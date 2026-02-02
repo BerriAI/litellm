@@ -197,12 +197,22 @@ def extract_and_raise_litellm_exception(
         exception_name = exception_name.strip().replace("litellm.", "")
         raised_exception_obj = getattr(litellm, exception_name, None)
         if raised_exception_obj:
-            raise raised_exception_obj(
-                message=error_str,
-                llm_provider=custom_llm_provider,
-                model=model,
-                response=response,
-            )
+            # Try with response parameter first, fall back to without it
+            # Some exceptions (e.g., APIConnectionError) don't accept response param
+            try:
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    response=response,
+                )
+            except TypeError:
+                # Exception doesn't accept response parameter
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
 
 
 def exception_type(  # type: ignore  # noqa: PLR0915

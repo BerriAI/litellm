@@ -1,7 +1,7 @@
 import * as networking from "@/components/networking";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import TeamInfoView from "./team_info";
 
 // Mock the networking module
@@ -17,7 +17,54 @@ vi.mock("@/components/networking", () => ({
   organizationInfoCall: vi.fn(),
 }));
 
+// Mock hooks used by ModelSelect
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useAllProxyModels: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeam: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganization: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
+  useCurrentUser: vi.fn(),
+}));
+
+import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+
+const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
+const mockUseTeam = vi.mocked(useTeam);
+const mockUseOrganization = vi.mocked(useOrganization);
+const mockUseCurrentUser = vi.mocked(useCurrentUser);
+
 describe("TeamInfoView", () => {
+  beforeEach(() => {
+    // Set up default mock implementations
+    mockUseAllProxyModels.mockReturnValue({
+      data: { data: [] },
+      isLoading: false,
+    } as any);
+    mockUseTeam.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as any);
+    mockUseOrganization.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as any);
+    mockUseCurrentUser.mockReturnValue({
+      data: { models: [] },
+      isLoading: false,
+    } as any);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -158,7 +205,7 @@ describe("TeamInfoView", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Models")).toBeInTheDocument();
+      expect(screen.getByTestId("models-select")).toBeInTheDocument();
     });
 
     const allProxyModelsOption = screen.queryByText("All Proxy Models");
@@ -169,6 +216,40 @@ describe("TeamInfoView", () => {
     const organizationId = "org-123";
     const organizationModels = ["gpt-4", "claude-3-opus"];
     const userModels = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus", "claude-2"];
+
+    // Mock all proxy models - should include all user models
+    const allProxyModels = userModels.map((id) => ({
+      id,
+      object: "model",
+      created: 1234567890,
+      owned_by: "openai",
+    }));
+
+    mockUseAllProxyModels.mockReturnValue({
+      data: { data: allProxyModels },
+      isLoading: false,
+    } as any);
+
+    mockUseCurrentUser.mockReturnValue({
+      data: { models: userModels },
+      isLoading: false,
+    } as any);
+
+    const organizationData = {
+      organization_id: organizationId,
+      organization_name: "Test Organization",
+      spend: 0,
+      max_budget: null,
+      models: organizationModels,
+      tpm_limit: null,
+      rpm_limit: null,
+      members: null,
+    };
+
+    mockUseOrganization.mockReturnValue({
+      data: organizationData,
+      isLoading: false,
+    } as any);
 
     vi.mocked(networking.teamInfoCall).mockResolvedValue({
       team_id: "123",
@@ -206,16 +287,7 @@ describe("TeamInfoView", () => {
       team_memberships: [],
     });
 
-    vi.mocked(networking.organizationInfoCall).mockResolvedValue({
-      organization_id: organizationId,
-      organization_name: "Test Organization",
-      spend: 0,
-      max_budget: null,
-      models: organizationModels,
-      tpm_limit: null,
-      rpm_limit: null,
-      members: null,
-    });
+    vi.mocked(networking.organizationInfoCall).mockResolvedValue(organizationData);
 
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
@@ -253,26 +325,39 @@ describe("TeamInfoView", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Models")).toBeInTheDocument();
+      expect(screen.getByTestId("models-select")).toBeInTheDocument();
     });
 
-    const modelsSelect = screen.getByLabelText("Models");
+    // Find the Ant Design Select selector element to open the dropdown
+    // The data-testid is on the Select component, we need to find the selector inside it
+    const modelsSelectElement = screen.getByTestId("models-select");
+    const selectSelector = modelsSelectElement.querySelector(".ant-select-selector");
+    expect(selectSelector).toBeTruthy();
+
+    // Open the dropdown by clicking on the selector
     act(() => {
-      fireEvent.mouseDown(modelsSelect);
+      fireEvent.mouseDown(selectSelector!);
     });
 
-    await waitFor(() => {
-      const dropdownOptions = screen.getAllByRole("option");
-      const optionTexts = dropdownOptions.map((option) => option.textContent);
+    // Wait for dropdown to open - Ant Design renders options in a portal
+    await waitFor(
+      () => {
+        const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
+        expect(dropdownOptions.length).toBeGreaterThan(0);
+      },
+      { timeout: 5000 },
+    );
 
-      organizationModels.forEach((model) => {
-        expect(optionTexts).toContain(model);
-      });
+    const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
+    const optionTexts = Array.from(dropdownOptions).map((option) => option.textContent?.trim() || "");
 
-      const modelsNotInOrganization = userModels.filter((m) => !organizationModels.includes(m));
-      modelsNotInOrganization.forEach((model) => {
-        expect(optionTexts).not.toContain(model);
-      });
+    organizationModels.forEach((model) => {
+      expect(optionTexts).toContain(model);
+    });
+
+    const modelsNotInOrganization = userModels.filter((m) => !organizationModels.includes(m));
+    modelsNotInOrganization.forEach((model) => {
+      expect(optionTexts).not.toContain(model);
     });
   }, 10000);
 

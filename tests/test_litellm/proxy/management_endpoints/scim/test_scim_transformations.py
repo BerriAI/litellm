@@ -1,14 +1,8 @@
-import asyncio
-import json
 import os
 import sys
-from litellm._uuid import uuid
-from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../")
@@ -19,10 +13,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
-    SCIMGroup,
-    SCIMPatchOp,
     SCIMPatchOperation,
-    SCIMUser,
 )
 
 
@@ -228,6 +219,63 @@ class TestScimTransformations:
         member_without_email = Member(user_id="user-456", user_email=None, role="user")
         result = ScimTransformations._get_scim_member_value(member_without_email)
         assert result == member_without_email.user_id
+
+    @pytest.mark.asyncio
+    async def test_transform_user_with_uuid_as_email(self, mock_prisma_client):
+        """
+        Test that users with UUID in user_email don't cause validation errors.
+        This tests the defensive fix that validates email contains '@' before creating SCIMUserEmail.
+        """
+        mock_client, mock_find_unique = mock_prisma_client
+
+        user_with_uuid_email = LiteLLM_UserTable(
+            user_id="21df4e37-2f38-4f2e-a21b-c33cb939ff5b",
+            user_email="21df4e37-2f38-4f2e-a21b-c33cb939ff5b",  # UUID as email (bug scenario)
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={},
+        )
+
+        mock_find_unique.return_value = None
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user_with_uuid_email
+            )
+
+            assert scim_user.id == user_with_uuid_email.user_id
+            assert scim_user.emails is None or len(scim_user.emails) == 0
+
+    @pytest.mark.asyncio
+    async def test_transform_user_with_none_email(self, mock_prisma_client):
+        """
+        Test that users with user_email=None are transformed correctly.
+        This tests the root cause fix.
+        """
+        mock_client, mock_find_unique = mock_prisma_client
+
+        user_with_none_email = LiteLLM_UserTable(
+            user_id="user-from-group",
+            user_email=None,
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={},
+        )
+
+        mock_find_unique.return_value = None
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user_with_none_email
+            )
+
+            assert scim_user.id == user_with_none_email.user_id
+            assert scim_user.emails is None or len(scim_user.emails) == 0
+
 
 
 class TestSCIMPatchOperations:

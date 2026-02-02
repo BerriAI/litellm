@@ -80,7 +80,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
@@ -89,6 +89,9 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         inline_parts = self._prepare_inline_image_parts(image)
         if not inline_parts:
             raise ValueError("Gemini image edit requires at least one image.")
+
+        if prompt is None:
+            raise ValueError("Gemini image edit requires a prompt.")
 
         contents = [
             {

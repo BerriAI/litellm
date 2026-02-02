@@ -1,0 +1,29 @@
+name: Check Duplicate Issues
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  check-duplicate:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Check for potential duplicates
+        uses: wow-actions/potential-duplicates@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          label: potential-duplicate
+          threshold: 0.6
+          reaction: eyes
+          comment: |
+            **⚠️ Potential duplicate detected**
+            
+            This issue appears similar to existing issue(s):
+            {{#issues}}
+            - [#{{number}}]({{html_url}}) - {{title}} ({{accuracy}}% similar)
+            {{/issues}}
+            
+            Please review the linked issue(s) to see if they address your concern. If this is not a duplicate, please provide additional context to help us understand the difference.

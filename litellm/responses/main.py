@@ -668,6 +668,7 @@ def responses(
             optional_params=dict(responses_api_request_params),
             litellm_params={
                 **responses_api_request_params,
+                "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "metadata": metadata,
             },

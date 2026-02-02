@@ -1,0 +1,7 @@
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+
+general_settings:
+  master_key: sk-1234

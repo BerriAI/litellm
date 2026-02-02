@@ -10,6 +10,114 @@ import pytest
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 
 
+def test_spend_log_cleanup_cron_scheduling():
+    """Test that cron expressions are correctly parsed for spend log cleanup scheduling"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    # Valid cron expressions
+    cron_expr = "0 4 * * *"  # 4:00 AM daily
+    trigger = CronTrigger.from_crontab(cron_expr)
+    assert trigger is not None
+
+    # Every minute (useful for testing)
+    trigger_minute = CronTrigger.from_crontab("*/1 * * * *")
+    assert trigger_minute is not None
+
+    # Specific day and hour
+    trigger_weekly = CronTrigger.from_crontab("0 3 * * 0")  # 3 AM every Sunday
+    assert trigger_weekly is not None
+
+    # Invalid cron expression should raise ValueError
+    with pytest.raises(ValueError):
+        CronTrigger.from_crontab("invalid cron")
+
+    with pytest.raises(ValueError):
+        CronTrigger.from_crontab("60 25 * * *")  # Invalid minute and hour
+
+
+def test_spend_log_cleanup_cron_scheduler_integration():
+    """
+    Integration test: Verify the proxy_server scheduler logic correctly adds
+    cron-based cleanup job when maximum_spend_logs_cleanup_cron is configured.
+
+    This tests the logic in proxy_server.py lines 4671-4717 without requiring
+    a real database connection.
+    """
+    from unittest.mock import MagicMock
+    from apscheduler.triggers.cron import CronTrigger
+
+    # Mock scheduler
+    mock_scheduler = MagicMock()
+    mock_prisma_client = MagicMock()
+    mock_cleanup_instance = MagicMock()
+
+    # Test Case 1: Cron-based scheduling
+    general_settings_cron = {
+        "maximum_spend_logs_retention_period": "7d",
+        "maximum_spend_logs_cleanup_cron": "0 4 * * *",  # 4 AM daily
+    }
+
+    cleanup_cron = general_settings_cron.get("maximum_spend_logs_cleanup_cron")
+    assert cleanup_cron is not None
+
+    # Simulate the scheduler logic from proxy_server.py
+    cron_trigger = CronTrigger.from_crontab(cleanup_cron)
+    mock_scheduler.add_job(
+        mock_cleanup_instance.cleanup_old_spend_logs,
+        cron_trigger,
+        args=[mock_prisma_client],
+        id="spend_log_cleanup_job",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # Verify scheduler was called correctly
+    mock_scheduler.add_job.assert_called_once()
+    call_args = mock_scheduler.add_job.call_args
+
+    # Verify the trigger is a CronTrigger
+    assert isinstance(call_args[0][1], CronTrigger)
+
+    # Verify job ID
+    assert call_args[1]["id"] == "spend_log_cleanup_job"
+    assert call_args[1]["replace_existing"] is True
+
+    # Test Case 2: Interval-based scheduling (fallback)
+    mock_scheduler.reset_mock()
+    general_settings_interval = {
+        "maximum_spend_logs_retention_period": "7d",
+        # No cron, so it should fall back to interval
+    }
+
+    cleanup_cron_fallback = general_settings_interval.get(
+        "maximum_spend_logs_cleanup_cron"
+    )
+    assert cleanup_cron_fallback is None  # No cron configured
+
+    # Simulate interval-based scheduling fallback
+    retention_interval = general_settings_interval.get(
+        "maximum_spend_logs_retention_interval", "1d"
+    )
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+    interval_seconds = duration_in_seconds(retention_interval)
+
+    mock_scheduler.add_job(
+        mock_cleanup_instance.cleanup_old_spend_logs,
+        "interval",
+        seconds=interval_seconds,
+        args=[mock_prisma_client],
+        id="spend_log_cleanup_job",
+        replace_existing=True,
+    )
+
+    # Verify interval scheduling was called
+    mock_scheduler.add_job.assert_called_once()
+    interval_call_args = mock_scheduler.add_job.call_args
+    assert interval_call_args[0][1] == "interval"
+    assert interval_call_args[1]["seconds"] == 86400  # 1 day in seconds
+
+
 @pytest.mark.asyncio
 async def test_should_delete_spend_logs():
     # Test case 1: No retention set

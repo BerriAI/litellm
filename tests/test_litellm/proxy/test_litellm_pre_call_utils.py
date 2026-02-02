@@ -161,6 +161,44 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_user_spend_and_budget():
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        user_spend=150.0,
+        user_max_budget=500.0,
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    metadata = updated_data.get("metadata", {})
+    assert metadata["user_api_key_user_spend"] == 150.0
+    assert metadata["user_api_key_user_max_budget"] == 500.0
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_audio_transcription_multipart():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
@@ -1297,3 +1335,145 @@ def test_update_model_if_key_alias_exists():
     original_model = data["model"]
     _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
     assert data["model"] == original_model  # Should remain unchanged
+
+
+@pytest.mark.asyncio
+async def test_embedding_header_forwarding_with_model_group():
+    """
+    Test that headers are properly forwarded for embedding requests when
+    forward_client_headers_to_llm_api is configured for the model group.
+
+    This test verifies the fix for embedding endpoints not forwarding headers
+    similar to how chat completion endpoints do.
+    """
+    import litellm
+
+    # Setup mock request for embeddings
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/embeddings"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/embeddings"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID": "test-request-123",
+        "Authorization": "Bearer sk-test-key",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup embedding request data
+    data = {
+        "model": "local-openai/text-embedding-3-small",
+        "input": ["Text to embed"],
+    }
+
+    # Setup user API key
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        org_id="test-org",
+    )
+
+    # Mock model_group_settings to enable header forwarding for the model
+    mock_settings = MagicMock(forward_client_headers_to_llm_api=["local-openai/*"])
+    original_model_group_settings = getattr(litellm, "model_group_settings", None)
+    litellm.model_group_settings = mock_settings
+
+    try:
+        # Call add_litellm_data_to_request which includes header forwarding logic
+        updated_data = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        # Verify that headers were added to the request data
+        assert "headers" in updated_data, "Headers should be added to embedding request"
+        
+        # Verify that only x- prefixed headers (except x-stainless) were forwarded
+        forwarded_headers = updated_data["headers"]
+        assert "X-Custom-Header" in forwarded_headers, "X-Custom-Header should be forwarded"
+        assert forwarded_headers["X-Custom-Header"] == "custom-value"
+        assert "X-Request-ID" in forwarded_headers, "X-Request-ID should be forwarded"
+        assert forwarded_headers["X-Request-ID"] == "test-request-123"
+        
+        # Verify that authorization header was NOT forwarded (sensitive header)
+        assert "Authorization" not in forwarded_headers, "Authorization header should not be forwarded"
+        
+        # Verify that Content-Type was NOT forwarded (doesn't start with x-)
+        assert "Content-Type" not in forwarded_headers, "Content-Type should not be forwarded"
+
+        # Verify original data fields are preserved
+        assert updated_data["model"] == "local-openai/text-embedding-3-small"
+        assert updated_data["input"] == ["Text to embed"]
+
+    finally:
+        # Restore original model_group_settings
+        litellm.model_group_settings = original_model_group_settings
+
+
+@pytest.mark.asyncio
+async def test_embedding_header_forwarding_without_model_group_config():
+    """
+    Test that headers are NOT forwarded for embedding requests when
+    the model is not in the forward_client_headers_to_llm_api list.
+    """
+    import litellm
+
+    # Setup mock request for embeddings
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/embeddings"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/embeddings"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "X-Custom-Header": "custom-value",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup embedding request data with a model NOT in the forward list
+    data = {
+        "model": "text-embedding-ada-002",
+        "input": ["Text to embed"],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+    )
+
+    # Mock model_group_settings with a different model in the forward list
+    mock_settings = MagicMock(forward_client_headers_to_llm_api=["gpt-4", "claude-*"])
+    original_model_group_settings = getattr(litellm, "model_group_settings", None)
+    litellm.model_group_settings = mock_settings
+
+    try:
+        updated_data = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        # Verify that headers were NOT added since model is not in forward list
+        assert "headers" not in updated_data or updated_data.get("headers") is None, \
+            "Headers should not be forwarded for models not in forward_client_headers_to_llm_api list"
+
+        # Verify original data fields are preserved
+        assert updated_data["model"] == "text-embedding-ada-002"
+        assert updated_data["input"] == ["Text to embed"]
+
+    finally:
+        # Restore original model_group_settings
+        litellm.model_group_settings = original_model_group_settings

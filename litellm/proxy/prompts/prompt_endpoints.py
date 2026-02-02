@@ -851,7 +851,7 @@ async def delete_prompt(
             )
 
         # Delete the prompt from the database
-        await prisma_client.db.litellm_prompttable.delete(
+        await prisma_client.db.litellm_prompttable.delete_many(
             where={"prompt_id": prompt_id}
         )
 

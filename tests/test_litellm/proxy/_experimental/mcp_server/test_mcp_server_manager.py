@@ -12,6 +12,7 @@ sys.path.insert(0, "../../../../../")
 import httpx
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
+    CallToolResult,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
@@ -285,6 +286,50 @@ class TestMCPServerManager:
 
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_case_insensitive_extra_headers(self):
+        """_call_regular_mcp_tool should forward headers regardless of original casing."""
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-case-call",
+            name="case-call-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.authorization,
+            extra_headers=["Authorization"],
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = MagicMock(side_effect=capture_create_mcp_client)
+
+        result = await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"authorization": "Bearer token"},
+            proxy_logging_obj=None,
+        )
+
+        assert captured_extra_headers == {"Authorization": "Bearer token"}
+        assert isinstance(result, CallToolResult)
 
     @pytest.mark.asyncio
     async def test_get_prompts_from_server_success(self):

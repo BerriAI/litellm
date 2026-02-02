@@ -1,0 +1,3 @@
+ignore:
+  - vulnerability: CVE-2026-22184
+    reason: no fixed zlib package is available yet in the Wolfi repositories, so this is ignored temporarily until an upstream release exists

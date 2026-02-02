@@ -732,6 +732,25 @@ def test_videos_route_is_llm_api_route(route):
     assert RouteChecks.is_llm_api_route(route) is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/containers",
+        "/v1/containers",
+        "/containers/container_123",
+        "/v1/containers/container_123",
+        "/containers/container_123/files",
+        "/v1/containers/container_123/files",
+        "/containers/container_123/files/file_456",
+        "/v1/containers/container_123/files/file_456",
+    ],
+)
+def test_containers_routes_are_llm_api_routes(route):
+    """Test that container routes are recognized as LLM API routes"""
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
 def test_videos_route_accessible_to_internal_users():
     """
     Test that internal users can access the videos routes.

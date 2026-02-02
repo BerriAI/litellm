@@ -1640,6 +1640,37 @@ def client(original_function):  # noqa: PLR0915
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return original_function(*args, **kwargs)
+            elif call_type == CallTypes.responses.value:
+                num_retries = (
+                    kwargs.get("num_retries", None) or litellm.num_retries or None
+                )
+                if kwargs.get("retry_policy", None):
+                    get_num_retries_from_retry_policy = getattr(sys.modules[__name__], 'get_num_retries_from_retry_policy')
+                    reset_retry_policy = getattr(sys.modules[__name__], 'reset_retry_policy')
+                    num_retries = get_num_retries_from_retry_policy(
+                        exception=e,
+                        retry_policy=kwargs.get("retry_policy"),
+                    )
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
+                litellm.num_retries = (
+                    None  # set retries to None to prevent infinite loops
+                )
+
+                _is_litellm_router_call = "model_group" in kwargs.get(
+                    "metadata", {}
+                )  # check if call from litellm.router/proxy
+                if (
+                    num_retries and not _is_litellm_router_call
+                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+                    if (
+                        isinstance(e, openai.APIError)
+                        or isinstance(e, openai.Timeout)
+                        or isinstance(e, openai.APIConnectionError)
+                    ):
+                        kwargs["num_retries"] = num_retries
+                        return litellm.responses_with_retries(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             end_time = datetime.datetime.now()
 
@@ -1899,12 +1930,36 @@ def client(original_function):  # noqa: PLR0915
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
+                    and not _is_litellm_router_call
                 ):
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]  # type: ignore
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
+            elif call_type == CallTypes.aresponses.value:
+                _is_litellm_router_call = "model_group" in kwargs.get(
+                    "metadata", {}
+                )  # check if call from litellm.router/proxy
+
+                if (
+                    num_retries and not _is_litellm_router_call
+                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+                    try:
+                        litellm.num_retries = (
+                            None  # set retries to None to prevent infinite loops
+                        )
+                        kwargs["num_retries"] = num_retries
+                        kwargs["original_function"] = original_function
+                        if isinstance(
+                            e, openai.RateLimitError
+                        ):  # rate limiting specific error
+                            kwargs["retry_strategy"] = "exponential_backoff_retry"
+                        elif isinstance(e, openai.APIError):  # generic api error
+                            kwargs["retry_strategy"] = "constant_retry"
+                        return await litellm.aresponses_with_retries(*args, **kwargs)
+                    except Exception:
+                        pass
 
             setattr(
                 e, "num_retries", num_retries
@@ -2639,6 +2694,10 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        
+        # Invalidate case-insensitive lookup map since model_cost was modified
+        _invalidate_model_cost_lowercase_map()
+        
         verbose_logger.debug(
             f"added/updated model={model_cost_key} in litellm.model_cost: {model_cost_key}"
         )
@@ -4993,6 +5052,109 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
         return model
 
 
+# Global case-insensitive lookup map for model_cost (built eagerly at module import)
+_model_cost_lowercase_map: Optional[Dict[str, str]] = None
+
+
+def _invalidate_model_cost_lowercase_map() -> None:
+    """Invalidate the case-insensitive lookup map for model_cost.
+    
+    Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = None
+
+
+def _rebuild_model_cost_lowercase_map() -> Dict[str, str]:
+    """Rebuild the case-insensitive lookup map from the current model_cost.
+    
+    Returns:
+        The rebuilt map (guaranteed to be not None).
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = {k.lower(): k for k in litellm.model_cost}
+    return _model_cost_lowercase_map
+
+
+def _handle_stale_map_entry_rebuild(
+    potential_key_lower: str,
+) -> Optional[str]:
+    """
+    Handle stale _model_cost_lowercase_map entry (key was popped).
+    
+    Rebuilds the map and retries the lookup.
+    
+    Returns:
+        The matched key if found after rebuild, None otherwise.
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+    matched_key = _model_cost_lowercase_map.get(potential_key_lower)
+    if matched_key is not None and matched_key in litellm.model_cost:
+        return matched_key
+    return None
+
+
+def _handle_new_key_with_scan(
+    potential_key_lower: str,
+) -> Optional[str]:
+    """
+    Handle new key added to model_cost without invalidating _model_cost_lowercase_map.
+    
+    Scans model_cost for case-insensitive match and rebuilds the map if found.
+    
+    Returns:
+        The matched key if found, None otherwise.
+    """
+    global _model_cost_lowercase_map
+    for key in litellm.model_cost:
+        if key.lower() == potential_key_lower:
+            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+            return key
+    return None
+
+
+def _get_model_cost_key(potential_key: str) -> Optional[str]:
+    """
+    Get the actual key from model_cost, with case-insensitive fallback.
+    
+    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
+    CPU overhead. This function is called frequently during router operations.
+    
+    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
+    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
+    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
+    
+    If you need to add a new helper function with O(n) operations that is conditionally
+    called and confirmed not to cause performance issues, add it to the allowed_helpers
+    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
+    """
+    global _model_cost_lowercase_map
+    
+    # Exact match (O(1))
+    if potential_key in litellm.model_cost:
+        return potential_key
+
+    # Case-insensitive lookup via map (O(1))
+    if _model_cost_lowercase_map is None:
+        _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+    
+    potential_key_lower = potential_key.lower()
+    matched_key = _model_cost_lowercase_map.get(potential_key_lower)
+    
+    # Verify key exists (O(1) - handles model_cost.pop() case)
+    if matched_key is not None and matched_key in litellm.model_cost:
+        return matched_key
+    
+    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
+    if matched_key is not None:
+        matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
+        if matched_key is not None:
+            return matched_key
+    
+    return None
+
+
 def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
@@ -5020,6 +5182,11 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
         elif (
             custom_llm_provider == "litellm_proxy"
         ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
+            return True
+        elif custom_llm_provider == "azure_ai" and model_info["litellm_provider"] in ("azure", "openai"):
+            # Azure AI also works with azure models 
+            # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost 
+            # tracking the cost is better than attributing 0 cost to it.
             return True
         else:
             return False
@@ -5142,10 +5309,10 @@ def _is_potential_model_name_in_model_cost(
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
 ) -> bool:
     """
-    Check if the potential model name is in the model cost.
+    Check if the potential model name is in the model cost (case-insensitive).
     """
     return any(
-        potential_model_name in litellm.model_cost
+        _get_model_cost_key(str(potential_model_name)) is not None
         for potential_model_name in potential_model_names.values()
     )
 
@@ -5223,44 +5390,51 @@ def _get_model_info_helper(  # noqa: PLR0915
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
 
-            if combined_model_name in litellm.model_cost:
-                key = combined_model_name
+            # Use case-insensitive lookup for all model name checks
+            _matched_key = _get_model_cost_key(combined_model_name)
+            if _matched_key is not None:
+                key = _matched_key
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            if _model_info is None and model in litellm.model_cost:
-                key = model
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if (
-                _model_info is None
-                and combined_stripped_model_name in litellm.model_cost
-            ):
-                key = combined_stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and stripped_model_name in litellm.model_cost:
-                key = stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and split_model in litellm.model_cost:
-                key = split_model
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(combined_stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(split_model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
 
             if _model_info is None or key is None:
                 raise ValueError(
@@ -7195,6 +7369,29 @@ def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     return False
 
 
+def any_assistant_message_has_thinking_blocks(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Returns true if ANY assistant message has thinking_blocks.
+
+    This is used to prevent dropping the thinking param when some messages
+    in the conversation already contain thinking blocks. Dropping thinking
+    when thinking blocks exist causes Anthropic error:
+    "When thinking is disabled, an assistant message cannot contain thinking"
+
+    Related issue: https://github.com/BerriAI/litellm/issues/18926
+    """
+    for message in messages:
+        if message.get("role") == "assistant":
+            thinking_blocks = message.get("thinking_blocks")
+            if thinking_blocks is not None and (
+                not hasattr(thinking_blocks, "__len__") or len(thinking_blocks) > 0
+            ):
+                return True
+    return False
+
+
 def last_assistant_with_tool_calls_has_no_thinking_blocks(
     messages: List[AllMessageValues],
 ) -> bool:
@@ -7206,6 +7403,10 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
 
     When thinking is enabled, assistant messages with tool_calls must include thinking_blocks.
     If the client didn't preserve thinking_blocks, we need to drop the thinking param.
+
+    IMPORTANT: This should only be used in conjunction with
+    any_assistant_message_has_thinking_blocks() to ensure we don't drop thinking
+    when other messages in the conversation contain thinking blocks.
 
     Related issues: https://github.com/BerriAI/litellm/issues/14194, https://github.com/BerriAI/litellm/issues/9020
     """
@@ -8153,6 +8354,12 @@ class ProviderConfigManager:
             )
 
             return get_vertex_ai_image_generation_config(model)
+        elif LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.image_generation import (
+                get_openrouter_image_generation_config,
+            )
+
+            return get_openrouter_image_generation_config(model)
         return None
 
     @staticmethod

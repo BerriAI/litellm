@@ -78,6 +78,8 @@ class Cache:
             "text_completion",
             "arerank",
             "rerank",
+            "responses",
+            "aresponses",
         ],
         # s3 Bucket, boto3 configuration
         azure_account_url: Optional[str] = None,
@@ -796,6 +798,8 @@ def enable_cache(
         "text_completion",
         "arerank",
         "rerank",
+        "responses",
+        "aresponses",
     ],
     **kwargs,
 ):
@@ -854,6 +858,8 @@ def update_cache(
         "text_completion",
         "arerank",
         "rerank",
+        "responses",
+        "aresponses",
     ],
     **kwargs,
 ):

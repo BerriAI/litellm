@@ -27,6 +27,9 @@ exporter = InMemorySpanExporter()
 @pytest.mark.parametrize("streaming", [True, False])
 async def test_async_otel_callback(streaming):
     litellm.set_verbose = True
+    
+    # Clear exporter at the start to ensure clean state
+    exporter.clear()
 
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
 
@@ -83,9 +86,9 @@ def validate_litellm_request(span):
         "llm.user",
         "gen_ai.response.id",
         "gen_ai.response.model",
-        "llm.usage.total_tokens",
-        "gen_ai.usage.completion_tokens",
-        "gen_ai.usage.prompt_tokens",
+        "gen_ai.usage.total_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.usage.input_tokens",
     ]
 
     # get the str of all the span attributes
@@ -149,6 +152,10 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
     tests when OpenTelemetry(message_logging=False) is set
     """
     litellm.set_verbose = True
+    
+    # Clear exporter at the start to ensure clean state
+    exporter.clear()
+    
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
     if global_redact is False:
         otel_logger = OpenTelemetry(
@@ -201,9 +208,9 @@ def validate_redacted_message_span_attributes(span):
         "llm.request.type",
         "gen_ai.response.id",
         "gen_ai.response.model",
-        "llm.usage.total_tokens",
-        "gen_ai.usage.completion_tokens",
-        "gen_ai.usage.prompt_tokens",
+        "gen_ai.usage.total_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.usage.input_tokens",
     ]
 
     _all_attributes = set(
@@ -230,6 +237,8 @@ def validate_redacted_message_span_attributes(span):
             attr.startswith("metadata.")
             or attr.startswith("hidden_params")
             or attr.startswith("gen_ai.cost.")
+            or attr.startswith("gen_ai.operation.")
+            or attr.startswith("gen_ai.request.")
         ), f"Non-metadata attribute found: {attr}"
 
     pass

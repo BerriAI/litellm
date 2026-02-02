@@ -68,6 +68,8 @@ def _convert_detail_to_media_resolution_enum(
 ) -> Optional[Dict[str, str]]:
     if detail == "low":
         return {"level": "MEDIA_RESOLUTION_LOW"}
+    elif detail == "medium":
+        return {"level": "MEDIA_RESOLUTION_MEDIUM"}
     elif detail == "high":
         return {"level": "MEDIA_RESOLUTION_HIGH"}
     return None

@@ -1216,11 +1216,11 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
                 item_type = getattr(output_item, "type", None)
                 content = getattr(output_item, "content", [])
 
-            if item_type == "message":
+            if item_type == "message" and content:
                 for content_item in content:
                     if isinstance(content_item, dict):
                         content_type = content_item.get("type")
-                        text = content_item.get("text", "")
+                        text = content_item.get("text", "") or ""
                     else:
                         content_type = getattr(content_item, "type", None)
                         text = getattr(content_item, "text", "") or ""

@@ -359,6 +359,26 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 ### Deploy with Database
 ##### Docker, Kubernetes, Helm Chart
 
+:::warning High Traffic Deployments (1000+ RPS)
+
+If you expect high traffic (1000+ requests per second), **Redis is required** to prevent database connection exhaustion and deadlocks.
+
+Add this to your config:
+```yaml
+general_settings:
+  use_redis_transaction_buffer: true
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: your-redis-host
+```
+
+See [Resolve DB Deadlocks](/docs/proxy/db_deadlocks) for details.
+
+:::
+
 Requirements:
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
 - Set a `LITELLM_MASTER_KEY`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`)

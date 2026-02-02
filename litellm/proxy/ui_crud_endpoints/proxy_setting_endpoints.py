@@ -72,6 +72,11 @@ class UISettings(BaseModel):
         description="If true, internal users cannot add models from the UI",
     )
 
+    disable_team_admin_delete_team_user: bool = Field(
+        default=False,
+        description="Prevents Team Admins from deleting users from the teams they manage. Useful for SCIM provisioning where team membership is defined externally.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -80,7 +85,7 @@ class UISettingsResponse(SettingsResponse):
 
 
 # Allowlist of UI settings that can be stored
-ALLOWED_UI_SETTINGS_FIELDS = {"disable_model_add_for_internal_users"}
+ALLOWED_UI_SETTINGS_FIELDS = {"disable_model_add_for_internal_users", "disable_team_admin_delete_team_user"}
 
 
 @router.get(

@@ -310,3 +310,85 @@ def test_google_generate_content_with_system_instruction():
         assert "contents" in called_data
         assert len(called_data["contents"]) == 1
         assert called_data["contents"][0]["role"] == "user"
+
+
+def test_google_generate_content_with_image_config():
+    """
+    Test that imageConfig is correctly passed through from generationConfig to the router.
+    
+    This test verifies that imageConfig parameters (aspectRatio, imageSize) are preserved
+    when forwarding requests to Google GenAI through the endpoint.
+    """
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy.google_endpoints.endpoints import router as google_router
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to missing dependency: {e}")
+    
+    # Create a FastAPI app and include the router
+    app = FastAPI()
+    app.include_router(google_router)
+    
+    # Create a test client
+    client = TestClient(app)
+    
+    # Mock all required proxy server dependencies
+    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
+         patch("litellm.proxy.proxy_server.general_settings", {}), \
+         patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, \
+         patch("litellm.proxy.proxy_server.version", "1.0.0"), \
+         patch("litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request") as mock_add_data:
+        
+        mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
+        
+        # Mock add_litellm_data_to_request to pass through data unchanged
+        async def mock_add_litellm_data(data, request, user_api_key_dict, proxy_config, general_settings, version):
+            return data
+        
+        mock_add_data.side_effect = mock_add_litellm_data
+        
+        # Send a request with generationConfig containing imageConfig
+        response = client.post(
+            "/v1beta/models/gemini-3-pro-image-preview:generateContent",
+            json={
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": "Create a vibrant infographic about photosynthesis"}]
+                }],
+                "generationConfig": {
+                    "responseModalities": ["TEXT", "IMAGE"],
+                    "imageConfig": {
+                        "aspectRatio": "9:16",
+                        "imageSize": "4K"
+                    }
+                }
+            },
+            headers={"Authorization": "Bearer sk-test-key"}
+        )
+        
+        # Verify the response
+        assert response.status_code == 200
+        
+        # Verify that agenerate_content was called
+        mock_router.agenerate_content.assert_called_once()
+        call_args = mock_router.agenerate_content.call_args
+        called_data = call_args[1]
+        
+        # Verify that config is present in the call arguments
+        assert "config" in called_data
+        
+        # Verify that imageConfig is preserved in the config
+        assert "imageConfig" in called_data["config"]
+        assert called_data["config"]["imageConfig"]["aspectRatio"] == "9:16"
+        assert called_data["config"]["imageConfig"]["imageSize"] == "4K"
+        
+        # Verify that responseModalities is also preserved
+        assert "responseModalities" in called_data["config"]
+        assert called_data["config"]["responseModalities"] == ["TEXT", "IMAGE"]
+        
+        # Verify contents are also present
+        assert "contents" in called_data
+        assert len(called_data["contents"]) == 1
+        assert called_data["contents"][0]["role"] == "user"

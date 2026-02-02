@@ -1,4 +1,4 @@
-from typing import Dict, List, Union, Any
+from typing import Dict, List, Union, Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -7,6 +7,9 @@ from ...router import ModelGroupInfo
 
 class ModelGroupInfoProxy(ModelGroupInfo):
     is_public_model_group: bool = Field(default=False)
+    health_status: Optional[str] = Field(default=None)
+    health_response_time: Optional[float] = Field(default=None)
+    health_checked_at: Optional[str] = Field(default=None)
 
 
 class UpdateUsefulLinksRequest(BaseModel):

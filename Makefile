@@ -45,6 +45,7 @@ install-proxy-dev-ci:
 install-test-deps: install-proxy-dev
 	poetry run pip install "pytest-retry==1.6.3"
 	poetry run pip install pytest-xdist
+	poetry run pip install openapi-core
 	cd enterprise && poetry run pip install -e . && cd ..
 
 install-helm-unittest:

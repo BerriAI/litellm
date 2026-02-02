@@ -2,7 +2,8 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj, verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -13,9 +14,10 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
-from ...common_utils import AnthropicError
+from ...common_utils import AnthropicError, AnthropicModelInfo
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -75,9 +77,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
 
-        headers = self._update_headers_with_optional_anthropic_beta(
+        headers = self._update_headers_with_anthropic_beta(
             headers=headers,
-            context_management=optional_params.get("context_management"),
+            optional_params=optional_params,
         )
 
         return headers, api_base
@@ -153,16 +155,44 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         )
 
     @staticmethod
-    def _update_headers_with_optional_anthropic_beta(
-        headers: dict, context_management: Optional[Dict]
+    def _update_headers_with_anthropic_beta(
+        headers: dict,
+        optional_params: dict,
+        custom_llm_provider: str = "anthropic",
     ) -> dict:
-        if context_management is None:
-            return headers
-
+        """
+        Auto-inject anthropic-beta headers based on features used.
+        
+        Handles:
+        - context_management: adds 'context-management-2025-06-27'
+        - tool_search: adds provider-specific tool search header
+        
+        Args:
+            headers: Request headers dict
+            optional_params: Optional parameters including tools, context_management
+            custom_llm_provider: Provider name for looking up correct tool search header
+        """
+        beta_values: set = set()
+        
+        # Get existing beta headers if any
         existing_beta = headers.get("anthropic-beta")
-        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
-        if existing_beta is None:
-            headers["anthropic-beta"] = beta_value
-        elif beta_value not in [beta.strip() for beta in existing_beta.split(",")]:
-            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+        if existing_beta:
+            beta_values.update(b.strip() for b in existing_beta.split(","))
+        
+        # Check for context management
+        if optional_params.get("context_management") is not None:
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+        
+        # Check for tool search tools
+        tools = optional_params.get("tools")
+        if tools:
+            anthropic_model_info = AnthropicModelInfo()
+            if anthropic_model_info.is_tool_search_used(tools):
+                # Use provider-specific tool search header
+                tool_search_header = get_tool_search_beta_header(custom_llm_provider)
+                beta_values.add(tool_search_header)
+        
+        if beta_values:
+            headers["anthropic-beta"] = ",".join(sorted(beta_values))
+        
         return headers

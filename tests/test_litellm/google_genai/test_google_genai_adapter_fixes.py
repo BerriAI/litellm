@@ -252,7 +252,7 @@ def test_stream_transformation_error_handling():
 def test_non_stream_response_when_stream_requested():
     """Test handling of non-stream responses when streaming was requested"""
     from litellm.types.utils import Choices
-    
+
     # Mock a non-stream response (ModelResponse with valid choices)
     mock_response = ModelResponse(
         id="test-123",
@@ -270,13 +270,13 @@ def test_non_stream_response_when_stream_requested():
         model="gpt-3.5-turbo",
         object="chat.completion"
     )
-    
+
     # Create an instance of the adapter
     adapter = GoogleGenAIAdapter()
-    
+
     # Test the adapter's translate_completion_to_generate_content method directly
     result = adapter.translate_completion_to_generate_content(mock_response)
-    
+
     # Verify the result is a valid Google GenAI format response
     assert "candidates" in result
     assert isinstance(result["candidates"], list)
@@ -288,3 +288,69 @@ def test_non_stream_response_when_stream_requested():
     assert len(candidate["content"]["parts"]) > 0
     assert "text" in candidate["content"]["parts"][0]
     assert candidate["content"]["parts"][0]["text"] == "Hello, world!"
+
+
+def test_extra_headers_forwarding():
+    """Test that extra_headers is correctly forwarded to completion call.
+
+    This is important for providers like github_copilot that require custom
+    headers (e.g., Editor-Version) for authentication.
+    """
+    # Test that extra_headers is included in completion kwargs
+    model = "gpt-3.5-turbo"
+    contents = {"role": "user", "parts": [{"text": "Test"}]}
+    config = {"temperature": 0.7}
+
+    extra_kwargs = {
+        "extra_headers": {
+            "Editor-Version": "vscode/1.95.0",
+            "Editor-Plugin-Version": "copilot-chat/0.22.4",
+            "Custom-Header": "custom-value"
+        },
+        "metadata": {"user_id": "test-user"}
+    }
+
+    completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model=model,
+        contents=contents,
+        config=config,
+        stream=False,
+        extra_kwargs=extra_kwargs
+    )
+
+    # Verify extra_headers is forwarded
+    assert "extra_headers" in completion_kwargs, "extra_headers should be forwarded to completion call"
+    assert completion_kwargs["extra_headers"]["Editor-Version"] == "vscode/1.95.0"
+    assert completion_kwargs["extra_headers"]["Editor-Plugin-Version"] == "copilot-chat/0.22.4"
+    assert completion_kwargs["extra_headers"]["Custom-Header"] == "custom-value"
+
+    # Verify metadata is also forwarded (existing behavior)
+    assert "metadata" in completion_kwargs
+    assert completion_kwargs["metadata"]["user_id"] == "test-user"
+
+
+def test_extra_headers_not_present():
+    """Test that missing extra_headers doesn't cause issues."""
+    model = "gpt-3.5-turbo"
+    contents = {"role": "user", "parts": [{"text": "Test"}]}
+    config = {"temperature": 0.7}
+
+    # extra_kwargs without extra_headers
+    extra_kwargs = {
+        "metadata": {"user_id": "test-user"}
+    }
+
+    completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model=model,
+        contents=contents,
+        config=config,
+        stream=False,
+        extra_kwargs=extra_kwargs
+    )
+
+    # Verify extra_headers is not present (no error)
+    assert "extra_headers" not in completion_kwargs
+
+    # Verify metadata is still forwarded
+    assert "metadata" in completion_kwargs
+    assert completion_kwargs["metadata"]["user_id"] == "test-user"

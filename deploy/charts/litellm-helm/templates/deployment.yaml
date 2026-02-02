@@ -170,7 +170,8 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: litellm-config
-              mountPath: /etc/litellm/
+              mountPath: /etc/litellm/config.yaml
+              subPath: config.yaml
           {{ if .Values.securityContext.readOnlyRootFilesystem }}
             - name: tmp
               mountPath: /tmp

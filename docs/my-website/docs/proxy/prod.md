@@ -277,7 +277,12 @@ Set the following environment variable(s):
 ```bash
 SEPARATE_HEALTH_APP="1" # Default "0" 
 SEPARATE_HEALTH_PORT="8001" # Default "4001", Works only if `SEPARATE_HEALTH_APP` is "1"
+SUPERVISORD_STOPWAITSECS="3600" # Optional: Upper bound timeout in seconds for graceful shutdown. Default: 3600 (1 hour). Only used when SEPARATE_HEALTH_APP=1.
 ```
+
+**Graceful Shutdown:**
+
+Previously, `stopwaitsecs` was not set, defaulting to 10 seconds and causing in-flight requests to fail. `SUPERVISORD_STOPWAITSECS` (default: 3600) provides an upper bound for graceful shutdown, allowing uvicorn to wait for all in-flight requests to complete.
 
 <video controls width="100%" style={{ borderRadius: '8px', marginBottom: '1em' }}>
   <source src="https://cdn.loom.com/sessions/thumbnails/b08be303331246b88fdc053940d03281-1718990992822.mp4" type="video/mp4" />

@@ -151,7 +151,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
@@ -160,6 +160,9 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         inline_parts = self._prepare_inline_image_parts(image)
         if not inline_parts:
             raise ValueError("Vertex AI Gemini image edit requires at least one image.")
+
+        if prompt is None:
+            raise ValueError("Vertex AI Gemini image edit requires a prompt.")
 
         # Correct format for Vertex AI Gemini image editing
         contents = {

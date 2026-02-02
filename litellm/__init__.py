@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 warnings.filterwarnings(
     "ignore", message=".*Accessing the.*attribute on the instance is deprecated.*"
 )
-### INIT VARIABLES ########################
+### INIT VARIABLES #########################
 import threading
 import os
 from typing import (

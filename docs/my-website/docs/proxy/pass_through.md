@@ -165,6 +165,7 @@ general_settings:
       target: string                  # Target URL for forwarding
       auth: boolean                   # Enable LiteLLM authentication (Enterprise)
       forward_headers: boolean        # Forward all incoming headers
+      include_subpath: boolean        # If true, forwards requests to sub-paths (default: false)
       headers:                        # Custom headers to add
         Authorization: string         # Auth header for target API
         content-type: string         # Request content type
@@ -180,6 +181,23 @@ general_settings:
 - **accept**: Expected response format
 - **LANGFUSE_PUBLIC_KEY/SECRET_KEY**: For Langfuse integration
 - **Custom headers**: Any additional key-value pairs
+
+### Sub-path Routing
+
+By default, pass-through endpoints only match the **exact path** specified. To forward requests to sub-paths, set `include_subpath: true`:
+
+```yaml
+general_settings:
+  pass_through_endpoints:
+    - path: "/custom-api"                    # Any path prefix you choose
+      target: "https://api.example.com"
+      include_subpath: true  # Forward /custom-api/*, not just /custom-api
+```
+
+| Setting | Behavior |
+|---------|----------|
+| `include_subpath: false` (default) | Only `/custom-api` is forwarded |
+| `include_subpath: true` | `/custom-api`, `/custom-api/v1/chat`, `/custom-api/anything` are all forwarded |
 
 ---
 

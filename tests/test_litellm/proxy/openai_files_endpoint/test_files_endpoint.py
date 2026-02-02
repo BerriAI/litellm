@@ -158,16 +158,16 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
                 status="uploaded",
             )
         
-        async def afile_retrieve(self, file_id, litellm_parent_otel_span):
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
         
         async def afile_list(self, purpose, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_delete(self, file_id, litellm_parent_otel_span):
+        async def afile_delete(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_content(self, file_id, litellm_parent_otel_span):
+        async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
 
     # Manually add the hook to the proxy_hook_mapping
@@ -607,16 +607,16 @@ def test_create_file_with_expires_after(mocker: MockerFixture, monkeypatch, llm_
                 status="uploaded",
             )
         
-        async def afile_retrieve(self, file_id, litellm_parent_otel_span):
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
         
         async def afile_list(self, purpose, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_delete(self, file_id, litellm_parent_otel_span):
+        async def afile_delete(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_content(self, file_id, litellm_parent_otel_span):
+        async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
 
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
@@ -747,16 +747,16 @@ def test_create_file_with_expires_after_valid_values(mocker: MockerFixture, monk
                 status="uploaded",
             )
         
-        async def afile_retrieve(self, file_id, litellm_parent_otel_span):
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
         
         async def afile_list(self, purpose, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_delete(self, file_id, litellm_parent_otel_span):
+        async def afile_delete(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_content(self, file_id, litellm_parent_otel_span):
+        async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
 
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
@@ -820,16 +820,16 @@ def test_create_file_without_expires_after(mocker: MockerFixture, monkeypatch, l
                 status="uploaded",
             )
         
-        async def afile_retrieve(self, file_id, litellm_parent_otel_span):
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
         
         async def afile_list(self, purpose, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_delete(self, file_id, litellm_parent_otel_span):
+        async def afile_delete(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
         
-        async def afile_content(self, file_id, litellm_parent_otel_span):
+        async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
             raise NotImplementedError("Not implemented for test")
 
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()

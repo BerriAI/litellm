@@ -29,34 +29,33 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
 import { truncateString } from "../../../utils/textUtils";
 import GuardrailSelector from "../../guardrails/GuardrailSelector";
+import { MCPServer } from "../../mcp_tools/types";
 import NotificationsManager from "../../molecules/notifications_manager";
+import { fetchMCPServers, listMCPTools } from "../../networking";
 import TagSelector from "../../tag_management/TagSelector";
 import VectorStoreSelector from "../../vector_store_management/VectorStoreSelector";
+import { makeA2ASendMessageRequest } from "../llm_calls/a2a_send_message";
+import { makeAnthropicMessagesRequest } from "../llm_calls/anthropic_messages";
+import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
+import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
+import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
+import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
+import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
+import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
+import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
 import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
+import CodeInterpreterOutput from "./CodeInterpreterOutput";
+import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
-import { makeAnthropicMessagesRequest } from "../llm_calls/anthropic_messages";
-import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
-import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
-import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
-import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
-import { listMCPTools, fetchMCPServers } from "../../networking";
-import { MCPServer } from "../../mcp_tools/types";
-import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
-import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
-import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
-import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
-import CodeInterpreterOutput from "./CodeInterpreterOutput";
-import { useCodeInterpreter } from "./useCodeInterpreter";
-import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
-import { makeA2AStreamMessageRequest } from "../llm_calls/a2a_send_message";
-import A2AMetrics from "./A2AMetrics";
-import { A2ATaskMetadata } from "./types";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
@@ -66,8 +65,8 @@ import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
-import { MessageType } from "./types";
-import CodeInterpreterTool from "./CodeInterpreterTool";
+import { A2ATaskMetadata, MessageType } from "./types";
+import { useCodeInterpreter } from "./useCodeInterpreter";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -1037,7 +1036,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
       // Handle A2A agent calls (separate from model-based calls) - use streaming
       if (endpointType === EndpointType.A2A_AGENTS && selectedAgent) {
-        await makeA2AStreamMessageRequest(
+        await makeA2ASendMessageRequest(
           selectedAgent,
           inputMessage,
           (chunk, model) => updateTextUI("assistant", chunk, model),

@@ -3,6 +3,8 @@ from urllib.parse import parse_qs
 
 import httpx
 
+from litellm.constants import PASS_THROUGH_HEADER_PREFIX
+
 
 class BasePassthroughUtils:
     @staticmethod
@@ -27,7 +29,11 @@ class BasePassthroughUtils:
         forward_headers: Optional[bool] = False,
     ):
         """
-        Helper to forward headers from original request
+        Helper to forward headers from original request.
+
+        Also handles 'x-pass-' prefixed headers which are always forwarded
+        with the prefix stripped, regardless of forward_headers setting.
+        e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
         """
         if forward_headers is True:
             # Header We Should NOT forward
@@ -36,6 +42,14 @@ class BasePassthroughUtils:
 
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
+
+        # Always process x-pass- prefixed headers (strip prefix and forward)
+        for header_name, header_value in request_headers.items():
+            if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
+                # Strip the 'x-pass-' prefix to get the actual header name
+                actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :]
+                headers[actual_header_name] = header_value
+
         return headers
 
 class CommonUtils:

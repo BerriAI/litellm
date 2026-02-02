@@ -261,7 +261,7 @@ class BedrockImageEdit(BaseAWSLLM):
         """
         config_class = self.get_config_class(model=model)
         config_instance = config_class()
-        request_body = config_instance.transform_image_edit_request(
+        request_body, _ = config_instance.transform_image_edit_request(
             model=model,
             prompt=prompt,
             image=image[0] if image else None,

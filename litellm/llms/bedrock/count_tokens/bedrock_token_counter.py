@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
@@ -79,9 +79,31 @@ class BedrockTokenCounter(BaseTokenCounter):
                     tokenizer_type="bedrock_api",
                     original_response=result,
                 )
+        except BedrockError as e:
+            verbose_logger.warning(
+                f"Bedrock CountTokens API error: status={e.status_code}, message={e.message}"
+            )
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="bedrock_api",
+                error=True,
+                error_message=e.message,
+                status_code=e.status_code,
+            )
         except Exception as e:
             verbose_logger.warning(
-                f"Error calling Bedrock CountTokens API: {e}, falling back to default tokenizer"
+                f"Error calling Bedrock CountTokens API: {e}"
+            )
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="bedrock_api",
+                error=True,
+                error_message=str(e),
+                status_code=500,
             )
 
         return None

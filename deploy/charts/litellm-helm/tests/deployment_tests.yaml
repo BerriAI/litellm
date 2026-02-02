@@ -136,7 +136,8 @@ tests:
           path: spec.template.spec.containers[0].volumeMounts
           content:
             name: litellm-config
-            mountPath: /etc/litellm/
+            mountPath: /etc/litellm/config.yaml
+            subPath: config.yaml
   - it: should work with lifecycle hooks
     template: deployment.yaml
     set:

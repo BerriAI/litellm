@@ -27,6 +27,8 @@ CachingSupportedCallTypes = Literal[
     "text_completion",
     "arerank",
     "rerank",
+    "responses",
+    "aresponses",
 ]
 
 

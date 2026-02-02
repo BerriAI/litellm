@@ -29,7 +29,8 @@ router = APIRouter()
 )
 async def public_model_hub():
     import litellm
-    from litellm.proxy.proxy_server import _get_model_group_info, llm_router
+    from litellm.proxy.proxy_server import _get_model_group_info, llm_router, prisma_client
+    from litellm.proxy.health_endpoints._health_endpoints import _convert_health_check_to_dict
 
     if llm_router is None:
         raise HTTPException(
@@ -43,6 +44,28 @@ async def public_model_hub():
             all_models_str=litellm.public_model_groups,
             model_group=None,
         )
+
+    # Fetch health check information if available
+    health_checks_map = {}
+    if prisma_client is not None:
+        try:
+            latest_checks = await prisma_client.get_all_latest_health_checks()
+            for check in latest_checks:
+                key = check.model_id if check.model_id else check.model_name
+                if key:
+                    health_check_dict = _convert_health_check_to_dict(check)
+                    health_checks_map[key] = health_check_dict
+                    if check.model_name:
+                        health_checks_map[check.model_name] = health_check_dict
+        except Exception:
+            pass
+
+    for model_group in model_groups:
+        health_info = health_checks_map.get(model_group.model_group)
+        if health_info:
+            model_group.health_status = health_info.get("status")
+            model_group.health_response_time = health_info.get("response_time_ms")
+            model_group.health_checked_at = health_info.get("checked_at")
 
     return model_groups
 

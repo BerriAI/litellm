@@ -125,16 +125,20 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        response = httpx.Response(
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        _response_headers = (
+            getattr(response, "headers", None) if response is not None else None
+        )
+        self.response = httpx.Response(
             status_code=self.status_code,
+            headers=_response_headers,
             request=httpx.Request(
                 method="GET", url="https://litellm.ai"
             ),  # mock request object
         )
-        self.max_retries = max_retries
-        self.num_retries = num_retries
         super().__init__(
-            self.message, response=response, body=body
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -368,13 +372,11 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=self.response,
+            response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
@@ -457,18 +459,14 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = httpx.Response(status_code=400, request=request)
         self.provider_specific_fields = provider_specific_fields
-        
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=self.response,
+            response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
-    
 
     def __str__(self):
         return self._transform_error_to_string()
@@ -898,9 +896,15 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
-    def __init__(self, guardrail_name: Optional[str] = None, message: str = ""):
+    def __init__(
+        self,
+        guardrail_name: Optional[str] = None,
+        message: str = "",
+        should_wrap_with_default_message: bool = True,
+    ):
+        default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
-        self.message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
 

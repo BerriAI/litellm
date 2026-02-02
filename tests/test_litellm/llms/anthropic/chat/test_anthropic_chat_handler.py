@@ -473,7 +473,6 @@ def test_partial_json_chunk_accumulation():
         streaming_response=MagicMock(), sync_stream=True, json_mode=False
     )
 
-    # Simulate a complete JSON chunk being split into two parts
     partial_chunk_1 = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel'
     partial_chunk_2 = 'lo"}}'
 
@@ -779,6 +778,169 @@ def test_web_search_tool_result_captured_in_provider_specific_fields():
     assert (
         web_search_results[0]["content"][0]["title"] == "Fun Otter Facts"
     ), "First result title should match"
+
+
+def test_web_fetch_tool_result_captured_in_provider_specific_fields():
+    """
+    Test that web_fetch_tool_result content is captured in provider_specific_fields.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/18137
+    where streaming with Anthropic web fetch wasn't capturing web_fetch_tool_result
+    blocks, causing multi-turn conversations to fail.
+
+    The web_fetch_tool_result content comes ALL AT ONCE in content_block_start,
+    not in deltas, so we need to capture it there.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Simulate the streaming sequence with web_fetch_tool_result
+    chunks = [
+        # 1. message_start
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        # 2. server_tool_use block starts (web_fetch)
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC123",
+                "name": "web_fetch",
+            },
+        },
+        # 3. input_json_delta with the url
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"url": "https://example.com"}'},
+        },
+        # 4. content_block_stop for server_tool_use
+        {"type": "content_block_stop", "index": 0},
+        # 5. web_fetch_tool_result block starts - THIS IS WHERE THE RESULTS ARE
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.com",
+                    "retrieved_at": "2025-12-16T19:28:29.758000+00:00",
+                    "content": {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "Hello World",
+                        },
+                        "title": "Example Page",
+                    },
+                },
+            },
+        },
+        # 6. content_block_stop for web_fetch_tool_result
+        {"type": "content_block_stop", "index": 1},
+    ]
+
+    web_search_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if (
+            parsed.choices
+            and parsed.choices[0].delta.provider_specific_fields
+            and "web_search_results" in parsed.choices[0].delta.provider_specific_fields
+        ):
+            web_search_results = parsed.choices[0].delta.provider_specific_fields[
+                "web_search_results"
+            ]
+
+    # Verify web_fetch_tool_result was captured (stored in web_search_results list)
+    assert web_search_results is not None, "web_search_results should be captured"
+    assert len(web_search_results) == 1, "Should have 1 web_fetch_tool_result block"
+    assert (
+        web_search_results[0]["type"] == "web_fetch_tool_result"
+    ), "Block type should be web_fetch_tool_result"
+    assert (
+        web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123"
+    ), "tool_use_id should match"
+    assert (
+        web_search_results[0]["content"]["url"] == "https://example.com"
+    ), "URL should match"
+    assert (
+        web_search_results[0]["content"]["content"]["title"] == "Example Page"
+    ), "Title should match"
+
+
+def test_web_fetch_tool_result_no_extra_tool_calls():
+    """
+    Test that web_fetch_tool_result blocks don't emit tool call chunks.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/18137
+    where streaming with Anthropic web fetch was causing issues with tool call arguments.
+
+    The issue was that web_fetch_tool_result blocks have input_json_delta events with {}
+    that were incorrectly being converted to tool calls.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # to verify it doesn't emit tool calls
+    chunks = [
+        # 1. web_fetch_tool_result block starts
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.com",
+                    "retrieved_at": "2025-12-16T19:28:29.758000+00:00",
+                    "content": {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "Hello World",
+                        },
+                        "title": "Example Page",
+                    },
+                },
+            },
+        },
+        # 2. input_json_delta with {} - this should NOT emit a tool call
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        },
+        # 3. content_block_stop for web_fetch_tool_result
+        {"type": "content_block_stop", "index": 1},
+    ]
+
+    tool_call_count = 0
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.choices and parsed.choices[0].delta.tool_calls:
+            tool_call_count += 1
+
+    # Should have 0 tool calls - web_fetch_tool_result should not emit tool calls
+    assert (
+        tool_call_count == 0
+    ), f"Expected 0 tool calls, got {tool_call_count}. web_fetch_tool_result should not emit tool calls"
 
 
 def test_container_in_provider_specific_fields_streaming():

@@ -6,6 +6,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
 // Mock network calls
 vi.mock("./networking", async (importOriginal) => {
@@ -21,6 +22,7 @@ vi.mock("./networking", async (importOriginal) => {
         },
       ],
     }),
+    teamListCall: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -50,6 +52,20 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
 vi.mock("../key_team_helpers/filter_logic", () => ({
   useFilterLogic: vi.fn(),
 }));
+
+// Mock useTeams hook (used by KeyInfoView)
+vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
+  default: vi.fn(),
+}));
+
+// Mock fetchTeams to prevent network calls
+vi.mock("@/app/(dashboard)/networking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/networking")>();
+  return {
+    ...actual,
+    fetchTeams: vi.fn().mockResolvedValue([]),
+  };
+});
 
 const mockKey: KeyResponse = {
   token: "sk-1234567890abcdef",
@@ -146,6 +162,7 @@ const mockOrganization: Organization = {
 // Mock hook implementations
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
 const mockUseFilterLogic = useFilterLogic as MockedFunction<typeof useFilterLogic>;
+const mockUseTeams = useTeams as MockedFunction<typeof useTeams>;
 
 beforeEach(() => {
   // Reset mocks before each test
@@ -180,6 +197,12 @@ beforeEach(() => {
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
     handleFilterReset: vi.fn(),
+  });
+
+  // Mock useTeams hook (used by KeyInfoView)
+  mockUseTeams.mockReturnValue({
+    teams: [mockTeam],
+    setTeams: vi.fn(),
   });
 });
 
@@ -393,4 +416,44 @@ it("should handle column resizing hover events", () => {
   // Simulate mouse leave using fireEvent - should set opacity back to 0 (lines 618-622)
   fireEvent.mouseLeave(headerCell);
   expect(resizer.style.opacity).toBe("0");
+});
+
+it("should open KeyInfoView when clicking on a key ID button", async () => {
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  // Wait for the table to render
+  await waitFor(() => {
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+
+  // Verify table is visible before clicking - check for table-specific text
+  expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
+
+  // Find the key ID button (it should show the truncated token)
+  const keyIdButton = screen.getByText("sk-1234...");
+  expect(keyIdButton).toBeInTheDocument();
+
+  // Click on the key ID button
+  fireEvent.click(keyIdButton);
+
+  // Wait for KeyInfoView to appear - check for unique elements that only exist in KeyInfoView
+  await waitFor(() => {
+    expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+    // KeyInfoView shows "Created:" or "Updated:" which is unique to it
+    expect(screen.getByText(/Created:|Updated:/)).toBeInTheDocument();
+  });
+
+  // Verify that table-specific elements are no longer visible
+  // The "Showing X of Y results" text should not be visible when KeyInfoView is open
+  expect(screen.queryByText(/Showing.*results/)).not.toBeInTheDocument();
 });

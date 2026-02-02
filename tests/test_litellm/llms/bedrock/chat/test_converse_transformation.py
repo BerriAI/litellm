@@ -2735,3 +2735,75 @@ def test_is_nova_lite_2_model():
     assert config._is_nova_lite_2_model("anthropic.claude-3-5-sonnet-20240620-v1:0") is False
     assert config._is_nova_lite_2_model("meta.llama3-70b-instruct-v1:0") is False
     assert config._is_nova_lite_2_model("mistral.mistral-7b-instruct-v0:2") is False
+
+
+def test_thinking_with_max_completion_tokens():
+    """Test that thinking respects max_completion_tokens parameter."""
+    config = AmazonConverseConfig()
+    
+    # Test case 1: max_completion_tokens is specified - should NOT set maxTokens automatically
+    non_default_params_with_max_completion = {
+        "thinking": {"type": "enabled", "budget_tokens": 5000},
+        "max_completion_tokens": 10000,
+    }
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params_with_max_completion,
+        optional_params=optional_params,
+        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        drop_params=False,
+    )
+    
+    # Should have maxTokens set to max_completion_tokens value
+    assert "maxTokens" in result
+    assert result["maxTokens"] == 10000
+    # Should have thinking config
+    assert "thinking" in result
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == 5000
+    
+    # Test case 2: max_tokens is specified - should NOT set maxTokens automatically
+    non_default_params_with_max_tokens = {
+        "thinking": {"type": "enabled", "budget_tokens": 5000},
+        "max_tokens": 8000,
+    }
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params_with_max_tokens,
+        optional_params=optional_params,
+        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        drop_params=False,
+    )
+    
+    # Should have maxTokens set to max_tokens value
+    assert "maxTokens" in result
+    assert result["maxTokens"] == 8000
+    # Should have thinking config
+    assert "thinking" in result
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == 5000
+    
+    # Test case 3: Neither max_tokens nor max_completion_tokens specified - should set maxTokens automatically
+    from litellm.constants import DEFAULT_MAX_TOKENS
+    
+    non_default_params_without_max = {
+        "thinking": {"type": "enabled", "budget_tokens": 5000},
+    }
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params_without_max,
+        optional_params=optional_params,
+        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        drop_params=False,
+    )
+    
+    # Should have maxTokens set to budget_tokens + DEFAULT_MAX_TOKENS
+    assert "maxTokens" in result
+    assert result["maxTokens"] == 5000 + DEFAULT_MAX_TOKENS
+    # Should have thinking config
+    assert "thinking" in result
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == 5000
