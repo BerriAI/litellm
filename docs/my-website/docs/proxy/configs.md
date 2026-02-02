@@ -9,7 +9,7 @@ Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`m
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
 | `router_settings`   | litellm Router settings, example `routing_strategy="least-busy"` [**see all**](#router-settings)|
-| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` [**see all**](#all-settings)|
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` [**see all**](./config-settings)|
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
