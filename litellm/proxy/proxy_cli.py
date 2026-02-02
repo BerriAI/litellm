@@ -212,7 +212,11 @@ class ProxyInitializationHelpers:
             else:
                 print("LiteLLM: Auto-benchmark timed out waiting for proxy health", file=sys.stderr)
                 return
-            # Proxy is up: run benchmark (single run or RPS suite)
+            # Wait for workers to finish initializing (simple fixed delay after first health 200)
+            stabilize_seconds = float(os.getenv("LITELLM_AUTO_BENCHMARK_STABILIZE_SECONDS", "300"))
+            if stabilize_seconds > 0:
+                time.sleep(stabilize_seconds)
+            # Proxy and workers are up: run benchmark (single run or RPS suite)
             from datetime import datetime
 
             mock_base, _ = ProxyInitializationHelpers._get_mock_chat_endpoint()
