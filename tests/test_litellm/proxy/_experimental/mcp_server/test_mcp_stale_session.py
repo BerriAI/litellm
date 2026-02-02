@@ -11,6 +11,96 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
+class TestStripStaleMcpSessionHeader:
+    """Unit tests for the _strip_stale_mcp_session_header helper."""
+
+    def test_strips_stale_session_id(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _strip_stale_mcp_session_header,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scope = {
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"mcp-session-id", b"stale-id"),
+            ],
+        }
+        mgr = MagicMock()
+        mgr._server_instances = {}  # no active sessions
+
+        _strip_stale_mcp_session_header(scope, mgr)
+
+        header_names = [k for k, _ in scope["headers"]]
+        assert b"mcp-session-id" not in header_names
+
+    def test_preserves_valid_session_id(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _strip_stale_mcp_session_header,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scope = {
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"mcp-session-id", b"valid-id"),
+            ],
+        }
+        mgr = MagicMock()
+        mgr._server_instances = {"valid-id": MagicMock()}
+
+        _strip_stale_mcp_session_header(scope, mgr)
+
+        header_names = [k for k, _ in scope["headers"]]
+        assert b"mcp-session-id" in header_names
+
+    def test_no_op_when_no_session_header(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _strip_stale_mcp_session_header,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scope = {
+            "headers": [
+                (b"content-type", b"application/json"),
+            ],
+        }
+        mgr = MagicMock()
+        mgr._server_instances = {}
+
+        _strip_stale_mcp_session_header(scope, mgr)
+
+        assert len(scope["headers"]) == 1
+
+    def test_no_op_when_server_instances_missing(self):
+        """If _server_instances attr doesn't exist, don't crash."""
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _strip_stale_mcp_session_header,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scope = {
+            "headers": [
+                (b"mcp-session-id", b"some-id"),
+            ],
+        }
+        mgr = MagicMock(spec=[])  # no attributes
+
+        _strip_stale_mcp_session_header(scope, mgr)
+
+        # Should keep the header since we can't verify
+        header_names = [k for k, _ in scope["headers"]]
+        assert b"mcp-session-id" in header_names
+
+
 @pytest.mark.asyncio
 async def test_stale_mcp_session_id_is_stripped():
     """
