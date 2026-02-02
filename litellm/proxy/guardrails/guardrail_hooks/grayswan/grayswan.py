@@ -206,8 +206,8 @@ class GraySwanGuardrail(CustomGuardrail):
         # Get dynamic params from request metadata
         dynamic_body = self.get_guardrail_dynamic_request_body_params(request_data) or {}
 
-        # Prepare and send payload
-        payload = self._prepare_payload(messages, dynamic_body)
+        # Prepare payload with LiteLLM metadata
+        payload = self._prepare_payload(messages, dynamic_body, request_data)
         if payload is None:
             return inputs
 
@@ -494,7 +494,10 @@ class GraySwanGuardrail(CustomGuardrail):
         }
 
     def _prepare_payload(
-        self, messages: List[Dict[str, str]], dynamic_body: dict
+        self,
+        messages: List[Dict[str, str]],
+        dynamic_body: dict,
+        request_data: Optional[dict] = None,
     ) -> Optional[Dict[str, Any]]:
         payload: Dict[str, Any] = {"messages": messages}
 
@@ -510,7 +513,57 @@ class GraySwanGuardrail(CustomGuardrail):
         if reasoning_mode:
             payload["reasoning_mode"] = reasoning_mode
 
+        # Add LiteLLM metadata to payload body
+        if request_data is not None:
+            litellm_metadata = self._extract_litellm_metadata(request_data)
+            if litellm_metadata:
+                payload["litellm_metadata"] = litellm_metadata
+
         return payload
+
+    def _extract_litellm_metadata(self, request_data: dict) -> Dict[str, Any]:
+        """
+        Extract LiteLLM metadata from request_data for inclusion in API payload.
+
+        This enables the Gray Swan /cygnal/monitor endpoint to receive
+        user identification and request context information.
+        """
+        litellm_metadata: Dict[str, Any] = {}
+
+        # Get litellm_call_id (only available in pre-call)
+        if litellm_call_id := request_data.get("litellm_call_id"):
+            litellm_metadata["litellm_call_id"] = str(litellm_call_id)
+
+        # Get metadata dict (could be in 'litellm_metadata' or 'metadata')
+        metadata = request_data.get("litellm_metadata") or request_data.get("metadata") or {}
+
+        # Extract user identification
+        if user_id := (metadata.get("user_api_key_user_id") or request_data.get("user_api_key_user_id")):
+            litellm_metadata["user_id"] = str(user_id)
+        if team_id := (metadata.get("user_api_key_team_id") or request_data.get("user_api_key_team_id")):
+            litellm_metadata["team_id"] = str(team_id)
+        if end_user_id := (metadata.get("user_api_key_end_user_id") or request_data.get("user_api_key_end_user_id")):
+            litellm_metadata["end_user_id"] = str(end_user_id)
+        if org_id := (metadata.get("user_api_key_org_id") or request_data.get("user_api_key_org_id")):
+            litellm_metadata["org_id"] = str(org_id)
+
+        # Extract API key info
+        if api_key_hash := (metadata.get("user_api_key_api_key") or metadata.get("user_api_key_hash") or request_data.get("user_api_key_hash")):
+            litellm_metadata["api_key_hash"] = str(api_key_hash)
+        if api_key_alias := metadata.get("user_api_key_alias"):
+            litellm_metadata["api_key_alias"] = str(api_key_alias)
+        if user_email := metadata.get("user_api_key_user_email"):
+            litellm_metadata["user_email"] = str(user_email)
+        if request_route := (metadata.get("user_api_key_request_route") or request_data.get("user_api_key_request_route")):
+            litellm_metadata["request_route"] = str(request_route)
+
+        # Model info (pre-call only)
+        if model := request_data.get("model"):
+            litellm_metadata["model"] = str(model)
+        if openai_user := request_data.get("user"):  # OpenAI 'user' field
+            litellm_metadata["openai_user"] = str(openai_user)
+
+        return litellm_metadata
 
     def _format_violation_message(
         self, detection_info: Any, is_output: bool = False
