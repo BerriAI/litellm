@@ -1,6 +1,7 @@
-import json
 import os
 import sys
+import time
+import types
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,11 +13,50 @@ sys.path.insert(0, os.path.abspath("../.."))
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
-from litellm.types.integrations.slack_alerting import HangingRequestData
+from litellm.types.integrations.slack_alerting import (
+    HANGING_ALERT_BUFFER_TIME_SECONDS,
+    HangingRequestData,
+)
 
 
 class TestAlertingHangingRequestCheck:
     """Test suite for AlertingHangingRequestCheck class"""
+
+    @pytest.fixture
+    def proxy_server_module_factory(self):
+        """Factory for a dummy litellm.proxy.proxy_server module used by tests."""
+
+        _UNSET = object()
+
+        def _factory(
+            internal_usage_cache_return_value: Optional[dict] = None,
+            internal_usage_cache_side_effect: Optional[list] = None,
+            internal_usage_cache=_UNSET,
+        ):
+            dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
+            proxy_logging_obj = MagicMock()
+
+            # Distinguish between:
+            # - internal_usage_cache is None: litellm should return early
+            # - internal_usage_cache exists but async_get_cache returns None: request is still hanging
+            if internal_usage_cache is _UNSET:
+                mock_internal_cache = AsyncMock()
+                if internal_usage_cache_side_effect is not None:
+                    mock_internal_cache.async_get_cache.side_effect = (
+                        internal_usage_cache_side_effect
+                    )
+                else:
+                    mock_internal_cache.async_get_cache.return_value = (
+                        internal_usage_cache_return_value
+                    )
+                proxy_logging_obj.internal_usage_cache = mock_internal_cache
+            else:
+                proxy_logging_obj.internal_usage_cache = internal_usage_cache
+
+            setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+            return dummy_proxy_server
+
+        return _factory
 
     @pytest.fixture
     def mock_slack_alerting(self):
@@ -40,9 +80,13 @@ class TestAlertingHangingRequestCheck:
         checker = AlertingHangingRequestCheck(slack_alerting_object=mock_slack_alerting)
 
         # The cache should be created with TTL = alerting_threshold + buffer time
+        # NOTE: checker runs every alerting_threshold/2, so we keep entries long enough
+        # to guarantee at least one post-threshold check can occur.
         expected_ttl = (
-            mock_slack_alerting.alerting_threshold + 60
-        )  # HANGING_ALERT_BUFFER_TIME_SECONDS
+            mock_slack_alerting.alerting_threshold
+            + (mock_slack_alerting.alerting_threshold / 2)
+            + HANGING_ALERT_BUFFER_TIME_SECONDS
+        )
         assert checker.hanging_request_cache.default_ttl == expected_ttl
 
     @pytest.mark.asyncio
@@ -57,9 +101,15 @@ class TestAlertingHangingRequestCheck:
             "litellm_call_id": "test_request_123",
             "model": "gpt-4",
             "deployment": {"litellm_params": {"api_base": "https://api.openai.com/v1"}},
-            "metadata": {
-                "user_api_key_alias": "test_key",
-                "user_api_key_team_alias": "test_team",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_alias": "test_key",
+                    "user_api_key_team_alias": "test_team",
+                    "user_api_key_org_id": "org_123",
+                    "user_api_key_team_id": "team_123",
+                    "model_info": {"id": "deployment_abc"},
+                    "alerting_metadata": {"trace_id": "trace_1"},
+                }
             },
         }
 
@@ -80,6 +130,10 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.request_id == "test_request_123"
         assert cached_data.model == "gpt-4"
         assert cached_data.api_base == "https://api.openai.com/v1"
+        assert cached_data.organization_id == "org_123"
+        assert cached_data.team_id == "team_123"
+        assert cached_data.deployment_id == "deployment_abc"
+        assert cached_data.alerting_metadata == {"trace_id": "trace_1"}
 
     @pytest.mark.asyncio
     async def test_add_request_to_hanging_request_check_none_request_data(
@@ -121,6 +175,36 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.api_base is None
         assert cached_data.key_alias == ""
         assert cached_data.team_alias == ""
+        assert cached_data.organization_id is None
+        assert cached_data.team_id is None
+        assert cached_data.deployment_id is None
+        assert cached_data.alerting_metadata is None
+
+    @pytest.mark.asyncio
+    async def test_add_request_to_hanging_request_check_uses_litellm_params_fallback_for_api_base(
+        self, hanging_request_checker
+    ):
+        request_data = {
+            "litellm_call_id": "fallback_api_base_1",
+            "model": "gpt-4",
+            "litellm_params": {"api_base": "https://example.com/v1"},
+        }
+
+        with patch(
+            "litellm.get_api_base", return_value="https://example.com/v1"
+        ) as mock_get_api_base:
+            await hanging_request_checker.add_request_to_hanging_request_check(
+                request_data
+            )
+
+        mock_get_api_base.assert_called_once()
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="fallback_api_base_1"
+            )
+        )
+        assert cached_data is not None
+        assert cached_data.api_base == "https://example.com/v1"
 
     @pytest.mark.asyncio
     async def test_send_hanging_request_alert(self, hanging_request_checker):
@@ -132,11 +216,18 @@ class TestAlertingHangingRequestCheck:
             request_id="test_hanging_request",
             model="gpt-4",
             api_base="https://api.openai.com/v1",
+            organization_id="org_123",
+            team_id="team_123",
+            deployment_id="deployment_abc",
             key_alias="test_key",
             team_alias="test_team",
         )
 
-        await hanging_request_checker.send_hanging_request_alert(hanging_request_data)
+        await hanging_request_checker.send_hanging_request_alert(
+            hanging_request_data,
+            elapsed_seconds=301.23,
+            threshold_seconds=hanging_request_checker.slack_alerting_object.alerting_threshold,
+        )
 
         # Verify slack alert was called
         hanging_request_checker.slack_alerting_object.send_alert.assert_called_once()
@@ -146,29 +237,36 @@ class TestAlertingHangingRequestCheck:
         message = call_args[1]["message"]
 
         assert "Requests are hanging - 300s+ request time" in message
+        assert "Request ID: `test_hanging_request`" in message
         assert "Request Model: `gpt-4`" in message
+        assert "Elapsed: `301.23s`" in message
         assert "API Base: `https://api.openai.com/v1`" in message
+        assert "Deployment ID: `deployment_abc`" in message
+        assert "Organization ID: `org_123`" in message
+        assert "Team ID: `team_123`" in message
         assert "Key Alias: `test_key`" in message
         assert "Team Alias: `test_team`" in message
         assert call_args[1]["level"] == "Medium"
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_no_proxy_logging(
-        self, hanging_request_checker
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when proxy_logging_obj.internal_usage_cache is None.
         Should return early without processing when internal usage cache is unavailable.
         """
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy:
-            mock_proxy.internal_usage_cache = None
+        dummy_proxy_server = proxy_server_module_factory(internal_usage_cache=None)
 
+        with patch.dict(
+            sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}
+        ):
             result = await hanging_request_checker.send_alerts_for_hanging_requests()
             assert result is None
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_with_completed_request(
-        self, hanging_request_checker
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when request has completed (not hanging).
@@ -184,12 +282,13 @@ class TestAlertingHangingRequestCheck:
             key="completed_request_789", value=hanging_data, ttl=300
         )
 
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy:
-            # Mock internal usage cache to return a request status (meaning request completed)
-            mock_internal_cache = AsyncMock()
-            mock_internal_cache.async_get_cache.return_value = {"status": "success"}
-            mock_proxy.internal_usage_cache = mock_internal_cache
+        dummy_proxy_server = proxy_server_module_factory(
+            internal_usage_cache_return_value={"status": "success"}
+        )
 
+        with patch.dict(
+            sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}
+        ):
             # Mock the cache method to return our test request
             hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
                 AsyncMock(return_value=["completed_request_789"])
@@ -202,7 +301,7 @@ class TestAlertingHangingRequestCheck:
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_with_actual_hanging_request(
-        self, hanging_request_checker
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when request is actually hanging.
@@ -216,16 +315,26 @@ class TestAlertingHangingRequestCheck:
             key_alias="test_key",
             team_alias="test_team",
         )
+        # Ensure this request is older than alerting_threshold to avoid false positives
+        alerting_threshold = (
+            hanging_request_checker.slack_alerting_object.alerting_threshold
+        )
+        safety_margin_seconds = 10
+        hanging_data.start_time = time.time() - (
+            alerting_threshold + safety_margin_seconds
+        )
         await hanging_request_checker.hanging_request_cache.async_set_cache(
             key="hanging_request_999", value=hanging_data, ttl=300
         )
 
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy:
-            # Mock internal usage cache to return None (meaning request is still hanging)
-            mock_internal_cache = AsyncMock()
-            mock_internal_cache.async_get_cache.return_value = None
-            mock_proxy.internal_usage_cache = mock_internal_cache
+        # Mock internal usage cache to return None (meaning request is still hanging)
+        dummy_proxy_server = proxy_server_module_factory(
+            internal_usage_cache_return_value=None
+        )
 
+        with patch.dict(
+            sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}
+        ):
             # Mock the cache method to return our test request
             hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
                 AsyncMock(return_value=["hanging_request_999"])
@@ -236,18 +345,141 @@ class TestAlertingHangingRequestCheck:
         # Verify alert was sent for hanging request
         hanging_request_checker.slack_alerting_object.send_alert.assert_called_once()
 
+        # Verify the cache was updated to mark alert_sent=True
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="hanging_request_999"
+            )
+        )
+        assert cached_data is not None
+        assert cached_data.alert_sent is True
+
+    @pytest.mark.asyncio
+    async def test_send_alerts_for_hanging_requests_does_not_alert_before_threshold(
+        self, hanging_request_checker, proxy_server_module_factory
+    ):
+        """Should not send hanging alert before alerting_threshold has elapsed."""
+        hanging_data = HangingRequestData(
+            request_id="not_yet_hanging_request",
+            model="gpt-4",
+            api_base="https://api.openai.com/v1",
+        )
+        hanging_data.start_time = time.time()  # just started
+        await hanging_request_checker.hanging_request_cache.async_set_cache(
+            key="not_yet_hanging_request", value=hanging_data, ttl=300
+        )
+
+        dummy_proxy_server = proxy_server_module_factory(
+            internal_usage_cache_return_value=None
+        )
+
+        with patch.dict(
+            sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}
+        ):
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
+                AsyncMock(return_value=["not_yet_hanging_request"])
+            )
+
+            await hanging_request_checker.send_alerts_for_hanging_requests()
+
+        hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_alerts_for_hanging_requests_prevents_duplicate_alerts(
+        self, hanging_request_checker, proxy_server_module_factory
+    ):
+        """Should not send duplicate alerts for the same request_id after alert_sent is True."""
+        hanging_data = HangingRequestData(
+            request_id="duplicate_alert_test",
+            model="gpt-4",
+            api_base="https://api.openai.com/v1",
+        )
+        alerting_threshold = (
+            hanging_request_checker.slack_alerting_object.alerting_threshold
+        )
+        safety_margin_seconds = 10
+        hanging_data.start_time = time.time() - (
+            alerting_threshold + safety_margin_seconds
+        )
+        hanging_data.alert_sent = True
+
+        await hanging_request_checker.hanging_request_cache.async_set_cache(
+            key="duplicate_alert_test", value=hanging_data, ttl=300
+        )
+
+        dummy_proxy_server = proxy_server_module_factory(
+            internal_usage_cache_return_value=None
+        )
+
+        with patch.dict(
+            sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}
+        ):
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
+                AsyncMock(return_value=["duplicate_alert_test"])
+            )
+
+            await hanging_request_checker.send_alerts_for_hanging_requests()
+
+        hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_alerts_for_hanging_requests_rechecks_status_before_alert(
+        self, hanging_request_checker, proxy_server_module_factory
+    ):
+        """Should avoid false alerts if the request completes between status checks."""
+        request_id = "race_completion_request"
+        hanging_data = HangingRequestData(
+            request_id=request_id,
+            model="gpt-4",
+            api_base="https://api.openai.com/v1",
+        )
+        alerting_threshold = (
+            hanging_request_checker.slack_alerting_object.alerting_threshold
+        )
+        hanging_data.start_time = time.time() - (alerting_threshold + 10)
+
+        await hanging_request_checker.hanging_request_cache.async_set_cache(
+            key=request_id, value=hanging_data, ttl=300
+        )
+
+        # First call -> still hanging (None), second call -> completed.
+        dummy_proxy_server = proxy_server_module_factory(
+            internal_usage_cache_side_effect=[None, {"status": "success"}]
+        )
+
+        with patch.dict(
+            sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}
+        ):
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
+                AsyncMock(return_value=[request_id])
+            )
+            await hanging_request_checker.send_alerts_for_hanging_requests()
+
+        hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
+
+        # Request should be removed from hanging cache after re-check detects completion.
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key=request_id
+            )
+        )
+        assert cached_data is None
+
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_with_missing_hanging_data(
-        self, hanging_request_checker
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when hanging request data is missing from cache.
         Should continue processing other requests when individual request data is missing.
         """
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy:
-            mock_internal_cache = AsyncMock()
-            mock_proxy.internal_usage_cache = mock_internal_cache
+        dummy_proxy_server = proxy_server_module_factory(
+            internal_usage_cache_return_value=None
+        )
 
+        with patch.dict(
+            sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}
+        ):
             # Mock cache to return request ID but no data (simulating expired or missing data)
             hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
                 AsyncMock(return_value=["missing_request_111"])

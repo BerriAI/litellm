@@ -1,7 +1,8 @@
 import os
+import time
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import List, Optional, Set
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -196,6 +197,22 @@ class HangingRequestData(BaseModel):
     request_id: str
     model: str
     api_base: Optional[str] = None
+
+    # Organization / team metadata (best-effort).
+    # NOTE: In proxy flows, organization id is typically stored as `user_api_key_org_id`.
+    organization_id: Optional[str] = None
+    team_id: Optional[str] = None
+
+    # Routing metadata (best-effort).
+    deployment_id: Optional[str] = None
+
     key_alias: Optional[str] = None
     team_alias: Optional[str] = None
     alerting_metadata: Optional[dict] = None
+
+    # Timestamp (epoch seconds) when the request was registered for hanging checks.
+    # Used to prevent errant alerts before `alerting_threshold` has elapsed.
+    start_time: float = Field(default_factory=lambda: time.time())
+
+    # Internal flag to avoid sending repeated alerts for the same request_id.
+    alert_sent: bool = False
