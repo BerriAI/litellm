@@ -42,6 +42,37 @@ describe("MCPServerEdit (stdio)", () => {
     vi.clearAllMocks();
   });
 
+  it("should render without crashing", () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          server_id: "server-1",
+          server_name: "TestServer",
+          alias: "test",
+          description: "desc",
+          transport: "stdio",
+          url: null,
+          auth_type: "none",
+          command: "npx",
+          args: ["-y", "@circleci/mcp-server-circleci"],
+          env: { CIRCLECI_TOKEN: "token" },
+          created_at: "2024-01-01T00:00:00Z",
+          created_by: "user-1",
+          updated_at: "2024-01-01T00:00:00Z",
+          updated_by: "user-1",
+          mcp_access_groups: [],
+        }}
+        // Avoid triggering async tool fetch side-effects in this smoke test.
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Server Configuration" })).toBeInTheDocument();
+  });
+
   it("should allow updating stdio transport configuration", async () => {
     const onCancel = vi.fn();
     const onSuccess = vi.fn();
@@ -88,7 +119,7 @@ describe("MCPServerEdit (stdio)", () => {
     );
 
     // Stdio section should be visible
-    expect(await screen.findByText("Command")).toBeInTheDocument();
+    expect(screen.getByLabelText("Command")).toBeInTheDocument();
 
     // URL field should not be visible when transport=stdio
     expect(screen.queryByText("MCP Server URL")).not.toBeInTheDocument();

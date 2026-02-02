@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -409,8 +409,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               env: parsedEnv,
             };
 
-            if (!stdioFields.command || parsedArgs.length === 0) {
-              NotificationsManager.fromBackend("Stdio configuration must include a command and at least one arg");
+            if (!stdioFields.command) {
+              NotificationsManager.fromBackend("Stdio configuration must include a command");
               return;
             }
           } catch {
@@ -440,8 +440,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             : [];
 
           const parsedCommand = rawCommand ? String(rawCommand).trim() : "";
-          if (!parsedCommand || parsedArgs.length === 0) {
-            NotificationsManager.fromBackend("Stdio transport requires a command and at least one arg");
+          if (!parsedCommand) {
+            NotificationsManager.fromBackend("Stdio transport requires a command");
             return;
           }
 
@@ -508,7 +508,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 },
               ]}
             >
-              <TextInput />
+              <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
             </Form.Item>
             <Form.Item
               label="Alias"
@@ -519,10 +519,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 },
               ]}
             >
-              <TextInput onChange={() => setAliasManuallyEdited(true)} />
+              <Input
+                onChange={() => setAliasManuallyEdited(true)}
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
             </Form.Item>
             <Form.Item label="Description" name="description">
-              <TextInput />
+              <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
             </Form.Item>
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
               <Select onChange={handleTransportChange}>
@@ -542,7 +545,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
-                <TextInput />
+                <Input
+                  placeholder="https://your-mcp-server.com"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
               </Form.Item>
             )}
 
@@ -570,13 +576,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   name="command"
                   rules={[{ required: true, message: "Please enter a command for stdio transport" }]}
                 >
-                  <TextInput placeholder="e.g., npx" />
+                  <Input
+                    placeholder="e.g., npx"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
                 </Form.Item>
 
                 <Form.Item
                   label="Args"
                   name="args"
-                  rules={[{ required: true, message: "Please enter at least one arg for stdio transport" }]}
+                  rules={[]}
                 >
                   <Select
                     mode="tags"
@@ -639,8 +648,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   },
                 ]}
               >
-                <TextInput
-                  type="password"
+                <Input.Password
                   placeholder="Enter token or secret (leave blank to keep existing)"
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
@@ -660,8 +668,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name={["credentials", "client_id"]}
                 >
-                  <TextInput
-                    type="password"
+                  <Input.Password
                     placeholder="Enter OAuth client ID (leave blank to keep existing)"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -677,8 +684,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name={["credentials", "client_secret"]}
                 >
-                  <TextInput
-                    type="password"
+                  <Input.Password
                     placeholder="Enter OAuth client secret (leave blank to keep existing)"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -713,7 +719,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name="authorization_url"
                 >
-                  <TextInput
+                  <Input
                     placeholder="https://example.com/oauth/authorize"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -729,7 +735,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name="token_url"
                 >
-                  <TextInput
+                  <Input
                     placeholder="https://example.com/oauth/token"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -745,7 +751,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name="registration_url"
                 >
-                  <TextInput
+                  <Input
                     placeholder="https://example.com/oauth/register"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
