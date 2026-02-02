@@ -150,6 +150,8 @@ class SemanticMCPToolFilter:
         Returns:
             Filtered and ordered list of tools (up to top_k)
         """
+        # Query semantic router with limit for top-k matches
+        from semantic_router.schema import RouteChoice
         if not self.enabled or not available_tools:
             return available_tools
         
@@ -169,11 +171,9 @@ class SemanticMCPToolFilter:
                 verbose_logger.warning("Router rebuild failed, returning all tools")
                 return available_tools
             
-            # Query semantic router
-            from semantic_router.schema import RouteChoice
             
-            verbose_logger.debug(f"Querying semantic router with: '{query[:50]}...'")
-            matches = self.tool_router(text=query)
+            verbose_logger.debug(f"Querying semantic router with: '{query[:50]}...' (top_k={top_k})")
+            matches = self.tool_router(text=query, limit=top_k)
             
             if not matches:
                 verbose_logger.warning(
@@ -184,10 +184,11 @@ class SemanticMCPToolFilter:
             # Extract matched tool names
             matched_names: List[str] = []
             if isinstance(matches, RouteChoice):
-                matched_names = [matches.name]
+                if matches.name:
+                    matched_names = [matches.name]
             elif isinstance(matches, list):
                 # semantic-router returns list of RouteChoice, take top_k
-                matched_names = [m.name for m in matches[:top_k] if hasattr(m, 'name')]
+                matched_names = [m.name for m in matches[:top_k] if hasattr(m, 'name') and m.name is not None]
             
             if not matched_names:
                 verbose_logger.warning("No matched tool names extracted, returning all tools")

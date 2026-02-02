@@ -55,7 +55,7 @@ async def test_e2e_semantic_filter():
     
     data = {
         "model": "gpt-4",
-        "messages": [{"role": "user", "content": "Send an email"}],
+        "messages": [{"role": "user", "content": "Send an email and create a calendar event"}],
         "tools": tools,
     }
     
