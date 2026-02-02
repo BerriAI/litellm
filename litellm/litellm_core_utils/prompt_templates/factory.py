@@ -3427,7 +3427,7 @@ def _deduplicate_bedrock_content_blocks(
     deduplicated: List[BedrockContentBlock] = []
     for block in blocks:
         keyed = block.get(block_key)
-        if keyed is not None:
+        if keyed is not None and isinstance(keyed, dict):
             block_id = keyed.get(id_key)
             if block_id:
                 if block_id in seen_ids:
