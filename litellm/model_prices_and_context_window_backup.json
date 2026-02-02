@@ -29785,6 +29785,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_regions": ["global"],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29797,6 +29798,7 @@
         "mode": "chat",
         "output_cost_per_token": 4e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_regions": ["global"],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29809,6 +29811,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_regions": ["global"],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29821,6 +29824,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_regions": ["global"],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },

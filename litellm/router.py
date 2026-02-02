@@ -88,6 +88,7 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
+    filter_deployments_by_access_groups,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -116,6 +117,9 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
 )
 from litellm.router_utils.pre_call_checks.responses_api_deployment_check import (
     ResponsesApiDeploymentCheck,
+)
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
+    ModelRateLimitingCheck,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -224,6 +228,7 @@ class Router:
         redis_host: Optional[str] = None,
         redis_port: Optional[int] = None,
         redis_password: Optional[str] = None,
+        redis_db: Optional[int] = None,
         cache_responses: Optional[bool] = False,
         cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
         caching_groups: Optional[
@@ -409,6 +414,12 @@ class Router:
 
             if redis_password is not None:
                 cache_config["password"] = redis_password
+
+            if redis_db is not None:
+                verbose_router_logger.warning(
+                    "Deprecated 'redis_db' argument used. Please remove 'redis_db' from your config/database and use 'cache_kwargs' instead."
+                )
+                cache_config["db"] = str(redis_db)
 
             # Add additional key-value pairs from cache_kwargs
             cache_config.update(cache_kwargs)
@@ -1187,6 +1198,8 @@ class Router:
                     )
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
+                elif pre_call_check == "enforce_model_rate_limits":
+                    _callback = ModelRateLimitingCheck(dual_cache=self.cache)
                 if _callback is not None:
                     if self.optional_callbacks is None:
                         self.optional_callbacks = []
@@ -8075,9 +8088,16 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(
-            f"healthy_deployments after web search filter: {healthy_deployments}"
+        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
+
+        # Filter by allowed access groups (GitHub issue #18333)
+        # This prevents cross-team load balancing when teams have models with same name in different access groups
+        healthy_deployments = filter_deployments_by_access_groups(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
         )
+
+        verbose_router_logger.debug(f"healthy_deployments after access group filter: {healthy_deployments}")
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
