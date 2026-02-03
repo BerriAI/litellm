@@ -800,7 +800,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         _config = proxy_config.get_config_state()
         _litellm_settings = _config.get("litellm_settings", {})
         verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
-        ProxyStartupEvent._initialize_semantic_tool_filter(
+        await ProxyStartupEvent._initialize_semantic_tool_filter(
             llm_router=llm_router,
             litellm_settings=_litellm_settings,
         )
@@ -4757,7 +4757,7 @@ class ProxyStartupEvent:
         )
 
     @classmethod
-    def _initialize_semantic_tool_filter(
+    async def _initialize_semantic_tool_filter(
         cls,
         llm_router: Optional[Router],
         litellm_settings: Dict[str, Any],
@@ -4773,7 +4773,7 @@ class ProxyStartupEvent:
         mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
         verbose_proxy_logger.debug(f"Semantic filter config: {mcp_semantic_filter_config}")
         
-        hook = SemanticToolFilterHook.initialize_from_config(
+        hook = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
             llm_router=llm_router,
         )

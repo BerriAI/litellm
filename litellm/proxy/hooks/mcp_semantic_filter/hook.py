@@ -237,7 +237,7 @@ class SemanticToolFilterHook(CustomLogger):
         return None
     
     @staticmethod
-    def initialize_from_config(
+    async def initialize_from_config(
         config: Optional[Dict[str, Any]],
         llm_router: Optional["Router"],
     ) -> Optional["SemanticToolFilterHook"]:
@@ -281,6 +281,9 @@ class SemanticToolFilterHook(CustomLogger):
                 similarity_threshold=similarity_threshold,
                 enabled=True,
             )
+            
+            # Build router from MCP registry on startup
+            await semantic_filter.build_router_from_mcp_registry()
             
             hook = SemanticToolFilterHook(semantic_filter)
             
