@@ -22,17 +22,21 @@ class A2AError(BaseLLMException):
         )
 
 
-def extract_text_from_a2a_message(message: Dict[str, Any]) -> str:
+def extract_text_from_a2a_message(
+    message: Dict[str, Any], depth: int = 0, max_depth: int = 10
+) -> str:
     """
     Extract text content from A2A message parts.
     
     Args:
         message: A2A message dict with 'parts' containing text parts
+        depth: Current recursion depth (internal use)
+        max_depth: Maximum recursion depth to prevent infinite loops
     
     Returns:
         Concatenated text from all text parts
     """
-    if message is None:
+    if message is None or depth >= max_depth:
         return ""
     
     parts = message.get("parts", [])
@@ -41,16 +45,24 @@ def extract_text_from_a2a_message(message: Dict[str, Any]) -> str:
     for part in parts:
         if part.get("kind") == "text":
             text_parts.append(part.get("text", ""))
+        # Handle nested parts if they exist
+        elif "parts" in part:
+            nested_text = extract_text_from_a2a_message(part, depth + 1, max_depth)
+            if nested_text:
+                text_parts.append(nested_text)
     
     return " ".join(text_parts)
 
 
-def extract_text_from_a2a_response(response_dict: Dict[str, Any]) -> str:
+def extract_text_from_a2a_response(
+    response_dict: Dict[str, Any], max_depth: int = 10
+) -> str:
     """
     Extract text content from A2A response result.
     
     Args:
         response_dict: A2A response dict with 'result' containing message
+        max_depth: Maximum recursion depth to prevent infinite loops
     
     Returns:
         Text from response message parts
@@ -66,17 +78,19 @@ def extract_text_from_a2a_response(response_dict: Dict[str, Any]) -> str:
     
     # Check if result itself has parts (direct message)
     if "parts" in result:
-        return extract_text_from_a2a_message(result)
+        return extract_text_from_a2a_message(result, depth=0, max_depth=max_depth)
     
     # Check for nested message
     message = result.get("message")
     if message:
-        return extract_text_from_a2a_message(message)
+        return extract_text_from_a2a_message(message, depth=0, max_depth=max_depth)
     
     # Handle task result with artifacts
     artifacts = result.get("artifacts", [])
     if artifacts and len(artifacts) > 0:
         first_artifact = artifacts[0]
-        return extract_text_from_a2a_message(first_artifact)
+        return extract_text_from_a2a_message(
+            first_artifact, depth=0, max_depth=max_depth
+        )
     
     return ""
