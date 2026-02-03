@@ -9,24 +9,6 @@ from typing import Any, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-from litellm.proxy.route_llm_request import (
-    ROUTE_ENDPOINT_MAPPING,
-    ProxyModelNotFoundError,
-)
-
-
-def is_a2a_agent_model(model_name: Any) -> bool:
-    """
-    Check if the model name is for an A2A agent (a2a/ prefix).
-    
-    Args:
-        model_name: The model name to check
-        
-    Returns:
-        True if this is an A2A agent model, False otherwise
-    """
-    return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
 async def route_a2a_agent_request(data: dict, route_type: str) -> Optional[Any]:
@@ -35,6 +17,13 @@ async def route_a2a_agent_request(data: dict, route_type: str) -> Optional[Any]:
     
     Returns None if not an A2A request (allows normal routing to continue).
     """
+    # Import here to avoid circular imports
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.route_llm_request import (
+        ROUTE_ENDPOINT_MAPPING,
+        ProxyModelNotFoundError,
+    )
+    
     model_name = data.get("model", "")
     
     # Check if this is an A2A agent request
