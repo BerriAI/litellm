@@ -303,7 +303,9 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             signed_json_body=signed_json_body,
         )
-        return provider_config.transform_response(
+        # Time response translation
+        response_translation_start = time.perf_counter()
+        result = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -316,6 +318,10 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=json_mode,
         )
+        response_translation_end = time.perf_counter()
+        response_translation_time_ms = (response_translation_end - response_translation_start) * 1000
+        logging_obj.model_call_details["response_translation_time_ms"] = response_translation_time_ms
+        return result
 
     def completion(
         self,
@@ -538,7 +544,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             logging_obj=logging_obj,
         )
-        return provider_config.transform_response(
+        # Time response translation
+        response_translation_start = time.perf_counter()
+        result = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -551,6 +559,10 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=json_mode,
         )
+        response_translation_end = time.perf_counter()
+        response_translation_time_ms = (response_translation_end - response_translation_start) * 1000
+        logging_obj.model_call_details["response_translation_time_ms"] = response_translation_time_ms
+        return result
 
     def make_sync_call(
         self,
@@ -596,6 +608,8 @@ class BaseLLMHTTPHandler:
         )
 
         if fake_stream is True:
+            # Time response translation
+            response_translation_start = time.perf_counter()
             model_response: ModelResponse = provider_config.transform_response(
                 model=model,
                 raw_response=response,
@@ -608,6 +622,9 @@ class BaseLLMHTTPHandler:
                 encoding=None,
                 json_mode=json_mode,
             )
+            response_translation_end = time.perf_counter()
+            response_translation_time_ms = (response_translation_end - response_translation_start) * 1000
+            logging_obj.model_call_details["response_translation_time_ms"] = response_translation_time_ms
 
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
@@ -734,6 +751,8 @@ class BaseLLMHTTPHandler:
         )
 
         if fake_stream is True:
+            # Time response translation
+            response_translation_start = time.perf_counter()
             model_response: ModelResponse = provider_config.transform_response(
                 model=model,
                 raw_response=response,
@@ -746,6 +765,9 @@ class BaseLLMHTTPHandler:
                 encoding=None,
                 json_mode=json_mode,
             )
+            response_translation_end = time.perf_counter()
+            response_translation_time_ms = (response_translation_end - response_translation_start) * 1000
+            logging_obj.model_call_details["response_translation_time_ms"] = response_translation_time_ms
 
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
