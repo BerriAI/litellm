@@ -132,14 +132,19 @@ class AlertingHangingRequestCheck:
         """
         Send alerts for hanging requests
         """
-        from litellm.proxy.proxy_server import proxy_logging_obj
-
         #########################################################
         # Find all requests that have been hanging for more than the alerting threshold
         # Get the last N oldest items in the cache and check if they have completed
         #########################################################
-        # check if request_id is in internal usage cache
-        if proxy_logging_obj.internal_usage_cache is None:
+
+        # Prefer the cache carried by the SlackAlerting instance.
+        # This avoids importing `litellm.proxy.proxy_server` (proxy extras are
+        # optional in many environments and importing the proxy server can have
+        # heavyweight dependencies).
+        internal_usage_cache = getattr(
+            self.slack_alerting_object, "internal_usage_cache", None
+        )
+        if internal_usage_cache is None:
             return
 
         hanging_requests = await self.hanging_request_cache.async_get_oldest_n_keys(
@@ -152,25 +157,22 @@ class AlertingHangingRequestCheck:
         )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[HangingRequestData] = (
-                await self.hanging_request_cache.async_get_cache(
-                    key=request_id,
-                )
+            hanging_request_data: Optional[
+                HangingRequestData
+            ] = await self.hanging_request_cache.async_get_cache(
+                key=request_id,
             )
 
             if hanging_request_data is None:
                 continue
 
-            request_status = (
-                await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                    key="request_status:{}".format(hanging_request_data.request_id),
-                    litellm_parent_otel_span=None,
-                    local_only=True,
-                )
+            request_status = await self._get_request_status_from_internal_cache(
+                internal_usage_cache=internal_usage_cache,
+                request_id=hanging_request_data.request_id,
             )
             # this means the request status was either success or fail
             # and is not hanging
-            if request_status is not None:
+            if self._request_is_completed(request_status):
                 # clear this request from hanging request cache since the request was either success or failed
                 self.hanging_request_cache._remove_key(
                     key=request_id,
@@ -191,14 +193,11 @@ class AlertingHangingRequestCheck:
 
             # Reduce completion-race false positives: request may complete between the
             # first status check above and the Slack send below.
-            request_status = (
-                await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                    key="request_status:{}".format(hanging_request_data.request_id),
-                    litellm_parent_otel_span=None,
-                    local_only=True,
-                )
+            request_status = await self._get_request_status_from_internal_cache(
+                internal_usage_cache=internal_usage_cache,
+                request_id=hanging_request_data.request_id,
             )
-            if request_status is not None:
+            if self._request_is_completed(request_status):
                 self.hanging_request_cache._remove_key(
                     key=request_id,
                 )
@@ -224,6 +223,50 @@ class AlertingHangingRequestCheck:
             )
 
         return
+
+    async def _get_request_status_from_internal_cache(
+        self,
+        internal_usage_cache: Any,
+        request_id: str,
+    ) -> Any:
+        """Read request status from either DualCache or InternalUsageCache.
+
+        In the proxy server, `SlackAlerting.internal_usage_cache` is usually a
+        `DualCache` (parameter name: `parent_otel_span`).
+
+        Historically, hanging alerts used `ProxyLogging.internal_usage_cache`
+        (parameter name: `litellm_parent_otel_span`).
+
+        We support both without importing the proxy server.
+        """
+
+        cache_key = "request_status:{}".format(request_id)
+        try:
+            return await internal_usage_cache.async_get_cache(
+                key=cache_key,
+                parent_otel_span=None,
+                local_only=True,
+            )
+        except TypeError:
+            return await internal_usage_cache.async_get_cache(
+                key=cache_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
+
+    def _request_is_completed(self, request_status: Any) -> bool:
+        """Return True if the cached request_status indicates completion.
+
+        In the proxy, status is set as a string ('success' | 'fail').
+        Some deployments may have historically stored a dict with a 'status' field.
+        """
+
+        if request_status in ("success", "fail"):
+            return True
+        if isinstance(request_status, dict):
+            status_value = request_status.get("status")
+            return status_value in ("success", "fail")
+        return False
 
     async def check_for_hanging_requests(
         self,
