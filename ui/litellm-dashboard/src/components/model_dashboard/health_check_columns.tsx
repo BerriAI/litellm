@@ -112,7 +112,7 @@ export const healthCheckColumns = (
       const teamId = model.model_info?.team_id;
 
       if (!teamId) {
-        return <Text className="text-gray-400 text-sm">-</Text>;
+        return <span className="text-gray-400 text-sm">-</span>;
       }
 
       const team = teams?.find((t) => t.team_id === teamId);
