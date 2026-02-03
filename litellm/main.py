@@ -2462,6 +2462,20 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers
 
+            # Add GitHub Copilot headers (same as /responses endpoint does)
+            if custom_llm_provider == "github_copilot":
+                from litellm.llms.github_copilot.common_utils import (
+                    get_copilot_default_headers,
+                )
+                from litellm.llms.github_copilot.authenticator import Authenticator
+
+                copilot_auth = Authenticator()
+                copilot_api_key = copilot_auth.get_api_key()
+                copilot_headers = get_copilot_default_headers(copilot_api_key)
+                if extra_headers:
+                    copilot_headers.update(extra_headers)
+                extra_headers = copilot_headers
+
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
