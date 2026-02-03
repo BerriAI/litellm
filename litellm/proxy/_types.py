@@ -359,7 +359,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/vector_store/list",
         "/v1/vector_store/list",
-
         # search
         "/search",
         "/v1/search",
@@ -2217,16 +2216,26 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
     def __init__(self, **kwargs):
-        # Handle litellm_budget_table_* keys
+        # Handle litellm_budget_table_* keys (from JOIN queries)
         for key, value in list(kwargs.items()):
             if key.startswith("litellm_budget_table_") and value is not None:
                 # Extract the corresponding attribute name
                 attr_name = key.replace("litellm_budget_table_", "")
-                # Check if the value is None and set the corresponding attribute
-                if getattr(self, attr_name, None) is None:
+                # Use value from join if not already present or None in kwargs
+                if kwargs.get(attr_name) is None:
                     kwargs[attr_name] = value
+
             if key == "end_user_id" and value is not None and isinstance(value, int):
                 kwargs[key] = str(value)
+
+        # Handle nested litellm_budget_table object (from Prisma include)
+        if "litellm_budget_table" in kwargs and isinstance(
+            kwargs["litellm_budget_table"], dict
+        ):
+            budget_table = kwargs["litellm_budget_table"]
+            for b_key, b_value in budget_table.items():
+                if b_value is not None and kwargs.get(b_key) is None:
+                    kwargs[b_key] = b_value
 
         if kwargs.get("organization_id") is not None:
             kwargs["org_id"] = kwargs.pop("organization_id")
