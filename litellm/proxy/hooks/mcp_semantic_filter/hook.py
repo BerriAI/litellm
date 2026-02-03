@@ -224,6 +224,8 @@ class SemanticToolFilterHook(CustomLogger):
             tool_names_csv = self._get_tool_names_csv(filtered_tools)
             
             _metadata_variable_name = self._get_metadata_variable_name(data)
+            if _metadata_variable_name not in data:
+                data[_metadata_variable_name] = {}
             data[_metadata_variable_name]["litellm_semantic_filter_stats"] = filter_stats
             data[_metadata_variable_name]["litellm_semantic_filter_tools"] = tool_names_csv
             

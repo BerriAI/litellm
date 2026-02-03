@@ -172,10 +172,20 @@ class SemanticMCPToolFilter:
         if not query or not query.strip():
             return available_tools
 
-        # Router should be built on startup - if not, something went wrong
+        # Lazy-build router from available_tools if not already initialized
         if self.tool_router is None:
-            verbose_logger.warning("Router not initialized - was build_router_from_mcp_registry() called on startup?")
-            return available_tools
+            verbose_logger.info(
+                "Router not pre-built, building from available_tools on first call"
+            )
+            try:
+                self._build_router(available_tools)
+            except Exception as e:
+                verbose_logger.error(f"Failed to lazy-build router: {e}")
+                return available_tools
+
+            if self.tool_router is None:
+                verbose_logger.warning("Router still None after build attempt")
+                return available_tools
 
         # Run semantic filtering
         try:
