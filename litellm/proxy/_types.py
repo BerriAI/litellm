@@ -2845,6 +2845,9 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    overhead_breakdown: Optional[
+        dict
+    ]  # Detailed overhead breakdown: auth_time_ms, cache_read_time_ms, request_translation_time_ms, response_translation_time_ms, retry_count
 
 
 class SpendLogsPayload(TypedDict):

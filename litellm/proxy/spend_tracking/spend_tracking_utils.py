@@ -62,6 +62,7 @@ def _get_spend_logs_metadata(
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
+    overhead_breakdown: Optional[dict] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -87,6 +88,7 @@ def _get_spend_logs_metadata(
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
             cost_breakdown=None,
+            overhead_breakdown=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -113,6 +115,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["overhead_breakdown"] = overhead_breakdown
 
     return clean_metadata
 
@@ -311,9 +314,50 @@ def get_logging_payload(  # noqa: PLR0915
 
     # Extract overhead from hidden_params if available
     litellm_overhead_time_ms = None
+    overhead_breakdown = None
     if standard_logging_payload is not None:
         hidden_params = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+        
+        # Extract overhead breakdown from metadata or hidden_params
+        overhead_breakdown = (
+            standard_logging_payload.get("metadata", {}).get("overhead_breakdown")
+            or hidden_params.get("overhead_breakdown")
+        )
+        
+        # If overhead_breakdown doesn't exist, try to construct it from available data
+        if overhead_breakdown is None:
+            overhead_breakdown = {}
+            
+            # Extract cache read time from caching_details
+            caching_details = standard_logging_payload.get("metadata", {}).get("caching_details")
+            if caching_details and isinstance(caching_details, dict):
+                cache_duration_ms = caching_details.get("cache_duration_ms")
+                if cache_duration_ms is not None:
+                    overhead_breakdown["cache_read_time_ms"] = cache_duration_ms
+            
+            # Extract retry count from previous_models
+            previous_models = metadata.get("previous_models", [])
+            if previous_models and isinstance(previous_models, list):
+                overhead_breakdown["retry_count"] = len(previous_models)
+            
+            # Extract auth time from metadata if available
+            auth_time_ms = metadata.get("auth_time_ms")
+            if auth_time_ms is not None:
+                overhead_breakdown["auth_time_ms"] = auth_time_ms
+            
+            # Extract translation times from metadata if available
+            request_translation_time_ms = metadata.get("request_translation_time_ms")
+            if request_translation_time_ms is not None:
+                overhead_breakdown["request_translation_time_ms"] = request_translation_time_ms
+            
+            response_translation_time_ms = metadata.get("response_translation_time_ms")
+            if response_translation_time_ms is not None:
+                overhead_breakdown["response_translation_time_ms"] = response_translation_time_ms
+            
+            # Only set overhead_breakdown if we have at least one value
+            if not overhead_breakdown:
+                overhead_breakdown = None
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
@@ -366,6 +410,7 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        overhead_breakdown=overhead_breakdown,
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]

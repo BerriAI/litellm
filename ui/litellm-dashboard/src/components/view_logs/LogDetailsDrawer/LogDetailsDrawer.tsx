@@ -190,6 +190,9 @@ export function LogDetailsDrawer({
         {/* Metrics Section */}
         <MetricsSection logEntry={logEntry} metadata={metadata} />
 
+        {/* Overhead Breakdown - Show if overhead breakdown data is available */}
+        <OverheadBreakdownSection metadata={metadata} />
+
         {/* Cost Breakdown - Show if cost breakdown data is available */}
         <CostBreakdownViewer costBreakdown={metadata?.cost_breakdown} totalSpend={logEntry.spend || 0} />
 
@@ -333,6 +336,64 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
         </Descriptions.Item>
       </Descriptions>
     </Card>
+    </div>
+  );
+}
+
+function OverheadBreakdownSection({ metadata }: { metadata: Record<string, any> }) {
+  const overheadBreakdown = metadata?.overhead_breakdown;
+  
+  if (!overheadBreakdown || typeof overheadBreakdown !== 'object') {
+    return null;
+  }
+
+  const hasAnyData = 
+    overheadBreakdown.auth_time_ms !== undefined ||
+    overheadBreakdown.cache_read_time_ms !== undefined ||
+    overheadBreakdown.request_translation_time_ms !== undefined ||
+    overheadBreakdown.response_translation_time_ms !== undefined ||
+    overheadBreakdown.retry_count !== undefined;
+
+  if (!hasAnyData) {
+    return null;
+  }
+
+  const formatTime = (ms: number | undefined) => {
+    if (ms === undefined || ms === null) return "-";
+    return `${ms.toFixed(2)} ms`;
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Card title="Overhead Breakdown" size="small" bordered={false} style={{ marginBottom: 0 }}>
+        <Descriptions column={2} size="small">
+          {overheadBreakdown.auth_time_ms !== undefined && (
+            <Descriptions.Item label="Time in Auth">
+              {formatTime(overheadBreakdown.auth_time_ms)}
+            </Descriptions.Item>
+          )}
+          {overheadBreakdown.cache_read_time_ms !== undefined && (
+            <Descriptions.Item label="Time Reading Cache">
+              {formatTime(overheadBreakdown.cache_read_time_ms)}
+            </Descriptions.Item>
+          )}
+          {overheadBreakdown.request_translation_time_ms !== undefined && (
+            <Descriptions.Item label="Time in Request Translation">
+              {formatTime(overheadBreakdown.request_translation_time_ms)}
+            </Descriptions.Item>
+          )}
+          {overheadBreakdown.response_translation_time_ms !== undefined && (
+            <Descriptions.Item label="Time in Response Translation">
+              {formatTime(overheadBreakdown.response_translation_time_ms)}
+            </Descriptions.Item>
+          )}
+          {overheadBreakdown.retry_count !== undefined && overheadBreakdown.retry_count !== null && (
+            <Descriptions.Item label="Number of Retries">
+              {overheadBreakdown.retry_count}
+            </Descriptions.Item>
+          )}
+        </Descriptions>
+      </Card>
     </div>
   );
 }
