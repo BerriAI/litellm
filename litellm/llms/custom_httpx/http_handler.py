@@ -3,6 +3,7 @@ import os
 import ssl
 import sys
 import time
+import threading
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -68,6 +69,9 @@ headers = get_default_headers()
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+
+_httpx_client_cache_lock = threading.Lock()
+_async_httpx_client_cache_lock = threading.Lock()
 
 
 def _prepare_request_data_and_content(
@@ -1212,27 +1216,28 @@ def get_async_httpx_client(
         cache = LLMClientCache()
         setattr(litellm, "in_memory_llm_clients_cache", cache)
 
-    _cached_client = cache.get_cache(_cache_key_name)
-    if _cached_client:
-        return _cached_client
+    with _async_httpx_client_cache_lock:
+        _cached_client = cache.get_cache(_cache_key_name)
+        if _cached_client:
+            return _cached_client
 
-    if params is not None:
-        # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
-        handler_params["shared_session"] = shared_session
-        _new_client = AsyncHTTPHandler(**handler_params)
-    else:
-        _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0),
-            shared_session=shared_session,
+        if params is not None:
+            # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
+            handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+            handler_params["shared_session"] = shared_session
+            _new_client = AsyncHTTPHandler(**handler_params)
+        else:
+            _new_client = AsyncHTTPHandler(
+                timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+                shared_session=shared_session,
+            )
+
+        cache.set_cache(
+            key=_cache_key_name,
+            value=_new_client,
+            ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
         )
-
-    cache.set_cache(
-        key=_cache_key_name,
-        value=_new_client,
-        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
-    )
-    return _new_client
+        return _new_client
 
 
 def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
@@ -1261,20 +1266,21 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         cache = LLMClientCache()
         setattr(litellm, "in_memory_llm_clients_cache", cache)
 
-    _cached_client = cache.get_cache(_cache_key_name)
-    if _cached_client:
-        return _cached_client
+    with _httpx_client_cache_lock:
+        _cached_client = cache.get_cache(_cache_key_name)
+        if _cached_client:
+            return _cached_client
 
-    if params is not None:
-        # Filter out params that are only used for cache key, not for HTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
-        _new_client = HTTPHandler(**handler_params)
-    else:
-        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+        if params is not None:
+            # Filter out params that are only used for cache key, not for HTTPHandler.__init__
+            handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+            _new_client = HTTPHandler(**handler_params)
+        else:
+            _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
-    cache.set_cache(
-        key=_cache_key_name,
-        value=_new_client,
-        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
-    )
-    return _new_client
+        cache.set_cache(
+            key=_cache_key_name,
+            value=_new_client,
+            ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        )
+        return _new_client

@@ -3,6 +3,7 @@ import os
 import pathlib
 import ssl
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -368,6 +369,47 @@ def test_shared_session_parameter_in_completion():
     # Verify the parameter type annotation
     shared_session_param = sig.parameters['shared_session']
     assert 'ClientSession' in str(shared_session_param.annotation)
+
+
+def test_httpx_client_cache_race_does_not_create_multiple_handlers(monkeypatch):
+    """Ensure concurrent cache misses return a single HTTPHandler instance."""
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx import http_handler
+
+    class _DummyHandler:
+        created = 0
+
+        def __init__(self, *args, **kwargs):
+            type(self).created += 1
+            if type(self).created == 1:
+                init_started.set()
+                allow_finish.wait(timeout=2)
+            self.client = object()
+
+    init_started = threading.Event()
+    allow_finish = threading.Event()
+    results = []
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(http_handler, "HTTPHandler", _DummyHandler)
+
+    def _worker():
+        results.append(http_handler._get_httpx_client(params={"timeout": 1}))
+
+    t1 = threading.Thread(target=_worker)
+    t2 = threading.Thread(target=_worker)
+    t1.start()
+    t2.start()
+
+    init_started.wait(timeout=2)
+    allow_finish.set()
+
+    t1.join(timeout=2)
+    t2.join(timeout=2)
+
+    assert len(results) == 2
+    assert results[0] is results[1]
+    assert _DummyHandler.created == 1
 
 
 @pytest.mark.asyncio
