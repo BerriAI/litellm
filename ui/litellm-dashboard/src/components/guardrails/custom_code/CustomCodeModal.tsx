@@ -9,7 +9,7 @@ import {
   CaretRightOutlined,
   SaveOutlined,
 } from "@ant-design/icons";
-import { createGuardrailCall } from "../../networking";
+import { createGuardrailCall, testCustomCodeGuardrail } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 
 const { Panel } = Collapse;
@@ -226,28 +226,60 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
     }
   };
 
-  // Test guardrail (placeholder - would need backend endpoint)
+  // Test guardrail using backend endpoint
   const handleTest = async () => {
+    if (!accessToken) {
+      setTestResult({ error: "No access token available" });
+      return;
+    }
+
     setIsTesting(true);
     setTestResult(null);
-    
-    // Simulate test - in real implementation, call backend
-    setTimeout(() => {
+
+    try {
+      // Parse test input JSON
+      let parsedInput;
       try {
-        JSON.parse(testInput);
-        // Mock result based on code content
-        if (code.includes("block(")) {
-          setTestResult({ action: "block", reason: "Test blocked" });
-        } else if (code.includes("modify(")) {
-          setTestResult({ action: "modify", modified_texts: ["[REDACTED]"] });
-        } else {
-          setTestResult({ action: "allow" });
-        }
+        parsedInput = JSON.parse(testInput);
       } catch (e) {
         setTestResult({ error: "Invalid test input JSON" });
+        setIsTesting(false);
+        return;
       }
+
+      // Ensure texts array exists
+      if (!parsedInput.texts) {
+        parsedInput.texts = [];
+      }
+
+      const response = await testCustomCodeGuardrail(accessToken, {
+        custom_code: code,
+        test_input: parsedInput,
+        input_type: mode as "request" | "response",
+        request_data: {
+          model: "test-model",
+          metadata: {},
+        },
+      });
+
+      if (response.success && response.result) {
+        setTestResult(response.result);
+      } else if (response.error) {
+        setTestResult({
+          error: response.error,
+          error_type: response.error_type,
+        });
+      } else {
+        setTestResult({ error: "Unknown error occurred" });
+      }
+    } catch (error) {
+      console.error("Failed to test custom code:", error);
+      setTestResult({
+        error: error instanceof Error ? error.message : "Failed to test custom code",
+      });
+    } finally {
       setIsTesting(false);
-    }, 500);
+    }
   };
 
   const lineCount = code.split("\n").length;
@@ -384,13 +416,28 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                         "text-blue-600"
                       }`}>
                         {testResult.error ? (
-                          <><CloseCircleOutlined /> {testResult.error}</>
+                          <>
+                            <CloseCircleOutlined />
+                            <span>
+                              {testResult.error_type && <span className="font-medium">[{testResult.error_type}] </span>}
+                              {testResult.error}
+                            </span>
+                          </>
                         ) : testResult.action === "allow" ? (
                           <><CheckCircleOutlined /> Allowed</>
                         ) : testResult.action === "block" ? (
                           <><CloseCircleOutlined /> Blocked: {testResult.reason}</>
+                        ) : testResult.action === "modify" ? (
+                          <>
+                            <CheckCircleOutlined /> Modified
+                            {testResult.texts && testResult.texts.length > 0 && (
+                              <span className="text-xs text-gray-500 ml-1">
+                                → {testResult.texts[0].substring(0, 50)}{testResult.texts[0].length > 50 ? "..." : ""}
+                              </span>
+                            )}
+                          </>
                         ) : (
-                          <><CheckCircleOutlined /> Modified</>
+                          <><CheckCircleOutlined /> {testResult.action || "Unknown"}</>
                         )}
                       </div>
                     )}
