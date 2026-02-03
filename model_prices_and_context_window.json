@@ -27067,7 +27067,7 @@
         "supports_vision": true
     },
     "together_ai/zai-org/GLM-4.7": {
-        "input_cost_per_token": 4.5e07,
+        "input_cost_per_token": 4.5e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
         "output_cost_per_token": 2e-06,
