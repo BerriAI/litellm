@@ -213,6 +213,7 @@ LLM_CONFIG_NAMES = (
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
     "GroqChatConfig",
+    "A2AConfig",
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
@@ -850,6 +851,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "A2AConfig": (".llms.a2a.chat.transformation", "A2AConfig"),
     "GenAIHubOrchestrationConfig": (
         ".llms.sap.chat.transformation",
         "GenAIHubOrchestrationConfig",
