@@ -37,6 +37,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         tpm_limit: selectedToken.tpm_limit,
         rpm_limit: selectedToken.rpm_limit,
         duration: selectedToken.duration || "",
+        grace_period_hours: 0,
       });
 
       // Initialize the current access token
@@ -223,6 +224,17 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
             Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
           </div>
           {newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
+          <Form.Item
+            name="grace_period_hours"
+            label="Grace Period (hours)"
+            tooltip="Keep the old key valid for this many hours after rotation. Both keys work during this period for seamless cutover. 0 = immediate revoke."
+            className="mt-8"
+          >
+            <InputNumber min={0} max={168} placeholder="0 (immediate revoke)" style={{ width: "100%" }} />
+          </Form.Item>
+          <div className="mt-2 text-sm text-gray-500">
+            Recommended: 24-72 hours for production keys to allow seamless client migration.
+          </div>
         </Form>
       )}
     </Modal>
