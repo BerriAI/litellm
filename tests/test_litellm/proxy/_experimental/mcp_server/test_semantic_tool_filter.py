@@ -71,6 +71,9 @@ async def test_semantic_filter_basic_filtering():
         enabled=True,
     )
     
+    # Build router with the tools before filtering
+    filter_instance._build_router(tools)
+    
     # Filter tools with email-related query
     filtered = await filter_instance.filter_tools(
         query="send an email to john@example.com",
@@ -138,6 +141,9 @@ async def test_semantic_filter_top_k_limiting():
         similarity_threshold=0.3,
         enabled=True,
     )
+    
+    # Build router with the tools before filtering
+    filter_instance._build_router(tools)
     
     # Filter tools
     filtered = await filter_instance.filter_tools(
@@ -297,14 +303,17 @@ async def test_semantic_filter_hook_triggers_on_completion():
         enabled=True,
     )
     
-    # Create hook
-    hook = SemanticToolFilterHook(filter_instance)
-    
     # Prepare data - completion request with tools
     tools = [
         MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
         for i in range(10)
     ]
+    
+    # Build router with the tools before filtering
+    filter_instance._build_router(tools)
+    
+    # Create hook
+    hook = SemanticToolFilterHook(filter_instance)
     
     data = {
         "model": "gpt-4",
@@ -312,6 +321,7 @@ async def test_semantic_filter_hook_triggers_on_completion():
             {"role": "user", "content": "Send an email"}
         ],
         "tools": tools,
+        "metadata": {},  # Hook needs metadata field to store filter stats
     }
     
     # Mock user API key dict and cache
