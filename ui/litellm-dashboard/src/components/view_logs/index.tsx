@@ -1,18 +1,20 @@
 import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { useQuery } from "@tanstack/react-query";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import FilterComponent from "../molecules/filter";
-import { keyInfoV1Call } from "../networking";
+import { errorStatsCall, keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
+import { ErrorStatsTable } from "./ErrorStatsTable";
 import { getLogFilterOptions } from "./filter_options";
-import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
+import { useLogFilterLogic, defaultFilters, FILTER_KEYS, type LogFilterState } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
@@ -110,6 +112,40 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     sortBy,
     sortOrder,
     currentPage,
+  });
+
+  const errorStatsQuery = useQuery({
+    queryKey: ["errorStats", startTime, endTime, isCustomDate, filters, filterByCurrentUser ? userID : null, activeTab],
+    queryFn: async () => {
+      if (!accessToken || !token || !userRole || !userID) {
+        return { time_bucket_size: "", data: [] };
+      }
+
+      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+      const formattedEndTime = isCustomDate
+        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+      return (
+        (await errorStatsCall(
+          accessToken,
+          filters[FILTER_KEYS.KEY_HASH] || undefined,
+          filters[FILTER_KEYS.TEAM_ID] || undefined,
+          filters[FILTER_KEYS.REQUEST_ID] || undefined,
+          formattedStartTime,
+          formattedEndTime,
+          filters[FILTER_KEYS.USER_ID] || (filterByCurrentUser ? userID ?? undefined : undefined),
+          filters[FILTER_KEYS.END_USER] || undefined,
+          filters[FILTER_KEYS.STATUS] || undefined,
+          filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL] || undefined,
+          filters[FILTER_KEYS.MODEL] || undefined,
+          filters[FILTER_KEYS.KEY_ALIAS] || undefined,
+        )) || { time_bucket_size: "", data: [] }
+      );
+    },
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
+    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const handleFilterReset = useCallback(() => {
@@ -281,7 +317,10 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     pageSize={pageSize}
                     isLoading={isLogsLoading}
                     isButtonLoading={isButtonLoading}
-                    onRefetch={() => logsQuery.refetch()}
+                    onRefetch={() => {
+                      logsQuery.refetch();
+                      errorStatsQuery.refetch();
+                    }}
                     filteredLogs={filteredLogs}
                   />
                   <DataTable
@@ -289,6 +328,10 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     data={deferredData}
                     onRowClick={handleRowClick}
                     isLoading={isLogsLoading}
+                  />
+                  <ErrorStatsTable
+                    data={errorStatsQuery.data?.data || []}
+                    timeBucketSize={errorStatsQuery.data?.time_bucket_size}
                   />
                 </div>
               </>

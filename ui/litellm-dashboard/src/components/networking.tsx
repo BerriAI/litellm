@@ -2022,6 +2022,43 @@ export const adminSpendLogsCall = async (accessToken: string) => {
   }
 };
 
+export const errorStatsCall = async (
+  accessToken: string,
+  api_key?: string,
+  team_id?: string,
+  request_id?: string,
+  start_date?: string,
+  end_date?: string,
+  user_id?: string,
+  end_user?: string,
+  status_filter?: string,
+  model?: string,
+  model_id?: string,
+  key_alias?: string,
+) => {
+  try {
+    return await apiClient.get(`/spend/logs/error_stats`, {
+      accessToken,
+      query: {
+        api_key: api_key || undefined,
+        team_id: team_id || undefined,
+        request_id: request_id || undefined,
+        start_date: start_date || undefined,
+        end_date: end_date || undefined,
+        user_id: user_id || undefined,
+        end_user: end_user || undefined,
+        status_filter: status_filter || undefined,
+        model: model || undefined,
+        model_id: model_id || undefined,
+        key_alias: key_alias || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch error stats:", error);
+    throw error;
+  }
+};
+
 export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
@@ -7031,11 +7068,7 @@ export const userDauCall = async (
   }
 };
 
-export const userWauCall = async (
-  accessToken: string,
-  custom_llm_provider?: string,
-  team_id?: string,
-) => {
+export const userWauCall = async (accessToken: string, custom_llm_provider?: string, team_id?: string) => {
   /**
    * Get weekly unique user count for the last 7 weeks (not broken down by user-agent)
    */
