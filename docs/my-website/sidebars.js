@@ -442,6 +442,7 @@ const sidebars = {
           label: "Spend Tracking",
           items: [
             "proxy/cost_tracking",
+            "proxy/request_tags",
             "proxy/custom_pricing",
             "proxy/pricing_calculator",
             "proxy/provider_margins",
@@ -537,6 +538,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",
             "mcp_guardrail",
@@ -715,6 +717,7 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
+            "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
         "providers/bedrock_vector_store",
       ]
@@ -1041,6 +1044,7 @@ const sidebars = {
       type: "category",
       label: "Issue Reporting",
       items: [
+        "troubleshoot/prisma_migrations",
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
         "troubleshoot/spend_queue_warnings",

@@ -539,6 +539,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
@@ -2290,7 +2291,11 @@ def test_register_model_with_scientific_notation():
         del litellm.model_cost[test_model_name]
     
     # Clear LRU caches that might have stale data
-    from litellm.utils import get_model_info, _cached_get_model_info_helper, _invalidate_model_cost_lowercase_map
+    from litellm.utils import (
+        _cached_get_model_info_helper,
+        _invalidate_model_cost_lowercase_map,
+        get_model_info,
+    )
     _invalidate_model_cost_lowercase_map()
     
     model_cost_dict = {

@@ -3,7 +3,7 @@
 import json
 import traceback
 from collections import deque
-from typing import Any, AsyncIterator, Iterator, Literal, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, Literal, Optional, cast
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -41,9 +41,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     pending_new_content_block: bool = False
     chunk_queue: deque = deque()  # Queue for buffering multiple chunks
 
-    def __init__(self, completion_stream: Any, model: str):
+    def __init__(
+        self,
+        completion_stream: Any,
+        model: str,
+        tool_name_mapping: Optional[Dict[str, str]] = None,
+    ):
         super().__init__(completion_stream)
         self.model = model
+        # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
+        self.tool_name_mapping = tool_name_mapping or {}
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -107,9 +114,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                should_start_new_block = self._should_start_new_content_block(
-                    chunk
-                )
+                should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
 
@@ -122,10 +127,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # This is where you'd add your logic to detect when a new content block should start
                 # For example, if the chunk indicates a tool call or different content type
 
-                if (
-                    should_start_new_block
-                    and not self.sent_content_block_finish
-                ):
+                if should_start_new_block and not self.sent_content_block_finish:
                     # End current content block and prepare for new one
                     self.holding_chunk = processed_chunk
                     self.sent_content_block_finish = True
@@ -135,10 +137,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "index": max(self.current_content_block_index - 1, 0),
                     }
 
-                if (
-                    processed_chunk["type"] == "message_delta"
-                    and self.sent_content_block_finish is False
-                ):
+                if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                     self.holding_chunk = processed_chunk
                     self.sent_content_block_finish = True
                     return {
@@ -165,9 +164,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(
-                "Anthropic Adapter - {}\n{}".format(e, traceback.format_exc())
-            )
+            verbose_logger.error("Anthropic Adapter - {}\n{}".format(e, traceback.format_exc()))
             raise StopAsyncIteration
 
     async def __anext__(self):  # noqa: PLR0915
@@ -214,9 +211,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     raise Exception
 
                 # Check if we need to start a new content block
-                should_start_new_block = self._should_start_new_content_block(
-                    chunk
-                )
+                should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
 
@@ -226,10 +221,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
-                if (
-                    self.holding_stop_reason_chunk is not None
-                    and getattr(chunk, "usage", None) is not None
-                ):
+                if self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None:
                     # Merge usage into the held stop_reason chunk
                     merged_chunk = self.holding_stop_reason_chunk.copy()
                     if "delta" not in merged_chunk:
@@ -245,16 +237,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         hasattr(chunk.usage, "_cache_creation_input_tokens")
                         and chunk.usage._cache_creation_input_tokens > 0
                     ):
-                        usage_dict["cache_creation_input_tokens"] = (
-                            chunk.usage._cache_creation_input_tokens
-                        )
-                    if (
-                        hasattr(chunk.usage, "_cache_read_input_tokens")
-                        and chunk.usage._cache_read_input_tokens > 0
-                    ):
-                        usage_dict["cache_read_input_tokens"] = (
-                            chunk.usage._cache_read_input_tokens
-                        )
+                        usage_dict["cache_creation_input_tokens"] = chunk.usage._cache_creation_input_tokens
+                    if hasattr(chunk.usage, "_cache_read_input_tokens") and chunk.usage._cache_read_input_tokens > 0:
+                        usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -266,19 +251,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # Check if this processed chunk has a stop_reason - hold it for next chunk
 
                 if not self.queued_usage_chunk:
-                    if (
-                        should_start_new_block
-                        and not self.sent_content_block_finish
-                    ):
+                    if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
-                                "index": max(
-                                    self.current_content_block_index - 1, 0
-                                ),
+                                "index": max(self.current_content_block_index - 1, 0),
                             }
                         )
 
@@ -300,10 +280,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         # Return the first queued item
                         return self.chunk_queue.popleft()
 
-                    if (
-                        processed_chunk["type"] == "message_delta"
-                        and self.sent_content_block_finish is False
-                    ):
+                    if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                         # Queue both the content_block_stop and the holding chunk
                         self.chunk_queue.append(
                             {
@@ -312,10 +289,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                        if (
-                            processed_chunk.get("delta", {}).get("stop_reason")
-                            is not None
-                        ):
+                        if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
                             self.chunk_queue.append(processed_chunk)
@@ -421,9 +395,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             )
         else:
             # Responses API streaming
-            event_type = LiteLLMAnthropicMessagesAdapter()._get_responses_api_stream_event_type(
-                chunk
-            )
+            event_type = LiteLLMAnthropicMessagesAdapter()._get_responses_api_stream_event_type(chunk)
             if event_type in (
                 "response.completed",
                 "response.incomplete",
@@ -438,6 +410,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 chunk
             )
 
+        # Restore original tool name if it was truncated for OpenAI's 64-char limit
+        if block_type == "tool_use" and isinstance(content_block_start, dict):
+            tool_block = cast(Dict[str, Any], content_block_start)
+            truncated_name = tool_block.get("name")
+            if isinstance(truncated_name, str) and truncated_name:
+                tool_block["name"] = self.tool_name_mapping.get(truncated_name, truncated_name)
+
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
             self.current_content_block_start = content_block_start
@@ -445,9 +424,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         # For parallel tool calls, we'll necessarily have a new content block
         # if we get a function name since it signals a new tool call
-        if block_type == "tool_use" and content_block_start.get("name"):
-            self.current_content_block_type = block_type
-            self.current_content_block_start = content_block_start
-            return True
+        if block_type == "tool_use" and isinstance(content_block_start, dict):
+            tool_block = cast(Dict[str, Any], content_block_start)
+            tool_name = tool_block.get("name")
+            if isinstance(tool_name, str) and tool_name:
+                self.current_content_block_type = block_type
+                self.current_content_block_start = content_block_start
+                return True
 
         return False
