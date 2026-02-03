@@ -12,11 +12,24 @@ vi.mock("@/utils/proxyUtils", () => ({
   fetchProxySettings: vi.fn(),
 }));
 
+// Mock CommunityEngagementButtons component
+vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => ({
+  CommunityEngagementButtons: () => (
+    <div data-testid="community-engagement-buttons">
+      <a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer">
+        Join Slack
+      </a>
+      <a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer">
+        Star us on GitHub
+      </a>
+    </div>
+  ),
+}));
+
 // Create mock functions that can be controlled in tests
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
-let mockUseDisableShowPromptsImpl = () => false;
 let mockUseAuthorizedImpl = () => ({
   userId: "test-user",
   userEmail: "test@example.com",
@@ -30,10 +43,6 @@ vi.mock("@/contexts/ThemeContext", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness", () => ({
   useHealthReadiness: () => mockUseHealthReadinessImpl(),
-}));
-
-vi.mock("@/app/(dashboard)/hooks/useDisableShowPrompts", () => ({
-  useDisableShowPrompts: () => mockUseDisableShowPromptsImpl(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -77,26 +86,6 @@ describe("Navbar", () => {
 
     expect(screen.getByText("Docs")).toBeInTheDocument();
     expect(screen.getByText("User")).toBeInTheDocument();
-  });
-
-  it("should render Join Slack button with correct link", () => {
-    renderWithProviders(<Navbar {...defaultProps} />);
-
-    const joinSlackLink = screen.getByRole("link", { name: /join slack/i });
-    expect(joinSlackLink).toBeInTheDocument();
-    expect(joinSlackLink).toHaveAttribute("href", "https://www.litellm.ai/support");
-    expect(joinSlackLink).toHaveAttribute("target", "_blank");
-    expect(joinSlackLink).toHaveAttribute("rel", "noopener noreferrer");
-  });
-
-  it("should render Star us on GitHub button with correct link", () => {
-    renderWithProviders(<Navbar {...defaultProps} />);
-
-    const starOnGithubLink = screen.getByRole("link", { name: /star us on github/i });
-    expect(starOnGithubLink).toBeInTheDocument();
-    expect(starOnGithubLink).toHaveAttribute("href", "https://github.com/BerriAI/litellm");
-    expect(starOnGithubLink).toHaveAttribute("target", "_blank");
-    expect(starOnGithubLink).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("should display user information in dropdown", async () => {
