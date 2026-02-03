@@ -12,6 +12,7 @@ All /key management endpoints
 import asyncio
 import copy
 import json
+import os
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -1343,6 +1344,7 @@ async def prepare_key_update_data(
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
+    data_json.pop("grace_period_hours", None)  # Request-only param, not a DB column
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None
@@ -2797,11 +2799,7 @@ async def can_modify_verification_token(
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
 
-    # 2. Internal jobs service account can modify any key (for auto-rotation)
-    if user_api_key_dict.api_key == LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME:
-        return True
-
-    # 3. For team keys: only team admin or key owner can modify
+    # 2. For team keys: only team admin or key owner can modify
     if is_team_key and key_info.team_id is not None:
         # Get team object to check if user is team admin
         team_table = await get_team_object(
@@ -2831,7 +2829,7 @@ async def can_modify_verification_token(
         # Not team admin and doesn't own the key
         return False
 
-    # 4. For personal keys: only key owner can modify
+    # 3. For personal keys: only key owner can modify
     if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
         return True
 
@@ -3249,7 +3247,7 @@ async def _execute_virtual_key_regeneration(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(
+async def regenerate_key_fn(  # noqa: PLR0915
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -3288,6 +3286,7 @@ async def regenerate_key_fn(
         - permissions: Optional[dict] - Key-specific permissions
         - guardrails: Optional[List[str]] - List of active guardrails for the key
         - blocked: Optional[bool] - Whether the key is blocked
+        - grace_period_hours: Optional[int] - Hours to keep old key valid after rotation (e.g. 24, 48, 72). 0 or omitted = immediate revoke. Env: LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS
 
 
     Returns:
@@ -3410,15 +3409,60 @@ async def regenerate_key_fn(
         if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
             litellm_changed_by = None
 
-        # Save the old key record to deleted table before regeneration.
-        # This preserves key_alias and team_id metadata for historical spend records.
-        # If this fails, abort the regeneration to avoid permanently losing the
-        # old hash→metadata mapping.
-        await _persist_deleted_verification_tokens(
-            keys=[_key_in_db],
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+        new_token_hash = hash_token(new_token)
+        new_token_key_name = f"sk-...{new_token[-4:]}"
+
+        # Prepare the update data
+        update_data = {
+            "token": new_token_hash,
+            "key_name": new_token_key_name,
+        }
+
+        non_default_values = {}
+        if data is not None:
+            # Update with any provided parameters from GenerateKeyRequest
+            non_default_values = await prepare_key_update_data(
+                data=data, existing_key_row=_key_in_db
+            )
+            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
+
+        update_data.update(non_default_values)
+        update_data = prisma_client.jsonify_object(data=update_data)
+
+        # If grace period > 0, insert deprecated key so old key remains valid
+        if data is not None and data.grace_period_hours is not None:
+            grace_period_hours = data.grace_period_hours
+        else:
+            grace_period_hours = int(
+                os.getenv("LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS", "0")
+            )
+        if grace_period_hours > 0:
+            try:
+                revoke_at = datetime.now(timezone.utc) + timedelta(
+                    hours=grace_period_hours
+                )
+                await prisma_client.db.litellm_deprecatedverificationtoken.create(
+                    data={
+                        "token": hashed_api_key,
+                        "active_token_id": new_token_hash,
+                        "revoke_at": revoke_at,
+                    }
+                )
+                verbose_proxy_logger.debug(
+                    "Deprecated key retained for %s hours (revoke_at: %s)",
+                    grace_period_hours,
+                    revoke_at,
+                )
+            except Exception as deprecated_err:
+                verbose_proxy_logger.warning(
+                    "Failed to insert deprecated key for grace period: %s",
+                    deprecated_err,
+                )
+
+        # Update the token in the database
+        updated_token = await prisma_client.db.litellm_verificationtoken.update(
+            where={"token": hashed_api_key},
+            data=update_data,  # type: ignore
         )
 
         return await _execute_virtual_key_regeneration(

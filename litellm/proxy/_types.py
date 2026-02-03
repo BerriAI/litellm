@@ -995,6 +995,9 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
+    grace_period_hours: Optional[
+        int
+    ] = None  # Hours to keep old key valid; 0/None = immediate revoke
 
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
