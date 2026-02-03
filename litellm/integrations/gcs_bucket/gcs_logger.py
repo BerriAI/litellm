@@ -24,14 +24,16 @@ class ProductionGCSLogger(CustomLogger):
         self.success_bucket_name = os.getenv("GCS_SUCCESS_BUCKET_NAME")
         self.error_bucket_name = os.getenv("GCS_ERROR_BUCKET_NAME")
         self.service_account_path = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
-        
+
         # Initialize GCS base for async operations
         self.gcs_base = GCSBucketBase(bucket_name=self.success_bucket_name)
-        
+
         if not self.success_bucket_name or not self.error_bucket_name:
             verbose_logger.warning("⚠️  GCS bucket names not set. GCS logging disabled.")
         else:
-            verbose_logger.info(f"✅ GCS initialized: {self.success_bucket_name}, {self.error_bucket_name}")
+            verbose_logger.info(
+                f"✅ GCS initialized: {self.success_bucket_name}, {self.error_bucket_name}"
+            )
 
     async def _upload_to_gcs_async(self, data: dict, bucket_name: str, log_type: str):
         """Upload log data to GCS bucket using async I/O"""
@@ -57,10 +59,9 @@ class ProductionGCSLogger(CustomLogger):
 
             # Use async httpx to upload to GCS
             headers = await self.gcs_base.construct_request_headers(
-                service_account_json=self.service_account_path,
-                vertex_instance=None
+                service_account_json=self.service_account_path, vertex_instance=None
             )
-            
+
             # Upload using the GCS REST API
             # Note: No indent - BigQuery requires single-line JSON (NEWLINE_DELIMITED_JSON format)
             json_data = json.dumps(data, default=str)
@@ -68,7 +69,7 @@ class ProductionGCSLogger(CustomLogger):
                 headers=headers,
                 bucket_name=bucket_name,
                 object_name=gcs_path,
-                logging_payload=json_data
+                logging_payload=json_data,
             )
 
         except Exception as e:
@@ -104,7 +105,9 @@ class ProductionGCSLogger(CustomLogger):
         try:
             correlation_id = getattr(response_obj, "id", None) or str(uuid.uuid4())
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or litellm_params.get("litellm_metadata", {})
+            metadata = litellm_params.get(
+                "metadata", litellm_params.get("litellm_metadata", {})
+            ) or litellm_params.get("litellm_metadata", {})
             # Extract date and session_id for queryability
             log_date = datetime.utcnow().strftime("%Y-%m-%d")
             session_id = self._get_session_id(kwargs, litellm_params, metadata)
@@ -197,7 +200,9 @@ class ProductionGCSLogger(CustomLogger):
                 success_log["cost"] = 0
 
             if self.success_bucket_name:
-                await self._upload_to_gcs_async(success_log, self.success_bucket_name, "success")
+                await self._upload_to_gcs_async(
+                    success_log, self.success_bucket_name, "success"
+                )
 
         except Exception as e:
             verbose_logger.exception(f"Error logging success: {e}")
@@ -207,7 +212,9 @@ class ProductionGCSLogger(CustomLogger):
         try:
             correlation_id = getattr(response_obj, "id", None) or str(uuid.uuid4())
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or litellm_params.get("litellm_metadata", {})
+            metadata = litellm_params.get(
+                "metadata", litellm_params.get("litellm_metadata", {})
+            ) or litellm_params.get("litellm_metadata", {})
             # Extract date and session_id for queryability
             log_date = datetime.utcnow().strftime("%Y-%m-%d")
             session_id = self._get_session_id(kwargs, litellm_params, metadata)
@@ -260,7 +267,9 @@ class ProductionGCSLogger(CustomLogger):
             }
 
             if self.error_bucket_name:
-                await self._upload_to_gcs_async(error_log, self.error_bucket_name, "error")
+                await self._upload_to_gcs_async(
+                    error_log, self.error_bucket_name, "error"
+                )
 
         except Exception as e:
             verbose_logger.exception(f"Error logging failure: {e}")
