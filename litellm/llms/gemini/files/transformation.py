@@ -299,7 +299,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             # Extract the file path from full URI
             file_name = file_id.split("/v1beta/")[-1]
         else:
-            file_name = f"files/{file_id}"
+            if not file_id.startswith("files/"):
+                file_id = f"files/{file_id}"
+            file_name = file_id
         
         # Construct the delete URL
         url = f"{api_base}/v1beta/{file_name}"
