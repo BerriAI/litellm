@@ -219,10 +219,13 @@ class SemanticToolFilterHook(CustomLogger):
             # Always update tools and emit header (even if count unchanged)
             data["tools"] = filtered_tools
             
-            # Store filter stats for response header (following standard hook pattern)
+            # Store filter stats and tool names for response header
             filter_stats = f"{original_tool_count}->{len(filtered_tools)}"
+            tool_names_csv = self._get_tool_names_csv(filtered_tools)
+            
             _metadata_variable_name = self._get_metadata_variable_name(data)
             data[_metadata_variable_name]["litellm_semantic_filter_stats"] = filter_stats
+            data[_metadata_variable_name]["litellm_semantic_filter_tools"] = tool_names_csv
             
             verbose_proxy_logger.info(
                 f"Semantic tool filter: {filter_stats} tools"
@@ -243,16 +246,40 @@ class SemanticToolFilterHook(CustomLogger):
         response: Any,
         request_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, str]]:
-        """
-        Add semantic filter stats to response headers.
-        """
+        """Add semantic filter stats and tool names to response headers."""
+        from litellm.constants import MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
+        
         _metadata_variable_name = self._get_metadata_variable_name(data)
-        filter_stats = data[_metadata_variable_name].get("litellm_semantic_filter_stats")
-        if filter_stats:
-            return {
-                "x-litellm-semantic-filter": filter_stats
-            }
-        return None
+        metadata = data[_metadata_variable_name]
+        
+        filter_stats = metadata.get("litellm_semantic_filter_stats")
+        if not filter_stats:
+            return None
+        
+        headers = {"x-litellm-semantic-filter": filter_stats}
+        
+        # Add CSV of filtered tool names (nginx-safe length)
+        tool_names_csv = metadata.get("litellm_semantic_filter_tools", "")
+        if tool_names_csv:
+            if len(tool_names_csv) > MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH:
+                tool_names_csv = tool_names_csv[:MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH - 3] + "..."
+            
+            headers["x-litellm-semantic-filter-tools"] = tool_names_csv
+        
+        return headers
+    
+    def _get_tool_names_csv(self, tools: List[Any]) -> str:
+        """Extract tool names and return as CSV string."""
+        if not tools:
+            return ""
+        
+        tool_names = []
+        for tool in tools:
+            name = tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")
+            if name:
+                tool_names.append(name)
+        
+        return ",".join(tool_names)
     
     @staticmethod
     async def initialize_from_config(
