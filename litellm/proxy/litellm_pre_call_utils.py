@@ -621,6 +621,10 @@ class LiteLLMProxyRequestSetup:
         )
         # Add the full UserAPIKeyAuth object for MCP server access control
         data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict
+        # Extract auth_time_ms from UserAPIKeyAuth object if available
+        auth_time_ms = getattr(user_api_key_dict, "auth_time_ms", None)
+        if auth_time_ms is not None:
+            data[_metadata_variable_name]["auth_time_ms"] = auth_time_ms
         return data
 
     @staticmethod

@@ -2254,6 +2254,7 @@ class UserAPIKeyAuth(
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
+    auth_time_ms: Optional[float] = None  # Time spent in authentication (milliseconds)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

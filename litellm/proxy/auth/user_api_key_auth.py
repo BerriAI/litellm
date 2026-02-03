@@ -9,6 +9,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 
 import asyncio
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
 
@@ -414,6 +415,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
+    auth_start_time = time.perf_counter()  # For accurate timing measurement
     route: str = get_request_route(request=request)
     valid_token: Optional[UserAPIKeyAuth] = None
     custom_auth_api_key: bool = False
@@ -856,6 +858,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 },
                 route=route,
                 start_time=start_time,
+                auth_start_time=auth_start_time,
             )
             asyncio.create_task(
                 _cache_key_object(
@@ -1242,6 +1245,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token_dict=valid_token_dict,
                 route=route,
                 start_time=start_time,
+                auth_start_time=auth_start_time,
             )
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
@@ -1312,9 +1316,16 @@ async def _return_user_api_key_auth_obj(
     valid_token_dict: dict,
     route: str,
     start_time: datetime,
+    auth_start_time: Optional[float] = None,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
+    
+    # Calculate auth time using perf_counter for accurate timing
+    auth_time_ms = None
+    if auth_start_time is not None:
+        auth_end_time = time.perf_counter()
+        auth_time_ms = (auth_end_time - auth_start_time) * 1000
 
     asyncio.create_task(
         user_api_key_service_logger_obj.async_service_success_hook(
@@ -1335,6 +1346,7 @@ async def _return_user_api_key_auth_obj(
         "api_key": api_key,
         "parent_otel_span": parent_otel_span,
         "user_role": retrieved_user_role,
+        "auth_time_ms": auth_time_ms,
         **valid_token_dict,
     }
     if user_obj is not None:

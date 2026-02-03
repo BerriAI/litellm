@@ -915,6 +915,86 @@ def test_get_logging_payload_extracts_response_translation_time_from_model_call_
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_extracts_auth_time_from_metadata():
+    """
+    Integration test: Verify that auth_time_ms stored in request metadata
+    gets extracted and included in overhead_breakdown.
+    
+    This tests the full flow:
+    1. auth_time_ms is stored in request metadata (by add_user_api_key_auth_to_request_metadata)
+    2. get_logging_payload extracts it from metadata
+    3. It's included in overhead_breakdown in the metadata
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObj,
+    )
+    
+    # Create a logging_obj
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    
+    # Create kwargs with auth_time_ms in metadata (simulating what add_user_api_key_auth_to_request_metadata does)
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "logging_obj": logging_obj,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "auth_time_ms": 8.3,  # Simulated auth time from metadata
+            }
+        },
+        "call_type": "completion",
+    }
+    
+    response_obj = {
+        "id": "test-response-789",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+    
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    
+    # Parse the metadata JSON string
+    metadata_json = payload.get("metadata")
+    assert metadata_json is not None, "metadata should not be None"
+    
+    metadata = json.loads(metadata_json)
+    
+    # Verify overhead_breakdown exists and contains auth_time_ms
+    overhead_breakdown = metadata.get("overhead_breakdown")
+    assert overhead_breakdown is not None, "overhead_breakdown should be present"
+    assert isinstance(overhead_breakdown, dict), "overhead_breakdown should be a dict"
+    
+    assert (
+        "auth_time_ms" in overhead_breakdown
+    ), "auth_time_ms should be in overhead_breakdown"
+    
+    assert (
+        overhead_breakdown["auth_time_ms"] == 8.3
+    ), f"Expected 8.3, got {overhead_breakdown.get('auth_time_ms')}"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_extracts_overhead_breakdown_from_multiple_sources():
     """
     Integration test: Verify that overhead_breakdown can be constructed from
