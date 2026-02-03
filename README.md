@@ -471,3 +471,5 @@ All these checks must pass before your PR can be merged.
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
 
+
+- [AgentMarket](https://agentmarket.cloud) - B2A marketplace for AI agents. Real energy data (28M+ records). Free API.
