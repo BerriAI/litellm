@@ -67,6 +67,20 @@ DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
 )
 
+# MCP Semantic Tool Filter Defaults
+DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_MCP_SEMANTIC_FILTER_TOP_K = int(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_TOP_K", 10)
+)
+DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
+)
+MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
+    os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
 # Gemini model-specific minimal thinking budget constants
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", 1)
@@ -980,6 +994,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-90b-instruct-v1:0",
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
+    "amazon.nova-2-pro-preview-20251202-v1:0",
     "amazon.nova-pro-v1:0",
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
@@ -1165,7 +1180,12 @@ LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
-CLI_JWT_EXPIRATION_HOURS = int(os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", 24))
+# Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
+CLI_JWT_EXPIRATION_HOURS = int(
+    os.getenv("CLI_JWT_EXPIRATION_HOURS") 
+    or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS") 
+    or 24
+)
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"

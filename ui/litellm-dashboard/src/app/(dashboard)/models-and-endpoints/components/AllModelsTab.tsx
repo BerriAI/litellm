@@ -77,11 +77,11 @@ const AllModelsTab = ({
   const sortBy = useMemo(() => {
     if (sorting.length === 0) return undefined;
     const sort = sorting[0];
-    // Map column IDs to server-side field names
-    // The server expects field names like "model_name", "created_at", etc.
     const columnIdToServerField: Record<string, string> = {
       input_cost: "costs", // Map input_cost column to "costs" for server-side sorting
       model_info_db_model: "status", // Map model_info.db_model column to "status" for server-side sorting
+      model_info_created_by: "created_at", // Map model_info.created_by column to "created_at" for server-side sorting
+      model_info_updated_at: "updated_at", // Map model_info.updated_at column to "updated_at" for server-side sorting
     };
     return columnIdToServerField[sort.id] || sort.id;
   }, [sorting]);

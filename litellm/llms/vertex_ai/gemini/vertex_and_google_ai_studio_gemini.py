@@ -478,6 +478,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
                 tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
+            # Handle OpenAI-style web_search and web_search_preview tools
+            # Transform them to Gemini's googleSearch tool
+            elif "type" in tool and tool["type"] in ("web_search", "web_search_preview"):
+                verbose_logger.info(
+                    f"Gemini: Transforming OpenAI-style '{tool['type']}' tool to googleSearch"
+                )
+                tool = {VertexToolName.GOOGLE_SEARCH.value: {}}
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             elif "type" in tool:
                 tool = {k: tool[k] for k in tool if k != "type"}
@@ -1657,7 +1664,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
         ## See: https://github.com/BerriAI/litellm/issues/18750
         if cached_text_tokens is not None and prompt_text_tokens is not None:
+            # Explicit caching: subtract cached tokens per modality from cacheTokensDetails
             prompt_text_tokens = prompt_text_tokens - cached_text_tokens
+        elif (
+            cached_tokens is not None
+            and prompt_text_tokens is not None
+            and cached_text_tokens is None
+        ):
+            # Implicit caching: only cachedContentTokenCount is provided (no cacheTokensDetails)
+            # Subtract from text tokens since implicit caching is primarily for text content
+            # See: https://github.com/BerriAI/litellm/issues/16341
+            prompt_text_tokens = prompt_text_tokens - cached_tokens
         if cached_audio_tokens is not None and prompt_audio_tokens is not None:
             prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
         if cached_image_tokens is not None and prompt_image_tokens is not None:

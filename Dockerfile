@@ -46,8 +46,9 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip
+# Install runtime dependencies (libsndfile needed for audio processing on ARM64)
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+    npm install -g npm@latest tar@latest
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app

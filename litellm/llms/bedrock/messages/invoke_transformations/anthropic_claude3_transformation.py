@@ -54,6 +54,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     # These will be filtered out to prevent 400 "invalid beta flag" errors
     UNSUPPORTED_BEDROCK_INVOKE_BETA_PATTERNS = [
         "advanced-tool-use",  # Bedrock Invoke doesn't support advanced-tool-use beta headers
+        "prompt-caching-scope"
     ]
 
     def __init__(self, **kwargs):

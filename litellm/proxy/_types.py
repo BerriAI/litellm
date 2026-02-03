@@ -227,6 +227,8 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_REGENERATE_WITH_PATH_PARAM = "/key/{key_id}/regenerate"
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
+    KEY_BULK_UPDATE = "/key/bulk_update"
+    KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -293,6 +295,8 @@ class LiteLLMRoutes(enum.Enum):
         "/batches",
         "/v1/batches/{batch_id}",
         "/batches/{batch_id}",
+        "/v1/batches/{batch_id}/cancel",
+        "/batches/{batch_id}/cancel",
         # files
         "/v1/files",
         "/files",
@@ -353,6 +357,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}",
         "/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
+        "/vector_store/list",
+        "/v1/vector_store/list",
+
         # search
         "/search",
         "/v1/search",
@@ -379,6 +386,7 @@ class LiteLLMRoutes(enum.Enum):
         "/azure",
         "/azure_ai",
         "/openai",
+        "/openai_passthrough",
         "/assemblyai",
         "/eu.assemblyai",
         "/vllm",
@@ -494,6 +502,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_LIST.value,
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
+        KeyManagementRoutes.KEY_BULK_UPDATE.value,
     ]
 
     management_routes = [
@@ -977,6 +986,10 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
+
+
+class ResetSpendRequest(LiteLLMPydanticObjectBase):
+    reset_to: float
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
@@ -2147,10 +2160,6 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
-    router_settings: Optional[
-        Dict
-    ] = None  # Router settings for this key (Key > Team > Global precedence)
-
     model_config = ConfigDict(protected_namespaces=())
 
 
@@ -3917,6 +3926,8 @@ class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime]
     litellm_credential_name: Optional[str]
     litellm_params: Optional[Dict[str, Any]]
+    team_id: Optional[str]
+    user_id: Optional[str]
 
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
