@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # MCP Semantic Tool Filter
 
-LiteLLM's semantic tool filter enables building agents with hundreds of tools by intelligently selecting only the most relevant tools for each request. This reduces prompt size, improves tool selection accuracy, and enables agents to scale to large MCP ecosystems without degrading model performance.
+Automatically filter MCP tools by semantic relevance. When you have many MCP tools registered, LiteLLM semantically matches the user's query against tool descriptions and sends only the most relevant tools to the LLM.
 
 ## How It Works
 
