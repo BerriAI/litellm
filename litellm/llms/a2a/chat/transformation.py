@@ -12,7 +12,11 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse
 
-from ..common_utils import A2AError, extract_text_from_a2a_response
+from ..common_utils import (
+    A2AError,
+    convert_messages_to_prompt,
+    extract_text_from_a2a_response,
+)
 from .streaming_iterator import A2AModelResponseIterator
 
 
@@ -140,24 +144,19 @@ class A2AConfig(BaseConfig):
         # Generate request ID
         request_id = str(uuid.uuid4())
         
-        # Convert last message to A2A format (A2A protocol typically sends single message)
-        # For multi-turn conversations, we'd need to handle context differently
         if not messages:
             raise ValueError("At least one message is required for A2A completion")
         
-        last_message = messages[-1]
+        # Convert all messages to maintain conversation history
+        # Use helper to format conversation with role prefixes
+        full_context = convert_messages_to_prompt(messages)
         
-        # Convert to dict if needed
-        msg_dict: Dict[str, Any]
-        if isinstance(last_message, BaseModel):
-            msg_dict = last_message.model_dump()
-        elif isinstance(last_message, dict):
-            msg_dict = cast(Dict[str, Any], last_message)
-        else:
-            msg_dict = dict(last_message)  # type: ignore
-        
-        # Transform to A2A message format
-        a2a_message = self._openai_message_to_a2a_message(msg_dict)
+        # Create single A2A message with full conversation context
+        a2a_message = {
+            "role": "user",
+            "parts": [{"kind": "text", "text": full_context}],
+            "messageId": str(uuid.uuid4()),
+        }
         
         # Build JSON-RPC 2.0 request
         # For A2A protocol, the method is "message/send" for non-streaming
