@@ -12,19 +12,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 from mcp.types import Tool as MCPTool
 
-# Check if semantic-router is available
-try:
-    import semantic_router
-    SEMANTIC_ROUTER_AVAILABLE = True
-except ImportError:
-    SEMANTIC_ROUTER_AVAILABLE = False
-
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not SEMANTIC_ROUTER_AVAILABLE,
-    reason="semantic-router not installed. Install with: pip install 'litellm[semantic-router]'"
-)
 async def test_e2e_semantic_filter():
     """E2E: Load router/filter and verify hook filters tools."""
     from litellm import Router
@@ -48,6 +37,8 @@ async def test_e2e_semantic_filter():
         enabled=True,
     )
     
+    hook = SemanticToolFilterHook(filter_instance)
+    
     # Create 10 tools
     tools = [
         MCPTool(name="gmail_send", description="Send an email via Gmail", inputSchema={"type": "object"}),
@@ -62,16 +53,10 @@ async def test_e2e_semantic_filter():
         MCPTool(name="note_add", description="Add note", inputSchema={"type": "object"}),
     ]
     
-    # Build router with test tools
-    filter_instance._build_router(tools)
-    
-    hook = SemanticToolFilterHook(filter_instance)
-    
     data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Send an email and create a calendar event"}],
         "tools": tools,
-        "metadata": {},  # Initialize metadata dict for hook to store filter stats
     }
     
     # Call hook
