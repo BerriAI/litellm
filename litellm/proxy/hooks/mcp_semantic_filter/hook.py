@@ -88,11 +88,29 @@ class SemanticToolFilterHook(CustomLogger):
             mcp_tools_with_litellm_proxy=mcp_tools
         )
         
+        # Convert Pydantic models to dicts for compatibility
+        openai_tools_as_dicts = []
+        for tool in openai_tools:
+            if hasattr(tool, "model_dump"):
+                tool_dict = tool.model_dump(exclude_none=True)
+                verbose_proxy_logger.debug(f"Converted Pydantic tool to dict: {type(tool).__name__} -> dict with keys: {list(tool_dict.keys())}")
+                openai_tools_as_dicts.append(tool_dict)
+            elif hasattr(tool, "dict"):
+                tool_dict = tool.dict(exclude_none=True)
+                verbose_proxy_logger.debug(f"Converted Pydantic tool (v1) to dict: {type(tool).__name__} -> dict")
+                openai_tools_as_dicts.append(tool_dict)
+            elif isinstance(tool, dict):
+                verbose_proxy_logger.debug(f"Tool is already a dict with keys: {list(tool.keys())}")
+                openai_tools_as_dicts.append(tool)
+            else:
+                verbose_proxy_logger.warning(f"Tool is unknown type: {type(tool)}, passing as-is")
+                openai_tools_as_dicts.append(tool)
+        
         verbose_proxy_logger.debug(
-            f"Expanded {len(mcp_tools)} MCP reference(s) to {len(openai_tools)} tools"
+            f"Expanded {len(mcp_tools)} MCP reference(s) to {len(openai_tools_as_dicts)} tools (all as dicts)"
         )
         
-        return openai_tools
+        return openai_tools_as_dicts
     
     def _get_metadata_variable_name(self, data: dict) -> str:
         if "litellm_metadata" in data:
