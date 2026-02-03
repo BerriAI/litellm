@@ -42,6 +42,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    add_client_context_to_request_data,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -247,7 +248,9 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+    if (
+        litellm.max_budget > 0 and prisma_client is not None
+    ):  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
         cache_key = "{}:spend".format(litellm_proxy_admin_name)
         global_proxy_spend = await _fetch_global_spend_with_event_coordination(
@@ -1251,6 +1254,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             route=route,
             parent_otel_span=parent_otel_span,
             api_key=api_key,
+            valid_token=valid_token,
         )
 
 
@@ -1277,6 +1281,14 @@ async def user_api_key_auth(
     request_data = await _read_request_body(request=request)
     request_data = populate_request_with_path_params(
         request_data=request_data, request=request
+    )
+    # Capture client context early so failures have IP/User-Agent for logging and metrics
+    from litellm.proxy.proxy_server import general_settings
+
+    add_client_context_to_request_data(
+        request=request,
+        request_data=request_data,
+        use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
     )
     route: str = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED

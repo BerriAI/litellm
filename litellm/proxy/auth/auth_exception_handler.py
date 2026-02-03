@@ -9,7 +9,10 @@ from fastapi import HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
+    add_client_context_to_request_data,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -30,6 +33,7 @@ class UserAPIKeyAuthExceptionHandler:
         route: str,
         parent_otel_span: Optional[Span],
         api_key: str,
+        valid_token: Optional[UserAPIKeyAuth] = None,
     ) -> UserAPIKeyAuth:
         """
         Handles Connection Errors when reading a Virtual Key from LiteLLM DB
@@ -71,30 +75,63 @@ class UserAPIKeyAuthExceptionHandler:
             )
         else:
             # raise the exception to the caller
+            use_x_forwarded_for = general_settings.get("use_x_forwarded_for", False)
             requester_ip = _get_request_ip_address(
                 request=request,
-                use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+                use_x_forwarded_for=use_x_forwarded_for,
             )
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                    str(e),
-                    requester_ip,
-                ),
-                extra={"requester_ip": requester_ip},
+            user_agent = request.headers.get("user-agent", "") if request else ""
+
+            # Ensure request_data has client context for callbacks (Prometheus, etc.)
+            add_client_context_to_request_data(
+                request=request,
+                request_data=request_data,
+                use_x_forwarded_for=use_x_forwarded_for,
             )
 
-            # Log this exception to OTEL, Datadog etc
-            user_api_key_dict = UserAPIKeyAuth(
-                parent_otel_span=parent_otel_span,
-                api_key=api_key,
-                request_route=route,
+            key_name = (
+                valid_token.key_alias or getattr(valid_token, "key_name", None)
+                if valid_token
+                else "<unknown-key>"
             )
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}\nUser-Agent:{}\nKey Hash:{}\nKey Name:{}".format(
+                    str(e),
+                    requester_ip or "<unknown>",
+                    user_agent or "<unknown>",
+                    api_key or "<unknown>",
+                    key_name,
+                ),
+                extra={
+                    "requester_ip": requester_ip,
+                    "user_agent": user_agent,
+                    "key_hash": api_key,
+                    "key_name": key_name,
+                },
+            )
+
+            # Log this exception to OTEL, Datadog etc - use valid_token when available (e.g. model access denied)
+            if valid_token is not None:
+                user_api_key_dict = valid_token
+            else:
+                user_api_key_dict = UserAPIKeyAuth(
+                    parent_otel_span=parent_otel_span,
+                    api_key=api_key,
+                    request_route=route,
+                    key_alias="<unknown-key>",
+                )
             # Allow callbacks to transform the error response
+            error_type = ProxyErrorTypes.auth_error
+            if isinstance(e, ProxyException) and hasattr(e, "type"):
+                try:
+                    error_type = ProxyErrorTypes(e.type)
+                except (ValueError, TypeError):
+                    pass
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
-                error_type=ProxyErrorTypes.auth_error,
+                error_type=error_type,
                 route=route,
             )
             # Use transformed exception if callback returned one, otherwise use original
