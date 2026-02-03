@@ -107,9 +107,9 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params)
 
-        # Map "global" to a supported region for Claude count_tokens only
+        # Map empty location/cluade models to a supported region for count-tokens endpoint
         # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-        if not vertex_location or (vertex_location == "global" and "claude" in model.lower()):
+        if not vertex_location or "claude" in model.lower():
             vertex_location = "us-central1"
 
         # Get access token and resolved project ID
