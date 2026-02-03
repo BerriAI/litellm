@@ -1207,16 +1207,16 @@ def get_async_httpx_client(
 
     _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
 
-    # Lazily initialize the global in-memory client cache to avoid relying on
-    # litellm globals being fully populated during import time.
-    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
-    if cache is None:
-        from litellm.caching.llm_caching_handler import LLMClientCache
-
-        cache = LLMClientCache()
-        setattr(litellm, "in_memory_llm_clients_cache", cache)
-
     with _async_httpx_client_cache_lock:
+        # Lazily initialize the global in-memory client cache to avoid relying on
+        # litellm globals being fully populated during import time.
+        cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+        if cache is None:
+            from litellm.caching.llm_caching_handler import LLMClientCache
+
+            cache = LLMClientCache()
+            setattr(litellm, "in_memory_llm_clients_cache", cache)
+
         _cached_client = cache.get_cache(_cache_key_name)
         if _cached_client:
             return _cached_client
@@ -1257,16 +1257,16 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     _cache_key_name = "httpx_client" + _params_key_name
 
-    # Lazily initialize the global in-memory client cache to avoid relying on
-    # litellm globals being fully populated during import time.
-    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
-    if cache is None:
-        from litellm.caching.llm_caching_handler import LLMClientCache
-
-        cache = LLMClientCache()
-        setattr(litellm, "in_memory_llm_clients_cache", cache)
-
     with _httpx_client_cache_lock:
+        # Lazily initialize the global in-memory client cache to avoid relying on
+        # litellm globals being fully populated during import time.
+        cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+        if cache is None:
+            from litellm.caching.llm_caching_handler import LLMClientCache
+
+            cache = LLMClientCache()
+            setattr(litellm, "in_memory_llm_clients_cache", cache)
+
         _cached_client = cache.get_cache(_cache_key_name)
         if _cached_client:
             return _cached_client
