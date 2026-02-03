@@ -594,7 +594,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 <Form.Item
                   label="Args"
                   name="args"
-                  rules={[]}
                 >
                   <Select
                     mode="tags"

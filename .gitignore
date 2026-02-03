@@ -42,7 +42,6 @@ litellm/proxy/tests/package.json
 litellm/proxy/tests/package-lock.json
 ui/litellm-dashboard/.next
 ui/litellm-dashboard/node_modules
-ui/litellm-dashboard/out
 ui/litellm-dashboard/next-env.d.ts
 ui/litellm-dashboard/package.json
 ui/litellm-dashboard/package-lock.json
