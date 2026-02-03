@@ -2663,6 +2663,111 @@ def test_vertex_ai_single_tool_type_still_works():
     assert tools[0]["code_execution"] == {}
 
 
+def test_vertex_ai_openai_web_search_tool_transformation():
+    """
+    Test that OpenAI-style web_search and web_search_preview tools are transformed to googleSearch.
+
+    This fixes the issue where passing OpenAI-style web search tools like:
+        {"type": "web_search"} or {"type": "web_search_preview"}
+    would be silently ignored (the request succeeds but grounding is not applied).
+
+    The fix transforms these to Gemini's googleSearch tool.
+
+    Input:
+        value=[{"type": "web_search"}]
+
+    Expected Output:
+        tools=[{"googleSearch": {}}]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test web_search transformation
+    tools = v._map_function(
+        value=[{"type": "web_search"}],
+        optional_params=optional_params
+    )
+
+    assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}"
+    assert "googleSearch" in tools[0], f"Expected googleSearch in tool, got {tools[0].keys()}"
+    assert tools[0]["googleSearch"] == {}, f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
+
+
+def test_vertex_ai_openai_web_search_preview_tool_transformation():
+    """
+    Test that OpenAI-style web_search_preview tool is transformed to googleSearch.
+
+    Input:
+        value=[{"type": "web_search_preview"}]
+
+    Expected Output:
+        tools=[{"googleSearch": {}}]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test web_search_preview transformation
+    tools = v._map_function(
+        value=[{"type": "web_search_preview"}],
+        optional_params=optional_params
+    )
+
+    assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}"
+    assert "googleSearch" in tools[0], f"Expected googleSearch in tool, got {tools[0].keys()}"
+    assert tools[0]["googleSearch"] == {}, f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
+
+
+def test_vertex_ai_openai_web_search_with_function_tools():
+    """
+    Test that OpenAI-style web_search tool works alongside function tools.
+
+    Input:
+        value=[
+            {"type": "web_search"},
+            {"type": "function", "function": {"name": "get_weather", "description": "Get weather"}},
+        ]
+
+    Expected Output:
+        tools=[
+            {"googleSearch": {}},
+            {"function_declarations": [{"name": "get_weather", "description": "Get weather"}]},
+        ]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = v._map_function(
+        value=[
+            {"type": "web_search"},
+            {"type": "function", "function": {"name": "get_weather", "description": "Get weather"}},
+        ],
+        optional_params=optional_params
+    )
+
+    # Should have 2 separate Tool objects
+    assert len(tools) == 2, f"Expected 2 Tool objects, got {len(tools)}"
+
+    # Find each tool type
+    search_tool = None
+    func_tool = None
+
+    for tool in tools:
+        if "googleSearch" in tool:
+            search_tool = tool
+        elif "function_declarations" in tool:
+            func_tool = tool
+
+    # Verify both tools are present
+    assert search_tool is not None, "googleSearch Tool should be present"
+    assert func_tool is not None, "function_declarations Tool should be present"
+
+    # Verify googleSearch is empty config
+    assert search_tool["googleSearch"] == {}
+
+    # Verify function declaration content
+    assert func_tool["function_declarations"][0]["name"] == "get_weather"
+
+
 def test_vertex_ai_multiple_function_declarations_grouped():
     """
     Test that multiple function declarations are grouped in ONE Tool object.

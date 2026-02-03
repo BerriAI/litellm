@@ -1435,3 +1435,20 @@ def test_gemini_image_size_limit_exceeded():
     error_message = str(excinfo.value)
     assert "Image size" in error_message
     assert "exceeds maximum allowed size" in error_message
+
+@pytest.mark.asyncio
+async def test_gemini_openai_web_search_tool_to_google_search():
+    """
+    Test that OpenAI-style web_search tools are transformed to Gemini's googleSearch.
+
+    When passing {"type": "web_search"} or {"type": "web_search_preview"} to Gemini,
+    these should be transformed to googleSearch, not silently ignored.
+    """
+    response = await litellm.acompletion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=[{"type": "web_search"}],
+    )
+    print("response: ", response.model_dump_json(indent=4))
+    assert hasattr(response, "vertex_ai_grounding_metadata")
+    assert getattr(response, "vertex_ai_grounding_metadata") is not None

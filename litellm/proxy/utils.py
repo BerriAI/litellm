@@ -982,7 +982,9 @@ class ProxyLogging:
 
         try:
             # Check if load balancing should be used
-            if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
+            if guardrail_name and self._should_use_guardrail_load_balancing(
+                guardrail_name
+            ):
                 response = await self._execute_guardrail_with_load_balancing(
                     guardrail_name=guardrail_name,
                     hook_type="pre_call",
@@ -1017,7 +1019,11 @@ class ProxyLogging:
             latency_seconds = guardrail_end_time - guardrail_start_time
 
             # Get guardrail name for metrics (fallback if not set)
-            metrics_guardrail_name = guardrail_name or getattr(callback, "guardrail_name", callback.__class__.__name__) or "unknown"
+            metrics_guardrail_name = (
+                guardrail_name
+                or getattr(callback, "guardrail_name", callback.__class__.__name__)
+                or "unknown"
+            )
 
             # Find PrometheusLogger in callbacks and record metrics
             for prom_callback in litellm.callbacks:
@@ -1793,12 +1799,54 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                await callback.async_post_call_success_hook(
+                callback_response = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
+                if callback_response is not None:
+                    response = callback_response
         except Exception as e:
             raise e
         return response
+
+    async def post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """
+        Calls async_post_call_response_headers_hook on all CustomLogger callbacks.
+        Merges all returned header dicts (later callbacks override earlier ones).
+
+        Returns:
+            Dict[str, str]: Merged headers from all callbacks.
+        """
+        merged_headers: Dict[str, str] = {}
+        try:
+            for callback in litellm.callbacks:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is not None and isinstance(_callback, CustomLogger):
+                    result = await _callback.async_post_call_response_headers_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_headers=request_headers,
+                    )
+                    if result is not None:
+                        merged_headers.update(result)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error in post_call_response_headers_hook: %s", str(e)
+            )
+        return merged_headers
 
     async def async_post_call_streaming_hook(
         self,
@@ -1852,16 +1900,14 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        potential_error_response = (
+                        callback_response = (
                             await _callback.async_post_call_streaming_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=complete_response,
                             )
                         )
-                        if isinstance(
-                            potential_error_response, str
-                        ) and potential_error_response.startswith("data: "):
-                            return potential_error_response
+                        if callback_response is not None:
+                            response = callback_response
                 except Exception as e:
                     raise e
         return response
@@ -1895,7 +1941,18 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-                    if "apply_guardrail" in type(callback).__dict__:
+                    if (
+                        "async_post_call_streaming_iterator_hook"
+                        in type(callback).__dict__
+                    ):
+                        current_response = (
+                            _callback.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=current_response,
+                                request_data=request_data,
+                            )
+                        )
+                    elif "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
                         current_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
@@ -2218,17 +2275,17 @@ class PrismaClient:
     ) -> Optional[dict]:
         """
         Execute a query with automatic fallback for PostgreSQL cached plan errors.
-        
+
         This handles the "cached plan must not change result type" error that occurs
         during rolling deployments when schema changes are applied while old pods
         still have cached query plans expecting the old schema.
-        
+
         Args:
             sql_query: SQL query string to execute
-            
+
         Returns:
             Query result or None
-            
+
         Raises:
             Original exception if not a cached plan error
         """
@@ -2241,7 +2298,7 @@ class PrismaClient:
                 # Add a unique comment to make the query different
                 sql_query_retry = sql_query.replace(
                     "SELECT",
-                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */"
+                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */",
                 )
                 verbose_proxy_logger.warning(
                     "PostgreSQL cached plan error detected for token lookup, "
@@ -2583,7 +2640,9 @@ class PrismaClient:
                         WHERE v.token = '{token}'
                     """
 
-                    response = await self._query_first_with_cached_plan_fallback(sql_query)
+                    response = await self._query_first_with_cached_plan_fallback(
+                        sql_query
+                    )
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -4227,7 +4286,7 @@ def get_server_root_path() -> str:
     - If SERVER_ROOT_PATH is set, return it.
     - Otherwise, default to "/".
     """
-    return os.getenv("SERVER_ROOT_PATH", "/")
+    return os.getenv("SERVER_ROOT_PATH", "")
 
 
 def get_prisma_client_or_throw(message: str):

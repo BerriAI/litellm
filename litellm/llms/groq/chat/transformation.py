@@ -323,4 +323,12 @@ class GroqChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
                 status_code=error.get("code"), message=error.get("message"), body=error
             )
 
+        # Map Groq's 'reasoning' field to LiteLLM's 'reasoning_content' field
+        # Groq returns delta.reasoning, but LiteLLM expects delta.reasoning_content
+        choices = chunk.get("choices", [])
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
+
         return super().chunk_parser(chunk)

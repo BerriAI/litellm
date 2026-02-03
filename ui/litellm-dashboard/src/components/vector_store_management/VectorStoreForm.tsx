@@ -76,7 +76,12 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       const providerFields = getProviderSpecificFields(formValues.custom_llm_provider);
       const litellmParams = providerFields.reduce(
         (acc, field) => {
-          acc[field.name] = formValues[field.name];
+          // Special handling for Milvus: rename embedding_model to litellm_embedding_model
+          if (formValues.custom_llm_provider === "milvus" && field.name === "embedding_model") {
+            acc["litellm_embedding_model"] = formValues[field.name];
+          } else {
+            acc[field.name] = formValues[field.name];
+          }
           return acc;
         },
         {} as Record<string, any>,
@@ -229,7 +234,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         {getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => {
           if (field.type === "select") {
             const embeddingModels = modelInfo
-              .filter((option: ModelGroup) => option.mode === "embedding")
+              .filter((option: ModelGroup) => option.mode === "embedding" || option.mode === null)
               .map((option: ModelGroup) => ({
                 value: option.model_group,
                 label: option.model_group,

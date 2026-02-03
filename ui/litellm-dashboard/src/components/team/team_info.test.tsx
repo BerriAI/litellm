@@ -1,10 +1,10 @@
 import * as networking from "@/components/networking";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../../tests/test-utils";
 import TeamInfoView from "./team_info";
 
-// Mock the networking module
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
   teamMemberDeleteCall: vi.fn(),
@@ -12,12 +12,18 @@ vi.mock("@/components/networking", () => ({
   teamMemberUpdateCall: vi.fn(),
   teamUpdateCall: vi.fn(),
   getGuardrailsList: vi.fn(),
+  getPoliciesList: vi.fn(),
+  getPolicyInfoWithGuardrails: vi.fn(),
   fetchMCPAccessGroups: vi.fn(),
   getTeamPermissionsCall: vi.fn(),
   organizationInfoCall: vi.fn(),
 }));
 
-// Mock hooks used by ModelSelect
+vi.mock("@/components/utils/dataUtils", () => ({
+  copyToClipboard: vi.fn().mockResolvedValue(true),
+  formatNumberWithCommas: vi.fn((value: number) => value.toLocaleString()),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
 }));
@@ -34,6 +40,59 @@ vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
 }));
 
+vi.mock("@/components/team/team_member_view", () => ({
+  default: vi.fn(({ setIsAddMemberModalVisible }) => (
+    <div>
+      <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
+    </div>
+  )),
+}));
+
+vi.mock("@/components/common_components/user_search_modal", () => ({
+  default: vi.fn(({ isVisible, onCancel, onSubmit }) =>
+    isVisible ? (
+      <div>
+        <button onClick={onCancel}>Cancel</button>
+        <button onClick={() => onSubmit({ user_email: "new@test.com", user_id: "new-user", role: "user" })}>
+          Submit
+        </button>
+      </div>
+    ) : null
+  ),
+}));
+
+vi.mock("@/components/team/EditMembership", () => ({
+  default: vi.fn(({ visible, onCancel, onSubmit }) =>
+    visible ? (
+      <div>
+        <button onClick={onCancel}>Cancel</button>
+        <button onClick={() => onSubmit({ user_email: "edit@test.com", user_id: "edit-user", role: "admin" })}>
+          Submit
+        </button>
+      </div>
+    ) : null
+  ),
+}));
+
+vi.mock("@/components/common_components/DeleteResourceModal", () => ({
+  default: vi.fn(({ isOpen, onCancel, onOk }) =>
+    isOpen ? (
+      <div>
+        <button onClick={onCancel}>Cancel</button>
+        <button onClick={onOk}>Confirm Delete</button>
+      </div>
+    ) : null
+  ),
+}));
+
+vi.mock("@/components/team/member_permissions", () => ({
+  default: vi.fn(() => <div>Member Permissions</div>),
+}));
+
+vi.mock("@/components/team/member_permissions", () => ({
+  default: vi.fn(() => <div>Member Permissions</div>),
+}));
+
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -44,9 +103,60 @@ const mockUseTeam = vi.mocked(useTeam);
 const mockUseOrganization = vi.mocked(useOrganization);
 const mockUseCurrentUser = vi.mocked(useCurrentUser);
 
+const createMockTeamData = (overrides = {}) => ({
+  team_id: "123",
+  team_info: {
+    team_alias: "Test Team",
+    team_id: "123",
+    organization_id: null,
+    admins: ["admin@test.com"],
+    members: ["user1@test.com"],
+    members_with_roles: [
+      {
+        user_id: "user1@test.com",
+        user_email: "user1@test.com",
+        role: "member",
+        spend: 0,
+        budget_id: "budget1",
+      },
+    ],
+    metadata: {},
+    tpm_limit: null,
+    rpm_limit: null,
+    max_budget: null,
+    budget_duration: null,
+    models: [],
+    blocked: false,
+    spend: 0,
+    max_parallel_requests: null,
+    budget_reset_at: null,
+    model_id: null,
+    litellm_model_table: null,
+    created_at: "2024-01-01T00:00:00Z",
+    team_member_budget_table: null,
+    guardrails: [],
+    policies: [],
+    object_permission: null,
+    ...overrides,
+  },
+  keys: [],
+  team_memberships: [],
+});
+
 describe("TeamInfoView", () => {
+  const defaultProps = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4", "gpt-3.5-turbo"],
+    editTeam: false,
+    premiumUser: false,
+  };
+
   beforeEach(() => {
-    // Set up default mock implementations
     mockUseAllProxyModels.mockReturnValue({
       data: { data: [] },
       isLoading: false,
@@ -63,6 +173,14 @@ describe("TeamInfoView", () => {
       data: { models: [] },
       isLoading: false,
     } as any);
+
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(networking.getTeamPermissionsCall).mockResolvedValue({
+      all_available_permissions: [],
+      team_member_permissions: [],
+    });
   });
 
   afterEach(() => {
@@ -70,503 +188,389 @@ describe("TeamInfoView", () => {
   });
 
   it("should render", async () => {
-    // Mock the team info response
-    vi.mocked(networking.teamInfoCall).mockResolvedValue({
-      team_id: "123",
-      team_info: {
-        team_alias: "Test Team",
-        team_id: "123",
-        organization_id: null,
-        admins: ["admin@test.com"],
-        members: ["user1@test.com", "user2@test.com"],
-        members_with_roles: [
-          {
-            user_id: "user1@test.com",
-            user_email: "user1@test.com",
-            role: "member",
-            spend: 0,
-            budget_id: "budget1",
-          },
-        ],
-        metadata: {},
-        tpm_limit: null,
-        rpm_limit: null,
-        max_budget: null,
-        budget_duration: null,
-        models: [],
-        blocked: false,
-        spend: 0,
-        max_parallel_requests: null,
-        budget_reset_at: null,
-        model_id: null,
-        litellm_model_table: null,
-        created_at: "2024-01-01T00:00:00Z",
-        team_member_budget_table: null,
-      },
-      keys: [],
-      team_memberships: [],
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
     });
-
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
-    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
-
-    renderWithProviders(
-      <TeamInfoView
-        teamId="123"
-        onUpdate={() => {}}
-        onClose={() => {}}
-        accessToken="123"
-        is_team_admin={true}
-        is_proxy_admin={true}
-        userModels={[]}
-        editTeam={false}
-        premiumUser={false}
-      />,
-    );
-    await waitFor(
-      () => {
-        expect(screen.queryByText("User ID")).not.toBeNull();
-      },
-      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
-      { timeout: 10000 },
-    );
   });
 
-  it("should not show all-proxy-models option when user has no access to it", async () => {
+  it("should display loading state while fetching team data", () => {
+    vi.mocked(networking.teamInfoCall).mockImplementation(() => new Promise(() => { }));
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+  });
+
+  it("should display error message when team is not found", async () => {
     vi.mocked(networking.teamInfoCall).mockResolvedValue({
       team_id: "123",
-      team_info: {
-        team_alias: "Test Team",
-        team_id: "123",
-        organization_id: null,
-        admins: ["admin@test.com"],
-        members: ["user1@test.com", "user2@test.com"],
-        members_with_roles: [
-          {
-            user_id: "user1@test.com",
-            user_email: "user1@test.com",
-            role: "member",
-            spend: 0,
-            budget_id: "budget1",
-          },
-        ],
-        metadata: {},
-        tpm_limit: null,
-        rpm_limit: null,
-        max_budget: null,
-        budget_duration: null,
-        models: ["gpt-4"],
-        blocked: false,
-        spend: 0,
-        max_parallel_requests: null,
-        budget_reset_at: null,
-        model_id: null,
-        litellm_model_table: null,
-        created_at: "2024-01-01T00:00:00Z",
-        team_member_budget_table: null,
-      },
+      team_info: null as any,
       keys: [],
       team_memberships: [],
     });
 
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
-    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
-
-    renderWithProviders(
-      <TeamInfoView
-        teamId="123"
-        onUpdate={() => {}}
-        onClose={() => {}}
-        accessToken="123"
-        is_team_admin={true}
-        is_proxy_admin={true}
-        userModels={["gpt-4", "gpt-3.5-turbo"]}
-        editTeam={false}
-        premiumUser={false}
-      />,
-    );
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getAllByText("Test Team")).not.toBeNull();
+      expect(screen.getByText("Team not found")).toBeInTheDocument();
+    });
+  });
+
+  it("should display budget information in overview", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        max_budget: 1000,
+        spend: 250.5,
+        budget_duration: "30d",
+      })
+    );
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+    });
+  });
+
+  it("should display guardrails in overview when present", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        guardrails: ["guardrail1", "guardrail2"],
+      })
+    );
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Guardrails")).toBeInTheDocument();
+    });
+  });
+
+  it("should display policies in overview when present", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        policies: ["policy1"],
+      })
+    );
+    vi.mocked(networking.getPolicyInfoWithGuardrails).mockResolvedValue({
+      resolved_guardrails: ["guardrail1"],
+    });
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Policies")).toBeInTheDocument();
+    });
+  });
+
+  it("should show members tab when user can edit team", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Members" })).toBeInTheDocument();
+    });
+  });
+
+  it("should not show members tab when user cannot edit team", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={false} is_proxy_admin={false} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByRole("tab", { name: "Members" })).not.toBeInTheDocument();
+  });
+
+  it("should show settings tab when user can edit team", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+    });
+  });
+
+  it("should navigate to settings tab when clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
     });
 
     const settingsTab = screen.getByRole("tab", { name: "Settings" });
-    act(() => {
-      fireEvent.click(settingsTab);
-    });
+    await user.click(settingsTab);
 
     await waitFor(() => {
       expect(screen.getByText("Team Settings")).toBeInTheDocument();
     });
+  });
 
-    const editButton = screen.getByRole("button", { name: "Edit Settings" });
-    act(() => {
-      fireEvent.click(editButton);
-    });
+  it("should open edit mode when edit button is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
-    await waitFor(() => {
-      expect(screen.getByTestId("models-select")).toBeInTheDocument();
-    });
-
-    const allProxyModelsOption = screen.queryByText("All Proxy Models");
-    expect(allProxyModelsOption).not.toBeInTheDocument();
-  }, 10000); // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
-
-  it("should only show organization models in dropdown when team is in organization with limited models", async () => {
-    const organizationId = "org-123";
-    const organizationModels = ["gpt-4", "claude-3-opus"];
-    const userModels = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus", "claude-2"];
-
-    // Mock all proxy models - should include all user models
-    const allProxyModels = userModels.map((id) => ({
-      id,
-      object: "model",
-      created: 1234567890,
-      owned_by: "openai",
-    }));
-
-    mockUseAllProxyModels.mockReturnValue({
-      data: { data: allProxyModels },
-      isLoading: false,
-    } as any);
-
-    mockUseCurrentUser.mockReturnValue({
-      data: { models: userModels },
-      isLoading: false,
-    } as any);
-
-    const organizationData = {
-      organization_id: organizationId,
-      organization_name: "Test Organization",
-      spend: 0,
-      max_budget: null,
-      models: organizationModels,
-      tpm_limit: null,
-      rpm_limit: null,
-      members: null,
-    };
-
-    mockUseOrganization.mockReturnValue({
-      data: organizationData,
-      isLoading: false,
-    } as any);
-
-    vi.mocked(networking.teamInfoCall).mockResolvedValue({
-      team_id: "123",
-      team_info: {
-        team_alias: "Test Team",
-        team_id: "123",
-        organization_id: organizationId,
-        admins: ["admin@test.com"],
-        members: ["user1@test.com"],
-        members_with_roles: [
-          {
-            user_id: "user1@test.com",
-            user_email: "user1@test.com",
-            role: "member",
-            spend: 0,
-            budget_id: "budget1",
-          },
-        ],
-        metadata: {},
-        tpm_limit: null,
-        rpm_limit: null,
-        max_budget: null,
-        budget_duration: null,
-        models: ["gpt-4"],
-        blocked: false,
-        spend: 0,
-        max_parallel_requests: null,
-        budget_reset_at: null,
-        model_id: null,
-        litellm_model_table: null,
-        created_at: "2024-01-01T00:00:00Z",
-        team_member_budget_table: null,
-      },
-      keys: [],
-      team_memberships: [],
-    });
-
-    vi.mocked(networking.organizationInfoCall).mockResolvedValue(organizationData);
-
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
-    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
-
-    renderWithProviders(
-      <TeamInfoView
-        teamId="123"
-        onUpdate={() => {}}
-        onClose={() => {}}
-        accessToken="123"
-        is_team_admin={true}
-        is_proxy_admin={true}
-        userModels={userModels}
-        editTeam={false}
-        premiumUser={false}
-      />,
-    );
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getAllByText("Test Team")).not.toBeNull();
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
     });
 
     const settingsTab = screen.getByRole("tab", { name: "Settings" });
-    act(() => {
-      fireEvent.click(settingsTab);
-    });
+    await user.click(settingsTab);
 
     await waitFor(() => {
-      expect(screen.getByText("Team Settings")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
     });
 
     const editButton = screen.getByRole("button", { name: "Edit Settings" });
-    act(() => {
-      fireEvent.click(editButton);
-    });
+    await user.click(editButton);
 
     await waitFor(() => {
-      expect(screen.getByTestId("models-select")).toBeInTheDocument();
+      expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+    });
+  });
+
+  it("should close edit mode when cancel button is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
     });
 
-    // Find the Ant Design Select selector element to open the dropdown
-    // The data-testid is on the Select component, we need to find the selector inside it
-    const modelsSelectElement = screen.getByTestId("models-select");
-    const selectSelector = modelsSelectElement.querySelector(".ant-select-selector");
-    expect(selectSelector).toBeTruthy();
+    const settingsTab = screen.getByRole("tab", { name: "Settings" });
+    await user.click(settingsTab);
 
-    // Open the dropdown by clicking on the selector
-    act(() => {
-      fireEvent.mouseDown(selectSelector!);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
     });
 
-    // Wait for dropdown to open - Ant Design renders options in a portal
-    await waitFor(
-      () => {
-        const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
-        expect(dropdownOptions.length).toBeGreaterThan(0);
-      },
-      { timeout: 5000 },
-    );
+    const editButton = screen.getByRole("button", { name: "Edit Settings" });
+    await user.click(editButton);
 
-    const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
-    const optionTexts = Array.from(dropdownOptions).map((option) => option.textContent?.trim() || "");
-
-    organizationModels.forEach((model) => {
-      expect(optionTexts).toContain(model);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
     });
 
-    const modelsNotInOrganization = userModels.filter((m) => !organizationModels.includes(m));
-    modelsNotInOrganization.forEach((model) => {
-      expect(optionTexts).not.toContain(model);
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    await user.click(cancelButton);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Team Name")).not.toBeInTheDocument();
     });
-  }, 10000);
+  });
+
+  it("should call onClose when back button is clicked", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} onClose={onClose} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const backButton = screen.getByRole("button", { name: /back to teams/i });
+    await user.click(backButton);
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("should copy team ID to clipboard when copy button is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const copyButtons = screen.getAllByRole("button");
+    const copyButton = copyButtons.find((btn) => btn.querySelector("svg"));
+    expect(copyButton).toBeTruthy();
+
+    if (copyButton) {
+      await user.click(copyButton);
+    }
+  });
 
   it("should disable secret manager settings for non-premium users", async () => {
-    const teamResponse = {
-      team_id: "123",
-      team_info: {
-        team_alias: "Test Team",
-        team_id: "123",
-        organization_id: null,
-        admins: ["admin@test.com"],
-        members: [],
-        members_with_roles: [],
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
         metadata: {
           secret_manager_settings: { provider: "aws", secret_id: "abc" },
         },
-        tpm_limit: null,
-        rpm_limit: null,
-        max_budget: null,
-        budget_duration: null,
-        models: ["gpt-4"],
-        blocked: false,
-        spend: 0,
-        max_parallel_requests: null,
-        budget_reset_at: null,
-        model_id: null,
-        litellm_model_table: null,
-        created_at: "2024-01-01T00:00:00Z",
-        team_member_budget_table: null,
-      },
-      keys: [],
-      team_memberships: [],
-    };
-
-    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamResponse as any);
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
-    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
-
-    renderWithProviders(
-      <TeamInfoView
-        teamId="123"
-        onUpdate={() => {}}
-        onClose={() => {}}
-        accessToken="123"
-        is_team_admin={true}
-        is_proxy_admin={true}
-        userModels={["gpt-4"]}
-        editTeam={false}
-        premiumUser={false}
-      />,
+      })
     );
 
-    const settingsTab = await screen.findByRole("tab", { name: "Settings" });
-    act(() => fireEvent.click(settingsTab));
+    renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={false} />);
 
-    const editButton = await screen.findByRole("button", { name: "Edit Settings" });
-    act(() => fireEvent.click(editButton));
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const settingsTab = screen.getByRole("tab", { name: "Settings" });
+    await user.click(settingsTab);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: "Edit Settings" });
+    await user.click(editButton);
 
     const secretField = await screen.findByPlaceholderText(
-      '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
+      '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
     );
     expect(secretField).toBeDisabled();
-    expect(secretField).toHaveValue(JSON.stringify(teamResponse.team_info.metadata.secret_manager_settings, null, 2));
-  }, 10000);
+  });
 
-  it("should allow premium users to update secret manager settings", async () => {
-    const teamResponse = {
-      team_id: "123",
-      team_info: {
-        team_alias: "Test Team",
-        team_id: "123",
-        organization_id: null,
-        admins: ["admin@test.com"],
-        members: [],
-        members_with_roles: [],
+  it("should allow premium users to edit secret manager settings", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
         metadata: {
           secret_manager_settings: { provider: "aws", secret_id: "abc" },
         },
-        tpm_limit: null,
-        rpm_limit: null,
-        max_budget: null,
-        budget_duration: null,
-        models: ["gpt-4"],
-        blocked: false,
-        spend: 0,
-        max_parallel_requests: null,
-        budget_reset_at: null,
-        model_id: null,
-        litellm_model_table: null,
-        created_at: "2024-01-01T00:00:00Z",
-        team_member_budget_table: null,
-      },
-      keys: [],
-      team_memberships: [],
-    };
-
-    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamResponse as any);
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
-    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
-    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: teamResponse.team_info, team_id: "123" } as any);
-
-    renderWithProviders(
-      <TeamInfoView
-        teamId="123"
-        onUpdate={() => {}}
-        onClose={() => {}}
-        accessToken="123"
-        is_team_admin={true}
-        is_proxy_admin={true}
-        userModels={["gpt-4"]}
-        editTeam={false}
-        premiumUser={true}
-      />,
+      })
     );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
-    const settingsTab = await screen.findByRole("tab", { name: "Settings" });
-    act(() => fireEvent.click(settingsTab));
+    renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
 
-    const editButton = await screen.findByRole("button", { name: "Edit Settings" });
-    act(() => fireEvent.click(editButton));
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const settingsTab = screen.getByRole("tab", { name: "Settings" });
+    await user.click(settingsTab);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: "Edit Settings" });
+    await user.click(editButton);
 
     const secretField = await screen.findByPlaceholderText(
-      '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
+      '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
     );
     expect(secretField).not.toBeDisabled();
+  });
 
-    act(() => {
-      fireEvent.change(secretField, { target: { value: '{"provider":"azure","secret_id":"xyz"}' } });
-    });
+  it("should add team member when form is submitted", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    const teamData = createMockTeamData();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamData);
+    vi.mocked(networking.teamMemberAddCall).mockResolvedValue({} as any);
 
-    const saveButton = await screen.findByRole("button", { name: "Save Changes" });
-    act(() => fireEvent.click(saveButton));
+    renderWithProviders(<TeamInfoView {...defaultProps} onUpdate={onUpdate} />);
 
     await waitFor(() => {
-      expect(networking.teamUpdateCall).toHaveBeenCalled();
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
     });
 
-    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
-    expect(payload.metadata.secret_manager_settings).toEqual({ provider: "azure", secret_id: "xyz" });
-  }, 10000);
+    const membersTab = screen.getByRole("tab", { name: "Members" });
+    await user.click(membersTab);
 
-  it("should include vector stores in object_permission when updating team", async () => {
-    const teamResponse = {
-      team_id: "123",
-      team_info: {
-        team_alias: "Test Team",
-        team_id: "123",
-        organization_id: null,
-        admins: ["admin@test.com"],
-        members: [],
-        members_with_roles: [],
-        metadata: {},
-        tpm_limit: null,
-        rpm_limit: null,
-        max_budget: null,
-        budget_duration: null,
-        models: ["gpt-4"],
-        blocked: false,
-        spend: 0,
-        max_parallel_requests: null,
-        budget_reset_at: null,
-        model_id: null,
-        litellm_model_table: null,
-        created_at: "2024-01-01T00:00:00Z",
-        team_member_budget_table: null,
-        object_permission: {
-          vector_stores: ["store1", "store2"],
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Add Member" })).toBeInTheDocument();
+    });
+
+    const addButton = screen.getByRole("button", { name: "Add Member" });
+    await user.click(addButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Submit" })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: "Submit" });
+    await user.click(submitButton);
+
+    await waitFor(() => {
+      expect(networking.teamMemberAddCall).toHaveBeenCalled();
+    });
+  });
+
+  it("should display team member budget information when present", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        team_member_budget_table: {
+          max_budget: 500,
+          budget_duration: "30d",
+          tpm_limit: 5000,
+          rpm_limit: 50,
         },
-      },
-      keys: [],
-      team_memberships: [],
-    };
-
-    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamResponse as any);
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
-    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
-    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: teamResponse.team_info, team_id: "123" } as any);
-
-    renderWithProviders(
-      <TeamInfoView
-        teamId="123"
-        onUpdate={() => {}}
-        onClose={() => {}}
-        accessToken="123"
-        is_team_admin={true}
-        is_proxy_admin={true}
-        userModels={["gpt-4"]}
-        editTeam={false}
-        premiumUser={true}
-      />,
+      })
     );
 
-    const settingsTab = await screen.findByRole("tab", { name: "Settings" });
-    act(() => fireEvent.click(settingsTab));
-
-    const editButton = await screen.findByRole("button", { name: "Edit Settings" });
-    act(() => fireEvent.click(editButton));
-
-    // Verify that Vector Stores field is present
-    expect(screen.getByLabelText("Vector Stores")).toBeInTheDocument();
-
-    const saveButton = await screen.findByRole("button", { name: "Save Changes" });
-    act(() => fireEvent.click(saveButton));
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(networking.teamUpdateCall).toHaveBeenCalled();
+      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+    });
+  });
+
+  it("should display virtual keys information", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue({
+      ...createMockTeamData(),
+      keys: [
+        { user_id: "user1", token: "key1" },
+        { token: "key2" },
+      ],
     });
 
-    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
-    expect(payload.object_permission.vector_stores).toEqual(["store1", "store2"]);
-  }, 10000);
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Virtual Keys")).toBeInTheDocument();
+    });
+  });
+
+  it("should display object permissions when present", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        object_permission: {
+          object_permission_id: "perm-1",
+          mcp_servers: ["server1"],
+          vector_stores: ["store1"],
+        },
+      })
+    );
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+  });
 });

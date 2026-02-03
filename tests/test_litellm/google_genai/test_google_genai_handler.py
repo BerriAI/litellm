@@ -183,10 +183,8 @@ def test_stream_transformation_error_sync():
         "translate_completion_output_params_streaming", 
         return_value=None
     ):
-        # Mock litellm.completion at the module level where it's imported
-        # We need to patch it in the handler module, not in litellm itself
-        with patch("litellm.google_genai.adapters.handler.litellm") as mock_litellm:
-            mock_litellm.completion.return_value = mock_stream
+        # Patch litellm.completion directly to prevent real API calls
+        with patch("litellm.completion", return_value=mock_stream):
             # Call the handler with stream=True and expect a ValueError
             with pytest.raises(ValueError, match="Failed to transform streaming response"):
                 GenerateContentToCompletionHandler.generate_content_handler(
