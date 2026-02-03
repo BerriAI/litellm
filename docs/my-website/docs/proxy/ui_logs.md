@@ -23,6 +23,20 @@ View Spend, Token Usage, Key, Team Name for Each Request to LiteLLM
 
 **By default LiteLLM does not track the request and response content.**
 
+## Tracking - Request / Response Content in Logs Page 
+
+If you want to view request and response content on LiteLLM Logs, you can enable it in either place:
+
+- **From the UI (no restart):** Use [UI Spend Log Settings](./ui_spend_log_settings.md) — open Logs → Settings → enable "Store Prompts in Spend Logs" → Save. Takes effect immediately and overrides config.
+- **From config:** Add this to your `proxy_config.yaml` (requires restart):
+
+```yaml
+general_settings:
+  store_prompts_in_spend_logs: true
+```
+
+<Image img={require('../../img/ui_request_logs_content.png')}/>
+
 ## Tracing Tools
 
 View which tools were provided and called in your completion requests.
@@ -57,21 +71,6 @@ curl -X POST 'http://localhost:4000/chat/completions' \
 ```
 
 Check the Logs page to see all tools provided and which ones were called.
-
-## Tracking - Request / Response Content in Logs Page 
-
-If you want to view request and response content on LiteLLM Logs, you can enable it in either place:
-
-- **From the UI (no restart):** Use [UI Spend Log Settings](./ui_spend_log_settings.md) — open Logs → Settings → enable "Store Prompts in Spend Logs" → Save. Takes effect immediately and overrides config.
-- **From config:** Add this to your `proxy_config.yaml` (requires restart):
-
-```yaml
-general_settings:
-  store_prompts_in_spend_logs: true
-```
-
-<Image img={require('../../img/ui_request_logs_content.png')}/>
-
 
 ## Stop storing Error Logs in DB
 
