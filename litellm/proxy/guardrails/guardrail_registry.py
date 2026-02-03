@@ -233,7 +233,10 @@ class GuardrailRegistry:
     ########### DB management helpers for guardrails ###########
     ############################################################
     async def add_guardrail_to_db(
-        self, guardrail: Guardrail, prisma_client: PrismaClient
+        self,
+        guardrail: Guardrail,
+        prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
     ):
         """
         Add a guardrail to the database
@@ -248,6 +251,8 @@ class GuardrailRegistry:
                 litellm_params_dict = (
                     dict(litellm_params_obj) if litellm_params_obj else {}
                 )
+
+            # Use safe_dumps to store as string, as Prisma client seems to prefer this for now
             litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
@@ -257,6 +262,7 @@ class GuardrailRegistry:
                     "guardrail_name": guardrail_name,
                     "litellm_params": litellm_params,
                     "guardrail_info": guardrail_info,
+                    "team_id": team_id,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                 }
@@ -265,18 +271,32 @@ class GuardrailRegistry:
             # Add guardrail_id to the returned guardrail object
             guardrail_dict = dict(guardrail)
             guardrail_dict["guardrail_id"] = created_guardrail.guardrail_id
+            guardrail_dict["team_id"] = team_id
 
             return guardrail_dict
         except Exception as e:
             raise Exception(f"Error adding guardrail to DB: {str(e)}")
 
     async def delete_guardrail_from_db(
-        self, guardrail_id: str, prisma_client: PrismaClient
+        self,
+        guardrail_id: str,
+        prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
     ):
         """
         Delete a guardrail from the database
         """
         try:
+            # Check ownership if team_id is provided
+            if team_id:
+                existing_guardrail = (
+                    await prisma_client.db.litellm_guardrailstable.find_unique(
+                        where={"guardrail_id": guardrail_id}
+                    )
+                )
+                if not existing_guardrail or existing_guardrail.team_id != team_id:
+                    raise Exception("Guardrail not found or access denied")
+
             # Delete from DB
             await prisma_client.db.litellm_guardrailstable.delete(
                 where={"guardrail_id": guardrail_id}
@@ -287,12 +307,26 @@ class GuardrailRegistry:
             raise Exception(f"Error deleting guardrail from DB: {str(e)}")
 
     async def update_guardrail_in_db(
-        self, guardrail_id: str, guardrail: Guardrail, prisma_client: PrismaClient
+        self,
+        guardrail_id: str,
+        guardrail: Guardrail,
+        prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
     ):
         """
         Update a guardrail in the database
         """
         try:
+            # Check ownership if team_id is provided
+            if team_id:
+                existing_guardrail = (
+                    await prisma_client.db.litellm_guardrailstable.find_unique(
+                        where={"guardrail_id": guardrail_id}
+                    )
+                )
+                if not existing_guardrail or existing_guardrail.team_id != team_id:
+                    raise Exception("Guardrail not found or access denied")
+
             guardrail_name = guardrail.get("guardrail_name")
             # Properly serialize LitellmParams Pydantic model to dict
             litellm_params_obj: Any = guardrail.get("litellm_params", {})
@@ -302,6 +336,7 @@ class GuardrailRegistry:
                 litellm_params_dict = (
                     dict(litellm_params_obj) if litellm_params_obj else {}
                 )
+
             litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
@@ -324,27 +359,67 @@ class GuardrailRegistry:
     @staticmethod
     async def get_all_guardrails_from_db(
         prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
     ) -> List[Guardrail]:
         """
         Get all guardrails from the database
         """
         try:
-            guardrails_from_db = (
-                await prisma_client.db.litellm_guardrailstable.find_many(
-                    order={"created_at": "desc"},
-                )
+            # Normal ORM Fetch
+            all_guardrails = await prisma_client.db.litellm_guardrailstable.find_many(
+                order={"created_at": "desc"},
             )
+
+            # Filter in Python
+            if team_id:
+                guardrails_from_db = [g for g in all_guardrails if g.team_id == team_id]
+            else:
+                guardrails_from_db = all_guardrails
 
             guardrails: List[Guardrail] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))  # type: ignore
+                try:
+                    # Deep copy to avoid mutating cache/original
+                    g_dict = (
+                        guardrail.dict()
+                        if hasattr(guardrail, "dict")
+                        else dict(guardrail)
+                    )
+
+                    # Handle litellm_params
+                    params = g_dict.get("litellm_params")
+                    if isinstance(params, str):
+                        import json
+
+                        try:
+                            g_dict["litellm_params"] = json.loads(params)
+                        except Exception:
+                            g_dict["litellm_params"] = {}
+
+                    # Handle guardrail_info
+                    info = g_dict.get("guardrail_info")
+                    if isinstance(info, str):
+                        import json
+
+                        try:
+                            g_dict["guardrail_info"] = json.loads(info)
+                        except Exception:
+                            g_dict["guardrail_info"] = {}
+
+                    # Construct
+                    guardrails.append(Guardrail(**g_dict))  # type: ignore
+                except Exception:
+                    continue
 
             return guardrails
         except Exception as e:
             raise Exception(f"Error getting guardrails from DB: {str(e)}")
 
     async def get_guardrail_by_id_from_db(
-        self, guardrail_id: str, prisma_client: PrismaClient
+        self,
+        guardrail_id: str,
+        prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
     ) -> Optional[Guardrail]:
         """
         Get a guardrail by its ID from the database
@@ -355,6 +430,11 @@ class GuardrailRegistry:
             )
 
             if not guardrail:
+                return None
+
+            if team_id and guardrail.team_id != team_id:
+                # Return None if not found or not owned by team
+                # Alternatively could raise exception, but returning None resembles "not found"
                 return None
 
             return Guardrail(**(dict(guardrail)))  # type: ignore
@@ -473,6 +553,7 @@ class InMemoryGuardrailHandler:
             guardrail_id=guardrail.get("guardrail_id"),
             guardrail_name=guardrail["guardrail_name"],
             litellm_params=litellm_params,
+            team_id=guardrail.get("team_id"),
         )
 
         # store references to the guardrail in memory
