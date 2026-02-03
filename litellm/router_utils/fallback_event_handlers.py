@@ -113,16 +113,8 @@ async def run_async_fallback(
         The most recent exception if all fallback model groups fail.
     """
 
-    ### BASE CASE ### MAX FALLBACK DEPTH REACHED 
-    if fallback_depth >= max_fallbacks: 
-        raise original_exception
-
-    ### CHECK IF MODEL GROUP LIST EXHAUSTED
-    if original_model_group in fallback_model_group:
-        fallback_group_length = len(fallback_model_group) - 1
-    else:
-        fallback_group_length = len(fallback_model_group) 
-    if fallback_depth >= fallback_group_length:
+    ### BASE CASE ### MAX FALLBACK DEPTH REACHED
+    if fallback_depth >= max_fallbacks:
         raise original_exception
 
     error_from_fallbacks = original_exception

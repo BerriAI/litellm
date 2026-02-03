@@ -228,6 +228,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
     KEY_BULK_UPDATE = "/key/bulk_update"
+    KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -987,6 +988,10 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
+
+
+class ResetSpendRequest(LiteLLMPydanticObjectBase):
+    reset_to: float
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):

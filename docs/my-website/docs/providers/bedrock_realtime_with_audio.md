@@ -1,8 +1,4 @@
-# Call Bedrock Nova Sonic Realtime API with Audio Input/Output 
-
-:::info
-Requires LiteLLM Proxy v1.70.1+
-:::
+# Bedrock Realtime API
 
 ## Overview
 

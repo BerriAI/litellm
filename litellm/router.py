@@ -88,7 +88,6 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
-    filter_deployments_by_access_groups,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -8088,16 +8087,9 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
-
-        # Filter by allowed access groups (GitHub issue #18333)
-        # This prevents cross-team load balancing when teams have models with same name in different access groups
-        healthy_deployments = filter_deployments_by_access_groups(
-            healthy_deployments=healthy_deployments,
-            request_kwargs=request_kwargs,
+        verbose_router_logger.debug(
+            f"healthy_deployments after web search filter: {healthy_deployments}"
         )
-
-        verbose_router_logger.debug(f"healthy_deployments after access group filter: {healthy_deployments}")
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments

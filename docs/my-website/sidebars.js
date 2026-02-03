@@ -538,6 +538,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",
             "mcp_guardrail",
@@ -716,6 +717,7 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
+            "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
         "providers/bedrock_vector_store",
       ]
