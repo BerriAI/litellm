@@ -462,6 +462,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...parsedMetadata,
           guardrails: values.guardrails || [],
           logging: values.logging_settings || [],
+          disable_global_guardrails: values.disable_global_guardrails || false,
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         policies: values.policies || [],
@@ -572,11 +573,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               size="small"
               icon={copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(info.team_id, "team-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["team-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["team-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
           </div>
         </div>
@@ -588,10 +588,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <Tab key="overview">Overview</Tab>,
             ...(canEditTeam
               ? [
-                  <Tab key="members">Members</Tab>,
-                  <Tab key="member-permissions">Member Permissions</Tab>,
-                  <Tab key="settings">Settings</Tab>,
-                ]
+                <Tab key="members">Members</Tab>,
+                <Tab key="member-permissions">Member Permissions</Tab>,
+                <Tab key="settings">Settings</Tab>,
+              ]
               : []),
           ]}
         </TabList>
@@ -764,10 +764,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
                     metadata: info.metadata
                       ? JSON.stringify(
-                          (({ logging, secret_manager_settings, ...rest }) => rest)(info.metadata),
-                          null,
-                          2,
-                        )
+                        (({ logging, secret_manager_settings, ...rest }) => rest)(info.metadata),
+                        null,
+                        2,
+                      )
                       : "",
                     logging_settings: info.metadata?.logging || [],
                     secret_manager_settings: info.metadata?.secret_manager_settings
@@ -905,7 +905,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form.Item
                     label={
                       <span>
-                        Disable Global Guardrails{" "}
+                        Disable Global Guardrails
                         <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
