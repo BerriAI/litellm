@@ -30,10 +30,11 @@ export interface ModelSelectProps {
     showAllProxyModelsOverride?: boolean;
     includeSpecialOptions?: boolean;
   };
-  context: "team" | "organization" | "user";
+  context: "team" | "organization" | "user" | "global";
   dataTestId?: string;
   value?: string[];
   onChange: (values: string[]) => void;
+  style?: React.CSSProperties;
 }
 
 type FilterContextArgs = {
@@ -65,6 +66,10 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
   organization: ({ allProxyModels }) => {
     return allProxyModels;
   },
+
+  global: ({ allProxyModels }) => {
+    return allProxyModels;
+  },
 };
 
 const filterModels = (
@@ -84,7 +89,7 @@ const filterModels = (
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
-  const { teamID, organizationID, options, context, dataTestId, value = [], onChange } = props;
+  const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { includeUserModels, showAllTeamModelsOption, showAllProxyModelsOverride, includeSpecialOptions } =
     options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
@@ -98,7 +103,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const organizationHasAllProxyModels = organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || organization?.models.length === 0;
   const shouldShowAllProxyModels =
     showAllProxyModelsOverride ||
-    (organizationHasAllProxyModels && includeSpecialOptions);
+    (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
 
   if (isLoading) {
     return <Skeleton.Input active block />;
@@ -134,6 +139,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
       data-testid={dataTestId}
       value={value}
       onChange={handleChange}
+      style={style}
       options={[
         includeSpecialOptions
           ? {
