@@ -3441,12 +3441,21 @@ async def regenerate_key_fn(  # noqa: PLR0915
                 revoke_at = datetime.now(timezone.utc) + timedelta(
                     hours=grace_period_hours
                 )
-                await prisma_client.db.litellm_deprecatedverificationtoken.create(
+                # Use upsert to handle concurrent rotations gracefully; avoids
+                # unique constraint violation if same key is rotated simultaneously
+                await prisma_client.db.litellm_deprecatedverificationtoken.upsert(
+                    where={"token": hashed_api_key},
                     data={
-                        "token": hashed_api_key,
-                        "active_token_id": new_token_hash,
-                        "revoke_at": revoke_at,
-                    }
+                        "create": {
+                            "token": hashed_api_key,
+                            "active_token_id": new_token_hash,
+                            "revoke_at": revoke_at,
+                        },
+                        "update": {
+                            "active_token_id": new_token_hash,
+                            "revoke_at": revoke_at,
+                        },
+                    },
                 )
                 verbose_proxy_logger.debug(
                     "Deprecated key retained for %s hours (revoke_at: %s)",
