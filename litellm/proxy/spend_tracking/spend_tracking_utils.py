@@ -211,6 +211,83 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
+def _extract_overhead_breakdown(
+    standard_logging_payload: Optional[StandardLoggingPayload],
+    metadata: dict,
+    kwargs: dict,
+) -> tuple[Optional[float], Optional[dict]]:
+    """
+    Extract overhead breakdown and litellm_overhead_time_ms from available sources.
+    
+    Returns:
+        tuple: (litellm_overhead_time_ms, overhead_breakdown)
+    """
+    litellm_overhead_time_ms = None
+    overhead_breakdown = None
+    
+    if standard_logging_payload is not None:
+        hidden_params = standard_logging_payload.get("hidden_params", {})
+        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+        
+        # Extract overhead breakdown from metadata or hidden_params
+        overhead_breakdown = (
+            standard_logging_payload.get("metadata", {}).get("overhead_breakdown")
+            or hidden_params.get("overhead_breakdown")
+        )
+        
+        # If overhead_breakdown doesn't exist, try to construct it from available data
+        if overhead_breakdown is None:
+            overhead_breakdown = {}
+            
+            # Extract cache read time from caching_details (requires standard_logging_payload)
+            caching_details = standard_logging_payload.get("metadata", {}).get("caching_details")
+            if caching_details and isinstance(caching_details, dict):
+                cache_duration_ms = caching_details.get("cache_duration_ms")
+                if cache_duration_ms is not None:
+                    overhead_breakdown["cache_read_time_ms"] = cache_duration_ms
+    
+    # Initialize overhead_breakdown if it doesn't exist
+    if overhead_breakdown is None:
+        overhead_breakdown = {}
+    
+    # Extract metrics from available sources (works regardless of standard_logging_payload)
+    # These can be added to an existing overhead_breakdown or used to create a new one
+    logging_obj = kwargs.get("logging_obj")
+    
+    # Extract translation times from metadata or model_call_details
+    if "request_translation_time_ms" not in overhead_breakdown:
+        request_translation_time_ms = metadata.get("request_translation_time_ms")
+        if request_translation_time_ms is None and logging_obj and hasattr(logging_obj, "model_call_details"):
+            request_translation_time_ms = logging_obj.model_call_details.get("request_translation_time_ms")
+        if request_translation_time_ms is not None:
+            overhead_breakdown["request_translation_time_ms"] = request_translation_time_ms
+    
+    if "response_translation_time_ms" not in overhead_breakdown:
+        response_translation_time_ms = metadata.get("response_translation_time_ms")
+        if response_translation_time_ms is None and logging_obj and hasattr(logging_obj, "model_call_details"):
+            response_translation_time_ms = logging_obj.model_call_details.get("response_translation_time_ms")
+        if response_translation_time_ms is not None:
+            overhead_breakdown["response_translation_time_ms"] = response_translation_time_ms
+    
+    # Extract retry count from previous_models in metadata
+    if "retry_count" not in overhead_breakdown:
+        previous_models = metadata.get("previous_models", [])
+        if previous_models and isinstance(previous_models, list):
+            overhead_breakdown["retry_count"] = len(previous_models)
+    
+    # Extract auth time from metadata
+    if "auth_time_ms" not in overhead_breakdown:
+        auth_time_ms = metadata.get("auth_time_ms")
+        if auth_time_ms is not None:
+            overhead_breakdown["auth_time_ms"] = auth_time_ms
+    
+    # Only set overhead_breakdown if we have at least one value
+    if not overhead_breakdown:
+        overhead_breakdown = None
+    
+    return litellm_overhead_time_ms, overhead_breakdown
+
+
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
@@ -312,62 +389,10 @@ def get_logging_payload(  # noqa: PLR0915
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
 
-    # Extract overhead from hidden_params if available
-    litellm_overhead_time_ms = None
-    overhead_breakdown = None
-    if standard_logging_payload is not None:
-        hidden_params = standard_logging_payload.get("hidden_params", {})
-        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
-        
-        # Extract overhead breakdown from metadata or hidden_params
-        overhead_breakdown = (
-            standard_logging_payload.get("metadata", {}).get("overhead_breakdown")
-            or hidden_params.get("overhead_breakdown")
-        )
-        
-        # If overhead_breakdown doesn't exist, try to construct it from available data
-        if overhead_breakdown is None:
-            overhead_breakdown = {}
-            
-            # Extract cache read time from caching_details
-            caching_details = standard_logging_payload.get("metadata", {}).get("caching_details")
-            if caching_details and isinstance(caching_details, dict):
-                cache_duration_ms = caching_details.get("cache_duration_ms")
-                if cache_duration_ms is not None:
-                    overhead_breakdown["cache_read_time_ms"] = cache_duration_ms
-            
-            # Extract retry count from previous_models
-            previous_models = metadata.get("previous_models", [])
-            if previous_models and isinstance(previous_models, list):
-                overhead_breakdown["retry_count"] = len(previous_models)
-            
-            # Extract auth time from metadata if available
-            auth_time_ms = metadata.get("auth_time_ms")
-            if auth_time_ms is not None:
-                overhead_breakdown["auth_time_ms"] = auth_time_ms
-            
-            # Extract translation times from metadata or model_call_details if available
-            request_translation_time_ms = metadata.get("request_translation_time_ms")
-            if request_translation_time_ms is None:
-                # Also check model_call_details from logging_obj in kwargs
-                logging_obj = kwargs.get("logging_obj")
-                if logging_obj and hasattr(logging_obj, "model_call_details"):
-                    request_translation_time_ms = logging_obj.model_call_details.get("request_translation_time_ms")
-            if request_translation_time_ms is not None:
-                overhead_breakdown["request_translation_time_ms"] = request_translation_time_ms
-            
-            response_translation_time_ms = metadata.get("response_translation_time_ms")
-            if response_translation_time_ms is None:
-                # Also check model_call_details from logging_obj in kwargs
-                logging_obj = kwargs.get("logging_obj")
-                if logging_obj and hasattr(logging_obj, "model_call_details"):
-                    response_translation_time_ms = logging_obj.model_call_details.get("response_translation_time_ms")
-            if response_translation_time_ms is not None:
-                overhead_breakdown["response_translation_time_ms"] = response_translation_time_ms
-            
-            # Only set overhead_breakdown if we have at least one value
-            if not overhead_breakdown:
-                overhead_breakdown = None
+    # Extract overhead from available sources
+    litellm_overhead_time_ms, overhead_breakdown = _extract_overhead_breakdown(
+        standard_logging_payload, metadata, kwargs
+    )
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
