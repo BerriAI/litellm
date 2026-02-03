@@ -51,8 +51,8 @@ def main() -> int:
     parser.add_argument(
         "--requests",
         type=int,
-        default=20_000,
-        help="Number of requests per run (default: 20k)",
+        default=100_000,
+        help="Number of requests per run (default: 100k)",
     )
     parser.add_argument(
         "--no-wait",
