@@ -3984,11 +3984,12 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
+                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
                 messages=messages,
                 web_search_options={},  # Enables Nova grounding
                 max_tokens=500,
                 client=client,
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
             )
         except Exception:
             pass  # Expected - we're just checking the request structure
@@ -4058,12 +4059,13 @@ def test_bedrock_nova_grounding_with_function_tools():
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
+                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
                 messages=messages,
                 tools=tools,
                 web_search_options={},  # Also enable web grounding
                 max_tokens=500,
                 client=client,
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
             )
         except Exception:
             pass  # Expected - we're just checking the request structure
@@ -4119,11 +4121,12 @@ async def test_bedrock_nova_grounding_async():
     with patch.object(client, "post", new=AsyncMock()) as mock_post:
         try:
             await litellm.acompletion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
+                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
                 messages=messages,
                 web_search_options={},
                 max_tokens=500,
                 client=client,
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
             )
         except Exception:
             pass  # Expected - we're just checking the request structure

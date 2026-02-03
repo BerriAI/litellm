@@ -7,7 +7,6 @@ import { healthCheckColumns } from "./health_check_columns";
 import { errorPatterns } from "@/utils/errorPatterns";
 import { individualModelHealthCheckCall, latestHealthChecksCall } from "../networking";
 import { Table as TableInstance } from "@tanstack/react-table";
-import { Team } from "../key_team_helpers/key_list";
 
 interface HealthStatus {
   status: string;
@@ -25,7 +24,6 @@ interface HealthCheckComponentProps {
   all_models_on_proxy: string[];
   getDisplayModelName: (model: any) => string;
   setSelectedModelId?: (modelId: string) => void;
-  teams?: Team[] | null;
 }
 
 const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
@@ -34,7 +32,6 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   all_models_on_proxy,
   getDisplayModelName,
   setSelectedModelId,
-  teams,
 }) => {
   const [modelHealthStatuses, setModelHealthStatuses] = useState<{ [key: string]: HealthStatus }>({});
   const [selectedModelsForHealth, setSelectedModelsForHealth] = useState<string[]>([]);
@@ -577,7 +574,6 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             showErrorModal,
             showSuccessModal,
             setSelectedModelId,
-            teams,
           )}
           data={modelData.data.map((model: any) => {
             const modelName = model.model_name;

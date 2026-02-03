@@ -400,7 +400,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     all_models_on_proxy={allModelsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
-                    teams={teams}
                   />
                 </TabPanel>
                 <ModelRetrySettingsTab

@@ -28,7 +28,6 @@ export interface SSOSettingsValues {
   user_email: string | null;
   ui_access_mode: string | null;
   role_mappings: RoleMappings;
-  team_mappings: TeamMappings;
 }
 
 export interface RoleMappings {
@@ -38,10 +37,6 @@ export interface RoleMappings {
   roles: {
     [key: string]: string[];
   };
-}
-
-export interface TeamMappings {
-  team_ids_jwt_field: string;
 }
 
 export interface SSOSettingsResponse {

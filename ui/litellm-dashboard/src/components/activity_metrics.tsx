@@ -5,8 +5,7 @@ import { Collapse } from "antd";
 import React from "react";
 import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
 import { Team } from "./key_team_helpers/key_list";
-import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
-import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
+import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData } from "./UsagePage/types";
 import { valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
@@ -73,29 +72,8 @@ const ModelSection = ({
         </Card>
       )}
 
-      {metrics.top_models && metrics.top_models.length > 0 && (
-        <KeyModelUsageView topModels={metrics.top_models} />
-      )}
-
-      {/* Spend per day - Full width card */}
-      <Card className="mt-4">
-        <div className="flex justify-between items-center">
-          <Title>Spend per day</Title>
-          <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
-        </div>
-        <BarChart
-          className="mt-4"
-          data={metrics.daily_data}
-          index="date"
-          categories={["metrics.spend"]}
-          colors={["green"]}
-          valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2, true)}`}
-          yAxisWidth={72}
-        />
-      </Card>
-
       {/* Charts */}
-      <Grid numItems={2} className="gap-4 mt-4">
+      <Grid numItems={2} className="gap-4">
         <Card>
           <div className="flex justify-between items-center">
             <Title>Total Tokens</Title>
@@ -130,6 +108,22 @@ const ModelSection = ({
             valueFormatter={valueFormatter}
             customTooltip={CustomTooltip}
             showLegend={false}
+          />
+        </Card>
+
+        <Card>
+          <div className="flex justify-between items-center">
+            <Title>Spend per day</Title>
+            <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
+          </div>
+          <BarChart
+            className="mt-4"
+            data={metrics.daily_data}
+            index="date"
+            categories={["metrics.spend"]}
+            colors={["green"]}
+            valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2, true)}`}
+            yAxisWidth={72}
           />
         </Card>
 
@@ -383,7 +377,6 @@ export const processActivityData = (
           total_cache_read_input_tokens: 0,
           total_cache_creation_input_tokens: 0,
           top_api_keys: [],
-          top_models: [],
           daily_data: [],
         };
       }
@@ -448,45 +441,6 @@ export const processActivityData = (
       modelMetrics[model].top_api_keys = Object.values(apiKeyBreakdown)
         .sort((a, b) => b.spend - a.spend)
         .slice(0, 5);
-    });
-  }
-
-  // Process Model breakdowns for each API key (only when key is 'api_keys')
-  if (key === "api_keys") {
-    Object.entries(modelMetrics).forEach(([apiKeyHash, _]) => {
-      const modelBreakdown: Record<string, TopModelData> = {};
-
-      // Aggregate Model data for this key across all days
-      // We need to look in breakdown.models[model].api_key_breakdown[apiKeyHash]
-      dailyActivity.results.forEach((day) => {
-        Object.entries(day.breakdown.models || {}).forEach(([modelName, modelData]) => {
-          if (modelData && "api_key_breakdown" in modelData) {
-            const keyDataForModel = modelData.api_key_breakdown?.[apiKeyHash];
-            if (keyDataForModel) {
-              if (!modelBreakdown[modelName]) {
-                modelBreakdown[modelName] = {
-                  model: modelName,
-                  spend: 0,
-                  requests: 0,
-                  successful_requests: 0,
-                  failed_requests: 0,
-                  tokens: 0,
-                };
-              }
-
-              modelBreakdown[modelName].spend += keyDataForModel.metrics.spend;
-              modelBreakdown[modelName].requests += keyDataForModel.metrics.api_requests;
-              modelBreakdown[modelName].successful_requests += keyDataForModel.metrics.successful_requests || 0;
-              modelBreakdown[modelName].failed_requests += keyDataForModel.metrics.failed_requests || 0;
-              modelBreakdown[modelName].tokens += keyDataForModel.metrics.total_tokens;
-            }
-          }
-        });
-      });
-
-      // Sort by spend
-      modelMetrics[apiKeyHash].top_models = Object.values(modelBreakdown)
-        .sort((a, b) => b.spend - a.spend);
     });
   }
 

@@ -1,8 +1,5 @@
 # Sarvam.ai
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 LiteLLM supports all the text models from [Sarvam ai](https://docs.sarvam.ai/api-reference-docs/chat/chat-completions)
 
 ## Usage

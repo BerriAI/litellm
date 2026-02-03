@@ -48,7 +48,7 @@ class EventDrivenCacheCoordinator:
 
     async def _get_cached(
         self, cache_key: str, cache: AsyncCacheProtocol
-    ) -> Optional[Any]:
+    ) -> Optional[T]:
         """Return value from cache if present, else None."""
         return await cache.async_get_cache(key=cache_key)
 
@@ -94,7 +94,7 @@ class EventDrivenCacheCoordinator:
             verbose_proxy_logger.debug(
                 "%s Signal received, reading from cache", self._log_prefix
             )
-        value: Optional[T] = await cache.async_get_cache(key=cache_key)
+        value = await cache.async_get_cache(key=cache_key)
         if value is not None and self._log_prefix:
             verbose_proxy_logger.debug(
                 "%s Cache filled by other request, value: %s",
@@ -186,7 +186,6 @@ class EventDrivenCacheCoordinator:
             )
 
         try:
-            result = await self._load_and_cache(cache_key, cache, load_fn)
-            return result
+            return await self._load_and_cache(cache_key, cache, load_fn)
         finally:
             await self._signal_done()

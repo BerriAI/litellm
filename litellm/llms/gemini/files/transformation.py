@@ -4,7 +4,7 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
-from typing import Any, List, Literal, Optional
+from typing import List, Optional
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -17,7 +17,6 @@ from litellm.llms.base_llm.files.transformation import (
 )
 from litellm.types.llms.gemini import GeminiCreateFilesResponseObject
 from litellm.types.llms.openai import (
-    AllMessageValues,
     CreateFileRequest,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
@@ -38,23 +37,22 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict[Any, Any],
+        api_key: Optional[str],
+        headers: dict,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict[Any, Any],
-        litellm_params: dict[Any, Any],
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict[Any, Any]:
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> dict:
         """
         Validate environment and add Gemini API key to headers.
         Google AI Studio uses x-goog-api-key header for authentication.
         """
-        resolved_api_key = self.get_api_key(api_key)
-        if not resolved_api_key:
+        api_key = self.get_api_key(api_key)
+        if not api_key:
             raise ValueError("GEMINI_API_KEY is required for Google AI Studio file operations")
         
-        headers["x-goog-api-key"] = resolved_api_key
+        headers["x-goog-api-key"] = api_key
         return headers
 
     def get_complete_url(
@@ -238,13 +236,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             
             # Map Gemini state to OpenAI status
             gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
-            # Explicitly type status as the Literal union
+            status = "uploaded" # Default
             if gemini_state == "ACTIVE":
-                status: Literal["uploaded", "processed", "error"] = "processed"
+                status = "processed"
             elif gemini_state == "FAILED":
                 status = "error"
-            else:
-                status = "uploaded"
             
             return OpenAIFileObject(
                 id=response_json.get("uri", ""),
@@ -305,7 +301,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         url = f"{api_base}/v1beta/{file_name}"
         
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
-        params: dict = {}
+        params = {}
         
         return url, params
 

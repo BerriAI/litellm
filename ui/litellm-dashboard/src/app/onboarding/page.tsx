@@ -1,5 +1,5 @@
 "use client";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, Title, Text, TextInput, Callout, Button, Grid, Col } from "@tremor/react";
 import { RiCheckboxCircleLine } from "@remixicon/react";
@@ -13,7 +13,7 @@ import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2 } from "antd";
 import { getCookie } from "@/utils/cookieUtils";
 
-function OnboardingContent() {
+export default function Onboarding() {
   const [form] = Form.useForm();
   const searchParams = useSearchParams()!;
   const token = getCookie("token");
@@ -138,13 +138,5 @@ function OnboardingContent() {
         </Form>
       </Card>
     </div>
-  );
-}
-
-export default function Onboarding() {
-  return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
-      <OnboardingContent />
-    </Suspense>
   );
 }

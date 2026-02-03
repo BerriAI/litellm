@@ -11,12 +11,10 @@ from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParamete
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 
-streamable_http_client: Optional[Any] = None
 try:
-    import mcp.client.streamable_http as streamable_http_module  # type: ignore
-    streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
+    from mcp.client.streamable_http import streamable_http_client  # type: ignore
 except ImportError:
-    pass
+    streamable_http_client = None
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
@@ -113,12 +111,6 @@ class MCPClient:
             ), None
 
         # HTTP transport (default)
-        if streamable_http_client is None:
-            raise ImportError(
-                "streamable_http_client is not available. "
-                "Please install mcp with HTTP support."
-            )
-        
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
         verbose_logger.debug(

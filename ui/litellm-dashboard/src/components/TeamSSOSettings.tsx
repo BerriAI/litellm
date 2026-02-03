@@ -5,7 +5,6 @@ import { getDefaultTeamSettings, updateDefaultTeamSettings, modelAvailableCall }
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
-import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 interface TeamSSOSettingsProps {
   accessToken: string | null;
@@ -117,15 +116,22 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
       );
     } else if (key === "models") {
       return (
-        <ModelSelect
+        <Select
+          mode="multiple"
+          style={{ width: "100%" }}
           value={editedValues[key] || []}
           onChange={(value) => handleTextInputChange(key, value)}
-          context="global"
-          style={{ width: "100%" }}
-          options={{
-            includeSpecialOptions: true,
-          }}
-        />
+          className="mt-2"
+        >
+          <Option key="no-default-models" value="no-default-models">
+            No Default Models
+          </Option>
+          {availableModels.map((model: string) => (
+            <Option key={model} value={model}>
+              {getModelDisplayName(model)}
+            </Option>
+          ))}
+        </Select>
       );
     } else if (type === "string" && property.enum) {
       return (

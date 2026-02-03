@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
@@ -22,7 +22,7 @@ function withBase(path: string): string {
 }
 /** -------------------------------- */
 
-function LayoutContent({ children }: { children: React.ReactNode }) {
+export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
@@ -69,13 +69,5 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     </ThemeProvider>
-  );
-}
-
-export default function Layout({ children }: { children: React.ReactNode }) {
-  return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
-      <LayoutContent>{children}</LayoutContent>
-    </Suspense>
   );
 }

@@ -1631,7 +1631,7 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
-            self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")  
+            self.handle_callback_failure(callback_name= self.callback_name)  
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
