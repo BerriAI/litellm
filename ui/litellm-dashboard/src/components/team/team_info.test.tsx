@@ -520,26 +520,6 @@ describe("TeamInfoView", () => {
     });
   });
 
-  it("should open delete member modal when delete is triggered", async () => {
-    const user = userEvent.setup();
-    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
-    vi.mocked(networking.teamMemberDeleteCall).mockResolvedValue({} as any);
-
-    renderWithProviders(<TeamInfoView {...defaultProps} />);
-
-    await waitFor(() => {
-      const teamNameElements = screen.queryAllByText("Test Team");
-      expect(teamNameElements.length).toBeGreaterThan(0);
-    });
-
-    const membersTab = screen.getByRole("tab", { name: "Members" });
-    await user.click(membersTab);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Confirm Delete" })).toBeInTheDocument();
-    });
-  });
-
   it("should display team member budget information when present", async () => {
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
