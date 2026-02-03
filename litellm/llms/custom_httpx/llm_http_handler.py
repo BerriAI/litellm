@@ -1,4 +1,5 @@
 import json
+import time
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -379,6 +380,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
+        # Time request translation
+        request_translation_start = time.perf_counter()
         data = provider_config.transform_request(
             model=model,
             messages=messages,
@@ -386,6 +389,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        request_translation_end = time.perf_counter()
+        request_translation_time_ms = (request_translation_end - request_translation_start) * 1000
+        logging_obj.model_call_details["request_translation_time_ms"] = request_translation_time_ms
 
         if extra_body is not None:
             data = {**data, **extra_body}
