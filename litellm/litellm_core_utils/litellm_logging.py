@@ -522,7 +522,8 @@ class Logging(LiteLLMLoggingBaseClass):
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
-        verbose_logger.debug(f"self.optional_params: {self.optional_params}")
+        if _is_debugging_on() or self.litellm_request_debug:
+            verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
         self.model_call_details.update(
             {
