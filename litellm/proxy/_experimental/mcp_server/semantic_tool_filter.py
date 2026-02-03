@@ -41,35 +41,60 @@ class SemanticMCPToolFilter:
         self.embedding_model = embedding_model
         self.router_instance = litellm_router_instance
         self.tool_router: Optional["SemanticRouter"] = None
-        self._tool_map: Dict[str, "MCPTool"] = {}
+        self._tool_map: Dict[str, Any] = {}  # MCPTool objects or OpenAI function dicts
 
     async def build_router_from_mcp_registry(self) -> None:
-        """Build semantic router from all MCP tools in the registry."""
+        """Build semantic router from all MCP tools in the registry (no auth checks)."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
         try:
-            # Fetch all MCP tools from the registry (no user auth = all servers)
-            tools = await global_mcp_server_manager.list_tools(
-                user_api_key_auth=None,
-                mcp_auth_header=None,
-            )
+            # Get all servers from registry without auth checks
+            registry = global_mcp_server_manager.get_registry()
+            if not registry:
+                verbose_logger.warning("MCP registry is empty")
+                self.tool_router = None
+                return
 
-            if not tools:
+            # Fetch tools from all servers in parallel
+            all_tools = []
+            for server_id, server in registry.items():
+                try:
+                    tools = await global_mcp_server_manager.get_tools_for_server(server_id)
+                    all_tools.extend(tools)
+                except Exception as e:
+                    verbose_logger.warning(f"Failed to fetch tools from server {server_id}: {e}")
+                    continue
+
+            if not all_tools:
                 verbose_logger.warning("No MCP tools found in registry")
                 self.tool_router = None
                 return
 
-            self._build_router(tools)
+            verbose_logger.info(f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers")
+            self._build_router(all_tools)
 
         except Exception as e:
             verbose_logger.error(f"Failed to build router from MCP registry: {e}")
             self.tool_router = None
             raise
 
-    def _build_router(self, tools: List["MCPTool"]) -> None:
-        """Build semantic router with tools."""
+    def _extract_tool_info(self, tool) -> tuple[str, str]:
+        """Extract name and description from MCP tool or OpenAI function dict."""
+        if isinstance(tool, dict):
+            # OpenAI function format
+            name = tool.get("name", "")
+            description = tool.get("description", name)
+        else:
+            # MCPTool object
+            name = tool.name
+            description = tool.description or tool.name
+        
+        return name, description
+
+    def _build_router(self, tools: List) -> None:
+        """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
         from semantic_router.routers import SemanticRouter
         from semantic_router.routers.base import Route
 
@@ -87,8 +112,7 @@ class SemanticMCPToolFilter:
             self._tool_map = {}
 
             for tool in tools:
-                name = tool.name
-                description = tool.description or tool.name
+                name, description = self._extract_tool_info(tool)
                 self._tool_map[name] = tool
 
                 routes.append(
@@ -111,7 +135,7 @@ class SemanticMCPToolFilter:
             )
 
             verbose_logger.info(
-                f"Built semantic router with {len(routes)} MCP tools from registry"
+                f"Built semantic router with {len(routes)} tools"
             )
 
         except Exception as e:
@@ -122,9 +146,9 @@ class SemanticMCPToolFilter:
     async def filter_tools(
         self,
         query: str,
-        available_tools: List["MCPTool"],
+        available_tools: List[Any],
         top_k: Optional[int] = None,
-    ) -> List["MCPTool"]:
+    ) -> List[Any]:
         """
         Filter tools semantically based on query.
 
@@ -146,8 +170,9 @@ class SemanticMCPToolFilter:
         if not query or not query.strip():
             return available_tools
 
+        # Router should be built on startup - if not, something went wrong
         if self.tool_router is None:
-            verbose_logger.warning("Router not initialized, returning all tools")
+            verbose_logger.warning("Router not initialized - was build_router_from_mcp_registry() called on startup?")
             return available_tools
 
         # Run semantic filtering
@@ -159,7 +184,7 @@ class SemanticMCPToolFilter:
             if not matched_tool_names:
                 return available_tools
             
-            return self._get_tools_by_names(matched_tool_names)
+            return self._get_tools_by_names(matched_tool_names, available_tools)
 
         except Exception as e:
             verbose_logger.error(f"Semantic tool filter failed: {e}", exc_info=True)
@@ -180,13 +205,20 @@ class SemanticMCPToolFilter:
         
         return []
 
-    def _get_tools_by_names(self, tool_names: List[str]) -> List["MCPTool"]:
-        """Get tools from tool map by their names, preserving order."""
-        return [
-            self._tool_map[name] 
-            for name in tool_names 
-            if name in self._tool_map
-        ]
+    def _get_tools_by_names(
+        self, tool_names: List[str], available_tools: List[Any]
+    ) -> List[Any]:
+        """Get tools from available_tools by their names, preserving order."""
+        # Match tools from available_tools (preserves format - dict or MCPTool)
+        matched_tools = []
+        for tool in available_tools:
+            tool_name, _ = self._extract_tool_info(tool)
+            if tool_name in tool_names:
+                matched_tools.append(tool)
+        
+        # Reorder to match semantic router's ordering
+        tool_map = {self._extract_tool_info(t)[0]: t for t in matched_tools}
+        return [tool_map[name] for name in tool_names if name in tool_map]
 
     def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
         """
