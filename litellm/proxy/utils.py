@@ -1725,6 +1725,39 @@ class ProxyLogging:
                 ),
             ).start()
 
+    def post_call_guardrail_exists(self, data: dict) -> bool:
+        """
+        Return True if post_call_guardrail exists in litellm.callbacks
+        """
+        guardrail_callbacks: List[CustomGuardrail] = []
+        for callback in litellm.callbacks:
+            _callback: Optional[CustomLogger] = None
+            if isinstance(callback, str):
+                _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
+                )
+            else:
+                _callback = callback  # type: ignore
+
+            if _callback is not None:
+                if isinstance(_callback, CustomGuardrail):
+                    guardrail_callbacks.append(_callback)
+                ############## Handle Guardrails ########################################
+                #############################################################################
+
+        for callback in guardrail_callbacks:
+            # Main - V2 Guardrails implementation
+
+            if (
+                callback.should_run_guardrail(
+                    data=data, event_type=GuardrailEventHooks.post_call
+                )
+                is True
+            ):
+                return True
+
+        return False
+
     async def post_call_success_hook(
         self,
         data: dict,

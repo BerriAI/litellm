@@ -213,6 +213,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     vector_store_id: Optional[str] = None
     milvus_text_field: Optional[str] = None
 
+    # Guardrails Params - used for realtime streaming
+    has_post_call_guardrails: Optional[bool] = False
+
     def __init__(
         self,
         custom_llm_provider: Optional[str] = None,

@@ -144,5 +144,6 @@ def get_litellm_params(
         "aws_bedrock_runtime_endpoint": kwargs.get("aws_bedrock_runtime_endpoint"),
         "tpm": kwargs.get("tpm"),
         "rpm": kwargs.get("rpm"),
+        "has_post_call_guardrails": kwargs.get("has_post_call_guardrails"),
     }
     return litellm_params

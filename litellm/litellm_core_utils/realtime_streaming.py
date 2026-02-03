@@ -73,6 +73,11 @@ class RealTimeStreaming:
         self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
         self.session_configuration_request: Optional[str] = None
+        self.buffered_messages: List = []
+        self.is_buffering = False
+
+    def _should_buffer_message(self) -> bool:
+        return self.logging_obj.litellm_params.get("has_post_call_guardrails", False)
 
     def _should_store_message(
         self,
@@ -142,9 +147,43 @@ class RealTimeStreaming:
                 response=message,
             )
 
+    async def buffer_message(self, message: OpenAIRealtimeEvents):
+        """
+        Only buffer if response.content_part.added has part type "audio" - message_json: {'type': 'response.content_part.added', 'event_id': 'event_D4ugsph441vhnQJ6Wn9KV', 'response_id': 'resp_D4ugsW02oco5ULadjJsQG', 'item_id': 'item_D4ugsRGmxeDXOkpeSHc5r', 'output_index': 0, 'content_index': 0, 'part': {'type': 'audio', 'transcript': ''}}
+
+        Buffer until response.audio_transcript.done is received. - message_json: {'type': 'response.audio_transcript.done', 'event_id': 'event_D4ugu5A33JruyingR1cpZ', 'response_id': 'resp_D4ugsW02oco5ULadjJsQG', 'item_id': 'item_D4ugsRGmxeDXOkpeSHc5r', 'output_index': 0, 'content_index': 0, 'transcript': "That sounds like the famous opening of the Gettysburg Address by Abraham Lincoln. It's a powerful and historic speech. Would you like to discuss it further or explore its meaning?"}
+        """
+
+        if isinstance(message, bytes):
+            message_obj = json.loads(message.decode("utf-8"))
+        if isinstance(message, dict):
+            message_obj = message
+        else:
+            message_obj = json.loads(message)
+        if (
+            message_obj.get("type") == "response.content_part.added"
+            and message_obj.get("part", {}).get("type") == "audio"
+        ):
+            self.is_buffering = True
+
+        if message_obj.get("type") == "response.audio_transcript.done":
+
+            for buffered_message, original_message_str in self.buffered_messages:
+
+                await self.websocket.send_text(original_message_str)
+            self.buffered_messages = []
+            self.is_buffering = False
+            await self.websocket.send_text(message)
+
+        if self.is_buffering:
+            self.buffered_messages.append((message_obj, message))
+        else:
+            await self.websocket.send_text(message)
+
     async def backend_to_client_send_messages(self):
         import websockets
 
+        should_buffer_message = self._should_buffer_message()
         try:
             while True:
                 try:
@@ -197,8 +236,12 @@ class RealTimeStreaming:
                         await self.websocket.send_text(event_str)
 
                 else:
-                    ## LOGGING
                     await self.store_and_check_message(raw_response)
+                    ## LOGGING
+                    # if should_buffer_message:
+                    #     print("REACHES HERE")
+                    #     await self.buffer_message(raw_response)
+                    # else:
                     await self.websocket.send_text(raw_response)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore

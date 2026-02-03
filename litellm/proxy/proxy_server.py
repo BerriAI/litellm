@@ -6564,6 +6564,10 @@ async def realtime_websocket_endpoint(
         # PASS post-call guardrails to the route request for realtime requests
         data["proxy_logging_obj"] = proxy_logging_obj
 
+        if proxy_logging_obj.post_call_guardrail_exists(data=data):
+
+            data["has_post_call_guardrails"] = True
+
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",
