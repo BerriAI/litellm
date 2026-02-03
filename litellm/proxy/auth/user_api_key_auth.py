@@ -247,7 +247,9 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+    if (
+        litellm.max_budget > 0 and prisma_client is not None
+    ):  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
         cache_key = "{}:spend".format(litellm_proxy_admin_name)
         global_proxy_spend = await _fetch_global_spend_with_event_coordination(
@@ -604,13 +606,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if team_object is not None
                     else None,
                 )
-                
+
                 # Check if model has zero cost - if so, skip all budget checks
                 model = get_model_from_request(request_data, route)
                 skip_budget_checks = False
                 if model is not None and llm_router is not None:
                     from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                    
+
                     skip_budget_checks = _is_model_cost_zero(
                         model=model, llm_router=llm_router
                     )
@@ -618,7 +620,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         verbose_proxy_logger.info(
                             f"Skipping all budget checks for zero-cost model: {model}"
                         )
-                
+
                 # run through common checks
                 _ = await common_checks(
                     request=request,
@@ -901,7 +903,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    api_key
+                    abbreviate_api_key(api_key)
                 )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
@@ -1029,7 +1031,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             skip_budget_checks = False
             if model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                
+
                 skip_budget_checks = _is_model_cost_zero(
                     model=model, llm_router=llm_router
                 )
