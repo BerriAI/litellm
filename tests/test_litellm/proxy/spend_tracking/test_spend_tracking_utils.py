@@ -749,6 +749,241 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_extracts_request_translation_time_from_model_call_details():
+    """
+    Integration test: Verify that request_translation_time_ms stored in 
+    logging_obj.model_call_details gets extracted and included in overhead_breakdown.
+    
+    This tests the full flow:
+    1. request_translation_time_ms is stored in model_call_details (by llm_http_handler)
+    2. get_logging_payload extracts it from model_call_details
+    3. It's included in overhead_breakdown in the metadata
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObj,
+    )
+    
+    # Create a logging_obj with request_translation_time_ms in model_call_details
+    # (simulating what llm_http_handler does)
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    
+    # Simulate the timing being stored (as done in llm_http_handler.py)
+    logging_obj.model_call_details["request_translation_time_ms"] = 15.5
+    
+    # Create kwargs with the logging_obj
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "logging_obj": logging_obj,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "call_type": "completion",
+    }
+    
+    response_obj = {
+        "id": "test-response-123",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+    
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    
+    # Parse the metadata JSON string
+    metadata_json = payload.get("metadata")
+    assert metadata_json is not None, "metadata should not be None"
+    
+    metadata = json.loads(metadata_json)
+    
+    # Verify overhead_breakdown exists and contains request_translation_time_ms
+    overhead_breakdown = metadata.get("overhead_breakdown")
+    assert overhead_breakdown is not None, "overhead_breakdown should be present"
+    assert isinstance(overhead_breakdown, dict), "overhead_breakdown should be a dict"
+    
+    assert (
+        "request_translation_time_ms" in overhead_breakdown
+    ), "request_translation_time_ms should be in overhead_breakdown"
+    
+    assert (
+        overhead_breakdown["request_translation_time_ms"] == 15.5
+    ), f"Expected 15.5, got {overhead_breakdown.get('request_translation_time_ms')}"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_extracts_overhead_breakdown_from_multiple_sources():
+    """
+    Integration test: Verify that overhead_breakdown can be constructed from
+    multiple sources (model_call_details, caching_details, previous_models).
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObj,
+    )
+    
+    # Create logging_obj with multiple overhead metrics
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    
+    # Add request translation time (from llm_http_handler)
+    logging_obj.model_call_details["request_translation_time_ms"] = 12.3
+    
+    # Create standard_logging_payload with caching_details in metadata
+    # Use cast to work around TypedDict strictness for extra fields
+    metadata_dict: dict = {
+        "user_api_key_hash": "test_hash",
+        "user_api_key_alias": None,
+        "user_api_key_team_id": None,
+        "user_api_key_org_id": None,
+        "user_api_key_user_id": None,
+        "user_api_key_team_alias": None,
+        "spend_logs_metadata": None,
+        "requester_ip_address": None,
+        "requester_metadata": None,
+        "user_api_key_end_user_id": None,
+        "caching_details": {"cache_duration_ms": 5.2, "cache_hit": True},  # Extra field
+    }
+    
+    standard_logging_payload = cast(
+        StandardLoggingPayload,
+        {
+            "id": "test-id-789",
+            "call_type": "completion",
+            "stream": False,
+            "response_cost": 0.001,
+            "status": "success",
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+            "startTime": 1234567890.0,
+            "endTime": 1234567891.0,
+            "completionStartTime": None,
+            "model_map_information": StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            "model": "gpt-3.5-turbo",
+            "model_id": "model-123",
+            "model_group": "openai",
+            "custom_llm_provider": "openai",
+            "api_base": "https://api.openai.com",
+            "metadata": cast(StandardLoggingMetadata, metadata_dict),
+            "cache_hit": True,
+            "cache_key": "test-cache-key",
+            "saved_cache_cost": 0.0,
+            "request_tags": [],
+            "end_user": None,
+            "requester_ip_address": None,
+            "messages": [],
+            "response": {},
+            "error_str": None,
+            "model_parameters": {},
+            "hidden_params": StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key="test-cache-key",
+                api_base="https://api.openai.com",
+                response_cost="0.001",
+                litellm_overhead_time_ms=None,
+                additional_headers=None,
+                batch_models=None,
+                litellm_model_name=None,
+                usage_object=None,
+            ),
+            "trace_id": "test-trace-id",
+            "response_time": 1.0,
+            "cost_breakdown": None,
+            "response_cost_failure_debug_info": None,
+            "status_fields": {},
+            "error_information": None,
+            "guardrail_information": None,
+            "standard_built_in_tools_params": None,
+        },
+    )
+    
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "logging_obj": logging_obj,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "previous_models": ["gpt-4", "gpt-3.5-turbo"],  # In metadata for retry count
+            }
+        },
+        "standard_logging_object": standard_logging_payload,
+        "call_type": "completion",
+    }
+    
+    response_obj = {
+        "id": "test-response-789",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+    
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    
+    # Parse the metadata JSON string
+    metadata_json = payload.get("metadata")
+    assert metadata_json is not None, "metadata should not be None"
+    
+    metadata = json.loads(metadata_json)
+    overhead_breakdown = metadata.get("overhead_breakdown")
+    
+    assert overhead_breakdown is not None, "overhead_breakdown should be present"
+    
+    # Verify all metrics are present
+    assert (
+        overhead_breakdown.get("request_translation_time_ms") == 12.3
+    ), "request_translation_time_ms should be extracted from model_call_details"
+    
+    assert (
+        overhead_breakdown.get("cache_read_time_ms") == 5.2
+    ), "cache_read_time_ms should be extracted from caching_details"
+    
+    assert (
+        overhead_breakdown.get("retry_count") == 2
+    ), "retry_count should be extracted from previous_models length"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_handles_missing_overhead_gracefully():
     """
     Test that get_logging_payload handles missing overhead gracefully

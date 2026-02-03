@@ -346,12 +346,22 @@ def get_logging_payload(  # noqa: PLR0915
             if auth_time_ms is not None:
                 overhead_breakdown["auth_time_ms"] = auth_time_ms
             
-            # Extract translation times from metadata if available
+            # Extract translation times from metadata or model_call_details if available
             request_translation_time_ms = metadata.get("request_translation_time_ms")
+            if request_translation_time_ms is None:
+                # Also check model_call_details from logging_obj in kwargs
+                logging_obj = kwargs.get("logging_obj")
+                if logging_obj and hasattr(logging_obj, "model_call_details"):
+                    request_translation_time_ms = logging_obj.model_call_details.get("request_translation_time_ms")
             if request_translation_time_ms is not None:
                 overhead_breakdown["request_translation_time_ms"] = request_translation_time_ms
             
             response_translation_time_ms = metadata.get("response_translation_time_ms")
+            if response_translation_time_ms is None:
+                # Also check model_call_details from logging_obj in kwargs
+                logging_obj = kwargs.get("logging_obj")
+                if logging_obj and hasattr(logging_obj, "model_call_details"):
+                    response_translation_time_ms = logging_obj.model_call_details.get("response_translation_time_ms")
             if response_translation_time_ms is not None:
                 overhead_breakdown["response_translation_time_ms"] = response_translation_time_ms
             
