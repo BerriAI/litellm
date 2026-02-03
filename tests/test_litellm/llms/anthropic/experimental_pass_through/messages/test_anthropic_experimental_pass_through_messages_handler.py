@@ -101,69 +101,55 @@ async def test_bedrock_converse_budget_tokens_preserved():
     The bug was that the messages -> completion adapter was converting thinking to reasoning_effort
     and losing the original budget_tokens value, causing it to use the default (128) instead.
     """
-    import os
-    
     client = AsyncHTTPHandler()
     
-    # Mock at httpx level for better CI compatibility
-    with patch("httpx.AsyncClient.post") as mock_httpx_post:
-        with patch.object(client, "post") as mock_post:
-            mock_response = AsyncMock()
-            mock_response.status_code = 200
-            mock_response.headers = {}
-            mock_response.text = "mock response"
-            mock_response.json.return_value = {
-                "output": {
-                    "message": {
-                        "role": "assistant",
-                        "content": [{"text": "4"}]
-                    }
-                },
-                "stopReason": "end_turn",
-                "usage": {
-                    "inputTokens": 10,
-                    "outputTokens": 5,
-                    "totalTokens": 15
+    with patch.object(client, "post") as mock_post:
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.text = "mock response"
+        mock_response.json.return_value = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "4"}]
                 }
+            },
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 10,
+                "outputTokens": 5,
+                "totalTokens": 15
             }
-            mock_post.return_value = mock_response
-            mock_httpx_post.return_value = mock_response
-            
-            try:
-                await messages.acreate(
-                    client=client,
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": "What is 2+2?"}],
-                    model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
-                    thinking={
-                        "budget_tokens": 1024,
-                        "type": "enabled"
-                    },
-                )
-            except Exception:
-                pass  # Expected due to mock response format
-            
-            # Check which mock was called (client.post or httpx.AsyncClient.post)
-            if mock_post.call_count == 0 and mock_httpx_post.call_count == 0:
-                # Skip test if neither mock was called (CI environment issue)
-                if os.getenv("CI") == "true":
-                    pytest.skip("Mock not intercepted in CI environment")
-                else:
-                    pytest.fail("Expected mock to be called but it wasn't")
-            
-            # Use whichever mock was actually called
-            active_mock = mock_post if mock_post.call_count > 0 else mock_httpx_post
-            
-            call_kwargs = active_mock.call_args.kwargs
-            json_data = call_kwargs.get("json") or json.loads(call_kwargs.get("data", "{}"))
-            print("Request json: ", json.dumps(json_data, indent=4, default=str))
-            
-            additional_fields = json_data.get("additionalModelRequestFields", {})
-            thinking_config = additional_fields.get("thinking", {})
-            
-            assert "thinking" in additional_fields, "thinking parameter should be in additionalModelRequestFields"
-            assert thinking_config.get("type") == "enabled", "thinking.type should be 'enabled'"
-            assert thinking_config.get("budget_tokens") == 1024, f"thinking.budget_tokens should be 1024, but got {thinking_config.get('budget_tokens')}"
+        }
+        mock_post.return_value = mock_response
+        
+        try:
+            await messages.acreate(
+                client=client,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "What is 2+2?"}],
+                model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                thinking={
+                    "budget_tokens": 1024,
+                    "type": "enabled"
+                },
+            )
+        except Exception:
+            pass  # Expected due to mock response format
+        
+        mock_post.assert_called_once()
+        
+        call_kwargs = mock_post.call_args.kwargs
+        json_data = call_kwargs.get("json") or json.loads(call_kwargs.get("data", "{}"))
+        print("Request json: ", json.dumps(json_data, indent=4, default=str))
+        
+        additional_fields = json_data.get("additionalModelRequestFields", {})
+        thinking_config = additional_fields.get("thinking", {})
+        
+        assert "thinking" in additional_fields, "thinking parameter should be in additionalModelRequestFields"
+        assert thinking_config.get("type") == "enabled", "thinking.type should be 'enabled'"
+        assert thinking_config.get("budget_tokens") == 1024, f"thinking.budget_tokens should be 1024, but got {thinking_config.get('budget_tokens')}"
 
 
 def test_openai_model_with_thinking_converts_to_reasoning_effort():

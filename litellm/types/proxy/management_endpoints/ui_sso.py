@@ -1,11 +1,10 @@
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from litellm.types.utils import LiteLLMPydanticObjectBase
-
 from litellm.proxy._types import LitellmUserRoles
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
@@ -27,6 +26,7 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+
 
 class MicrosoftGraphAPIUserGroupDirectoryObject(TypedDict, total=False):
     """Model for Microsoft Graph API directory object"""
@@ -65,7 +65,7 @@ class AccessControl_UI_AccessMode(LiteLLMPydanticObjectBase):
 class RoleMappings(LiteLLMPydanticObjectBase):
     """
     Configuration for mapping SSO groups to LiteLLM roles.
-    
+
     The system will look at the group_claim field in the SSO token to determine
     which role to assign the user based on the roles mapping.
     """
@@ -78,11 +78,25 @@ class RoleMappings(LiteLLMPydanticObjectBase):
     )
     default_role: Optional[LitellmUserRoles] = Field(
         default=None,
-        description="Default role to assign if user's groups don't match any role mappings. Must be a valid LitellmUserRoles value (e.g., 'proxy_admin', 'internal_user', 'proxy_admin_viewer')"
+        description="Default role to assign if user's groups don't match any role mappings. Must be a valid LitellmUserRoles value (e.g., 'proxy_admin', 'internal_user', 'proxy_admin_viewer')",
     )
     roles: Dict[LitellmUserRoles, List[str]] = Field(
         default_factory=dict,
-        description="Mapping of LiteLLM role names to arrays of SSO group names. Example: {'proxy_admin': ['group-1', 'group-2'], 'proxy_admin_viewer': ['group-3']}"
+        description="Mapping of LiteLLM role names to arrays of SSO group names. Example: {'proxy_admin': ['group-1', 'group-2'], 'proxy_admin_viewer': ['group-3']}",
+    )
+
+
+class TeamMappings(LiteLLMPydanticObjectBase):
+    """
+    Configuration for mapping SSO JWT fields to team IDs.
+
+    This allows configuring team_ids_jwt_field via the database instead of
+    requiring config file changes and restarts.
+    """
+
+    team_ids_jwt_field: Optional[str] = Field(
+        default=None,
+        description="The field name in the SSO/JWT token that contains the team IDs array (e.g., 'groups', 'teams'). Supports dot notation for nested fields.",
     )
 
 
@@ -159,6 +173,12 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         description="Configuration for mapping SSO groups to LiteLLM roles based on group claims in the SSO token",
     )
 
+    # Team Mappings
+    team_mappings: Optional[TeamMappings] = Field(
+        default=None,
+        description="Configuration for mapping SSO JWT fields to team IDs. Takes precedence over config file settings.",
+    )
+
 
 class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     """
@@ -184,4 +204,11 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = Field(
         default=None,
         description="Default rpm limit for new automatically created teams",
+    )
+
+
+class InProductNudgeResponse(BaseModel):
+    is_claude_code_enabled: bool = Field(
+        default=False,
+        description="Whether the Claude Code nudge should be shown.",
     )

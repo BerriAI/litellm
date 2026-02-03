@@ -148,6 +148,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     validate_chat_completion_tool_choice,
+    validate_openai_optional_params,
 )
 
 from ._logging import verbose_logger
@@ -367,7 +368,7 @@ class AsyncCompletions:
 
 @tracer.wrap()
 @client
-async def acompletion(
+async def acompletion(  # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -598,7 +599,7 @@ async def acompletion(
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
-
+            
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
@@ -924,6 +925,7 @@ def mock_completion(
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
     try:
@@ -937,6 +939,10 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+        
+        if web_search_options is not None and custom_llm_provider == "xai":
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
     except Exception as e:
         verbose_logger.debug("Error getting model info: {}".format(e))
 
@@ -1094,6 +1100,8 @@ def completion(  # type: ignore # noqa: PLR0915
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    # validate optional params
+    stop = validate_openai_optional_params(stop=stop)
 
     ######### unpacking kwargs #####################
     args = locals()
@@ -1111,7 +1119,9 @@ def completion(  # type: ignore # noqa: PLR0915
         # Check if MCP tools are present (following responses pattern)
         # Cast tools to Optional[Iterable[ToolParam]] for type checking
         tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools_for_mcp):
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+            tools=tools_for_mcp
+        ):
             # Return coroutine - acompletion will await it
             # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
             return acompletion_with_mcp(  # type: ignore[return-value]
@@ -1512,6 +1522,8 @@ def completion(  # type: ignore # noqa: PLR0915
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
+            tpm=kwargs.get("tpm"),
+            rpm=kwargs.get("rpm"),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -1539,7 +1551,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         model_info, model = responses_api_bridge_check(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model, custom_llm_provider=custom_llm_provider, web_search_options=web_search_options
         )
 
         if model_info.get("mode") == "responses":
@@ -2337,17 +2349,40 @@ def completion(  # type: ignore # noqa: PLR0915
                 input=messages, api_key=api_key, original_response=response
             )
         elif custom_llm_provider == "minimax":
-            api_key = (
-                api_key
-                or get_secret_str("MINIMAX_API_KEY")
-                or litellm.api_key
-            )
+            api_key = api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
 
             api_base = (
                 api_base
                 or litellm.api_base
                 or get_secret_str("MINIMAX_API_BASE")
                 or "https://api.minimax.io/v1"
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                model_response=model_response,
+                encoding=_get_encoding(),
+                logging_obj=logging,
+                optional_params=optional_params,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                acompletion=acompletion,
+                stream=stream,
+                api_key=api_key,
+                headers=headers,
+                client=client,
+                provider_config=provider_config,
+            )
+            logging.post_call(
+                input=messages, api_key=api_key, original_response=response
+            )
+        elif custom_llm_provider == "hosted_vllm":
+            api_base = (
+                api_base or litellm.api_base or get_secret_str("HOSTED_VLLM_API_BASE")
             )
 
             response = base_llm_http_handler.completion(
@@ -2389,7 +2424,9 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
-            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
+            or JSONProviderRegistry.exists(
+                custom_llm_provider
+            )  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -3586,9 +3623,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params[
-                        "aws_region_name"
-                    ] = aws_bedrock_client.meta.region_name
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -4672,11 +4709,11 @@ def embedding(  # noqa: PLR0915
                 litellm_params=litellm_params_dict,
             )
         elif (
-            model in litellm.open_ai_embedding_models
-            or custom_llm_provider == "openai"
+            custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
+            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
         ):
             api_base = (
                 api_base
@@ -4700,7 +4737,7 @@ def embedding(  # noqa: PLR0915
 
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers
-            
+
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
             else:
@@ -4748,9 +4785,32 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "hosted_vllm":
+            api_base = (
+                api_base or litellm.api_base or get_secret_str("HOSTED_VLLM_API_BASE")
+            )
+
+            # set API KEY
+            if api_key is None:
+                api_key = litellm.api_key or get_secret_str("HOSTED_VLLM_API_KEY")
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers or {},
+            )
         elif (
             custom_llm_provider == "openai_like"
-            or custom_llm_provider == "hosted_vllm"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
         ):
@@ -4841,6 +4901,36 @@ def embedding(  # noqa: PLR0915
                 openrouter_headers.update(_headers)
 
             headers = openrouter_headers
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
+        elif custom_llm_provider == "vercel_ai_gateway":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
+                or "https://ai-gateway.vercel.sh/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                or get_secret_str("VERCEL_OIDC_TOKEN")
+            )
 
             response = base_llm_http_handler.embedding(
                 model=model,
@@ -5893,9 +5983,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[
-        Union[BaseModel, AdapterCompletionStreamWrapper]
-    ] = None
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
+    )
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -6600,9 +6690,9 @@ def speech(  # noqa: PLR0915
                 ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
             ] = query_params
 
-        litellm_params_dict[
-            ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY
-        ] = voice_id
+        litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = (
+            voice_id
+        )
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -6735,9 +6825,7 @@ def speech(  # noqa: PLR0915
         if text_to_speech_provider_config is None:
             text_to_speech_provider_config = MinimaxTextToSpeechConfig()
 
-        minimax_config = cast(
-            MinimaxTextToSpeechConfig, text_to_speech_provider_config
-        )
+        minimax_config = cast(MinimaxTextToSpeechConfig, text_to_speech_provider_config)
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -6877,7 +6965,7 @@ async def ahealth_check(
         custom_llm_provider_from_params = model_params.get("custom_llm_provider", None)
         api_base_from_params = model_params.get("api_base", None)
         api_key_from_params = model_params.get("api_key", None)
-        
+
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider_from_params,
@@ -7110,9 +7198,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"][
-                "content"
-            ] = processor.get_combined_content(content_chunks)
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
 
         thinking_blocks = [
             chunk
@@ -7123,9 +7211,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"][
-                "thinking_blocks"
-            ] = processor.get_combined_thinking_content(thinking_blocks)
+            response["choices"][0]["message"]["thinking_blocks"] = (
+                processor.get_combined_thinking_content(thinking_blocks)
+            )
 
         reasoning_chunks = [
             chunk
@@ -7136,9 +7224,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"][
-                "reasoning_content"
-            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_chunks)
+            )
 
         annotation_chunks = [
             chunk
@@ -7163,6 +7251,23 @@ def stream_chunk_builder(  # noqa: PLR0915
         if len(audio_chunks) > 0:
             _choice = cast(Choices, response.choices[0])
             _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
+
+        # Handle image chunks from models like gemini-2.5-flash-image
+        # See: https://github.com/BerriAI/litellm/issues/19478
+        image_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "images" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["images"] is not None
+        ]
+
+        if len(image_chunks) > 0:
+            # Images come complete in a single chunk, collect all images from all chunks
+            all_images = []
+            for chunk in image_chunks:
+                all_images.extend(chunk["choices"][0]["delta"]["images"])
+            response["choices"][0]["message"]["images"] = all_images
 
         # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
         # See: https://github.com/BerriAI/litellm/issues/17737
@@ -7247,10 +7352,14 @@ def _get_encoding():
 def __getattr__(name: str) -> Any:
     """Lazy import handler for main module"""
     if name == "encoding":
-        # Lazy load encoding to avoid heavy tiktoken import at module load time
-        _encoding = tiktoken.get_encoding("cl100k_base")
+        # Use _get_default_encoding which properly sets TIKTOKEN_CACHE_DIR
+        # before loading tiktoken, ensuring the local cache is used
+        # instead of downloading from the internet
+        from litellm._lazy_imports import _get_default_encoding
+        _encoding = _get_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
+
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding

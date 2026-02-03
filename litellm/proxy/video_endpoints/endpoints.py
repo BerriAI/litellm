@@ -256,9 +256,7 @@ async def video_status(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded, custom_llm_provider=provider_from_id
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
@@ -356,9 +354,7 @@ async def video_content(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded, custom_llm_provider=provider_from_id
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
@@ -470,9 +466,7 @@ async def video_remix(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded, custom_llm_provider=provider_from_id
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 

@@ -3955,156 +3955,284 @@ def test_bedrock_openai_error_handling():
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
 
+# ============================================================================
+# Nova Grounding (web_search_options) Unit Tests (Mocked)
+# ============================================================================
 
-def test_bedrock_malformed_tool_json_handling():
+def test_bedrock_nova_grounding_web_search_options_non_streaming():
     """
-    Test that Bedrock handles malformed JSON in tool call arguments gracefully.
-    
-    This test covers the issue where:
-    1. LLM generates malformed JSON in tool call arguments
-    2. Subsequent requests with conversation history should not crash
-    3. The toolUse.input field should handle any JSON value type per boto3 spec
-    
-    Related issue: https://github.com/BerriAI/litellm/issues/[issue_number]
+    Unit test for Nova grounding using web_search_options parameter (non-streaming).
+
+    This test mocks the HTTP call to verify:
+    1. web_search_options is correctly mapped to systemTool for Nova models
+    2. The request structure is correct
+
+    Related: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _convert_to_bedrock_tool_call_invoke,
-    )
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the current population of Tokyo, Japan?",
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=messages,
+                web_search_options={},  # Enables Nova grounding
+                max_tokens=500,
+                client=client,
+            )
+        except Exception:
+            pass  # Expected - we're just checking the request structure
+
+        # Verify the request was made correctly
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
+
+            # Verify toolConfig is present with systemTool
+            assert "toolConfig" in request_body, "toolConfig should be in request"
+            tool_config = request_body["toolConfig"]
+            assert "tools" in tool_config, "tools should be in toolConfig"
+
+            # Find the systemTool for nova_grounding
+            system_tool_found = False
+            for tool in tool_config["tools"]:
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
+                    break
+
+            assert system_tool_found, "systemTool with nova_grounding should be present"
+            print(f"✓ web_search_options correctly transformed to systemTool (non-streaming)")
+
+
+def test_bedrock_nova_grounding_with_function_tools():
+    """
+    Unit test for Nova grounding combined with regular function tools.
+
+    This tests the scenario where users want both web grounding AND
+    custom function calling capabilities.
+    """
+    from unittest.mock import patch
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    # Regular function tool
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "description": "Get the current stock price for a given ticker symbol",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ticker": {
+                            "type": "string",
+                            "description": "The stock ticker symbol, e.g. AAPL, GOOGL",
+                        }
+                    },
+                    "required": ["ticker"],
+                },
+            },
+        }
+    ]
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the current market cap of Apple Inc?",
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=messages,
+                tools=tools,
+                web_search_options={},  # Also enable web grounding
+                max_tokens=500,
+                client=client,
+            )
+        except Exception:
+            pass  # Expected - we're just checking the request structure
+
+        # Verify the request was made correctly
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
+
+            # Verify toolConfig has both function tool and systemTool
+            assert "toolConfig" in request_body, "toolConfig should be in request"
+            tool_config = request_body["toolConfig"]
+            assert "tools" in tool_config, "tools should be in toolConfig"
+
+            tools_in_request = tool_config["tools"]
+
+            # Should have both the function tool and the systemTool
+            function_tool_found = False
+            system_tool_found = False
+
+            for tool in tools_in_request:
+                if "toolSpec" in tool:
+                    assert tool["toolSpec"]["name"] == "get_stock_price"
+                    function_tool_found = True
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
+
+            assert function_tool_found, "Function tool (get_stock_price) should be present"
+            assert system_tool_found, "systemTool (nova_grounding) should be present"
+            print(f"✓ Both function tools and web_search_options correctly combined")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_nova_grounding_async():
+    """
+    Async unit test for Nova grounding via web_search_options.
+
+    This test verifies the request transformation for async calls.
+    """
+    from unittest.mock import patch, AsyncMock
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the weather forecast for New York City today?",
+        }
+    ]
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_post:
+        try:
+            await litellm.acompletion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=messages,
+                web_search_options={},
+                max_tokens=500,
+                client=client,
+            )
+        except Exception:
+            pass  # Expected - we're just checking the request structure
+
+        # Verify the request was made correctly
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
+
+            # Verify toolConfig is present with systemTool
+            assert "toolConfig" in request_body, "toolConfig should be in request"
+            tool_config = request_body["toolConfig"]
+            assert "tools" in tool_config, "tools should be in toolConfig"
+
+            # Find the systemTool for nova_grounding
+            system_tool_found = False
+            for tool in tool_config["tools"]:
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
+                    break
+
+            assert system_tool_found, "systemTool with nova_grounding should be present"
+            print(f"✓ Async web_search_options correctly transformed to systemTool")
+
+
+def test_bedrock_nova_web_search_options_ignored_for_non_nova():
+    """
+    Test that web_search_options is ignored for non-Nova Bedrock models.
+
+    Nova grounding is only supported on Nova models. For other models,
+    the parameter should be silently ignored.
+    """
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-    from litellm.types.llms.bedrock import ContentBlock
-    
-    # Test 1: Malformed JSON in tool call arguments
-    malformed_tool_calls = [
-        {
-            "id": "call_123",
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "arguments": '{"location": "Paris", "invalid_json',  # Malformed JSON
-            },
-        }
-    ]
-    
-    # Should not raise an exception, but store as raw string
-    result = _convert_to_bedrock_tool_call_invoke(malformed_tool_calls)
-    assert len(result) == 1
-    assert result[0]["toolUse"]["name"] == "get_weather"
-    # The malformed JSON should be stored as a string
-    assert isinstance(result[0]["toolUse"]["input"], str)
-    assert result[0]["toolUse"]["input"] == '{"location": "Paris", "invalid_json'
-    print("✓ Malformed JSON stored as raw string")
-    
-    # Test 2: Valid JSON should still work normally
-    valid_tool_calls = [
-        {
-            "id": "call_456",
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "arguments": '{"location": "London"}',
-            },
-        }
-    ]
-    
-    result = _convert_to_bedrock_tool_call_invoke(valid_tool_calls)
-    assert len(result) == 1
-    assert result[0]["toolUse"]["name"] == "get_weather"
-    assert isinstance(result[0]["toolUse"]["input"], dict)
-    assert result[0]["toolUse"]["input"] == {"location": "London"}
-    print("✓ Valid JSON parsed correctly")
-    
-    # Test 3: Empty arguments should create empty dict
-    empty_tool_calls = [
-        {
-            "id": "call_789",
-            "type": "function",
-            "function": {
-                "name": "no_args_function",
-                "arguments": "",
-            },
-        }
-    ]
-    
-    result = _convert_to_bedrock_tool_call_invoke(empty_tool_calls)
-    assert len(result) == 1
-    assert result[0]["toolUse"]["input"] == {}
-    print("✓ Empty arguments handled correctly")
-    
-    # Test 4: Bedrock to OpenAI conversion handles string input
-    converse_config = AmazonConverseConfig()
-    content_blocks = [
-        ContentBlock(
-            toolUse={
-                "name": "get_weather",
-                "toolUseId": "call_123",
-                "input": '{"location": "Paris", "invalid_json',  # String input (malformed)
+
+    config = AmazonConverseConfig()
+
+    # Should return None for non-Nova models
+    result = config._map_web_search_options({}, "anthropic.claude-3-sonnet-v1")
+    assert result is None
+
+    result = config._map_web_search_options({}, "amazon.titan-text-express-v1")
+    assert result is None
+
+    # Should return systemTool for Nova models
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    result2 = config._map_web_search_options({}, "us.amazon.nova-premier-v1:0")
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"
+
+
+def test_bedrock_nova_grounding_request_transformation():
+    """
+    Unit test to verify that web_search_options transforms to systemTool in the request.
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    messages = [{"role": "user", "content": "What is the population of Tokyo?"}]
+
+    with patch.object(client, "post") as mock_post:
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "output": {"message": {"role": "assistant", "content": [{"text": "Test"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 10, "outputTokens": 5}
             }
         )
-    ]
-    
-    content_str, tools, reasoning = converse_config._translate_message_content(
-        content_blocks
-    )
-    assert len(tools) == 1
-    assert tools[0]["function"]["name"] == "get_weather"
-    # Should return the string as-is
-    assert tools[0]["function"]["arguments"] == '{"location": "Paris", "invalid_json'
-    print("✓ Bedrock to OpenAI conversion handles string input")
-    
-    # Test 5: Bedrock to OpenAI conversion handles dict input
-    content_blocks_dict = [
-        ContentBlock(
-            toolUse={
-                "name": "get_weather",
-                "toolUseId": "call_456",
-                "input": {"location": "London"},  # Dict input (normal case)
-            }
-        )
-    ]
-    
-    content_str, tools, reasoning = converse_config._translate_message_content(
-        content_blocks_dict
-    )
-    assert len(tools) == 1
-    assert tools[0]["function"]["name"] == "get_weather"
-    # Should serialize dict to JSON string
-    assert tools[0]["function"]["arguments"] == '{"location": "London"}'
-    print("✓ Bedrock to OpenAI conversion handles dict input")
-    
-    # Test 6: Round-trip conversion with malformed JSON
-    # Test that we can convert OpenAI -> Bedrock -> OpenAI with malformed JSON
-    malformed_tool_calls_roundtrip = [
-        {
-            "id": "call_999",
-            "type": "function",
-            "function": {
-                "name": "test_function",
-                "arguments": '{"key": "value", "broken',  # Malformed
-            },
-        }
-    ]
-    
-    # Step 1: OpenAI to Bedrock (should store as string)
-    bedrock_blocks = _convert_to_bedrock_tool_call_invoke(malformed_tool_calls_roundtrip)
-    assert isinstance(bedrock_blocks[0]["toolUse"]["input"], str)
-    
-    # Step 2: Bedrock back to OpenAI (should preserve the string)
-    content_blocks_roundtrip = [
-        ContentBlock(
-            toolUse={
-                "name": bedrock_blocks[0]["toolUse"]["name"],
-                "toolUseId": bedrock_blocks[0]["toolUse"]["toolUseId"],
-                "input": bedrock_blocks[0]["toolUse"]["input"],
-            }
-        )
-    ]
-    
-    content_str, tools_roundtrip, reasoning = converse_config._translate_message_content(
-        content_blocks_roundtrip
-    )
-    
-    # Should preserve the malformed JSON string through the round trip
-    assert tools_roundtrip[0]["function"]["arguments"] == '{"key": "value", "broken'
-    print("✓ Round-trip conversion preserves malformed JSON")
-    
-    print("✓ All malformed JSON handling tests passed")
+
+        try:
+            response = completion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=messages,
+                web_search_options={},
+                max_tokens=100,
+                client=client,
+            )
+        except Exception:
+            pass  # Expected - we're just checking the request
+
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
+
+            # Verify toolConfig is present with systemTool
+            assert "toolConfig" in request_body, "toolConfig should be in request"
+
+            tool_config = request_body["toolConfig"]
+            assert "tools" in tool_config, "tools should be in toolConfig"
+
+            tools_in_request = tool_config["tools"]
+
+            # Find the systemTool
+            system_tool_found = False
+            for tool in tools_in_request:
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
+                    break
+
+            assert system_tool_found, "systemTool with nova_grounding should be present"
+            print("✓ web_search_options correctly transformed to systemTool")

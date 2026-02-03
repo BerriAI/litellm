@@ -150,11 +150,14 @@ class KeyManagementEventHooks:
                     existing_key_row.key_alias
                     or f"virtual-key-{existing_key_row.token}"
                 )
+                team_id = getattr(existing_key_row, "team_id", None)
                 await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
                     current_secret_name=initial_secret_name,
-                    new_secret_name=data.key_alias
+                    new_secret_name=response.key_alias
+                    or data.key_alias
                     or f"virtual-key-{response.token_id}",
                     new_secret_value=response.key,
+                    team_id=team_id,
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -285,14 +288,19 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _rotate_virtual_key_in_secret_manager(
-        current_secret_name: str, new_secret_name: str, new_secret_value: str
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
+        team_id: Optional[str] = None,
     ):
         """
         Update a virtual key in the secret manager
 
         Args:
-            secret_name: Name of the virtual key
-            secret_token: Value of the virtual key (example: sk-1234)
+            current_secret_name: Current name of the virtual key
+            new_secret_name: New name of the virtual key
+            new_secret_value: New value of the virtual key (example: sk-1234)
+            team_id: Optional team ID to get team-specific secret manager settings
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:
@@ -302,6 +310,9 @@ class KeyManagementEventHooks:
 
                 # store the key in the secret manager
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
+                    optional_params = await KeyManagementEventHooks._get_secret_manager_optional_params(
+                        team_id
+                    )
                     await litellm.secret_manager_client.async_rotate_secret(
                         current_secret_name=KeyManagementEventHooks._get_secret_name(
                             current_secret_name
@@ -310,6 +321,7 @@ class KeyManagementEventHooks:
                             new_secret_name
                         ),
                         new_secret_value=new_secret_value,
+                        optional_params=optional_params,
                     )
 
     @staticmethod

@@ -44,8 +44,8 @@ commands:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
+            pip install "pydantic==2.11.0"
+            pip install "mcp==1.25.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -112,14 +112,14 @@ jobs:
             python -m mypy .
             cd ..
           no_output_timeout: 10m
-  local_testing:
+  local_testing_part1:
     docker:
       - image: cimg/python:3.12
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-
+    parallelism: 4
     steps:
       - checkout
       - setup_google_dns
@@ -144,8 +144,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -205,20 +205,32 @@ jobs:
 
       # Run pytest and generate JUnit XML report
       - run:
-          name: Run tests
+          name: Run tests (Part 1 - A-M)
           command: |
-            pwd
-            ls
-            # Add --timeout to kill hanging tests after 300s (5 min)
-            # Add -v to show test names as they run for debugging
-            # Add --tb=short for shorter tracebacks
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=20 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4 --timeout=300 --timeout_method=thread
+            mkdir test-results
+
+            # Discover test files (A-M)
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[a-mA-M]*.py")
+
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=timings \
+              --verbose \
+              --command="xargs python -m pytest \
+                -vv \
+                --cov=litellm \
+                --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=20 \
+                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
+                -n 4 \
+                --timeout=300 \
+                --timeout_method=thread"
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_coverage.xml
-            mv .coverage local_testing_coverage
+            mv coverage.xml local_testing_part1_coverage.xml
+            mv .coverage local_testing_part1_coverage
 
       # Store test results
       - store_test_results:
@@ -226,8 +238,136 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - local_testing_coverage.xml
-            - local_testing_coverage
+            - local_testing_part1_coverage.xml
+            - local_testing_part1_coverage
+  local_testing_part2:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    parallelism: 4
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "mypy==1.18.2"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
+            pip install langchain
+            pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.59.7"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.100.1
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
+            pip install "httpx==0.24.1"
+            pip install "respx==0.22.0"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.10.2"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+            pip install "pytest-xdist==3.6.1"
+            pip install "pytest-timeout==2.2.0"
+            pip install "websockets==13.1.0"
+            pip install semantic_router --no-deps
+            pip install aurelio_sdk --no-deps
+            pip uninstall posthog -y
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      - run:
+          name: Black Formatting
+          command: |
+            cd litellm
+            python -m pip install black
+            python -m black .
+            cd ..
+
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests (Part 2 - N-Z)
+          command: |
+            mkdir test-results
+
+            # Discover test files (N-Z)
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[n-zN-Z]*.py")
+
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=timings \
+              --verbose \
+              --command="xargs python -m pytest \
+                -vv \
+                --cov=litellm \
+                --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=20 \
+                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
+                -n 4 \
+                --timeout=300 \
+                --timeout_method=thread"
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml local_testing_part2_coverage.xml
+            mv .coverage local_testing_part2_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - local_testing_part2_coverage.xml
+            - local_testing_part2_coverage
   langfuse_logging_unit_tests:
     docker:
       - image: cimg/python:3.11
@@ -260,8 +400,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -367,8 +507,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -499,7 +639,6 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-
     steps:
       - checkout
       - setup_google_dns
@@ -513,6 +652,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-xdist==3.6.1"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
       # Run pytest and generate JUnit XML report
@@ -575,8 +715,8 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_router_coverage.xml
-            mv .coverage litellm_router_coverage
+            mv coverage.xml litellm_router_unit_coverage.xml
+            mv .coverage litellm_router_unit_coverage
       # Store test results
       - store_test_results:
           path: test-results
@@ -584,8 +724,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_router_coverage.xml
-            - litellm_router_coverage
+            - litellm_router_unit_coverage.xml
+            - litellm_router_unit_coverage
   litellm_security_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -637,8 +777,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -759,8 +899,8 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -865,8 +1005,8 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -972,8 +1112,8 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -1152,8 +1292,8 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
-            pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
+            pip install "pydantic==2.11.0"
+            pip install "mcp==1.25.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1198,7 +1338,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
-            pip install "boto3==1.40.61"
+            pip install "boto3==1.36.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1556,8 +1696,8 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
+            pip install "pydantic==2.11.0"
+            pip install "mcp==1.25.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -1743,13 +1883,14 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/image_gen_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/image_gen_tests -n 4 --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1792,6 +1933,7 @@ jobs:
             pip install "mlflow==2.17.2"
             pip install "anthropic==0.52.0"
             pip install "blockbuster==1.5.24"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -1799,7 +1941,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm -n 4 --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1879,7 +2021,7 @@ jobs:
             pip install aiohttp
             pip install openai
             pip install click
-            pip install "boto3==1.40.61"
+            pip install "boto3==1.36.0"
             pip install jinja2
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
@@ -1915,7 +2057,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "tomli==2.2.1"
-            pip install "mcp==1.10.1"
+            pip install "mcp==1.25.0"
       - run:
           name: Run tests
           command: |
@@ -2176,8 +2318,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -2192,6 +2334,8 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "openai==1.100.1"
+            pip install "litellm[proxy]"
+            pip install "pytest-xdist==3.6.1"
       - run:
           name: Install dockerize
           command: |
@@ -2268,7 +2412,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 120m
 
       # Store test results
@@ -2316,8 +2460,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langfuse>=2.0.0"
@@ -2462,8 +2606,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.40.61"
-            pip install "aioboto3==15.5.0"
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -3118,7 +3262,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "boto3==1.40.61"
+            pip install "boto3==1.36.0"
             pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
@@ -3263,6 +3407,110 @@ jobs:
       - store_test_results:
           path: test-results
 
+  proxy_e2e_anthropic_messages_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
+      - run:
+          name: Install Python 3.10
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.10 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "boto3==1.36.0"
+            pip install "httpx==0.27.0"
+            pip install "claude-agent-sdk"
+            pip install -r requirements.txt
+      - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Run Docker container with test config
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME="us-east-1" \
+              --add-host host.docker.internal:host-gateway \
+              --name my-app \
+              -v $(pwd)/tests/proxy_e2e_anthropic_messages_tests/test_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run Claude Agent SDK E2E Tests
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            export LITELLM_PROXY_URL="http://localhost:4000"
+            export LITELLM_API_KEY="sk-1234"
+            pwd
+            ls
+            python -m pytest -vv tests/proxy_e2e_anthropic_messages_tests/ -x -s --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
   upload-coverage:
     docker:
       - image: cimg/python:3.9
@@ -3284,7 +3532,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3334,8 +3582,22 @@ jobs:
                 ls dist/
                 twine upload --verbose dist/*
             else
-                echo "Version ${VERSION} of package is already published on PyPI. Skipping PyPI publish."
-                circleci step halt
+                echo "Version ${VERSION} of package is already published on PyPI."
+                
+                # Check if corresponding Docker nightly image exists
+                NIGHTLY_TAG="v${VERSION}-nightly"
+                echo "Checking for Docker nightly image: litellm/litellm:${NIGHTLY_TAG}"
+                
+                # Check Docker Hub for the nightly image
+                if curl -s "https://hub.docker.com/v2/repositories/litellm/litellm/tags/${NIGHTLY_TAG}" | grep -q "name"; then
+                    echo "Docker nightly image ${NIGHTLY_TAG} exists. This release was already completed successfully."
+                    echo "Skipping PyPI publish and continuing to ensure Docker images are up to date."
+                    circleci step halt
+                else
+                    echo "ERROR: PyPI package ${VERSION} exists but Docker nightly image ${NIGHTLY_TAG} does not exist!"
+                    echo "This indicates an incomplete release. Please investigate."
+                    exit 1
+                fi
             fi
       - run:
           name: Trigger Github Action for new Docker Container + Trigger Load Testing
@@ -3344,11 +3606,21 @@ jobs:
             python3 -m pip install toml
             VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "LiteLLM Version ${VERSION}"
+
+            # Determine which branch to use for Docker build
+            if [[ "$CIRCLE_BRANCH" =~ ^litellm_release_day_.* ]]; then
+              BUILD_BRANCH="$CIRCLE_BRANCH"
+              echo "Using release branch: $BUILD_BRANCH"
+            else
+              BUILD_BRANCH="main"
+              echo "Using default branch: $BUILD_BRANCH"
+            fi
+
             curl -X POST \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
+              -d "{\"ref\":\"${BUILD_BRANCH}\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
             echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
@@ -3481,6 +3753,9 @@ jobs:
             nvm use v20
 
             cd ui/litellm-dashboard
+
+            # Remove node_modules and package-lock to ensure clean install (fixes dependency resolution issues)
+            rm -rf node_modules package-lock.json
 
             # Install dependencies first
             npm install
@@ -3739,7 +4014,13 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - local_testing:
+      - local_testing_part1:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - local_testing_part2:
           filters:
             branches:
               only:
@@ -3901,6 +4182,14 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - proxy_e2e_anthropic_messages_tests:
+          requires:
+            - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - llm_translation_testing:
           filters:
             branches:
@@ -4044,7 +4333,8 @@ workflows:
             - litellm_proxy_unit_testing_part2
             - litellm_security_tests
             - langfuse_logging_unit_tests
-            - local_testing
+            - local_testing_part1
+            - local_testing_part2
             - litellm_assistants_api_testing
             - auth_ui_unit_tests
       - db_migration_disable_update_check:
@@ -4084,10 +4374,12 @@ workflows:
             branches:
               only:
                 - main
+                - /litellm_release_day_.*/
       - publish_to_pypi:
           requires:
             - mypy_linting
-            - local_testing
+            - local_testing_part1
+            - local_testing_part2
             - build_and_test
             - e2e_openai_endpoints
             - test_bad_database_url

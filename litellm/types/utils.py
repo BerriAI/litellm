@@ -3,25 +3,28 @@ import time
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
-from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.audio.transcription_create_params import (
+    FileTypes as FileTypes,  # type: ignore
+)
+from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
     PromptTokensDetails,
 )
+from openai.types.moderation import Categories as Categories
 from openai.types.moderation import (
-    Categories,
-    CategoryAppliedInputTypes,
-    CategoryScores,
+    CategoryAppliedInputTypes as CategoryAppliedInputTypes,
 )
-from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
+from openai.types.moderation import CategoryScores as CategoryScores
+from openai.types.moderation_create_response import Moderation as Moderation
+from openai.types.moderation_create_response import (
+    ModerationCreateResponse as ModerationCreateResponse,
+)
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
-from typing_extensions import Callable, Dict, Required, TypedDict, override
+from typing_extensions import Required, TypedDict
 
-import litellm
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
@@ -46,12 +49,13 @@ from .llms.openai import (
     FineTuningJob,
     ImageURLListItem,
     OpenAIChatCompletionChunk,
+    OpenAIChatCompletionFinishReason,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
 )
-from .rerank import RerankResponse
+from .rerank import RerankResponse as RerankResponse
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -61,6 +65,19 @@ else:
 
 def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
+
+
+class SafeAttributeModel:
+    """
+    A base model that provides safe attribute access.
+    """
+
+    def __delattr__(self, name):
+        try:
+            super().__delattr__(name)
+        except AttributeError:
+            # noop if attribute does not exist
+            pass
 
 
 class LiteLLMCommonStrings(Enum):
@@ -107,6 +124,21 @@ class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_low: float
     search_context_size_medium: float
     search_context_size_high: float
+
+
+class AgenticLoopParams(TypedDict, total=False):
+    """
+    Parameters passed to agentic loop hooks (e.g., WebSearch interception).
+
+    Stored in logging_obj.model_call_details["agentic_loop_params"] to provide
+    agentic hooks with the original request context needed for follow-up calls.
+    """
+
+    model: str
+    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+
+    custom_llm_provider: str
+    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -244,6 +276,8 @@ class CallTypes(str, Enum):
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
     retrieve_batch = "retrieve_batch"
+    acancel_batch = "acancel_batch"
+    cancel_batch = "cancel_batch"
     pass_through = "pass_through_endpoint"
     anthropic_messages = "anthropic_messages"
     get_assistants = "get_assistants"
@@ -357,6 +391,7 @@ class CallTypes(str, Enum):
     # MCP Call Types
     #########################################################
     call_mcp_tool = "call_mcp_tool"
+    list_mcp_tools = "list_mcp_tools"
 
     #########################################################
     # A2A Call Types
@@ -421,6 +456,7 @@ CallTypesLiteral = Literal[
     "vector_store_file_delete",
     "avector_store_file_delete",
     "call_mcp_tool",
+    "list_mcp_tools",
     "asend_message",
     "send_message",
     "aresponses",
@@ -1006,7 +1042,7 @@ def add_provider_specific_fields(
     setattr(object, "provider_specific_fields", provider_specific_fields)
 
 
-class Message(OpenAIObject):
+class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
@@ -1126,7 +1162,7 @@ class Message(OpenAIObject):
             return self.dict()
 
 
-class Delta(OpenAIObject):
+class Delta(SafeAttributeModel, OpenAIObject):
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -1223,8 +1259,8 @@ class Delta(OpenAIObject):
         setattr(self, key, value)
 
 
-class Choices(OpenAIObject):
-    finish_reason: str
+class Choices(SafeAttributeModel, OpenAIObject):
+    finish_reason: OpenAIChatCompletionFinishReason
     index: int
     message: Message
     logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
@@ -1316,7 +1352,7 @@ class CacheCreationTokenDetails(BaseModel):
 
 
 class PromptTokensDetailsWrapper(
-    PromptTokensDetails
+    SafeAttributeModel, PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
     text_tokens: Optional[int] = None
     """Text tokens sent to the model."""
@@ -1363,7 +1399,7 @@ class ServerToolUse(BaseModel):
     tool_search_requests: Optional[int] = None
 
 
-class Usage(CompletionUsage):
+class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
@@ -1380,7 +1416,7 @@ class Usage(CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
@@ -2093,6 +2129,7 @@ class ImageObject(OpenAIImage):
     b64_json: The base64-encoded JSON of the generated image, if response_format is b64_json.
     url: The URL of the generated image, if response_format is url (default).
     revised_prompt: The prompt that was used to generate the image, if there was any revision to the prompt.
+    provider_specific_fields: Provider-specific fields not part of OpenAI spec.
 
     https://platform.openai.com/docs/api-reference/images/object
     """
@@ -2100,9 +2137,12 @@ class ImageObject(OpenAIImage):
     b64_json: Optional[str] = None
     url: Optional[str] = None
     revised_prompt: Optional[str] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    def __init__(self, b64_json=None, url=None, revised_prompt=None, **kwargs):
+    def __init__(self, b64_json=None, url=None, revised_prompt=None, provider_specific_fields=None, **kwargs):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
+        if provider_specific_fields:
+            self.provider_specific_fields = provider_specific_fields
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2470,6 +2510,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     requester_metadata: Optional[dict]
     requester_custom_headers: Optional[
         Dict[str, str]
@@ -2600,6 +2641,7 @@ class CostBreakdown(TypedDict, total=False):
     )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
+    additional_costs: Dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
     discount_amount: float  # Discount amount in USD (optional)
@@ -2655,6 +2697,7 @@ class StandardLoggingPayload(TypedDict):
     request_tags: list
     end_user: Optional[str]
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
@@ -2944,6 +2987,7 @@ GenericBudgetConfigType = Dict[str, BudgetConfig]
 
 class LlmProviders(str, Enum):
     OPENAI = "openai"
+    CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
@@ -3040,6 +3084,7 @@ class LlmProviders(str, Enum):
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
+    S3_VECTORS = "s3_vectors"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -3088,6 +3133,7 @@ class SearchProviders(str, Enum):
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
     EXA_AI = "exa_ai"
+    BRAVE = "brave"
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
@@ -3395,3 +3441,4 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     structured_messages: List[
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
+    model: Optional[str]  # the model being used for the LLM call
