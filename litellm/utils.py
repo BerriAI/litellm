@@ -213,9 +213,11 @@ _CALL_TYPE_ENUM_MAP: dict = {ct.value: ct for ct in CallTypes}
 
 try:
     # Python 3.9+
-    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
-        "anthropic_tokenizer.json"
-    ).open("r", encoding="utf-8") as f:
+    with (
+        resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("anthropic_tokenizer.json")
+        .open("r", encoding="utf-8") as f
+    ):
         json_data = json.load(f)
 except (ImportError, AttributeError, TypeError):
     with resources.open_text(
@@ -779,17 +781,21 @@ def function_setup(  # noqa: PLR0915
         coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, "CustomLogger"]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
             for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
+                    from litellm import _custom_logger_compatible_callbacks_literal
+
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                        cast(_custom_logger_compatible_callbacks_literal, callback),
+                        internal_usage_cache=None,
+                        llm_router=None,  # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -1311,9 +1317,7 @@ def post_call_processing(
                         isinstance(original_response, ModelResponse)
                         and len(original_response.choices) > 0
                     ):
-                        model_response: Optional[str] = original_response.choices[
-                            0
-                        ].message.content  # type: ignore
+                        model_response: Optional[str] = original_response.choices[0].message.content  # type: ignore
                         if model_response is not None:
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
@@ -1664,9 +1668,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1713,9 +1717,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1748,7 +1752,9 @@ def client(original_function):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
-        _update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
+        _update_response_metadata = getattr(
+            sys.modules[__name__], "update_response_metadata"
+        )
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
@@ -2204,7 +2210,9 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token  # type: ignore
+            identifier,
+            revision=revision,
+            auth_token=auth_token,  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
@@ -3648,10 +3656,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3780,16 +3788,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4945,9 +4953,9 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     # Use list accumulation to avoid O(n^2) string concatenation across choices
     response_parts: List[str] = []
@@ -7416,13 +7424,13 @@ def is_cached_message(message: AllMessageValues) -> bool:
     Used for anthropic/gemini context caching.
 
     Follows the anthropic format {"cache_control": {"type": "ephemeral"}}
-    
+
     Can be disabled globally by setting litellm.disable_anthropic_gemini_context_caching_transform = True
     """
     # Check if context caching is disabled globally
     if litellm.disable_anthropic_gemini_context_caching_transform is True:
         return False
-    
+
     if "content" not in message:
         return False
 
@@ -7921,6 +7929,7 @@ class ProviderConfigManager:
     def _get_azure_ai_config(model: str) -> BaseConfig:
         """Get Azure AI config based on model type."""
         from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
         return AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
 
     @staticmethod
@@ -8311,7 +8320,11 @@ class ProviderConfigManager:
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
-            return litellm.llms.bedrock.common_utils.BedrockModelInfo()
+            # Avoid attribute access on `litellm.llms` (mypy does not assume
+            # submodules are present unless explicitly imported).
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            return BedrockModelInfo()
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
