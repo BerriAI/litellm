@@ -1016,6 +1016,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         "user_api_key_model_max_budget"
     ] = user_api_key_dict.model_max_budget
 
+    # User spend, budget - used by prometheus.py
+    # Follow same pattern as team and API key budgets
+    data[_metadata_variable_name][
+        "user_api_key_user_spend"
+    ] = user_api_key_dict.user_spend
+    data[_metadata_variable_name][
+        "user_api_key_user_max_budget"
+    ] = user_api_key_dict.user_max_budget
+
     # Extract allowed access groups for router filtering (GitHub issue #18333)
     # This allows the router to filter deployments based on team's access groups
     if llm_router is not None:
