@@ -137,7 +137,7 @@ You can also invoke A2A agents using the familiar OpenAI SDK by using the `a2a/`
 <Tabs>
 <TabItem value="python" label="Python" default>
 
-```python
+```python showLineNumbers title="openai_non_streaming.py"
 import openai
 
 client = openai.OpenAI(
@@ -158,7 +158,7 @@ print(response.choices[0].message.content)
 </TabItem>
 <TabItem value="typescript" label="TypeScript">
 
-```typescript
+```typescript showLineNumbers title="openai_non_streaming.ts"
 import OpenAI from 'openai';
 
 const client = new OpenAI({
@@ -179,7 +179,7 @@ console.log(response.choices[0].message.content);
 </TabItem>
 <TabItem value="curl" label="cURL">
 
-```bash
+```bash showLineNumbers title="curl_non_streaming.sh"
 curl -X POST http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
@@ -199,7 +199,7 @@ curl -X POST http://localhost:4000/v1/chat/completions \
 <Tabs>
 <TabItem value="python" label="Python" default>
 
-```python
+```python showLineNumbers title="openai_streaming.py"
 import openai
 
 client = openai.OpenAI(
@@ -223,7 +223,7 @@ for chunk in stream:
 </TabItem>
 <TabItem value="typescript" label="TypeScript">
 
-```typescript
+```typescript showLineNumbers title="openai_streaming.ts"
 import OpenAI from 'openai';
 
 const client = new OpenAI({
@@ -250,7 +250,7 @@ for await (const chunk of stream) {
 </TabItem>
 <TabItem value="curl" label="cURL">
 
-```bash
+```bash showLineNumbers title="curl_streaming.sh"
 curl -X POST http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
