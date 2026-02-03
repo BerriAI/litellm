@@ -122,7 +122,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Remove `ttl` field from cache_control in messages.
         Bedrock doesn't support the ttl field in cache_control.
 
-        Update: bedock supports `5m` and `1h` for Claude 4.5 models.
+        Update: Bedock supports `5m` and `1h` for Claude 4.5 models.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
