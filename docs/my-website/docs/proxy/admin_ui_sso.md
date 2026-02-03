@@ -31,10 +31,11 @@ When configuring the application:
 - **Sign-in redirect URI**: `https://<your-proxy-base-url>/sso/callback`
 - **Sign-out redirect URI** (optional): `https://<your-proxy-base-url>`
 
-After creating the app, note down:
-- **Client ID**
-- **Client Secret**
-- **Okta domain** (e.g., `dev-12345678.okta.com`)
+<Image img={require('../../img/okta_redirect_uri.png')} />
+
+After creating the app, copy your **Client ID** and **Client Secret** from the application's General tab:
+
+<Image img={require('../../img/okta_client_credentials.png')} />
 
 #### Step 2: Assign Users to the Application
 
@@ -50,6 +51,8 @@ This step is required. Without an Access Policy for your app, users will get a `
 2. Select the **default** authorization server (or your custom one)
 3. In the **Access Policies** tab, create a new policy assigned to your LiteLLM app
 4. Add a rule that allows the **Authorization Code** grant type
+
+<Image img={require('../../img/okta_access_policy.png')} />
 
 See [Okta's Access Policy documentation](https://help.okta.com/en-us/content/topics/security/api-access-management/access-policies.htm) for more details.
 
