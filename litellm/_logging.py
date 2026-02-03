@@ -112,7 +112,7 @@ class JsonFormatter(Formatter):
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_RECORD_ATTRS:
+            if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
         if record.exc_info:
