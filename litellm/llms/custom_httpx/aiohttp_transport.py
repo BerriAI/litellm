@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import os
+import ssl
 import typing
 import urllib.request
 from typing import Callable, Dict, Optional, Union
@@ -139,8 +140,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     Credit to: https://github.com/karpetrosyan/httpx-aiohttp for this implementation
     """
 
-    def __init__(self, client: Union[ClientSession, Callable[[], ClientSession]]):
+    def __init__(
+        self,
+        client: Union[ClientSession, Callable[[], ClientSession]],
+        ssl_verify: Optional[Union[bool, ssl.SSLContext]] = None,
+    ):
         self.client = client
+        self._ssl_verify = ssl_verify  # Store for per-request SSL override
         super().__init__(client=client)
         # Store the client factory for recreating sessions when needed
         if callable(client):
@@ -214,6 +220,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         timeout: dict,
         proxy: Optional[str],
         sni_hostname: Optional[str],
+        ssl_verify: Optional[Union[bool, ssl.SSLContext]] = None,
     ) -> ClientResponse:
         """
         Helper function to make an aiohttp request with the given parameters.
@@ -224,6 +231,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             timeout: Timeout settings dict with 'connect', 'read', 'pool' keys
             proxy: Optional proxy URL
             sni_hostname: Optional SNI hostname for SSL
+            ssl_verify: Optional SSL verification setting (False to disable, SSLContext for custom)
 
         Returns:
             ClientResponse from aiohttp
@@ -250,6 +258,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 connect=timeout.get("pool"),
             ),
             proxy=proxy,
+            ssl=ssl_verify,
             server_hostname=sni_hostname,
         ).__aenter__()
 
@@ -268,6 +277,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Resolve proxy settings from environment variables
         proxy = await self._get_proxy_settings(request)
 
+        # Use stored SSL configuration for per-request override
+        ssl_config = self._ssl_verify
+
         try:
             with map_aiohttp_exceptions():
                 response = await self._make_aiohttp_request(
@@ -276,6 +288,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     timeout=timeout,
                     proxy=proxy,
                     sni_hostname=sni_hostname,
+                    ssl_verify=ssl_config,
                 )
         except RuntimeError as e:
             # Handle the case where session was closed between our check and actual use
@@ -296,6 +309,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                         timeout=timeout,
                         proxy=proxy,
                         sni_hostname=sni_hostname,
+                        ssl_verify=ssl_config,
                     )
             else:
                 # Re-raise if it's a different RuntimeError
