@@ -23,6 +23,41 @@ View Spend, Token Usage, Key, Team Name for Each Request to LiteLLM
 
 **By default LiteLLM does not track the request and response content.**
 
+## Tracing Tools
+
+View which tools were provided and called in your completion requests.
+
+<Image img={require('../../img/ui_tools.png')}/>
+
+**Example:** Make a completion request with tools:
+
+```bash
+curl -X POST 'http://localhost:4000/chat/completions' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "What is the weather?"}],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string"}
+            }
+          }
+        }
+      }
+    ]
+  }'
+```
+
+Check the Logs page to see all tools provided and which ones were called.
+
 ## Tracking - Request / Response Content in Logs Page 
 
 If you want to view request and response content on LiteLLM Logs, you can enable it in either place:
