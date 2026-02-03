@@ -42,7 +42,8 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
                     ChatCompletionDeltaToolCall(
                         id="call_d581d130-e234-4315-94e8-27e7ff7c4e55",
                         function=Function(
-                            arguments='{"location": "Boston"}', name="get_weather"
+                            arguments='{"location": "Boston"}',
+                            name="get_weather",
                         ),
                         type="function",
                         index=0,
@@ -60,8 +61,6 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
         choices=choices
     )
-
-    print(content_block_start)
 
     assert block_type == "tool_use"
     assert content_block_start == {
@@ -238,7 +237,9 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     assert len(result) == 2
     assert result[1]["role"] == "assistant"
@@ -290,7 +291,9 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     # find the indices of tool and user messages in the result
     tool_message_idx = None
@@ -327,7 +330,8 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
                         id="call_empty_args",
                         type="function",
                         function=Function(
-                            name="test_function", arguments=""  # empty arguments string
+                            name="test_function",
+                            arguments="",  # empty arguments string
                         ),
                     )
                 ],
@@ -336,13 +340,17 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+    result = adapter._translate_openai_content_to_anthropic(
+        choices=openai_choices
+    )
 
     assert len(result) == 1
     assert result[0].type == "tool_use"
     assert result[0].id == "call_empty_args"
     assert result[0].name == "test_function"
-    assert result[0].input == {}, "Empty function arguments should result in empty dict"
+    assert (
+        result[0].input == {}
+    ), "Empty function arguments should result in empty dict"
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
@@ -367,7 +375,9 @@ def test_translate_openai_content_to_anthropic_text_and_tool_calls():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+    result = adapter._translate_openai_content_to_anthropic(
+        choices=openai_choices
+    )
 
     assert len(result) == 2
     assert result[0].type == "text"
@@ -394,7 +404,8 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
                             id="call_tool_combo",
                             type="function",
                             function=Function(
-                                name="get_weather", arguments='{"location": "Paris"}'
+                                name="get_weather",
+                                arguments='{"location": "Paris"}',
                             ),
                         )
                     ],
@@ -413,11 +424,15 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     assert anthropic_content is not None
     assert len(anthropic_content) == 2
     assert cast(Any, anthropic_content[0]).type == "text"
-    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
+    assert (
+        cast(Any, anthropic_content[0]).text
+        == "Let me grab the current weather."
+    )
     assert cast(Any, anthropic_content[1]).type == "tool_use"
     assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
     assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
     assert anthropic_response.get("stop_reason") == "tool_use"
+
 
 def test_translate_openai_responses_api_response_to_anthropic_text_and_tool_calls():
     """Responses API output should translate to Anthropic text + tool_use blocks."""
@@ -464,14 +479,209 @@ def test_translate_openai_responses_api_response_to_anthropic_text_and_tool_call
     assert anthropic_content is not None
     assert len(anthropic_content) == 2
     assert cast(Any, anthropic_content[0]).type == "text"
-    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
+    assert (
+        cast(Any, anthropic_content[0]).text
+        == "Let me grab the current weather."
+    )
     assert cast(Any, anthropic_content[1]).type == "tool_use"
     assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
     assert cast(Any, anthropic_content[1]).name == "get_weather"
     assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
-    assert cast(Any, anthropic_content[1]).provider_specific_fields.get("signature") == "sigsig"
+    assert (
+        cast(Any, anthropic_content[1]).provider_specific_fields.get(
+            "signature"
+        )
+        == "sigsig"
+    )
     assert anthropic_response.get("stop_reason") == "tool_use"
 
+
+def test_translate_openai_responses_api_response_to_anthropic_reasoning_summary():
+    """Responses API reasoning outputs should translate to Anthropic thinking blocks."""
+
+    responses_api_response = ResponsesAPIResponse(
+        id="resp_reasoning_summary_responses_api",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "reasoning",
+                "id": "reason_1",
+                "status": "completed",
+                "content": [],
+                "summary": [
+                    {
+                        "type": "output_text",
+                        "text": "I should think this through.",
+                    }
+                ],
+            }
+        ],
+        usage=ResponseAPIUsage(input_tokens=5, output_tokens=2, total_tokens=7),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=responses_api_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 1
+    assert cast(Any, anthropic_content[0]).type == "thinking"
+    assert (
+        cast(Any, anthropic_content[0]).thinking
+        == "I should think this through."
+    )
+    assert anthropic_response.get("stop_reason") == "end_turn"
+
+
+def test_translate_openai_responses_api_response_to_anthropic_incomplete_status_has_max_tokens():
+    """Incomplete Responses API response should map to Anthropic max_tokens stop_reason."""
+
+    responses_api_response = ResponsesAPIResponse(
+        id="resp_incomplete_responses_api",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        status="incomplete",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_incomplete",
+                "status": "incomplete",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Partial output.",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+        usage=ResponseAPIUsage(input_tokens=5, output_tokens=2, total_tokens=7),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=responses_api_response
+    )
+
+    assert anthropic_response.get("stop_reason") == "max_tokens"
+
+
+def test_translate_openai_responses_api_response_to_anthropic_empty_output():
+    """Empty Responses API output should return empty content with end_turn stop_reason."""
+
+    responses_api_response = ResponsesAPIResponse(
+        id="resp_empty_output_responses_api",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        status="completed",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=responses_api_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert anthropic_content == []
+    assert anthropic_response.get("stop_reason") == "end_turn"
+
+
+def test_translate_streaming_openai_responses_api_output_text_delta_to_anthropic():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    chunk = {
+        "type": "response.output_text.delta",
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "Hello",
+    }
+
+    out = adapter.translate_streaming_openai_response_to_anthropic(
+        response=chunk,
+        current_content_block_index=0,
+    )
+
+    assert out["type"] == "content_block_delta"
+    assert out["index"] == 0
+    assert out["delta"]["type"] == "text_delta"
+    assert out["delta"]["text"] == "Hello"
+
+
+def test_translate_streaming_openai_responses_api_function_call_arguments_delta_to_anthropic():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    chunk = {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "call_1",
+        "output_index": 0,
+        "delta": '{"location":',
+    }
+
+    out = adapter.translate_streaming_openai_response_to_anthropic(
+        response=chunk,
+        current_content_block_index=2,
+    )
+
+    assert out["type"] == "content_block_delta"
+    assert out["index"] == 2
+    assert out["delta"]["type"] == "input_json_delta"
+    assert out["delta"]["partial_json"] == '{"location":'
+
+
+def test_translate_streaming_openai_responses_api_reasoning_summary_text_delta_to_anthropic():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    chunk = {
+        "type": "response.reasoning_summary_text.delta",
+        "item_id": "reason_1",
+        "output_index": 0,
+        "delta": "I should think.",
+    }
+
+    out = adapter.translate_streaming_openai_response_to_anthropic(
+        response=chunk,
+        current_content_block_index=1,
+    )
+
+    assert out["type"] == "content_block_delta"
+    assert out["index"] == 1
+    assert out["delta"]["type"] == "thinking_delta"
+    assert out["delta"]["thinking"] == "I should think."
+
+
+def test_translate_streaming_openai_responses_api_response_completed_to_anthropic_message_delta():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "status": "completed",
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 4,
+                "total_tokens": 7,
+            },
+        },
+    }
+
+    out = adapter.translate_streaming_openai_response_to_anthropic(
+        response=chunk,
+        current_content_block_index=0,
+    )
+
+    assert out["type"] == "message_delta"
+    assert out["delta"]["stop_reason"] == "end_turn"
+    assert out["usage"]["input_tokens"] == 3
+    assert out["usage"]["output_tokens"] == 4
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
@@ -506,9 +716,6 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
         choices=choices
     )
 
-    print("Type of content:", type_of_content)
-    print("Content block delta:", content_block_delta)
-
     assert type_of_content == "input_json_delta"
     assert content_block_delta["type"] == "input_json_delta"
     assert content_block_delta["partial_json"] == ': "San '
@@ -533,7 +740,9 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+    result = adapter._translate_openai_content_to_anthropic(
+        choices=openai_choices
+    )
 
     assert len(result) == 2
     assert result[0].type == "thinking"
@@ -543,7 +752,7 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     assert result[1].data == "REDACTED"
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
+def test_translate_streaming_openai_chunk_to_anthropic_with_signature():
     choices = [
         StreamingChoices(
             finish_reason=None,
@@ -693,7 +902,9 @@ def test_translate_anthropic_messages_to_openai_user_message_with_base64_image()
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     assert len(result) == 1
     assert result[0]["role"] == "user"
@@ -726,14 +937,19 @@ def test_translate_anthropic_messages_to_openai_user_message_with_url_image():
                 {"type": "text", "text": "Describe this forest path"},
                 {
                     "type": "image",
-                    "source": {"type": "url", "url": "https://example.com/forest.jpg"},
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/forest.jpg",
+                    },
                 },
             ],
         )
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     assert len(result) == 1
     assert result[0]["role"] == "user"
@@ -748,7 +964,8 @@ def test_translate_anthropic_messages_to_openai_user_message_with_url_image():
     assert result[0]["content"][1]["type"] == "image_url"
     assert "image_url" in result[0]["content"][1]
     assert (
-        result[0]["content"][1]["image_url"]["url"] == "https://example.com/forest.jpg"
+        result[0]["content"][1]["image_url"]["url"]
+        == "https://example.com/forest.jpg"
     )
 
 
@@ -792,7 +1009,9 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_base64_image():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     # Find the tool message in the result
     tool_message = None
@@ -814,7 +1033,9 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
-            content=[{"type": "text", "text": "Take a screenshot of the forest"}],
+            content=[
+                {"type": "text", "text": "Take a screenshot of the forest"}
+            ],
         ),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
@@ -848,7 +1069,9 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     # Find the tool message in the result
     tool_message = None
@@ -885,7 +1108,10 @@ def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
                 {"type": "text", "text": "and this one:"},
                 {
                     "type": "image",
-                    "source": {"type": "url", "url": "https://example.com/image2.jpg"},
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/image2.jpg",
+                    },
                 },
                 {"type": "text", "text": "What's the difference?"},
             ],
@@ -893,7 +1119,9 @@ def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     assert len(result) == 1
     assert result[0]["role"] == "user"
@@ -917,7 +1145,8 @@ def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
     # Check second image (URL)
     assert result[0]["content"][3]["type"] == "image_url"
     assert (
-        result[0]["content"][3]["image_url"]["url"] == "https://example.com/image2.jpg"
+        result[0]["content"][3]["image_url"]["url"]
+        == "https://example.com/image2.jpg"
     )
 
     # Check final text
@@ -933,7 +1162,9 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
-            content=[{"type": "text", "text": "What's the weather like in London?"}],
+            content=[
+                {"type": "text", "text": "What's the weather like in London?"}
+            ],
         ),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
@@ -952,7 +1183,9 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     assert len(result) == 2
     assert result[1]["role"] == "assistant"
@@ -985,7 +1218,9 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_conten
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
-            content=[{"type": "text", "text": "Take a screenshot and describe it"}],
+            content=[
+                {"type": "text", "text": "Take a screenshot and describe it"}
+            ],
         ),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
@@ -1014,7 +1249,10 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_conten
                                 "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
                             },
                         },
-                        {"type": "text", "text": "Screenshot captured successfully."},
+                        {
+                            "type": "text",
+                            "text": "Screenshot captured successfully.",
+                        },
                     ],
                 }
             ],
@@ -1022,11 +1260,15 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_conten
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     # Count how many tool messages have the same tool_call_id
     tool_messages = [
-        msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"
+        msg
+        for msg in result
+        if isinstance(msg, dict) and msg.get("role") == "tool"
     ]
     tool_call_ids = [msg.get("tool_call_id") for msg in tool_messages]
 
@@ -1038,7 +1280,9 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_conten
     )
 
     # There should be exactly one tool message
-    assert len(tool_messages) == 1, f"Expected 1 tool message, got {len(tool_messages)}"
+    assert (
+        len(tool_messages) == 1
+    ), f"Expected 1 tool message, got {len(tool_messages)}"
 
     # The content should be a list with all items combined
     tool_message = tool_messages[0]
@@ -1055,7 +1299,10 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_conten
     assert tool_message["content"][0]["text"] == "Here is the screenshot:"
     assert tool_message["content"][1]["type"] == "image_url"
     assert tool_message["content"][2]["type"] == "text"
-    assert tool_message["content"][2]["text"] == "Screenshot captured successfully."
+    assert (
+        tool_message["content"][2]["text"]
+        == "Screenshot captured successfully."
+    )
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward_compat():
@@ -1095,20 +1342,23 @@ def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
 
     tool_messages = [
-        msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"
+        msg
+        for msg in result
+        if isinstance(msg, dict) and msg.get("role") == "tool"
     ]
 
     assert len(tool_messages) == 1
     tool_message = tool_messages[0]
 
     # Single item should be a string for backward compatibility
-    assert isinstance(tool_message["content"], str), (
-        f"Single content item should be a string for backward compatibility, "
-        f"got {type(tool_message['content'])}"
-    )
+    assert isinstance(
+        tool_message["content"], str
+    ), f"Single content item should be a string for backward compatibility, got {type(tool_message['content'])}"
     assert tool_message["content"] == "72°F and sunny"
 
 
@@ -1130,7 +1380,9 @@ def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
                 tool_calls=[
                     ChatCompletionDeltaToolCall(
                         id="toolu_bdrk_013xRVejhv3ybmLEGCoZib2b",
-                        function=Function(arguments='{"cmd": "init"}', name="Bash"),
+                        function=Function(
+                            arguments='{"cmd": "init"}', name="Bash"
+                        ),
                         type="function",
                         index=0,
                     )
@@ -1170,7 +1422,9 @@ def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
 # ============================================================================
 
 # Model constant for cache control tests
-CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
+CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = (
+    "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
+)
 CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
 
 
@@ -1186,7 +1440,9 @@ def test_should_add_cache_control_for_anthropic_model():
         "vertex_ai/claude-3-sonnet@20240229",
     ]:
         target = {}
-        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
         assert "cache_control" in target
         assert target["cache_control"] == cache_control
 
@@ -1196,9 +1452,15 @@ def test_should_not_add_cache_control_for_non_anthropic_model():
     adapter = LiteLLMAnthropicMessagesAdapter()
     cache_control = {"type": "ephemeral"}
 
-    for model in [CACHE_CONTROL_NON_ANTHROPIC_MODEL, "openai/gpt-4-turbo", "gemini-pro"]:
+    for model in [
+        CACHE_CONTROL_NON_ANTHROPIC_MODEL,
+        "openai/gpt-4-turbo",
+        "gemini-pro",
+    ]:
         target = {}
-        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
         assert "cache_control" not in target
 
 
@@ -1206,9 +1468,16 @@ def test_should_not_add_cache_control_when_none():
     """Should not add cache_control when source has None or empty cache_control."""
     adapter = LiteLLMAnthropicMessagesAdapter()
 
-    for source in [{"cache_control": None}, {"cache_control": {}}, {"cache_control": ""}, {}]:
+    for source in [
+        {"cache_control": None},
+        {"cache_control": {}},
+        {"cache_control": ""},
+        {},
+    ]:
         target = {}
-        adapter._add_cache_control_if_applicable(source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL)
+        adapter._add_cache_control_if_applicable(
+            source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+        )
         assert "cache_control" not in target
 
 
@@ -1219,7 +1488,9 @@ def test_should_not_add_cache_control_when_model_none():
 
     for model in [None, ""]:
         target = {}
-        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
         assert "cache_control" not in target
 
 
@@ -1437,7 +1708,10 @@ def test_cache_control_preserved_in_tools_for_claude():
         {
             "name": "get_weather",
             "description": "Get weather for a location",
-            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
             "cache_control": {"type": "ephemeral"},
         }
     ]
@@ -1457,7 +1731,10 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
         {
             "name": "get_weather",
             "description": "Get weather for a location",
-            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
             "cache_control": {"type": "ephemeral"},
         }
     ]
