@@ -469,6 +469,7 @@ const sidebars = {
           label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
+            "a2a_invoking_agents",
             "a2a_cost_tracking",
             "a2a_agent_permissions"
           ],
