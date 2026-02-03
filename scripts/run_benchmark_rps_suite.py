@@ -4,7 +4,7 @@ Run the proxy-vs-provider benchmark 30 times: 1k, 2k, ..., 30k RPS, one at a tim
 Each run writes to a separate results file (e.g. benchmark_results_1000rps.txt, ...).
 
 Usage:
-  # Wait for proxy, then run 30 tests (1k–30k RPS), 1M requests each:
+  # Wait for proxy, then run 30 tests (1k–30k RPS), 100k requests each:
   python scripts/run_benchmark_rps_suite.py
 
   # Skip proxy wait (proxy already up):
@@ -22,13 +22,13 @@ import os
 import subprocess
 import sys
 
-# RPS values for the runs: 1k, 2k, ..., 30k
-RPS_LEVELS = list(range(1000, 31_000, 1000))
+# RPS values for the runs: 1k, 2k, ..., 10k
+RPS_LEVELS = list(range(1000, 11_000, 1000))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run benchmark 30 times at 1k–30k RPS, one at a time, each to a separate file.",
+        description="Run benchmark 10 times at 1k–10k RPS, one at a time, each to a separate file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -51,8 +51,8 @@ def main() -> int:
     parser.add_argument(
         "--requests",
         type=int,
-        default=1_000_000,
-        help="Number of requests per run (default: 1M)",
+        default=20_000,
+        help="Number of requests per run (default: 20k)",
     )
     parser.add_argument(
         "--no-wait",
