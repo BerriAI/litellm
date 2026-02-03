@@ -12,8 +12,20 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 from mcp.types import Tool as MCPTool
 
+# Check if semantic-router is available
+try:
+    import semantic_router
+
+    SEMANTIC_ROUTER_AVAILABLE = True
+except ImportError:
+    SEMANTIC_ROUTER_AVAILABLE = False
+
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not SEMANTIC_ROUTER_AVAILABLE,
+    reason="semantic-router not installed. Install with: pip install 'litellm[semantic-router]'",
+)
 async def test_e2e_semantic_filter():
     """E2E: Load router/filter and verify hook filters tools."""
     from litellm import Router
@@ -40,17 +52,11 @@ async def test_e2e_semantic_filter():
     )
 
     # Avoid relying on external embedding calls in CI by stubbing the tool_router.
-    # The hook+filter integration is still exercised end-to-end.
+    # This still exercises the hook+filter integration end-to-end without
+    # requiring external network access.
     class _Match:
         def __init__(self, name: str):
             self.name = name
-
-    filter_instance.tool_router = lambda text, limit: [
-        _Match("gmail_send"),
-        _Match("calendar_create"),
-    ]
-
-    hook = SemanticToolFilterHook(filter_instance)
 
     # Create 10 tools
     tools = [
@@ -106,6 +112,13 @@ async def test_e2e_semantic_filter():
         ),
     ]
 
+    # Deterministic semantic matches (no embedding calls)
+    filter_instance.tool_router = lambda text, limit: [
+        _Match("gmail_send"),
+        _Match("calendar_create"),
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
     data = {
         "model": "gpt-4",
         "messages": [
@@ -115,7 +128,7 @@ async def test_e2e_semantic_filter():
             }
         ],
         "tools": tools,
-        "metadata": {},
+        "metadata": {},  # Initialize metadata dict for hook to store filter stats
     }
 
     # Call hook
@@ -127,8 +140,8 @@ async def test_e2e_semantic_filter():
     )
 
     # Single assertion: hook filtered tools
-    assert result and len(result["tools"]) < len(
-        tools
-    ), f"Expected filtered tools, got {len(result['tools'])} tools (original: {len(tools)})"
+    assert result and len(result["tools"]) < len(tools), (
+        f"Expected filtered tools, got {len(result['tools'])} tools (original: {len(tools)})"
+    )
 
     # NOTE: avoid prints in tests to keep repo lint clean.
