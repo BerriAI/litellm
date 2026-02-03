@@ -372,6 +372,26 @@ export default function KeyInfoView({
             />
           </div>
 
+          {currentKeyData.user_id && (
+            <div className="flex items-center cursor-pointer mb-2">
+              <div>
+                <Text className="text-xs text-gray-400 uppercase tracking-wide">User ID</Text>
+                <Text className="text-gray-500 font-mono text-sm">{currentKeyData.user_id}</Text>
+              </div>
+              <AntdButton
+                type="text"
+                size="small"
+                icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                onClick={() => copyToClipboard(currentKeyData.user_id, "user-id")}
+                className={`ml-2 transition-all duration-200${
+                  copiedStates["user-id"]
+                    ? "text-green-600 bg-green-50 border-green-200"
+                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
+              />
+            </div>
+          )}
+
           {/* Add timestamp and regeneration indicator */}
           <div className="flex items-center gap-2 flex-wrap">
             <Text className="text-sm text-gray-500">
@@ -628,6 +648,11 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Secret Key</Text>
                     <Text className="font-mono">{currentKeyData.key_name}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">User ID</Text>
+                    <Text>{currentKeyData.user_id || "Not Set"}</Text>
                   </div>
 
                   <div>
