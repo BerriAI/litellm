@@ -15,13 +15,14 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
-import { allEndUsersCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
+import { allEndUsersCall, errorStatsCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
 import { AGENT_CALL_TYPES, ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
+import { ErrorStatsTable } from "./ErrorStatsTable";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
@@ -237,6 +238,49 @@ export default function SpendLogsTable({
     total_pages: 1,
   };
 
+  const errorStats = useQuery({
+    queryKey: [
+      "errorStats",
+      startTime,
+      endTime,
+      selectedTeamId,
+      selectedKeyHash,
+      filterByCurrentUser ? userID : null,
+      selectedStatus,
+      selectedModelId,
+      selectedEndUser,
+    ],
+    queryFn: async () => {
+      if (!accessToken || !token || !userRole || !userID) {
+        return { time_bucket_size: '', data: [] };
+      }
+
+      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+      const formattedEndTime = isCustomDate
+        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+      const response = await errorStatsCall(
+        accessToken,
+        selectedKeyHash || undefined,
+        selectedTeamId || undefined,
+        undefined,
+        formattedStartTime,
+        formattedEndTime,
+        filterByCurrentUser ? userID : undefined,
+        selectedEndUser,
+        selectedStatus,
+        selectedModelId,
+        undefined,
+      );
+
+      return response || { time_bucket_size: '', data: [] };
+    },
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
+    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
+    refetchIntervalInBackground: true,
+  });
+
   const {
     filters,
     filteredLogs,
@@ -365,6 +409,7 @@ export default function SpendLogsTable({
   // Add this function to handle manual refresh
   const handleRefresh = () => {
     logs.refetch();
+    errorStats.refetch();
   };
 
   const handleRowClick = (log: LogEntry) => {
@@ -705,6 +750,7 @@ export default function SpendLogsTable({
                     onRowClick={handleRowClick}
                     isLoading={logs.isLoading}
                   />
+                  <ErrorStatsTable data={errorStats.data?.data || []} timeBucketSize={errorStats.data?.time_bucket_size} />
                 </div>
               </>
             )}

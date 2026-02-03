@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -44,6 +45,11 @@ def _get_read_prisma_client():
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     return client
+
+
+class ErrorStatsResponse(BaseModel):
+    time_bucket_size: str
+    data: List[Dict[str, Any]]
 
 
 @router.get(
@@ -2037,6 +2043,249 @@ async def ui_view_request_response_for_request_id(
             }
 
     return None
+
+
+@router.get(
+    "/spend/logs/error_stats",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": ErrorStatsResponse},
+    },
+)
+async def ui_view_error_stats(
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by api key",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by team_id",
+    ),
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by request_id",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing error stats",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view error stats",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by user_id",
+    ),
+    end_user: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by end user",
+    ),
+    status_filter: Optional[str] = fastapi.Query(
+        default=None, description="Filter by status (e.g., success, failure)"
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None, description="Filter by model"
+    ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter by key alias"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get error statistics grouped by error_class from spend logs
+
+    Returns:
+        [
+            {"extracted_error": "error_class_name", "count": 123},
+            ...
+        ]
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+
+        start_date_iso = start_date_obj.isoformat()
+        end_date_iso = end_date_obj.isoformat()
+
+        where_conditions: dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
+
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
+
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
+
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
+
+        if user_id is not None:
+            where_conditions["user"] = user_id
+
+        if model is not None:
+            where_conditions["model"] = model
+
+        if end_user is not None:
+            where_conditions["end_user"] = end_user
+
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias,
+            }
+
+        status_condition = _build_status_filter_condition(status_filter)
+        if status_condition:
+            where_conditions.update(status_condition)
+
+        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        if not is_admin_view:
+            if team_id is not None:
+                can_view_team = await _can_team_member_view_log(
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=team_id,
+                )
+                if not can_view_team:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view team spend for team_id={}".format(
+                                team_id
+                            )
+                        },
+                    )
+                where_conditions["team_id"] = team_id
+            else:
+                if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+                    where_conditions["user"] = user_api_key_dict.user_id
+                    where_conditions.pop("team_id", None)
+
+        time_diff_hours = (end_date_obj - start_date_obj).total_seconds() / 3600
+
+        if time_diff_hours < 12:
+            time_bucket_display = "2 minutes"
+            bucket_seconds = 120
+        elif time_diff_hours < 24:
+            time_bucket_display = "5 minutes"
+            bucket_seconds = 300
+        elif time_diff_hours < 72:
+            time_bucket_display = "10 minutes"
+            bucket_seconds = 600
+        elif time_diff_hours < 168:
+            time_bucket_display = "20 minutes"
+            bucket_seconds = 1200
+        else:
+            time_bucket_display = "1 hour"
+            bucket_seconds = 3600
+
+        sql_query = f"""
+        SELECT
+            to_timestamp(FLOOR(EXTRACT(EPOCH FROM "startTime") / {bucket_seconds}) * {bucket_seconds}) AS time_bucket,
+            (metadata::jsonb)->'error_information'->>'error_class' AS extracted_error,
+            COUNT(*) AS count
+        FROM "LiteLLM_SpendLogs"
+        WHERE (metadata::jsonb)->'error_information'->>'error_class' IS NOT NULL
+        """
+
+        params = []
+        param_index = 1
+
+        if "startTime" in where_conditions:
+            sql_query += f" AND \"startTime\" >= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["gte"])
+            param_index += 1
+            sql_query += f" AND \"startTime\" <= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["lte"])
+            param_index += 1
+
+        if "team_id" in where_conditions:
+            sql_query += f" AND team_id = ${param_index}"
+            params.append(where_conditions["team_id"])
+            param_index += 1
+
+        if "api_key" in where_conditions:
+            sql_query += f" AND api_key = ${param_index}"
+            params.append(where_conditions["api_key"])
+            param_index += 1
+
+        if "request_id" in where_conditions:
+            sql_query += f" AND request_id = ${param_index}"
+            params.append(where_conditions["request_id"])
+            param_index += 1
+
+        if "user" in where_conditions:
+            sql_query += f" AND \"user\" = ${param_index}"
+            params.append(where_conditions["user"])
+            param_index += 1
+
+        if "model" in where_conditions:
+            sql_query += f" AND model = ${param_index}"
+            params.append(where_conditions["model"])
+            param_index += 1
+
+        if "end_user" in where_conditions:
+            sql_query += f" AND end_user = ${param_index}"
+            params.append(where_conditions["end_user"])
+            param_index += 1
+
+        if "metadata" in where_conditions:
+            sql_query += f" AND metadata::text LIKE ${param_index}"
+            params.append(f'%{where_conditions["metadata"]["string_contains"]}%')
+            param_index += 1
+
+        sql_query += " GROUP BY 1, 2 ORDER BY 1 ASC, 3 DESC"
+
+        db_response = await prisma_client.db.query_raw(sql_query, *params)
+
+        if db_response is None:
+            return {
+                "time_bucket_size": time_bucket_display,
+                "data": []
+            }
+
+        result = []
+        for row in db_response:
+            result.append({
+                "time_bucket": row.get("time_bucket"),
+                "extracted_error": row.get("extracted_error", "Unknown Error"),
+                "count": row.get("count", 0)
+            })
+
+        return {
+            "time_bucket_size": time_bucket_display,
+            "data": result
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_error_stats: {e}")
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(

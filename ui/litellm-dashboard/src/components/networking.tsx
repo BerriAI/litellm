@@ -2769,6 +2769,63 @@ export const adminSpendLogsCall = async (accessToken: string) => {
   }
 };
 
+export const errorStatsCall = async (
+  accessToken: string,
+  api_key?: string,
+  team_id?: string,
+  request_id?: string,
+  start_date?: string,
+  end_date?: string,
+  user_id?: string,
+  end_user?: string,
+  status_filter?: string,
+  model?: string,
+  key_alias?: string,
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs/error_stats` : `/spend/logs/error_stats`;
+
+    const queryParams = new URLSearchParams();
+    if (api_key) queryParams.append("api_key", api_key);
+    if (team_id) queryParams.append("team_id", team_id);
+    if (request_id) queryParams.append("request_id", request_id);
+    if (start_date) queryParams.append("start_date", start_date);
+    if (end_date) queryParams.append("end_date", end_date);
+    if (user_id) queryParams.append("user_id", user_id);
+    if (end_user) queryParams.append("end_user", end_user);
+    if (status_filter) queryParams.append("status_filter", status_filter);
+    if (model) queryParams.append("model", model);
+    if (key_alias) queryParams.append("key_alias", key_alias);
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Error Stats Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch error stats:", error);
+    throw error;
+  }
+};
+
 export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
