@@ -1,23 +1,49 @@
-import { Bot, Loader2, UserRound } from "lucide-react";
-import React from "react";
+import { Bot, Loader2, UserRound, Edit2, RotateCw } from "lucide-react";
+import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { Button, Input } from "antd";
 import ChatImageRenderer from "../../chat_ui/ChatImageRenderer";
 import ReasoningContent from "../../chat_ui/ReasoningContent";
 import ResponseMetrics from "../../chat_ui/ResponseMetrics";
 import { SearchResultsDisplay } from "../../chat_ui/SearchResultsDisplay";
 import type { MessageType } from "../../chat_ui/types";
 
+const { TextArea } = Input;
+
 interface MessageDisplayProps {
   messages: MessageType[];
   isLoading: boolean;
+  onEditMessage?: (index: number, newContent: string) => void;
+  onRetryMessage?: (index: number) => void;
 }
 
-export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
+export function MessageDisplay({ messages, isLoading, onEditMessage, onRetryMessage }: MessageDisplayProps) {
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editedContent, setEditedContent] = useState<string>("");
+
   if (messages.length === 0) {
     return <div className="h-full" />;
   }
+
+  const handleStartEdit = (index: number, content: string) => {
+    setEditingIndex(index);
+    setEditedContent(typeof content === "string" ? content : "");
+  };
+
+  const handleSaveEdit = (index: number) => {
+    if (onEditMessage && editedContent.trim()) {
+      onEditMessage(index, editedContent);
+    }
+    setEditingIndex(null);
+    setEditedContent("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingIndex(null);
+    setEditedContent("");
+  };
 
   const conversationBlocks: Array<{
     user?: MessageType;
@@ -105,21 +131,57 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
         return (
           <div key={blockIndex} className="space-y-4">
             {block.user && (
-              <div className="space-y-2 min-w-0">
+              <div className="space-y-2 min-w-0 group relative">
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
                     <UserRound size={16} />
                   </div>
                   <div className="text-sm font-semibold text-gray-700">You</div>
+                  {!isLoading && editingIndex === null && onEditMessage && block.user && (
+                    <button
+                      onClick={() => {
+                        const userIndex = messages.findIndex((m) => m === block.user);
+                        const content = typeof block.user?.content === "string" ? block.user.content : "";
+                        handleStartEdit(userIndex, content);
+                      }}
+                      className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-blue-50 text-blue-600"
+                      title="Edit message"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                  )}
                 </div>
-                {renderMessageBody(block.user)}
+                {editingIndex === messages.findIndex((m) => m === block.user) ? (
+                  <div className="space-y-2">
+                    <TextArea
+                      value={editedContent}
+                      onChange={(e) => setEditedContent(e.target.value)}
+                      autoSize={{ minRows: 2, maxRows: 10 }}
+                      className="w-full"
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={() => handleSaveEdit(messages.findIndex((m) => m === block.user))}
+                      >
+                        Save & Resend
+                      </Button>
+                      <Button size="small" onClick={handleCancelEdit}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  renderMessageBody(block.user)
+                )}
               </div>
             )}
 
             <div className="border-t border-gray-200" />
 
             {assistantMessage ? (
-              <div className="space-y-3 min-w-0">
+              <div className="space-y-3 min-w-0 group relative">
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600">
                     <Bot size={16} />
@@ -132,6 +194,18 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
                       </span>
                     )}
                   </div>
+                  {!isLoading && editingIndex === null && onRetryMessage && block.user && (
+                    <button
+                      onClick={() => {
+                        const assistantIndex = messages.findIndex((m) => m === assistantMessage);
+                        onRetryMessage(assistantIndex);
+                      }}
+                      className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-green-50 text-green-600"
+                      title="Regenerate response"
+                    >
+                      <RotateCw size={14} />
+                    </button>
+                  )}
                 </div>
                 {assistantMessage.reasoningContent && (
                   <ReasoningContent reasoningContent={assistantMessage.reasoningContent} />

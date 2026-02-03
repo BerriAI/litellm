@@ -3,16 +3,20 @@
 import {
   ApiOutlined,
   ArrowUpOutlined,
+  CheckOutlined,
+  CloseOutlined,
   ClearOutlined,
   CodeOutlined,
   DatabaseOutlined,
   DeleteOutlined,
+  EditOutlined,
   FilePdfOutlined,
   InfoCircleOutlined,
   KeyOutlined,
   LinkOutlined,
   LoadingOutlined,
   PictureOutlined,
+  RedoOutlined,
   RobotOutlined,
   SafetyOutlined,
   SettingOutlined,
@@ -222,6 +226,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+  const [editedMessageContent, setEditedMessageContent] = useState<string>("");
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -767,6 +773,68 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const handleRemoveAudio = () => {
     setUploadedAudio(null);
+  };
+
+  const handleEditMessage = (index: number) => {
+    const message = chatHistory[index];
+    if (message.role !== "user") return;
+    
+    setEditingMessageIndex(index);
+    setEditedMessageContent(typeof message.content === "string" ? message.content : "");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageIndex(null);
+    setEditedMessageContent("");
+  };
+
+  const handleSaveEdit = async () => {
+    if (editingMessageIndex === null || editedMessageContent.trim() === "") return;
+
+    // Update the message content
+    const updatedHistory = [...chatHistory];
+    updatedHistory[editingMessageIndex] = {
+      ...updatedHistory[editingMessageIndex],
+      content: editedMessageContent,
+    };
+
+    // Remove all messages after the edited message (including assistant response)
+    const newHistory = updatedHistory.slice(0, editingMessageIndex + 1);
+    setChatHistory(newHistory);
+
+    // Clear editing state
+    setEditingMessageIndex(null);
+    setEditedMessageContent("");
+
+    // Resend the message
+    setInputMessage(editedMessageContent);
+    
+    // Use setTimeout to ensure state is updated before sending
+    setTimeout(() => {
+      handleSendMessage();
+    }, 100);
+  };
+
+  const handleRetryMessage = async (index: number) => {
+    // Find the corresponding user message
+    const userMessageIndex = index - 1;
+    if (userMessageIndex < 0 || chatHistory[userMessageIndex].role !== "user") return;
+
+    // Remove the assistant message and all subsequent messages
+    const newHistory = chatHistory.slice(0, userMessageIndex + 1);
+    setChatHistory(newHistory);
+
+    // Get the user message content
+    const userMessage = chatHistory[userMessageIndex];
+    const messageContent = typeof userMessage.content === "string" ? userMessage.content : "";
+    
+    // Resend the message
+    setInputMessage(messageContent);
+    
+    // Use setTimeout to ensure state is updated before sending
+    setTimeout(() => {
+      handleSendMessage();
+    }, 100);
   };
 
   const handleSendMessage = async () => {
@@ -1677,9 +1745,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {chatHistory.map((message, index) => (
                 <div key={index}>
-                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
+                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"} group`}>
                     <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
+                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4 relative"
                       style={{
                         backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
                         border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
@@ -1706,6 +1774,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           </span>
                         )}
                       </div>
+                      
+                      {/* Action buttons - show on hover */}
+                      {!isLoading && editingMessageIndex !== index && (
+                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                          {message.role === "user" && (
+                            <Tooltip title="Edit message">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => handleEditMessage(index)}
+                                className="hover:bg-blue-100 hover:text-blue-600"
+                              />
+                            </Tooltip>
+                          )}
+                          {message.role === "assistant" && index > 0 && chatHistory[index - 1].role === "user" && (
+                            <Tooltip title="Regenerate response">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<RedoOutlined />}
+                                onClick={() => handleRetryMessage(index)}
+                                className="hover:bg-green-100 hover:text-green-600"
+                              />
+                            </Tooltip>
+                          )}
+                        </div>
+                      )}
                       {message.reasoningContent && <ReasoningContent reasoningContent={message.reasoningContent} />}
 
                       {/* Show MCP events at the start of assistant messages */}
@@ -1736,16 +1832,45 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           />
                         )}
 
-                      <div
-                        className="whitespace-pre-wrap break-words max-w-full message-content"
-                        style={{
-                          wordWrap: "break-word",
-                          overflowWrap: "break-word",
-                          wordBreak: "break-word",
-                          hyphens: "auto",
-                        }}
-                      >
-                        {message.isImage ? (
+                      {/* Edit mode UI */}
+                      {editingMessageIndex === index ? (
+                        <div className="space-y-2">
+                          <TextArea
+                            value={editedMessageContent}
+                            onChange={(e) => setEditedMessageContent(e.target.value)}
+                            autoSize={{ minRows: 2, maxRows: 10 }}
+                            className="w-full"
+                          />
+                          <div className="flex gap-2">
+                            <Button
+                              type="primary"
+                              size="small"
+                              icon={<CheckOutlined />}
+                              onClick={handleSaveEdit}
+                              className="bg-blue-600 hover:bg-blue-700"
+                            >
+                              Save & Resend
+                            </Button>
+                            <Button
+                              size="small"
+                              icon={<CloseOutlined />}
+                              onClick={handleCancelEdit}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className="whitespace-pre-wrap break-words max-w-full message-content"
+                          style={{
+                            wordWrap: "break-word",
+                            overflowWrap: "break-word",
+                            wordBreak: "break-word",
+                            hyphens: "auto",
+                          }}
+                        >
+                          {message.isImage ? (
                           <img
                             src={typeof message.content === "string" ? message.content : ""}
                             alt="Generated image"
@@ -1836,7 +1961,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             totalLatency={message.totalLatency}
                           />
                         )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
