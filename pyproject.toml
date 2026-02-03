@@ -10,14 +10,6 @@ packages = [
     { include = "litellm/py.typed"},
 ]
 
-[virtualenvs]
-in-project = true          # Create .venv in project root
-create = true              # Auto-create venv if it doesn't exist
-prefer-active-python = true # Use currently active Python version
-
-[installer]
-parallel = true            # Parallel package installation
-
 [tool.poetry.urls]
 homepage = "https://litellm.ai"
 Homepage = "https://litellm.ai"
@@ -147,7 +139,6 @@ litellm = 'litellm:run_server'
 litellm-proxy = 'litellm.proxy.client.cli:cli'
 
 [tool.poetry.group.dev.dependencies]
-pylint = "^3.0"
 diff-cover = "^9.0"
 flake8 = "^6.1.0"
 black = "^23.12.0"
