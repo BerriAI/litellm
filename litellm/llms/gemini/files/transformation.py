@@ -236,7 +236,6 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         try:
             response_json = raw_response.json()
-            print(f"response_json: {response_json}")
             
             # Map Gemini state to OpenAI status
             gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
