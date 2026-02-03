@@ -102,12 +102,17 @@ async def _handle_stream_message(
                 else:
                     yield "data: " + json.dumps(chunk) + "\n\n"
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
+            # Log full exception details server-side for debugging
+            verbose_proxy_logger.exception("Error streaming A2A response")
+            # Return a generic error message to the client without exposing internal details
             yield "data: " + json.dumps(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
+                    "error": {
+                        "code": -32603,
+                        "message": "Streaming error",
+                    },
                 }
             ) + "\n\n"
 
