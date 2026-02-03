@@ -1496,6 +1496,7 @@ if TYPE_CHECKING:
     from .llms.lemonade.chat.transformation import LemonadeChatConfig as LemonadeChatConfig
     from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig as SnowflakeEmbeddingConfig
     from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig as AmazonNovaChatConfig
+    from .llms.a2a.chat.transformation import A2AAgentConfig as A2AAgentConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (

@@ -4232,6 +4232,42 @@ def completion(  # type: ignore # noqa: PLR0915
                 client=client,
             )
 
+        elif custom_llm_provider == "a2a_agent":
+            # A2A (Agent-to-Agent) Protocol Provider
+            # Looks up agents from the global registry first, then falls back
+            # to explicit api_base or environment variables.
+            from litellm.llms.a2a.chat.transformation import A2AAgentConfig
+
+            (
+                api_base,
+                api_key,
+            ) = A2AAgentConfig()._get_openai_compatible_provider_info(
+                api_base=api_base or litellm.api_base,
+                api_key=api_key or litellm.api_key,
+                model=model,
+            )
+
+            headers = headers or litellm.headers
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
