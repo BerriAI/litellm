@@ -1,7 +1,8 @@
 import os
+import time
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import List, Optional, Set
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -199,3 +200,10 @@ class HangingRequestData(BaseModel):
     key_alias: Optional[str] = None
     team_alias: Optional[str] = None
     alerting_metadata: Optional[dict] = None
+
+    # When the request was registered for hanging checks.
+    # Used to ensure we only alert after `alerting_threshold` has elapsed.
+    start_time: float = Field(default_factory=time.time)
+
+    # Prevent duplicate alerts for the same request.
+    alert_sent: bool = False
