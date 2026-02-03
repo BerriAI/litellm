@@ -16,6 +16,19 @@ from litellm.proxy.route_llm_request import (
 )
 
 
+def is_a2a_agent_model(model_name: Any) -> bool:
+    """
+    Check if the model name is for an A2A agent (a2a/ prefix).
+    
+    Args:
+        model_name: The model name to check
+        
+    Returns:
+        True if this is an A2A agent model, False otherwise
+    """
+    return isinstance(model_name, str) and model_name.startswith("a2a/")
+
+
 async def route_a2a_agent_request(data: dict, route_type: str) -> Optional[Any]:
     """
     Route A2A agent requests directly to litellm with injected API base.

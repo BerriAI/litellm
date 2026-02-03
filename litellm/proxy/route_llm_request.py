@@ -4,6 +4,12 @@ from fastapi import HTTPException, status
 
 import litellm
 
+# Check for A2A agent models (a2a/ prefix)
+from litellm.proxy.agent_endpoints.a2a_routing import (
+    is_a2a_agent_model,
+    route_a2a_agent_request,
+)
+
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
@@ -322,6 +328,8 @@ async def route_request(
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**data)
+            elif is_a2a_agent_model(data.get("model", "")):
+                return await route_a2a_agent_request(data, route_type)
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
