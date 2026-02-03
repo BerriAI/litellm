@@ -210,7 +210,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         We expect file_id to be the URI (e.g. https://generativelanguage.googleapis.com/v1beta/files/...)
         as returned by the upload response.
         """
-        api_key = litellm_params.get("api_key")
+        api_key = litellm_params.get("api_key") or self.get_api_key()
         if not api_key:
             raise ValueError("api_key is required")
 
@@ -222,7 +222,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             api_base = api_base.rstrip("/")
             url = "{}/v1beta/{}?key={}".format(api_base, file_id, api_key)
 
-        return url, {"Content-Type": "application/json"}
+        # Return empty params dict - API key is already in URL, no query params needed
+        return url, {}
 
     def transform_retrieve_file_response(
         self,
@@ -235,6 +236,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         try:
             response_json = raw_response.json()
+            print(f"response_json: {response_json}")
             
             # Map Gemini state to OpenAI status
             gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
@@ -299,9 +301,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             # Extract the file path from full URI
             file_name = file_id.split("/v1beta/")[-1]
         else:
-            if not file_id.startswith("files/"):
-                file_id = f"files/{file_id}"
-            file_name = file_id
+            file_name = file_id if file_id.startswith("files/") else f"files/{file_id}"
         
         # Construct the delete URL
         url = f"{api_base}/v1beta/{file_name}"
