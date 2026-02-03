@@ -94,7 +94,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 if state == "completed":
                     return "stop"
                 elif state == "failed":
-                    return "error"
+                    return "stop"  # Map failed state to 'stop' (valid finish_reason)
         
         # Check for [DONE] marker
         if chunk.get("done") is True:
