@@ -108,9 +108,14 @@ class A2AConfig(BaseConfig):
         """
         Map OpenAI parameters to A2A parameters.
         
-        For A2A protocol, we don't need to map most parameters since
-        they're handled in the transform_request method.
+        For A2A protocol, we need to map the stream parameter so
+        transform_request can determine which JSON-RPC method to use.
         """
+        # Map stream parameter
+        for param, value in non_default_params.items():
+            if param == "stream" and value is True:
+                optional_params["stream"] = value
+        
         return optional_params
     
     def validate_environment(
@@ -222,8 +227,9 @@ class A2AConfig(BaseConfig):
         
         # Build JSON-RPC 2.0 request
         # For A2A protocol, the method is "message/send" for non-streaming
-        # and "message/stream" for streaming (handled by optional_params["stream"])
-        method = "message/stream" if optional_params.get("stream") else "message/send"
+        # and "message/stream" for streaming
+        stream = optional_params.get("stream", False)
+        method = "message/stream" if stream else "message/send"
         
         request_data = {
             "jsonrpc": "2.0",
