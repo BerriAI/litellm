@@ -752,7 +752,7 @@ async def update_batch_in_database(
         await prisma_client.db.litellm_managedobjecttable.update(
             where={"unified_object_id": batch_id},
             data={
-                "status": db_status if db_status != "completed" else "complete",
+                "status": db_status,
                 "file_object": response.model_dump_json(),
                 "updated_at": litellm.utils.get_utc_datetime(),
             },
