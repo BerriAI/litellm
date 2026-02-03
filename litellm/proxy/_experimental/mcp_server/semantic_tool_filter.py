@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
-    from mcp.types import Tool as MCPTool
     from semantic_router.routers import SemanticRouter
 
     from litellm.router import Router
@@ -88,8 +87,8 @@ class SemanticMCPToolFilter:
             description = tool.get("description", name)
         else:
             # MCPTool object
-            name = tool.name
-            description = tool.description or tool.name
+            name = str(tool.name)
+            description = str(tool.description) if tool.description else str(tool.name)
         
         return name, description
 
