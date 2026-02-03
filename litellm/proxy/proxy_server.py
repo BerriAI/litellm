@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import enum
 import inspect
 import io
 import os
@@ -12,7 +13,6 @@ import time
 import traceback
 import warnings
 from datetime import datetime, timedelta, timezone
-import enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,41 +29,9 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+
 from pydantic import BaseModel, Json
 
-from litellm.proxy._types import (
-    ProxyException,
-    UserAPIKeyAuth,
-    LiteLLM_UserTable,
-    CommonProxyErrors,
-    LitellmUserRoles,
-    ConfigList,
-    ConfigYAML,
-    ConfigFieldUpdate,
-    ConfigGeneralSettings,
-    ConfigFieldInfo,
-    PassThroughGenericEndpoint,
-    FieldDetail,
-    ConfigFieldDelete,
-    CallbackDelete,
-    InvitationClaim,
-    InvitationModel,
-    InvitationNew,
-    InvitationUpdate,
-    InvitationDelete,
-    CallInfo,
-    Litellm_EntityType,
-    TeamDefaultSettings,
-    RoleBasedPermissions,
-    SupportedDBObjectType,
-    ProxyErrorTypes,
-    EnterpriseLicenseData,
-    LiteLLM_JWTAuth,
-    TokenCountRequest,
-    TransformRequestBody,
-    LiteLLM_TeamTable,
-    SpecialModelNames,
-)
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -84,6 +52,39 @@ from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import (
+    CallbackDelete,
+    CallInfo,
+    CommonProxyErrors,
+    ConfigFieldDelete,
+    ConfigFieldInfo,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigList,
+    ConfigYAML,
+    EnterpriseLicenseData,
+    FieldDetail,
+    InvitationClaim,
+    InvitationDelete,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    PassThroughGenericEndpoint,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    SupportedDBObjectType,
+    TeamDefaultSettings,
+    TokenCountRequest,
+    TransformRequestBody,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -791,6 +792,21 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         proxy_logging_obj=proxy_logging_obj,
         redis_usage_cache=redis_usage_cache,
     )
+
+    ## SEMANTIC TOOL FILTER ##
+    # Read litellm_settings from config for semantic filter initialization
+    try:
+        verbose_proxy_logger.debug("About to initialize semantic tool filter")
+        _config = proxy_config.get_config_state()
+        _litellm_settings = _config.get("litellm_settings", {})
+        verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
+        await ProxyStartupEvent._initialize_semantic_tool_filter(
+            llm_router=llm_router,
+            litellm_settings=_litellm_settings,
+        )
+        verbose_proxy_logger.debug("After semantic tool filter initialization")
+    except Exception as e:
+        verbose_proxy_logger.error(f"Semantic filter init failed: {e}", exc_info=True)
 
     ## JWT AUTH ##
     ProxyStartupEvent._initialize_jwt_auth(
@@ -3379,105 +3395,6 @@ class ProxyConfig:
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
 
-    async def _get_hierarchical_router_settings(
-        self,
-        user_api_key_dict: Optional["UserAPIKeyAuth"],
-        prisma_client: Optional[PrismaClient],
-    ) -> Optional[dict]:
-        """
-        Get router_settings in priority order: Key > Team > Global
-
-        Returns:
-            dict: Combined router_settings, or None if no settings found
-        """
-        if prisma_client is None:
-            return None
-
-        import json
-
-        import yaml
-
-        # 1. Try key-level router_settings
-        if user_api_key_dict is not None:
-            # Check if router_settings is available on the key object
-            key_router_settings_value = getattr(
-                user_api_key_dict, "router_settings", None
-            )
-            if key_router_settings_value is not None:
-                key_router_settings = None
-                if isinstance(key_router_settings_value, str):
-                    try:
-                        key_router_settings = yaml.safe_load(key_router_settings_value)
-                    except (yaml.YAMLError, json.JSONDecodeError):
-                        try:
-                            key_router_settings = json.loads(key_router_settings_value)
-                        except json.JSONDecodeError:
-                            pass
-                elif isinstance(key_router_settings_value, dict):
-                    key_router_settings = key_router_settings_value
-
-                # If key has router_settings (non-empty dict), use it
-                if (
-                    key_router_settings is not None
-                    and isinstance(key_router_settings, dict)
-                    and key_router_settings
-                ):
-                    return key_router_settings
-
-        # 2. Try team-level router_settings
-        if user_api_key_dict is not None and user_api_key_dict.team_id is not None:
-            try:
-                team_obj = await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": user_api_key_dict.team_id}
-                )
-                if team_obj is not None:
-                    team_router_settings_value = getattr(
-                        team_obj, "router_settings", None
-                    )
-                    if team_router_settings_value is not None:
-                        team_router_settings = None
-                        if isinstance(team_router_settings_value, str):
-                            try:
-                                team_router_settings = yaml.safe_load(
-                                    team_router_settings_value
-                                )
-                            except (yaml.YAMLError, json.JSONDecodeError):
-                                try:
-                                    team_router_settings = json.loads(
-                                        team_router_settings_value
-                                    )
-                                except json.JSONDecodeError:
-                                    pass
-                        elif isinstance(team_router_settings_value, dict):
-                            team_router_settings = team_router_settings_value
-
-                        # If team has router_settings (non-empty dict), use it
-                        if (
-                            team_router_settings is not None
-                            and isinstance(team_router_settings, dict)
-                            and team_router_settings
-                        ):
-                            return team_router_settings
-            except Exception:
-                # If team lookup fails, continue to global settings
-                pass
-
-        # 3. Try global router_settings
-        try:
-            db_router_settings = await prisma_client.db.litellm_config.find_first(
-                where={"param_name": "router_settings"}
-            )
-            if (
-                db_router_settings is not None
-                and isinstance(db_router_settings.param_value, dict)
-                and db_router_settings.param_value
-            ):
-                return db_router_settings.param_value
-        except Exception:
-            pass
-
-        return None
-
     async def _add_router_settings_from_db_config(
         self,
         config_data: dict,
@@ -3644,7 +3561,9 @@ class ProxyConfig:
                     )
             else:
                 # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
 
                 retention_interval = general_settings.get(
                     "maximum_spend_logs_retention_interval", "1d"
@@ -4007,8 +3926,9 @@ class ProxyConfig:
                 where={"id": "sso_config"}
             )
             if sso_settings is not None:
-                # Capitalize all keys in sso_settings dictionary
                 sso_settings.sso_settings.pop("role_mappings", None)
+                sso_settings.sso_settings.pop("team_mappings", None)
+                sso_settings.sso_settings.pop("ui_access_mode", None)
                 uppercase_sso_settings = {
                     key.upper(): value
                     for key, value in sso_settings.sso_settings.items()
@@ -4836,6 +4756,34 @@ class ProxyStartupEvent:
         proxy_logging_obj.startup_event(
             llm_router=llm_router, redis_usage_cache=redis_usage_cache
         )
+
+    @classmethod
+    async def _initialize_semantic_tool_filter(
+        cls,
+        llm_router: Optional[Router],
+        litellm_settings: Dict[str, Any],
+    ):
+        """Initialize MCP semantic tool filter if configured"""
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+        
+        verbose_proxy_logger.info(
+            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
+            f"litellm_settings keys={list(litellm_settings.keys())}"
+        )
+        
+        mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
+        verbose_proxy_logger.debug(f"Semantic filter config: {mcp_semantic_filter_config}")
+        
+        hook = await SemanticToolFilterHook.initialize_from_config(
+            config=mcp_semantic_filter_config,
+            llm_router=llm_router,
+        )
+        
+        if hook:
+            verbose_proxy_logger.debug("✅ Semantic tool filter hook registered")
+            litellm.logging_callback_manager.add_litellm_callback(hook)
+        else:
+            verbose_proxy_logger.warning("❌ Semantic tool filter hook not initialized")
 
     @classmethod
     def _initialize_jwt_auth(
@@ -10164,9 +10112,13 @@ async def get_image():
     if logo_path.startswith(("http://", "https://")):
         try:
             # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+            from litellm.types.llms.custom_http import httpxSpecialProvider
 
-            async_client = AsyncHTTPHandler(timeout=5.0)
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
             response = await async_client.get(logo_path)
             if response.status_code == 200:
                 # Save the image to a local file

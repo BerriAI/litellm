@@ -93,15 +93,12 @@ async def test_router_silent_experiment_acompletion():
 
     router = Router(model_list=model_list)
 
-    # Mock litellm.acompletion
-    mock_acompletion = MagicMock()
-    # Create a future that resolves to a ModelResponse
+    # Use AsyncMock for async function mocking
     mock_response = litellm.ModelResponse(choices=[{"message": {"content": "hello"}}])
-    future = asyncio.Future()
-    future.set_result(mock_response)
-    mock_acompletion.return_value = future
+    mock_acompletion = AsyncMock(return_value=mock_response)
 
-    with patch("litellm.acompletion", mock_acompletion):
+    # Patch at the litellm.router module level where it's imported and used
+    with patch.object(litellm, "acompletion", mock_acompletion):
         response = await router.acompletion(
             model="primary-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -177,11 +174,11 @@ def test_router_silent_experiment_completion():
     router = Router(model_list=model_list)
 
     # Mock litellm.completion
-    mock_completion = MagicMock()
     mock_response = litellm.ModelResponse(choices=[{"message": {"content": "hello"}}])
-    mock_completion.return_value = mock_response
+    mock_completion = MagicMock(return_value=mock_response)
 
-    with patch("litellm.completion", mock_completion):
+    # Patch at the litellm module level
+    with patch.object(litellm, "completion", mock_completion):
         response = router.completion(
             model="primary-model",
             messages=[{"role": "user", "content": "hi"}],

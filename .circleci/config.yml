@@ -3754,6 +3754,9 @@ jobs:
 
             cd ui/litellm-dashboard
 
+            # Remove node_modules and package-lock to ensure clean install (fixes dependency resolution issues)
+            rm -rf node_modules package-lock.json
+
             # Install dependencies first
             npm install
 
