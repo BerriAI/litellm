@@ -94,6 +94,11 @@ class SemanticToolFilterHook(CustomLogger):
         
         return openai_tools
     
+    def _get_metadata_variable_name(self, data: dict) -> str:
+        if "litellm_metadata" in data:
+            return "litellm_metadata"
+        return "metadata"
+    
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -152,12 +157,6 @@ class SemanticToolFilterHook(CustomLogger):
                     f"Expanded {len(tools)} MCP reference(s) to {len(expanded_tools)} tools"
                 )
                 
-                # Debug: log first expanded tool format
-                if expanded_tools:
-                    verbose_proxy_logger.debug(
-                        f"First expanded tool format: {type(expanded_tools[0])}, keys: {list(expanded_tools[0].keys()) if isinstance(expanded_tools[0], dict) else 'not a dict'}"
-                    )
-                
                 # Update tools for filtering
                 tools = expanded_tools
                 original_tool_count = len(tools)
@@ -202,13 +201,10 @@ class SemanticToolFilterHook(CustomLogger):
             # Always update tools and emit header (even if count unchanged)
             data["tools"] = filtered_tools
             
-            # Store filter stats for response header
+            # Store filter stats for response header (following standard hook pattern)
             filter_stats = f"{original_tool_count}->{len(filtered_tools)}"
-            
-            # Store in proxy_server_request (internal field not sent to providers)
-            if "proxy_server_request" not in data:
-                data["proxy_server_request"] = {}
-            data["proxy_server_request"]["semantic_filter_stats"] = filter_stats
+            _metadata_variable_name = self._get_metadata_variable_name(data)
+            data[_metadata_variable_name]["litellm_semantic_filter_stats"] = filter_stats
             
             verbose_proxy_logger.info(
                 f"Semantic tool filter: {filter_stats} tools"
@@ -221,6 +217,24 @@ class SemanticToolFilterHook(CustomLogger):
                 f"Semantic tool filter hook failed: {e}. Proceeding with all tools."
             )
             return None
+    
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: "UserAPIKeyAuth",
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Add semantic filter stats to response headers.
+        """
+        _metadata_variable_name = self._get_metadata_variable_name(data)
+        filter_stats = data[_metadata_variable_name].get("litellm_semantic_filter_stats")
+        if filter_stats:
+            return {
+                "x-litellm-semantic-filter": filter_stats
+            }
+        return None
     
     @staticmethod
     def initialize_from_config(
@@ -240,19 +254,15 @@ class SemanticToolFilterHook(CustomLogger):
         from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
             SemanticMCPToolFilter,
         )
-        verbose_proxy_logger.info(f"🔍 initialize_from_config called: config={config}, llm_router={llm_router is not None}")
-        
         if not config or not config.get("enabled", False):
-            verbose_proxy_logger.warning(f"❌ Semantic tool filter not enabled: config={config}")
+            verbose_proxy_logger.debug("Semantic tool filter not enabled in config")
             return None
         
         if llm_router is None:
             verbose_proxy_logger.warning(
-                "❌ Cannot initialize semantic filter: llm_router is None"
+                "Cannot initialize semantic filter: llm_router is None"
             )
             return None
-        
-        verbose_proxy_logger.info("✅ Config and router available, creating filter...")
         
         try:
             
