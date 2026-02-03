@@ -147,12 +147,6 @@ class AmazonAnthropicClaudeMessagesConfig(
                                     ttl = cache_control["ttl"]
                                     if is_claude_4_5 and ttl in ["5m", "1h"]:
                                         continue
-
-                                    # [Maintain compatibility with current implementation and tests]
-                                    # Existing tests expect '5m' or '1h' to be preserved even if not Claude 4.5?
-                                    # Wait, the test I saw earlier expected '5m' and '1h' preservation!
-                                    # Let me re-read the test carefully.
-
                                     if ttl in ["5m", "1h"]:
                                         continue
 
