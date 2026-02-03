@@ -599,9 +599,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -619,7 +619,9 @@ class OpenTelemetry(CustomLogger):
         # Prevents thread exhaustion by reusing providers for the same credential sets (e.g. per-team keys)
         cache_key = str(sorted(dynamic_headers.items()))
         if cache_key in self._tracer_provider_cache:
-            return self._tracer_provider_cache[cache_key].get_tracer(LITELLM_TRACER_NAME)
+            return self._tracer_provider_cache[cache_key].get_tracer(
+                LITELLM_TRACER_NAME
+            )
 
         # Create a temporary tracer provider with dynamic headers
         temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
@@ -674,7 +676,10 @@ class OpenTelemetry(CustomLogger):
                 kwargs, response_obj, start_time, end_time, span
             )
             # Ensure proxy-request parent span is annotated with the actual operation kind
-            if parent_span is not None and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME:
+            if (
+                parent_span is not None
+                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+            ):
                 self.set_attributes(parent_span, kwargs, response_obj)
         else:
             # Do not create primary span (keep hierarchy shallow when parent exists)
@@ -1003,10 +1008,9 @@ class OpenTelemetry(CustomLogger):
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
+
         try:
-            from opentelemetry.sdk._logs import (
-                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL < 1.39.0
-            )
+            from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore[attr-defined]  # OTEL < 1.39.0
         except ImportError:
             from opentelemetry.sdk._logs._internal import (
                 LogRecord as SdkLogRecord,  # OTEL >= 1.39.0
@@ -1618,7 +1622,6 @@ class OpenTelemetry(CustomLogger):
 
                     for idx, choice in enumerate(response_obj.get("choices")):
                         if choice.get("finish_reason"):
-
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
@@ -1631,7 +1634,9 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
-            self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")  
+            self.handle_callback_failure(
+                callback_name=self.callback_name or "opentelemetry"
+            )
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
