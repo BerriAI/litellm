@@ -35,7 +35,7 @@ def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
         cur = json.loads(cur)
     for k in path:
         if not isinstance(cur, dict) or k not in cur:
-            raise KeyError(".".join(path))
+            return None
         cur = cur[k]
     return cur
 
@@ -48,6 +48,9 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+def _str_or_none(value) -> Optional[str]:
+    return str(value) if value else None
 
 
 def _load_vcap() -> Dict[str, Any]:
@@ -85,7 +88,6 @@ CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
         transform_fn=lambda url: url.rstrip("/")
         + ("" if url.endswith("/v2") else "/v2"),
     ),
-    CredentialsValue("resource_group", default="default"),
     CredentialsValue(
         "cert_url",
         ("certurl",),
@@ -103,6 +105,11 @@ CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
         "key_str", ("key",), transform_fn=lambda s: s.replace("\\n", "\n")
     ),
 ]
+
+@dataclass
+class Source:
+    name: str
+    get: Callable[[CredentialsValue], Optional[str]]
 
 
 def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
@@ -147,57 +154,34 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
 def _env_name(name: str) -> str:
     return f"AICORE_{name.upper()}"
 
+def extract_credentials(source: Source, exclude: List[str] = None) -> Dict[str, str]:
+    """Extract all credentials from a source."""
+    exclude = exclude or []
+    credentials = {}
+    for cv in CREDENTIAL_VALUES:
+        if cv.name in exclude:
+            continue
+        value = source.get(cv)
+        if value:
+            credentials[cv.name] = cv.transform_fn(value) if cv.transform_fn else value
+    return credentials
 
-def _resolve_value(
-    cred: CredentialsValue,
-    *,
-    kwargs: Dict[str, Any],
-    env: Dict[str, str],
-    config: Dict[str, Any],
-    service_like: Optional[Union[Dict[str, Any], str]],
-    vcap_service: Optional[Dict[str, Any]]
-) -> Optional[str]:
-    # 1) explicit kwargs
-    if cred.name in kwargs and kwargs[cred.name] is not None:
-        return kwargs[cred.name]
+def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
+    """Extract credentials from the first source that has any defined."""
+    for source in sources:
+        credentials = extract_credentials(source, exclude=['resource_group'])
+        if credentials:
+            return credentials
+    raise ValueError("No credentials found in any source")
 
-    # 2) service-like source (AICORE_SERVICE_KEY first, else VCAP)
-    if service_like and cred.vcap_key:
-        try:
-            val = _get_nested(service_like, cred.vcap_key)
-            if val is not None:
-                return val
-        except KeyError:
-            verbose_logger.debug(f"Unable to find {cred.name} in service key")
-            return None
-        except json.JSONDecodeError:
-            raise KeyError("service key variable is not valid JSON. Please fix or remove it!")
-
-    # 3) environment variables (primary name)
-    env_key = _env_name(cred.name)
-    if env_key in env and env[env_key] is not None:
-        return env[env_key]
-
-    # 4) VCAP service
-    if vcap_service and cred.vcap_key:
-        try:
-            val = _get_nested(vcap_service, ("credentials",) + cred.vcap_key)
-            if val is not None:
-                return val
-        except KeyError:
-            verbose_logger.debug(f"Unable to find {cred.name} in vcap service")
-            return None
-        except json.JSONDecodeError:
-            raise KeyError("vcap service variable is not valid JSON. Please fix or remove it!")
-
-    # 5) config file (accept both prefixed and plain keys)
-    for key in (env_key, cred.name):
-        if key in config and config[key] is not None:
-            return config[key]
-
-    # 6) default
-    return cred.default
-
+def resolve_resource_group(sources: List[Source]) -> Optional[str]:
+    """Find resource_group from the first source that defines it."""
+    rg_cred = CredentialsValue("resource_group", default="default")
+    for source in sources:
+        value = source.get(rg_cred)
+        if value:
+            return value
+    return rg_cred.default
 
 def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
     """
@@ -205,29 +189,37 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
       kwargs
       > service key
       > env (AICORE_<NAME>)
-      > vcap service key
       > config (AICORE_<NAME> or plain <name>)
+      > vcap service key
       > default
     """
     config = init_conf(profile)
-    env = dict(os.environ)  # snapshot for testability
 
-
-    service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+    service_key = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
     vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
-    out: Dict[str, str] = {}
-    for cred in CREDENTIAL_VALUES:
-        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like,
-                               vcap_service=vcap_service)
-        if value is None:
-            continue
-        if cred.transform_fn:
-            value = cred.transform_fn(value)
-        out[cred.name] = value
-    if "cert_url" in out.keys():
-        out["auth_url"] = out.pop("cert_url")
-    return out
+    sources = [
+        Source("service key", lambda cv: _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))),
+        Source("kwargs",
+               lambda cv: _str_or_none(kwargs.get(cv.name))),
+        Source("environment variables",
+               lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
+        Source("config file",
+               lambda cv: _str_or_none(config.get(f'AICORE_{cv.name.upper()}'))),
+        Source("VCAP service",
+               lambda cv: _get_nested(vcap_service, ("credentials",) + cv.vcap_key if cv.vcap_key else (cv.name,))),
+    ]
+
+    credentials = resolve_credentials(sources)
+
+    resource_group = resolve_resource_group(sources)
+
+    if resource_group:
+        credentials['resource_group'] = resource_group
+
+    if 'cert_url' in credentials:
+        credentials['auth_url'] = credentials.pop('cert_url')
+    return credentials
 
 
 def get_token_creator(
