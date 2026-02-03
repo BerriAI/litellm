@@ -73,4 +73,4 @@ pypdf>=6.6.2 # for PDF text extraction in RAG ingestion
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.28
+litellm-enterprise==0.1.29
