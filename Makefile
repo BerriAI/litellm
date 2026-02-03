@@ -2,7 +2,7 @@
 # Simple Makefile for running tests and basic development tasks
 
 .PHONY: help test test-unit test-integration test-unit-helm \
-	info lint format \ 
+	info lint lint-dev format \
 	install-dev install-proxy-dev install-test-deps \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -37,9 +37,7 @@ info:
 
 # Installation targets
 install-dev:
-	poetry check --lock 2>&1 | grep -v "^Warning:"
-	poetry lock 2>&1 | grep -v "^Warning:"
-	poetry install --with dev 2>&1 | grep -v "^Warning:"
+	poetry install --with dev
 
 install-proxy-dev:
 	poetry install --with dev,proxy-dev --extras proxy
@@ -94,13 +92,17 @@ lint-format-changed: install-dev
 	done
 
 lint-ruff-dev: install-dev
+	@tmpfile=$$(mktemp /tmp/ruff-dev.XXXXXX) && \
 	cd litellm && \
-	(poetry run ruff check . --output-format=pylint || true) > /tmp/ruff.txt && \
-	poetry run diff-quality --violations=pylint /tmp/ruff.txt --compare-branch=origin/main && \
-	cd ..
+	(poetry run ruff check . --output-format=pylint || true) > "$$tmpfile" && \
+	poetry run diff-quality --violations=pylint "$$tmpfile" --compare-branch=origin/main && \
+	cd .. ; \
+	rm -f "$$tmpfile"
 
 lint-ruff-FULL-dev: install-dev
-	git diff --name-only origin/main -- '*.py' | xargs poetry run ruff check
+	@files=$$(git diff --name-only origin/main -- '*.py'); \
+	if [ -n "$$files" ]; then echo "$$files" | xargs poetry run ruff check; \
+	else echo "No changed .py files to check."; fi
 
 lint-mypy: install-dev
 	poetry run $(PIP) install types-requests types-setuptools types-redis types-PyYAML
@@ -117,7 +119,7 @@ check-import-safety: install-dev
 # Combined linting (matches test-linting.yml workflow)
 lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
 
-# Combined linting (matches test-linting.yml workflow)
+# Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety
 
 # Testing targets
