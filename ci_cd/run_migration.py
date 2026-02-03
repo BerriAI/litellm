@@ -5,6 +5,8 @@ from datetime import datetime
 import testing.postgresql
 import shutil
 
+from ci_cd.migration_utils import make_migration_idempotent
+
 
 def create_migration(migration_name: str = None):
     """
@@ -64,9 +66,12 @@ def create_migration(migration_name: str = None):
                     migration_dir = migrations_dir / f"{timestamp}_{migration_name}"
                     migration_dir.mkdir(parents=True, exist_ok=True)
 
+                    # Post-process SQL to make it idempotent
+                    idempotent_sql = make_migration_idempotent(result.stdout)
+
                     # Write the SQL to migration.sql
                     migration_file = migration_dir / "migration.sql"
-                    migration_file.write_text(result.stdout)
+                    migration_file.write_text(idempotent_sql)
 
                     print(f"Created migration in {migration_dir}")
                     return True

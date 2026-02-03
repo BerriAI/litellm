@@ -2,6 +2,8 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
+from ci_cd.migration_utils import make_migration_idempotent
+
 
 def create_baseline():
     """Create baseline migration in deploy/migrations"""
@@ -41,9 +43,12 @@ def create_baseline():
             check=True,
         )
 
+        # Post-process SQL to make it idempotent
+        idempotent_sql = make_migration_idempotent(result.stdout)
+
         # Write the SQL to migration.sql
         migration_file = migration_dir / "migration.sql"
-        migration_file.write_text(result.stdout)
+        migration_file.write_text(idempotent_sql)
 
         print(f"Created baseline migration in {migration_dir}")
         return True

@@ -57,6 +57,24 @@ def _get_prisma_command() -> str:
     return "prisma"
 
 
+def _make_migration_idempotent(sql_content: str) -> str:
+    """
+    Post-process SQL migration to make it idempotent by adding IF NOT EXISTS clauses.
+    
+    This is a wrapper around the shared utility function from ci_cd.migration_utils.
+    
+    Args:
+        sql_content: Raw SQL from Prisma migrate diff
+        
+    Returns:
+        SQL with IF NOT EXISTS clauses added to ADD COLUMN and CREATE INDEX statements
+    """
+    # Import here to avoid circular dependencies
+    from ci_cd.migration_utils import make_migration_idempotent
+    
+    return make_migration_idempotent(sql_content)
+
+
 class ProxyExtrasDBManager:
     @staticmethod
     def _get_prisma_dir() -> str:
@@ -302,6 +320,18 @@ class ProxyExtrasDBManager:
         if not diff_sql_path.exists():
             logger.warning("Migration diff was not created")
             return
+        
+        # Post-process SQL to make it idempotent
+        try:
+            with open(diff_sql_path, "r") as f:
+                sql_content = f.read()
+            idempotent_sql = _make_migration_idempotent(sql_content)
+            with open(diff_sql_path, "w") as f:
+                f.write(idempotent_sql)
+            logger.info("Migration SQL post-processed to be idempotent")
+        except Exception as e:
+            logger.warning(f"Failed to post-process migration SQL: {e}")
+        
         logger.info(f"Migration diff created at {diff_sql_path}")
 
         # 2. Run prisma db execute to apply the migration
