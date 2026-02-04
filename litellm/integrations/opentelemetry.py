@@ -1004,13 +1004,9 @@ class OpenTelemetry(CustomLogger):
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
         try:
-            from opentelemetry.sdk._logs import (
-                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL < 1.39.0
-            )
+            from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore[attr-defined]  # OTEL < 1.39.0
         except ImportError:
-            from opentelemetry.sdk._logs._internal import (
-                LogRecord as SdkLogRecord,  # OTEL >= 1.39.0
-            )
+            from opentelemetry.sdk._logs._internal import LogRecord as SdkLogRecord  # type: ignore[attr-defined, no-redef]  # OTEL >= 1.39.0
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
