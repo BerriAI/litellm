@@ -1,7 +1,6 @@
 """
 Tests for structured outputs support in Anthropic /v1/messages endpoint.
 """
-import pytest
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -12,13 +11,15 @@ def test_output_format_supported_and_transforms_correctly():
     config = AnthropicMessagesConfig()
 
     # 1. Verify it's in supported parameters
-    supported_params = config.get_supported_anthropic_messages_params("claude-sonnet-4-5")
+    supported_params = config.get_supported_anthropic_messages_params(
+        "claude-sonnet-4-5"
+    )
     assert "output_format" in supported_params
 
     # 2. Verify transformation preserves output_format and adds beta header
     output_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"result": {"type": "string"}}}
+        "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
     }
 
     optional_params = {"max_tokens": 1024, "output_format": output_format}
@@ -30,7 +31,7 @@ def test_output_format_supported_and_transforms_correctly():
         messages=[{"role": "user", "content": "test"}],
         anthropic_messages_optional_request_params=optional_params.copy(),
         litellm_params={},
-        headers=headers
+        headers=headers,
     )
 
     # Update headers
@@ -49,7 +50,10 @@ def test_output_format_works_with_bedrock_and_azure():
     """Test that output_format works with Bedrock and Azure Foundry models."""
     config = AnthropicMessagesConfig()
 
-    output_format = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
+    output_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {}},
+    }
     optional_params = {"max_tokens": 1024, "output_format": output_format}
     messages = [{"role": "user", "content": "test"}]
 
@@ -59,7 +63,7 @@ def test_output_format_works_with_bedrock_and_azure():
         messages=messages,
         anthropic_messages_optional_request_params=optional_params.copy(),
         litellm_params={},
-        headers={}
+        headers={},
     )
     assert "output_format" in bedrock_result
 
@@ -69,6 +73,6 @@ def test_output_format_works_with_bedrock_and_azure():
         messages=messages,
         anthropic_messages_optional_request_params=optional_params.copy(),
         litellm_params={},
-        headers={}
+        headers={},
     )
     assert "output_format" in azure_result
