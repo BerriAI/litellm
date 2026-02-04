@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Claude Code Plugin Marketplace
+# Claude Code Plugin Marketplace (Managed Skills)
 
 LiteLLM AI Gateway acts as a central registry for Claude Code plugins. Admins can govern which plugins are available across the organization, and engineers can discover and install approved plugins from a single source.
 
@@ -252,7 +252,7 @@ curl -X POST http://localhost:4000/claude-code/plugins \
   }'
 ```
 
-### 3. Share with Your Team
+### 3. Use in Claude Code
 
 Send engineers the marketplace URL:
 

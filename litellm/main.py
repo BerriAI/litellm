@@ -2199,6 +2199,38 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "a2a":
+            # A2A (Agent-to-Agent) Protocol
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("A2A_API_BASE")
+            )
+
+            if api_base is None:
+                raise Exception("api_base is required for A2A provider")
+
+            headers = headers or litellm.headers
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+                provider_config=provider_config,
+            )
         elif custom_llm_provider == "gigachat":
             # GigaChat - Sber AI's LLM (Russia)
             api_key = (
@@ -3113,8 +3145,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key
                 or litellm.api_key
                 or litellm.openrouter_key
-                or get_secret("OPENROUTER_API_KEY")
-                or get_secret("OR_API_KEY")
+                or get_secret_str("OPENROUTER_API_KEY")
+                or get_secret_str("OR_API_KEY")
             )
 
             openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
@@ -4709,11 +4741,11 @@ def embedding(  # noqa: PLR0915
                 litellm_params=litellm_params_dict,
             )
         elif (
-            model in litellm.open_ai_embedding_models
-            or custom_llm_provider == "openai"
+            custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
+            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
         ):
             api_base = (
                 api_base
@@ -4884,8 +4916,8 @@ def embedding(  # noqa: PLR0915
                 api_key
                 or litellm.api_key
                 or litellm.openrouter_key
-                or get_secret("OPENROUTER_API_KEY")
-                or get_secret("OR_API_KEY")
+                or get_secret_str("OPENROUTER_API_KEY")
+                or get_secret_str("OR_API_KEY")
             )
 
             openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"

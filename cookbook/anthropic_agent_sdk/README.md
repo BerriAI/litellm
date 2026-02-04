@@ -22,8 +22,22 @@ litellm --config config.yaml
 
 ### 3. Run the chat
 
+**Basic Agent (no MCP):**
+
 ```bash
 python main.py
+```
+
+**Agent with MCP (DeepWiki2 for research):**
+
+```bash
+python agent_with_mcp.py
+```
+
+If MCP connection fails, you can disable it:
+
+```bash
+USE_MCP=false python agent_with_mcp.py
 ```
 
 That's it! You can now chat with the agent in your terminal.
@@ -45,10 +59,18 @@ Set these environment variables if needed:
 ```bash
 export LITELLM_PROXY_URL="http://localhost:4000"
 export LITELLM_API_KEY="sk-1234"
-export LITELLM_MODEL="claude-sonnet-4-20250514"
+export LITELLM_MODEL="bedrock-claude-sonnet-4.5"
 ```
 
 Or just use the defaults - it'll connect to `http://localhost:4000` by default.
+
+## Files
+
+- `main.py` - Basic interactive agent without MCP
+- `agent_with_mcp.py` - Agent with MCP server integration (DeepWiki2)
+- `common.py` - Shared utilities and functions
+- `config.example.yaml` - Example LiteLLM configuration
+- `requirements.txt` - Python dependencies
 
 ## Example Config File
 
@@ -109,6 +131,11 @@ Note: Don't add `/anthropic` to the base URL - LiteLLM handles the routing autom
 **Model not found?**
 - Check the model name matches what's in your LiteLLM config
 - Run `litellm --model your-model` to test it works
+
+**Agent with MCP stuck or failing?**
+- The MCP server might not be available at `http://localhost:4000/mcp/deepwiki2`
+- Try disabling MCP: `USE_MCP=false python agent_with_mcp.py`
+- Or use the basic agent: `python main.py`
 
 ## Learn More
 
