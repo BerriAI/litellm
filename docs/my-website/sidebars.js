@@ -151,6 +151,7 @@ const sidebars = {
       items: [
         "tutorials/claude_agent_sdk",
         "tutorials/google_adk",
+        "tutorials/livekit_xai_realtime",
       ]
     },
 
@@ -851,7 +852,14 @@ const sidebars = {
             "providers/watsonx/audio_transcription",
           ]
         },
-        "providers/xai",
+        {
+          type: "category",
+          label: "xAI",
+          items: [
+            "providers/xai",
+            "providers/xai_realtime",
+          ]
+        },
         "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
