@@ -1133,6 +1133,24 @@ def test_update_internal_user_params_ignores_other_nones():
     assert non_default_values["max_budget"] == 100.0
 
 
+def test_update_internal_user_params_keeps_original_max_budget_when_not_provided():
+    """
+    Test that _update_internal_user_params does not include max_budget 
+    when it's not provided in the request (should keep original value).
+    """
+    # Create test data without max_budget
+    data_json = {"user_id": "test_user", "user_alias": "test_alias"}
+    data = UpdateUserRequest(user_id="test_user", user_alias="test_alias")
+
+    # Call the function
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    # Assertions: max_budget should NOT be in non_default_values
+    assert "max_budget" not in non_default_values
+    assert "user_id" in non_default_values
+    assert "user_alias" in non_default_values
+
+
 def test_generate_request_base_validator():
     """
     Test that GenerateRequestBase validator converts empty string to None for max_budget
