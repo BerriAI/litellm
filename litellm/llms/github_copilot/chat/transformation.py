@@ -1,11 +1,19 @@
+<<<<<<< ttl-prompt-caching-bedrock
 from typing import List, Optional, Tuple
+=======
+from typing import Any, List, Optional, Tuple, cast
+>>>>>>> main
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 
 from ..authenticator import Authenticator
-from ..common_utils import GetAPIKeyError, GITHUB_COPILOT_API_BASE
+from ..common_utils import (
+    GITHUB_COPILOT_API_BASE,
+    GetAPIKeyError,
+    get_copilot_default_headers,
+)
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -43,6 +51,7 @@ class GithubCopilotConfig(OpenAIConfig):
     ):
         import litellm
 
+<<<<<<< ttl-prompt-caching-bedrock
         disable_copilot_system_to_assistant = (
             litellm.disable_copilot_system_to_assistant
         )
@@ -51,6 +60,26 @@ class GithubCopilotConfig(OpenAIConfig):
                 if "role" in message and message["role"] == "system":
                     message["role"] = "assistant"
         return messages
+=======
+        # Check if system-to-assistant conversion is disabled
+        if litellm.disable_copilot_system_to_assistant:
+            # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
+            # No conversion needed - just return messages as-is
+            return messages
+        
+        # Default behavior: convert system messages to assistant for compatibility
+        transformed_messages = []
+        for message in messages:
+            if message.get("role") == "system":
+                # Convert system message to assistant message
+                transformed_message = message.copy()
+                transformed_message["role"] = "assistant"
+                transformed_messages.append(transformed_message)
+            else:
+                transformed_messages.append(message)
+        
+        return transformed_messages
+>>>>>>> main
 
     def validate_environment(
         self,
@@ -66,6 +95,14 @@ class GithubCopilotConfig(OpenAIConfig):
         validated_headers = super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
+
+        # Add Copilot-specific headers (editor-version, user-agent, etc.)
+        try:
+            copilot_api_key = self.authenticator.get_api_key()
+            copilot_headers = get_copilot_default_headers(copilot_api_key)
+            validated_headers = {**copilot_headers, **validated_headers}
+        except GetAPIKeyError:
+            pass  # Will be handled later in the request flow
 
         # Add X-Initiator header based on message roles
         initiator = self._determine_initiator(messages)
