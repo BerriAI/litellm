@@ -14,7 +14,7 @@ from typing import Optional
 import pytest
 import websockets
 
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 

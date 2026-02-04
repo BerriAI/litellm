@@ -9,9 +9,9 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath("../../.."))
 
-from tests.llm_translation.base_realtime_tests import BaseRealtimeTest
+from tests.llm_translation.realtime.base_realtime_tests import BaseRealtimeTest
 
 
 class TestXAIRealtime(BaseRealtimeTest):
