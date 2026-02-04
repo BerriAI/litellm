@@ -5,7 +5,8 @@ import TabItem from '@theme/TabItem';
 
 Use CopilotKit SDK with any LLM provider through LiteLLM Proxy.
 
-CopilotKit provides a framework for building AI copilots in your applications. By pointing it to LiteLLM, you can use any LLM provider while building copilot experiences.
+> **Note:** CopilotKit SDK integration with LiteLLM Proxy works with LiteLLM v1.81.7-nightly or higher.
+
 
 ## Quick Start
 
