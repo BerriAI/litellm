@@ -613,10 +613,13 @@ def responses(
         
         # Update tools with provider-specific file IDs if needed
         if tools:
-            tools = update_responses_tools_with_model_file_ids(
-                tools=tools,
-                model_id=model_info_id,
-                model_file_id_mapping=model_file_id_mapping,
+            tools = cast(
+                Optional[Iterable[ToolParam]],
+                update_responses_tools_with_model_file_ids(
+                    tools=tools,
+                    model_id=model_info_id,
+                    model_file_id_mapping=model_file_id_mapping,
+                ),
             )
             local_vars["tools"] = tools
 
