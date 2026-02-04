@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
-from litellm.types.integrations.langfuse_otel import LangfuseOtelConfig
+from litellm.integrations.opentelemetry import OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
@@ -33,9 +33,9 @@ class TestLangfuseOtelIntegration:
 
             config = LangfuseOtelLogger.get_langfuse_otel_config()
 
-            assert isinstance(config, LangfuseOtelConfig)
-            assert config.protocol == "otlp_http"
-            assert "Authorization=Basic" in config.otlp_auth_headers
+            assert isinstance(config, OpenTelemetryConfig)
+            assert config.exporter == "otlp_http"
+            assert "Authorization=Basic" in config.headers
             # Note: We no longer set os.environ explicitly to avoid leakage
             # assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://us.cloud.langfuse.com/api/public/otel"
             # assert "Authorization=Basic" in os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
@@ -62,7 +62,7 @@ class TestLangfuseOtelIntegration:
         ):
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             # Endpoint assertion removed as side effect is gone
-            assert isinstance(config, LangfuseOtelConfig)
+            assert isinstance(config, OpenTelemetryConfig)
 
     def test_get_langfuse_otel_config_with_custom_host(self):
         """Test config with custom host."""
@@ -77,7 +77,7 @@ class TestLangfuseOtelIntegration:
         ):
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             # Endpoint assertion removed as side effect is gone
-            assert isinstance(config, LangfuseOtelConfig)
+            assert isinstance(config, OpenTelemetryConfig)
 
     def test_get_langfuse_otel_config_with_host_no_protocol(self):
         """Test config with custom host without protocol."""
@@ -92,7 +92,7 @@ class TestLangfuseOtelIntegration:
         ):
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             # Endpoint assertion removed as side effect is gone
-            assert isinstance(config, LangfuseOtelConfig)
+            assert isinstance(config, OpenTelemetryConfig)
 
     def test_set_langfuse_otel_attributes(self):
         """Test that set_langfuse_otel_attributes calls the Arize utils function."""
@@ -401,7 +401,7 @@ class TestLangfuseOtelIntegration:
             clear=False,
         ):
             config = LangfuseOtelLogger.get_langfuse_otel_config()
-            assert isinstance(config, LangfuseOtelConfig)
+            assert isinstance(config, OpenTelemetryConfig)
             # Endpoint assertion removed as side effect is gone
 
 
@@ -477,7 +477,7 @@ class TestLangfuseOtelResponsesAPI:
         import sys
 
         if "litellm.integrations.langfuse.langfuse" in sys.modules:
-            original_module = sys.modules["litellm.integrations.langfuse.langfuse"]
+            sys.modules["litellm.integrations.langfuse.langfuse"]
 
         test_metadata = {
             "user_id": "responses_user_123",
