@@ -744,7 +744,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_native_streaming": true
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -13338,7 +13339,8 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_native_streaming": true
     },
     "vertex_ai/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -13386,7 +13388,8 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_native_streaming": true
     },
     "vertex_ai/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -13429,7 +13432,8 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_native_streaming": true
     },
     "gemini-2.5-pro-exp-03-25": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -15416,6 +15420,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_native_streaming": true,
         "tpm": 800000
     },
     "gemini-3-flash-preview": {
@@ -15461,7 +15466,8 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_native_streaming": true
     },
     "gemini/gemini-2.5-pro-exp-03-25": {
         "cache_read_input_token_cost": 0.0,
@@ -28984,7 +28990,9 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_native_streaming": true,
+        "supports_vision": true
     },
     "vertex_ai/claude-3-5-sonnet": {
         "input_cost_per_token": 3e-06,
@@ -29255,7 +29263,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_native_streaming": true
     },
     "vertex_ai/claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -29307,7 +29316,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_native_streaming": true
     },
     "vertex_ai/claude-opus-4@20250514": {
         "cache_creation_input_token_cost": 1.875e-05,
