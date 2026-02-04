@@ -6,6 +6,7 @@ import { getGuardrailsList } from "./networking";
 vi.mock("./networking", () => ({
   getGuardrailsList: vi.fn(),
   deleteGuardrailCall: vi.fn(),
+  teamListCall: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./guardrails/add_guardrail_form", () => ({
@@ -71,6 +72,7 @@ describe("GuardrailsPanel", () => {
   const defaultProps = {
     accessToken: "test-token",
     userRole: "admin",
+    userID: "test-user-id",
   };
 
   const mockGetGuardrailsList = vi.mocked(getGuardrailsList);

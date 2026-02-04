@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
-import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Dropdown } from "antd";
-import { DownOutlined, PlusOutlined, CodeOutlined } from "@ant-design/icons";
-import { getGuardrailsList, deleteGuardrailCall } from "./networking";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel, Text } from "@tremor/react";
+import { Dropdown, Select, Tooltip } from "antd";
+import { DownOutlined, PlusOutlined, CodeOutlined, QuestionCircleOutlined } from "@ant-design/icons";
+import { getGuardrailsList, deleteGuardrailCall, teamListCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
 import { isAdminRole } from "@/utils/roles";
@@ -14,9 +14,21 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
 import { CustomCodeModal } from "./guardrails/custom_code";
 
+const { Option } = Select;
+
 interface GuardrailsPanelProps {
   accessToken: string | null;
   userRole?: string;
+  userID?: string | null;
+}
+
+interface Team {
+  team_id: string;
+  team_alias: string;
+  metadata?: {
+    guardrails?: string[];
+    [key: string]: any;
+  };
 }
 
 interface GuardrailItem {
@@ -37,7 +49,7 @@ interface GuardrailsResponse {
   guardrails: Guardrail[];
 }
 
-const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
+const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole, userID }) => {
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isCustomCodeModalVisible, setIsCustomCodeModalVisible] = useState(false);
@@ -47,6 +59,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<number>(0);
+  
+  // Team filtering state
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<string>("all");
+  const [filteredGuardrails, setFilteredGuardrails] = useState<Guardrail[]>([]);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -67,9 +84,68 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     }
   };
 
+  const fetchTeams = async () => {
+    if (!accessToken) {
+      return;
+    }
+
+    try {
+      const teamsResponse = await teamListCall(accessToken, null, isAdmin ? null : userID);
+      setTeams(teamsResponse || []);
+    } catch (error) {
+      console.error("Error fetching teams:", error);
+    }
+  };
+
   useEffect(() => {
     fetchGuardrails();
+    fetchTeams();
   }, [accessToken]);
+
+  // Get teams that have guardrails configured
+  const teamsWithGuardrails = useMemo(() => {
+    return teams.filter(team => 
+      team.metadata?.guardrails && 
+      Array.isArray(team.metadata.guardrails) && 
+      team.metadata.guardrails.length > 0
+    );
+  }, [teams]);
+
+  // Filter guardrails based on selected team
+  const filterGuardrails = useCallback((teamId: string) => {
+    if (!guardrailsList) {
+      setFilteredGuardrails([]);
+      return;
+    }
+
+    if (teamId === "all") {
+      // Show all guardrails
+      setFilteredGuardrails(guardrailsList);
+    } else if (teamId === "global") {
+      // Show only guardrails with default_on = true (global guardrails)
+      setFilteredGuardrails(guardrailsList.filter(g => g.litellm_params?.default_on === true));
+    } else {
+      // Show guardrails assigned to the selected team
+      const team = teams.find(t => t.team_id === teamId);
+      const teamGuardrailNames = team?.metadata?.guardrails || [];
+      setFilteredGuardrails(
+        guardrailsList.filter(g => 
+          g.guardrail_name && teamGuardrailNames.includes(g.guardrail_name)
+        )
+      );
+    }
+  }, [guardrailsList, teams]);
+
+  // Handle team filter change
+  const handleTeamChange = (teamId: string) => {
+    setSelectedTeam(teamId);
+    filterGuardrails(teamId);
+  };
+
+  // Initial and effect-based filtering
+  useEffect(() => {
+    filterGuardrails(selectedTeam);
+  }, [guardrailsList, selectedTeam, filterGuardrails]);
 
   const handleAddGuardrail = () => {
     if (selectedGuardrailId) {
@@ -132,6 +208,12 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
       ? getGuardrailLogoAndName(guardrailToDelete.litellm_params.guardrail).displayName
       : undefined;
 
+  // Count guardrails for display
+  const globalGuardrailsCount = useMemo(() => 
+    guardrailsList.filter(g => g.litellm_params?.default_on === true).length,
+    [guardrailsList]
+  );
+
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <TabGroup index={activeTab} onIndexChange={setActiveTab}>
@@ -169,6 +251,45 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               </Dropdown>
             </div>
 
+            {/* Team Filter Section */}
+            <div className="w-full mb-6">
+              <div className="flex flex-col space-y-4">
+                <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                  <div className="flex items-center gap-4">
+                    <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                    <Select 
+                      value={selectedTeam} 
+                      onChange={handleTeamChange} 
+                      style={{ width: 350 }}
+                    >
+                      <Option value="all">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                          <span className="font-medium">All Guardrails ({guardrailsList.length})</span>
+                        </div>
+                      </Option>
+                      <Option value="global">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                          <span className="font-medium">Global Guardrails ({globalGuardrailsCount})</span>
+                        </div>
+                      </Option>
+                      {teamsWithGuardrails.map((team) => (
+                        <Option key={team.team_id} value={team.team_id}>
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                            <span className="font-medium">
+                              {team.team_alias || team.team_id} ({team.metadata?.guardrails?.length || 0})
+                            </span>
+                          </div>
+                        </Option>
+                      ))}
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {selectedGuardrailId ? (
               <GuardrailInfoView
                 guardrailId={selectedGuardrailId}
@@ -178,7 +299,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               />
             ) : (
               <GuardrailTable
-                guardrailsList={guardrailsList}
+                guardrailsList={filteredGuardrails}
                 isLoading={isLoading}
                 onDeleteClick={handleDeleteClick}
                 accessToken={accessToken}

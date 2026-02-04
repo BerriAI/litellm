@@ -484,7 +484,7 @@ function CreateKeyPageContent() {
                   ) : page == "budgets" ? (
                     <BudgetPanel accessToken={accessToken} />
                   ) : page == "guardrails" ? (
-                    <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
+                    <GuardrailsPanel accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "policies" ? (
                     <PoliciesPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "agents" ? (
