@@ -8,8 +8,8 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _transform_request_body,
     check_if_part_exists_in_parts,
 )
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.openai import AllMessageValues
 
 
 def test_check_if_part_exists_in_parts():
@@ -89,7 +89,7 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
 # Tests for issue #14556: Labels field provider-aware filtering
 def test_google_genai_excludes_labels():
     """Test that Google GenAI/AI Studio endpoints exclude labels when custom_llm_provider='gemini'"""
-    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
+    messages = [{"role": "user", "content": "test"}]
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
 
@@ -109,7 +109,7 @@ def test_google_genai_excludes_labels():
 
 def test_vertex_ai_includes_labels():
     """Test that Vertex AI endpoints include labels when custom_llm_provider='vertex_ai'"""
-    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
+    messages = [{"role": "user", "content": "test"}]
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
 
@@ -130,7 +130,7 @@ def test_vertex_ai_includes_labels():
 
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
-    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
+    messages = [{"role": "user", "content": "test"}]
     optional_params = {}
     litellm_params = {
         "metadata": {
