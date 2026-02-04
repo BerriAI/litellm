@@ -12,9 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -191,3 +189,100 @@ class TestSupportedParams:
         """Test that language is a supported OpenAI parameter"""
         params = handler.get_supported_openai_params("saarika:v2.5")
         assert "language" in params
+
+
+class TestSaarasV3Modes:
+    """Tests for saaras:v3 mode parameter handling"""
+
+    def test_mode_transcribe_included_in_request(self, handler, test_bytes):
+        """Test that transcribe mode is included in request"""
+        audio_file, _ = test_bytes
+        result = handler.transform_audio_transcription_request(
+            model="saaras:v3",
+            audio_file=audio_file,
+            optional_params={"mode": "transcribe"},
+            litellm_params={},
+        )
+
+        assert isinstance(result.data, dict)
+        assert result.data.get("mode") == "transcribe"
+        assert result.data.get("model") == "saaras:v3"
+
+    def test_mode_translate_included_in_request(self, handler, test_bytes):
+        """Test that translate mode is included in request"""
+        audio_file, _ = test_bytes
+        result = handler.transform_audio_transcription_request(
+            model="saaras:v3",
+            audio_file=audio_file,
+            optional_params={"mode": "translate"},
+            litellm_params={},
+        )
+
+        assert isinstance(result.data, dict)
+        assert result.data.get("mode") == "translate"
+
+    def test_mode_verbatim_included_in_request(self, handler, test_bytes):
+        """Test that verbatim mode is included in request"""
+        audio_file, _ = test_bytes
+        result = handler.transform_audio_transcription_request(
+            model="saaras:v3",
+            audio_file=audio_file,
+            optional_params={"mode": "verbatim"},
+            litellm_params={},
+        )
+
+        assert isinstance(result.data, dict)
+        assert result.data.get("mode") == "verbatim"
+
+    def test_mode_translit_included_in_request(self, handler, test_bytes):
+        """Test that translit mode is included in request"""
+        audio_file, _ = test_bytes
+        result = handler.transform_audio_transcription_request(
+            model="saaras:v3",
+            audio_file=audio_file,
+            optional_params={"mode": "translit"},
+            litellm_params={},
+        )
+
+        assert isinstance(result.data, dict)
+        assert result.data.get("mode") == "translit"
+
+    def test_mode_codemix_included_in_request(self, handler, test_bytes):
+        """Test that codemix mode is included in request"""
+        audio_file, _ = test_bytes
+        result = handler.transform_audio_transcription_request(
+            model="saaras:v3",
+            audio_file=audio_file,
+            optional_params={"mode": "codemix"},
+            litellm_params={},
+        )
+
+        assert isinstance(result.data, dict)
+        assert result.data.get("mode") == "codemix"
+
+    def test_mode_not_included_when_not_provided(self, handler, test_bytes):
+        """Test that mode is not included when not provided"""
+        audio_file, _ = test_bytes
+        result = handler.transform_audio_transcription_request(
+            model="saaras:v3",
+            audio_file=audio_file,
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert isinstance(result.data, dict)
+        assert "mode" not in result.data
+
+    def test_mode_with_language_code(self, handler, test_bytes):
+        """Test that mode works together with language_code"""
+        audio_file, _ = test_bytes
+        result = handler.transform_audio_transcription_request(
+            model="saaras:v3",
+            audio_file=audio_file,
+            optional_params={"mode": "translate", "language": "hi-IN"},
+            litellm_params={},
+        )
+
+        assert isinstance(result.data, dict)
+        assert result.data.get("mode") == "translate"
+        assert result.data.get("language_code") == "hi-IN"

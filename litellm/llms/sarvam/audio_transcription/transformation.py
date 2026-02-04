@@ -27,12 +27,22 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     Reference: https://docs.sarvam.ai/api-reference-docs/speech/speech-to-text
 
     Supported models:
-    - saarika:v2.5 (default)
-    - saaras:v3
+    - saarika:v2.5 (default): Transcribes audio in the spoken language
+    - saaras:v3: State-of-the-art model with flexible output formats
+
+    saaras:v3 Modes (use 'mode' parameter):
+    - transcribe (default): Standard transcription with formatting and number normalization
+    - translate: Translates Indic speech to English
+    - verbatim: Exact word-for-word without normalization
+    - translit: Romanization to Latin script
+    - codemix: Code-mixed text (English words in English, Indic in native script)
 
     Supported languages:
-    hi-IN, bn-IN, kn-IN, ml-IN, mr-IN, od-IN, pa-IN, ta-IN, te-IN, en-IN, gu-IN
+    hi-IN, bn-IN, kn-IN, ml-IN, mr-IN, od-IN, pa-IN, ta-IN, te-IN, en-IN, gu-IN, unknown (auto-detect)
     """
+
+    # Valid modes for saaras:v3
+    VALID_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 
     @property
     def custom_llm_provider(self) -> str:
@@ -77,8 +87,9 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         Sarvam expects multipart form data with:
         - file: audio file
-        - model: model name (e.g., saarika:v2.5)
-        - language_code: optional language code (e.g., hi-IN)
+        - model: model name (e.g., saarika:v2.5, saaras:v3)
+        - language_code: optional language code (e.g., hi-IN, unknown for auto-detect)
+        - mode: optional mode for saaras:v3 (transcribe, translate, verbatim, translit, codemix)
         """
 
         # Use common utility to process the audio file
@@ -92,6 +103,10 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             form_data["language_code"] = optional_params["language"]
         elif "language_code" in optional_params:
             form_data["language_code"] = optional_params["language_code"]
+
+        # Add mode parameter (only applicable for saaras:v3)
+        if "mode" in optional_params:
+            form_data["mode"] = optional_params["mode"]
 
         # Add provider-specific parameters
         provider_specific_params = self.get_provider_specific_params(

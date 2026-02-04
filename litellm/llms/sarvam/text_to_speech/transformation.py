@@ -38,9 +38,16 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
     - bulbul:v2
     - bulbul:v3-beta
 
-    Available speakers (bulbul:v2):
-    Female: Anushka (default), Manisha, Vidya, Arya
-    Male: Abhilash, Karun, Hitesh
+    Available speakers:
+
+    bulbul:v2:
+      Female: Anushka (default), Manisha, Vidya, Arya
+      Male: Abhilash, Karun, Hitesh
+
+    bulbul:v3-beta:
+      Shubh (default), Prabhat, Ritu, Ashutosh, Priya, Neha, Rahul,
+      Pooja, Rohan, Simran, Kavya, Amit, Dev, Ishita, Shreya,
+      Ratan, Varun, Manan, Sumit, Roopa, Kabir, Aayan, Advait, Amelia, Sophia
 
     Supported languages:
     hi-IN, bn-IN, kn-IN, ml-IN, mr-IN, od-IN, pa-IN, ta-IN, te-IN, en-IN, gu-IN
@@ -50,18 +57,14 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
 
     TTS_ENDPOINT_PATH = "/text-to-speech"
     DEFAULT_LANGUAGE = "en-IN"
-    DEFAULT_SPEAKER = "Anushka"
+    DEFAULT_SPEAKER_V2 = "anushka"
+    DEFAULT_SPEAKER_V3_BETA = "shubh"
 
-    # Valid Sarvam speaker names (no mapping from OpenAI voices)
-    VALID_SPEAKERS = {
-        "Anushka",   # Female - Clear and professional
-        "Manisha",   # Female - Warm and friendly
-        "Vidya",     # Female - Articulate and precise
-        "Arya",      # Female - Young and energetic
-        "Abhilash",  # Male - Deep and authoritative
-        "Karun",     # Male - Natural and conversational
-        "Hitesh",    # Male - Professional and engaging
-    }
+    def _get_default_speaker(self, model: str) -> str:
+        """Get the default speaker based on model version."""
+        if "v3" in model.lower():
+            return self.DEFAULT_SPEAKER_V3_BETA
+        return self.DEFAULT_SPEAKER_V2
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -80,9 +83,8 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Process TTS parameters for Sarvam.
 
-        Voice must be a valid Sarvam speaker name:
-        Anushka, Manisha, Vidya, Arya (female)
-        Abhilash, Karun, Hitesh (male)
+        Voice must be a valid Sarvam speaker name.
+        See class docstring for available speakers per model.
         """
         mapped_params: Dict[str, Any] = {}
         params = dict(optional_params) if optional_params else {}
@@ -101,7 +103,7 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
             speaker = str(voice).strip()
 
         if speaker is None:
-            speaker = self.DEFAULT_SPEAKER
+            speaker = self._get_default_speaker(model)
 
         # Handle speed parameter (Sarvam uses 'pace' with range 0.5-2.0)
         speed = params.pop("speed", None)
@@ -135,10 +137,12 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
                 "Sarvam API key is required. Set SARVAM_API_KEY environment variable."
             )
 
-        headers.update({
-            "api-subscription-key": api_key,
-            "Content-Type": "application/json",
-        })
+        headers.update(
+            {
+                "api-subscription-key": api_key,
+                "Content-Type": "application/json",
+            }
+        )
 
         return headers
 
@@ -163,20 +167,25 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
 
         Sarvam TTS API expects:
         {
-            "inputs": ["text to synthesize"],
+            "text": "text to synthesize",
             "target_language_code": "hi-IN",
-            "speaker": "Anushka",
+            "speaker": "anushka",
             "model": "bulbul:v2"
         }
         """
         params = dict(optional_params) if optional_params else {}
 
+        # Get model-appropriate default speaker
+        default_speaker = self._get_default_speaker(model)
+
         # Build request body
         request_body: Dict[str, Any] = {
-            "inputs": [input],
+            "text": input,
             "model": model,
-            "speaker": (voice or self.DEFAULT_SPEAKER).lower(),
-            "target_language_code": params.pop("target_language_code", self.DEFAULT_LANGUAGE),
+            "speaker": voice.lower() if voice else default_speaker,
+            "target_language_code": params.pop(
+                "target_language_code", self.DEFAULT_LANGUAGE
+            ),
         }
 
         # Add pace parameter (Sarvam's speed control, range 0.5-2.0)

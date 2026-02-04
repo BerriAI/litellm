@@ -11,9 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.sarvam.text_to_speech.transformation import (
     SarvamTextToSpeechConfig,
@@ -62,7 +60,7 @@ class TestSpeakerNames:
             optional_params={},
             voice=None,
         )
-        assert voice == "Anushka"  # Default
+        assert voice == "anushka"  # Default for v2
 
     def test_speaker_from_dict(self, handler):
         """Test speaker extraction from dict"""
@@ -167,9 +165,9 @@ class TestTransformRequest:
 
         assert "dict_body" in result
         body = result["dict_body"]
-        assert body["inputs"] == ["Hello world"]
+        assert body["text"] == "Hello world"
         assert body["model"] == "bulbul:v2"
-        assert body["speaker"] == "Anushka"
+        assert body["speaker"] == "anushka"
 
     def test_transform_request_with_language(self, handler):
         """Test request with language code"""
@@ -184,7 +182,7 @@ class TestTransformRequest:
 
         body = result["dict_body"]
         assert body["target_language_code"] == "hi-IN"
-        assert body["speaker"] == "Manisha"
+        assert body["speaker"] == "manisha"
 
     def test_transform_request_with_pace(self, handler):
         """Test request with pace parameter"""
@@ -199,7 +197,7 @@ class TestTransformRequest:
 
         body = result["dict_body"]
         assert body["pace"] == 1.2
-        assert body["speaker"] == "Abhilash"
+        assert body["speaker"] == "abhilash"
 
 
 class TestTransformResponse:
