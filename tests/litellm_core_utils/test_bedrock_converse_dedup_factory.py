@@ -330,3 +330,118 @@ async def test_bedrock_converse_sync_async_parity_with_duplicates():
     )
 
     assert sync_result == async_result
+
+
+# ---------------------------------------------------------------------------
+# Empty content filtering tests
+# ---------------------------------------------------------------------------
+
+
+def test_bedrock_converse_filters_empty_assistant_content():
+    """Verify that empty assistant content blocks are filtered out to avoid
+    Bedrock API errors about blank text fields."""
+    messages = [
+        {"role": "user", "content": "Say hello"},
+        {"role": "assistant", "content": "Hello"},
+        {"role": "assistant", "content": " there"},
+        {"role": "assistant", "content": "!"},
+        {"role": "assistant", "content": ""},  # Empty content
+        {"role": "assistant", "content": ""},  # Empty content
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
+
+    # Should have 3 messages: user, assistant (with merged non-empty content), user
+    assert len(result) == 3
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    assert result[2]["role"] == "user"
+
+    # Assistant message should only contain non-empty text blocks
+    assistant_content = result[1]["content"]
+    text_blocks = [block for block in assistant_content if "text" in block]
+    assert len(text_blocks) == 3  # "Hello", " there", "!"
+    assert text_blocks[0]["text"] == "Hello"
+    assert text_blocks[1]["text"] == " there"
+    assert text_blocks[2]["text"] == "!"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_filters_empty_assistant_content_async():
+    """Verify that the async path also filters empty assistant content blocks."""
+    messages = [
+        {"role": "user", "content": "Say hello"},
+        {"role": "assistant", "content": "Hello"},
+        {"role": "assistant", "content": " there"},
+        {"role": "assistant", "content": "!"},
+        {"role": "assistant", "content": ""},  # Empty content
+        {"role": "assistant", "content": ""},  # Empty content
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages, MODEL, PROVIDER
+    )
+
+    # Should have 3 messages: user, assistant (with merged non-empty content), user
+    assert len(result) == 3
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    assert result[2]["role"] == "user"
+
+    # Assistant message should only contain non-empty text blocks
+    assistant_content = result[1]["content"]
+    text_blocks = [block for block in assistant_content if "text" in block]
+    assert len(text_blocks) == 3  # "Hello", " there", "!"
+    assert text_blocks[0]["text"] == "Hello"
+    assert text_blocks[1]["text"] == " there"
+    assert text_blocks[2]["text"] == "!"
+
+
+def test_bedrock_converse_filters_whitespace_only_content():
+    """Verify that whitespace-only content is also filtered out."""
+    messages = [
+        {"role": "user", "content": "Test"},
+        {"role": "assistant", "content": "Response"},
+        {"role": "assistant", "content": "   "},  # Whitespace only
+        {"role": "assistant", "content": "\n\t"},  # Whitespace only
+        {"role": "assistant", "content": ""},  # Empty
+    ]
+
+    result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
+
+    # Should have 2 messages: user and assistant
+    assert len(result) == 2
+    assistant_content = result[1]["content"]
+    text_blocks = [block for block in assistant_content if "text" in block]
+    # Only "Response" should be present
+    assert len(text_blocks) == 1
+    assert text_blocks[0]["text"] == "Response"
+
+
+def test_bedrock_converse_filters_empty_list_content():
+    """Verify that empty text elements in list content are filtered out."""
+    messages = [
+        {"role": "user", "content": "Test"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": ""},  # Empty
+                {"type": "text", "text": "World"},
+                {"type": "text", "text": "   "},  # Whitespace only
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
+
+    # Should have 2 messages: user and assistant
+    assert len(result) == 2
+    assistant_content = result[1]["content"]
+    text_blocks = [block for block in assistant_content if "text" in block]
+    # Only "Hello" and "World" should be present
+    assert len(text_blocks) == 2
+    assert text_blocks[0]["text"] == "Hello"
+    assert text_blocks[1]["text"] == "World"
