@@ -110,22 +110,29 @@ const CustomCodePlayground: React.FC<CustomCodePlaygroundProps> = ({
         throw new Error("Invalid JSON in request data");
       }
 
-      const result = await testCustomCodeGuardrail(
-        accessToken,
-        customCode,
-        parsedInputs,
-        parsedRequestData,
-        inputType
-      );
+      const response = await testCustomCodeGuardrail(accessToken, {
+        custom_code: customCode,
+        test_input: parsedInputs,
+        input_type: inputType,
+        request_data: parsedRequestData,
+      });
 
-      setTestResult(result);
+      if (response.success && response.result) {
+        setTestResult(response.result);
 
-      if (result.action === "allow") {
-        NotificationsManager.success("Guardrail allowed the request");
-      } else if (result.action === "block") {
-        NotificationsManager.fromBackend(`Guardrail blocked: ${result.reason || "No reason provided"}`);
-      } else if (result.action === "modify") {
-        NotificationsManager.success("Guardrail modified the content");
+        if (response.result.action === "allow") {
+          NotificationsManager.success("Guardrail allowed the request");
+        } else if (response.result.action === "block") {
+          NotificationsManager.fromBackend(`Guardrail blocked: ${response.result.reason || "No reason provided"}`);
+        } else if (response.result.action === "modify") {
+          NotificationsManager.success("Guardrail modified the content");
+        }
+      } else if (response.error) {
+        setTestResult({
+          action: "block",
+          error: response.error,
+        });
+        NotificationsManager.fromBackend(`Test failed: ${response.error}`);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
