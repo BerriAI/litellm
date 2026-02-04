@@ -27113,6 +27113,34 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "together_ai/zai-org/GLM-4.7": {
+        "input_cost_per_token": 4.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 200000,
+        "max_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://www.together.ai/models/glm-4-7",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "together_ai/moonshotai/Kimi-K2.5": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-06,
+        "source": "https://www.together.ai/models/kimi-k2-5",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true
+    },
     "together_ai/moonshotai/Kimi-K2-Instruct-0905": {
         "input_cost_per_token": 1e-06,
         "litellm_provider": "together_ai",
