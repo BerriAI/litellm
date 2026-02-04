@@ -2246,7 +2246,7 @@ class PrismaClient:
                     where={key: value}  # type: ignore
                 )
             elif table_name == "spend":
-                response = await self.db.l.find_first(  # type: ignore
+                response = await self.db.litellm_spendlogs.find_first(  # type: ignore
                     where={key: value}  # type: ignore
                 )
             return response
