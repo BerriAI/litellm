@@ -123,3 +123,34 @@ class TestGetOptionalParamsIntegration:
         # Both should include user
         assert regular_params.get("user") == "my-end-user"
         assert responses_params.get("user") == "my-end-user"
+
+
+class TestPromptCacheParams:
+    """Tests for prompt_cache_key and prompt_cache_retention support."""
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def test_prompt_cache_key_in_supported_params(self):
+        """Test that prompt_cache_key is in supported params for OpenAI models."""
+        supported_params = self.config.get_supported_openai_params("gpt-4o")
+        assert "prompt_cache_key" in supported_params
+
+    def test_prompt_cache_retention_in_supported_params(self):
+        """Test that prompt_cache_retention is in supported params for OpenAI models."""
+        supported_params = self.config.get_supported_openai_params("gpt-4o")
+        assert "prompt_cache_retention" in supported_params
+
+    def test_prompt_cache_params_passed_through(self):
+        """Test that prompt_cache_key and prompt_cache_retention are passed through by map_openai_params."""
+        optional_params = self.config.map_openai_params(
+            non_default_params={
+                "prompt_cache_key": "my-cache-key",
+                "prompt_cache_retention": "24h",
+            },
+            optional_params={},
+            model="gpt-4o",
+            drop_params=False,
+        )
+        assert optional_params.get("prompt_cache_key") == "my-cache-key"
+        assert optional_params.get("prompt_cache_retention") == "24h"
