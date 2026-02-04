@@ -51,7 +51,7 @@ Let's dive in.
 
 ### Preventing DB Deadlocks
 
-<Image img={require('../../img/prevent_deadlocks.jpg')} />
+<Image img={require('@site/img/prevent_deadlocks.jpg')} />
 
 This release fixes the DB deadlocking issue that users faced in high traffic (10K+ RPS). This is great because it enables user/key/team spend tracking works at that scale.
 
@@ -60,7 +60,7 @@ Read more about the new architecture [here](https://docs.litellm.ai/docs/proxy/d
 
 ### New Usage Tab
 
-<Image img={require('../../img/release_notes/spend_by_model.jpg')} />
+<Image img={require('@site/img/release_notes/spend_by_model.jpg')} />
 
 The new Usage tab now brings the ability to track daily spend by model. This makes it easier to catch any spend tracking or token counting errors, when combined with the ability to view successful requests, and token usage.
 
@@ -105,7 +105,7 @@ To test this out, just go to Experimental > New Usage > Activity.
 
 ## Management Endpoints / UI
 
-<Image img={require('../../img/release_notes/new_activity_tab.png')} />
+<Image img={require('@site/img/release_notes/new_activity_tab.png')} />
 
 1. New Usage Tab
     - Report 'total_tokens' + report success/failure calls

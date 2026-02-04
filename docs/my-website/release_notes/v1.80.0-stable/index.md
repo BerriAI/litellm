@@ -56,7 +56,7 @@ pip install litellm==1.80.0
 
 ### Agent Hub 
 
-<Image img={require('../../img/agent_hub_clean.png')} />  
+<Image img={require('@site/img/agent_hub_clean.png')} />  
 
 This release adds support for registering and making agents public for your organization. This is great for **Proxy Admins** who want a central place to make agents built in their organization, discoverable to their users. 
 

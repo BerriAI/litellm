@@ -54,7 +54,7 @@ pip install litellm==1.79.3.rc.1
 ### Built-in Guardrails on AI Gateway
 
 <Image 
-  img={require('../../img/release_notes/built_in_guard.png')}
+  img={require('@site/img/release_notes/built_in_guard.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

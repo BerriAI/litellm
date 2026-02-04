@@ -52,7 +52,7 @@ LiteLLM v1.71.1-stable is live now. Here are the key highlights of this release:
 
 ## Performance Improvements
 
-<Image img={require('../../img/perf_imp.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/perf_imp.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 
@@ -91,7 +91,7 @@ print(result)
 
 ## File Permissions
 
-<Image img={require('../../img/files_api_graphic.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/files_api_graphic.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 

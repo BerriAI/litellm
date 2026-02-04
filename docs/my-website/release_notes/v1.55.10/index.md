@@ -22,7 +22,7 @@ import Image from '@theme/IdealImage';
 `batches`, `guardrails`, `team management`, `custom auth`
 
 
-<Image img={require('../../img/batches_cost_tracking.png')} />
+<Image img={require('@site/img/batches_cost_tracking.png')} />
 
 <br/>
 

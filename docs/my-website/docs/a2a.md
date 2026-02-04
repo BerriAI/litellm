@@ -7,7 +7,7 @@ import Image from '@theme/IdealImage';
 Add A2A Agents on LiteLLM AI Gateway, Invoke agents in A2A Protocol, track request/response logs in LiteLLM Logs. Manage which Teams, Keys can access which Agents onboarded.
 
 <Image 
-  img={require('../img/a2a_gateway.png')}
+  img={require('@site/img/a2a_gateway.png')}
   style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
 />
 
@@ -39,7 +39,7 @@ You can add A2A-compatible agents through the LiteLLM Admin UI.
 3. Enter the agent name (e.g., `ij-local`) and the URL of your A2A agent
 
 <Image 
-  img={require('../img/add_agent_1.png')}
+  img={require('@site/img/add_agent_1.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -82,7 +82,7 @@ The logs show:
 - **Latency and cost** metrics
 
 <Image 
-  img={require('../img/agent2.png')}
+  img={require('@site/img/agent2.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -189,14 +189,14 @@ With header forwarding enabled, you'll see:
 **Trace Grouping in Langfuse:**
 
 <Image
-  img={require('../img/a2a_trace_grouping.png')}
+  img={require('@site/img/a2a_trace_grouping.png')}
   style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
 />
 
 **Agent Spend Attribution:**
 
 <Image
-  img={require('../img/a2a_agent_spend.png')}
+  img={require('@site/img/a2a_agent_spend.png')}
   style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
 />
 

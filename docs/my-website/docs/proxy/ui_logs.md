@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 View Spend, Token Usage, Key, Team Name for Each Request to LiteLLM
 
 
-<Image img={require('../../img/ui_request_logs.png')}/>
+<Image img={require('@site/img/ui_request_logs.png')}/>
 
 
 ## Overview
@@ -35,7 +35,7 @@ general_settings:
   store_prompts_in_spend_logs: true
 ```
 
-<Image img={require('../../img/ui_request_logs_content.png')}/>
+<Image img={require('@site/img/ui_request_logs_content.png')}/>
 
 ## Tracing Tools
 

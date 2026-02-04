@@ -55,7 +55,7 @@ pip install litellm==1.77.7.rc.1
 
 ### Performance - 2.9x Lower Median Latency
 
-<Image img={require('../../img/release_notes/perf_77_7.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/release_notes/perf_77_7.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 
@@ -93,7 +93,7 @@ View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache
 
 ### MCP OAuth 2.0 Support
 
-<Image img={require('../../img/mcp_updates.jpg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/mcp_updates.jpg')} style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 
@@ -103,7 +103,7 @@ This release adds support for OAuth 2.0 Client Credentials for MCP servers. This
 
 ### Scheduled Key Rotations
 
-<Image img={require('../../img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 

@@ -50,7 +50,7 @@ pip install litellm==1.73.6.post1
 ### Claude on gemini-cli
 
 
-<Image img={require('../../img/release_notes/gemini_cli.png')} />
+<Image img={require('@site/img/release_notes/gemini_cli.png')} />
 
 <br/>
 
@@ -74,7 +74,7 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 
 ### Batch API Cost Tracking
 
-<Image img={require('../../img/release_notes/batch_api_cost_tracking.jpg')}/>
+<Image img={require('@site/img/release_notes/batch_api_cost_tracking.jpg')}/>
 
 <br/>
 

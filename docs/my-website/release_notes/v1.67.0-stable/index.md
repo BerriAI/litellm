@@ -29,14 +29,14 @@ Let's dive in.
 
 ## SCIM Integration
 
-<Image img={require('../../img/scim_integration.png')}/>
+<Image img={require('@site/img/scim_integration.png')}/>
 
 This release adds SCIM support to LiteLLM. This allows your SSO provider (Okta, Azure AD, etc) to automatically create/delete users, teams, and memberships on LiteLLM. This means that when you remove a team on your SSO provider, your SSO provider will automatically delete the corresponding team on LiteLLM. 
 
 [Read more](../../docs/tutorials/scim_litellm)
 ## Team and Tag based usage tracking
 
-<Image img={require('../../img/release_notes/new_team_usage_highlight.jpg')}/>
+<Image img={require('@site/img/release_notes/new_team_usage_highlight.jpg')}/>
 
 
 This release improves team and tag based usage tracking at 1m+ spend logs, making it easy to monitor your LLM API Spend in production. This covers:
@@ -52,7 +52,7 @@ This release improves team and tag based usage tracking at 1m+ spend logs, makin
 
 This release allows you to call Azure OpenAI, Anthropic, AWS Bedrock, and Google Vertex AI models via the POST /v1/responses endpoint on LiteLLM. This means you can now use popular tools like [OpenAI Codex](https://docs.litellm.ai/docs/tutorials/openai_codex) with your own models. 
 
-<Image img={require('../../img/release_notes/unified_responses_api_rn.png')}/>
+<Image img={require('@site/img/release_notes/unified_responses_api_rn.png')}/>
 
 
 [Read more](https://docs.litellm.ai/docs/response_api)
@@ -117,14 +117,14 @@ This release allows you to call Azure OpenAI, Anthropic, AWS Bedrock, and Google
         - allow internal user view spend for teams they belong to - [PR](https://github.com/BerriAI/litellm/pull/10157)
         - allow viewing top keys by team - [PR](https://github.com/BerriAI/litellm/pull/10157)
 
-        <Image img={require('../../img/release_notes/new_team_usage.png')}/>
+        <Image img={require('@site/img/release_notes/new_team_usage.png')}/>
 
     2. Tag Based Usage
         - New `LiteLLM_DailyTagSpend` Table for aggregate tag based usage logging - [PR](https://github.com/BerriAI/litellm/pull/10071)
         - Restrict to only Proxy Admins - [PR](https://github.com/BerriAI/litellm/pull/10157)
         - allow viewing top keys by tag
         - Return tags passed in request (i.e. dynamic tags) on `/tag/list` API - [PR](https://github.com/BerriAI/litellm/pull/10157)
-        <Image img={require('../../img/release_notes/new_tag_usage.png')}/>
+        <Image img={require('@site/img/release_notes/new_tag_usage.png')}/>
     3. Track prompt caching metrics in daily user, team, tag tables - [PR](https://github.com/BerriAI/litellm/pull/10029)
     4. Show usage by key (on all up, team, and tag usage dashboards) - [PR](https://github.com/BerriAI/litellm/pull/10157)
     5. swap old usage with new usage tab

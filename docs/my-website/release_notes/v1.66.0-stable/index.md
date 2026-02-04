@@ -54,7 +54,7 @@ Let's dive in.
 ## Realtime API Cost Tracking
 
 <Image 
-  img={require('../../img/realtime_api.png')}
+  img={require('@site/img/realtime_api.png')}
   style={{width: '100%', display: 'block'}}
 />
 
@@ -71,7 +71,7 @@ Start [here](https://docs.litellm.ai/docs/realtime)
 ## Microsoft SSO Auto-sync
 
 <Image 
-  img={require('../../img/release_notes/sso_sync.png')}
+  img={require('@site/img/release_notes/sso_sync.png')}
   style={{width: '100%', display: 'block'}}
 />
 <p style={{textAlign: 'left', color: '#666'}}>
@@ -140,7 +140,7 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
     1. Added rendering of Reasoning content, ttft, usage metrics on test key page [PR](https://github.com/BerriAI/litellm/pull/9931)
 
     <Image 
-    img={require('../../img/release_notes/chat_metrics.png')}
+    img={require('@site/img/release_notes/chat_metrics.png')}
     style={{width: '100%', display: 'block'}}
     />
     <p style={{textAlign: 'left', color: '#666'}}>
@@ -152,7 +152,7 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
     <br />
 
     <Image 
-    img={require('../../img/release_notes/tag_management.png')}
+    img={require('@site/img/release_notes/tag_management.png')}
     style={{width: '100%', display: 'block'}}
     />
     <p style={{textAlign: 'left', color: '#666'}}>

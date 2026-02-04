@@ -36,11 +36,11 @@ Track guardrail failure rate and if a guardrail is going rogue and failing reque
 
 #### Traced Guardrail Success
 
-<Image img={require('../../img/gd_success.png')} />
+<Image img={require('@site/img/gd_success.png')} />
 
 #### Traced Guardrail Failure
 
-<Image img={require('../../img/gd_fail.png')} />
+<Image img={require('@site/img/gd_fail.png')} />
 
 
 ### `/guardrails/list` 
@@ -104,7 +104,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 You can now assign keys to users via Proxy UI
 
 
-<Image img={require('../../img/ui_key.png')} />
+<Image img={require('@site/img/ui_key.png')} />
 
 ## New Models
 

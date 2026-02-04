@@ -35,7 +35,7 @@ Get a 7 day free trial for LiteLLM Enterprise [here](https://litellm.ai/#trial).
 
 You can now view messages and response logs on Admin UI.
 
-<Image img={require('../../img/release_notes/ui_logs.png')} />
+<Image img={require('@site/img/release_notes/ui_logs.png')} />
 
 How to enable it - add `store_prompts_in_spend_logs: true` to your `proxy_config.yaml`
 

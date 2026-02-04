@@ -53,7 +53,7 @@ LiteLLM v1.70.1-stable is live now. Here are the key highlights of this release:
 
 ## Gemini Realtime API
 
-<Image img={require('../../img/gemini_realtime.png')}/>
+<Image img={require('@site/img/gemini_realtime.png')}/>
 
 
 This release brings support for calling Gemini's realtime models (e.g. gemini-2.0-flash-live) via OpenAI's /v1/realtime API. This is great for developers as it lets them easily switch from OpenAI to Gemini by just changing the model name. 
@@ -69,7 +69,7 @@ This is currently supported via Google AI Studio. We plan to release VertexAI su
 
 ## Spend Logs Retention Period
 
-<Image img={require('../../img/delete_spend_logs.jpg')}/>
+<Image img={require('@site/img/delete_spend_logs.jpg')}/>
 
 
 
@@ -79,7 +79,7 @@ This release enables deleting LiteLLM Spend Logs older than a certain period. Si
 
 ## PII Masking 2.0
 
-<Image img={require('../../img/pii_masking_v2.png')}/>
+<Image img={require('@site/img/pii_masking_v2.png')}/>
 
 This release brings improvements to our Presidio PII Integration. As a Proxy Admin, you now have the ability to:
 

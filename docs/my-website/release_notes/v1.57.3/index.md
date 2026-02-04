@@ -21,7 +21,7 @@ import Image from '@theme/IdealImage';
 
 # 0 Critical/High Vulnerabilities
 
-<Image img={require('../../img/release_notes/security.png')} />
+<Image img={require('@site/img/release_notes/security.png')} />
 
 ## What changed?
 - LiteLLMBase image now uses `cgr.dev/chainguard/python:latest-dev`

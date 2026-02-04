@@ -60,7 +60,7 @@ pip install litellm==1.80.11
 ### Cloudzero Integration on UI
 
 <Image
-img={require('../../img/ui_cloudzero.png')}
+img={require('@site/img/ui_cloudzero.png')}
 style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
