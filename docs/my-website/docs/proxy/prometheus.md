@@ -178,6 +178,17 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. Labels: `"litellm_model_name", "model_id", "api_base", "api_provider"` |
 | `litellm_deployment_latency_per_output_token`       | Latency per output token for deployment. Labels: `"litellm_model_name", "model_id", "api_base", "api_provider", "hashed_api_key", "api_key_alias", "team", "team_alias"` |
 
+**What does `litellm_deployment_latency_per_output_token` measure?**
+
+This metric is computed **inside LiteLLM** as `latency_seconds / output_tokens`:
+
+- **Non-streaming requests**: `latency_seconds` is the time from when LiteLLM starts the deployment request to when it receives the final response.
+- **Streaming requests**: `latency_seconds` is the **time-to-first-token (TTFT)** (time until LiteLLM receives the first token from the provider).
+
+Because the timer is taken at the LiteLLM boundary, it reflects **provider latency + any LiteLLM proxy overhead** that occurs during that interval (and can include network overhead).
+
+If you need a metric that targets *just the provider LLM API call latency*, use `litellm_llm_api_latency_metric`.
+
 #### Fallback (Failover) Metrics
 
 | Metric Name          | Description                          |
