@@ -470,6 +470,7 @@ const sidebars = {
           label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
+            "a2a_invoking_agents",
             "a2a_cost_tracking",
             "a2a_agent_permissions"
           ],
@@ -539,6 +540,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",
             "mcp_guardrail",
@@ -717,6 +719,7 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
+            "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
         "providers/bedrock_vector_store",
       ]

@@ -5,7 +5,7 @@ from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 
 from ..authenticator import Authenticator
-from ..common_utils import GetAPIKeyError, GITHUB_COPILOT_API_BASE
+from ..common_utils import GetAPIKeyError, GITHUB_COPILOT_API_BASE, get_copilot_default_headers
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -43,15 +43,8 @@ class GithubCopilotConfig(OpenAIConfig):
         messages,
         model: str,
     ):
-        import litellm
-
-        disable_copilot_system_to_assistant = (
-            litellm.disable_copilot_system_to_assistant
-        )
-        if not disable_copilot_system_to_assistant:
-            for message in messages:
-                if "role" in message and message["role"] == "system":
-                    cast(Any, message)["role"] = "assistant"
+        # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
+        # No conversion needed - just return messages as-is
         return messages
 
     def validate_environment(
@@ -68,6 +61,14 @@ class GithubCopilotConfig(OpenAIConfig):
         validated_headers = super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
+
+        # Add Copilot-specific headers (editor-version, user-agent, etc.)
+        try:
+            copilot_api_key = self.authenticator.get_api_key()
+            copilot_headers = get_copilot_default_headers(copilot_api_key)
+            validated_headers = {**copilot_headers, **validated_headers}
+        except GetAPIKeyError:
+            pass  # Will be handled later in the request flow
 
         # Add X-Initiator header based on message roles
         initiator = self._determine_initiator(messages)

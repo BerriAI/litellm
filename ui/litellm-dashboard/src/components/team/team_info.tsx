@@ -96,6 +96,7 @@ export interface TeamData {
       model_aliases: Record<string, string>;
     } | null;
     created_at: string;
+    allow_team_guardrail_config?: boolean;
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -467,6 +468,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         },
         policies: values.policies || [],
         organization_id: values.organization_id,
+        ...(values.allow_team_guardrail_config !== undefined ? { allow_team_guardrail_config: values.allow_team_guardrail_config } : {}),
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
@@ -658,6 +660,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <Card>
                 <Text className="font-semibold text-gray-900 mb-3">Guardrails</Text>
+                {info.allow_team_guardrail_config === true ? (
+                  <div className="mb-3">
+                    <Badge color="green">Team can configure guardrails</Badge>
+                  </div>
+                ) : (
+                  <div className="mb-3">
+                    <Badge color="gray">Only proxy admin can configure guardrails for this team</Badge>
+                  </div>
+                )}
                 {info.guardrails && info.guardrails.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {info.guardrails.map((guardrail: string, index: number) => (
@@ -761,6 +772,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     team_member_budget_duration: info.team_member_budget_table?.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
                     policies: info.policies || [],
+                    allow_team_guardrail_config: info.allow_team_guardrail_config ?? false,
                     disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
                     metadata: info.metadata
                       ? JSON.stringify(
@@ -877,28 +889,71 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item
+                    noStyle
+                    shouldUpdate={(prev, cur) =>
+                      prev.allow_team_guardrail_config !== cur.allow_team_guardrail_config
+                    }
+                  >
+                    {() => {
+                      const allowTeamGuardrailConfig =
+                        form.getFieldValue("allow_team_guardrail_config");
+                      const guardrailsDisabled =
+                        !is_proxy_admin && !allowTeamGuardrailConfig;
+                      return (
+                        <Form.Item
+                          label={
+                            <span>
+                              Guardrails{" "}
+                              <Tooltip title="Setup your first guardrail">
+                                <a
+                                  href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                </a>
+                              </Tooltip>
+                            </span>
+                          }
+                          name="guardrails"
+                          help="Select existing guardrails or enter new ones"
+                        >
+                          <Select
+                            mode="tags"
+                            placeholder="Select or enter guardrails"
+                            options={guardrailsList.map((name) => ({
+                              value: name,
+                              label: name,
+                            }))}
+                            disabled={guardrailsDisabled}
+                          />
+                        </Form.Item>
+                      );
+                    }}
+                  </Form.Item>
+
+                  <Form.Item
                     label={
                       <span>
-                        Guardrails{" "}
-                        <Tooltip title="Setup your first guardrail">
-                          <a
-                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </a>
+                        Allow team to configure guardrails{" "}
+                        <Tooltip title="When enabled, team admins can create, update, delete, and assign guardrails for this team. When disabled, only proxy admin can manage guardrails for this team. Only proxy admin can change this setting.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
                       </span>
                     }
-                    name="guardrails"
-                    help="Select existing guardrails or enter new ones"
+                    name="allow_team_guardrail_config"
+                    valuePropName="checked"
+                    help={
+                      is_proxy_admin
+                        ? "Let team admins manage guardrails for this team"
+                        : "Only proxy admin can change this setting"
+                    }
                   >
-                    <Select
-                      mode="tags"
-                      placeholder="Select or enter guardrails"
-                      options={guardrailsList.map((name) => ({ value: name, label: name }))}
+                    <Switch
+                      checkedChildren="Yes"
+                      unCheckedChildren="No"
+                      disabled={!is_proxy_admin}
                     />
                   </Form.Item>
 

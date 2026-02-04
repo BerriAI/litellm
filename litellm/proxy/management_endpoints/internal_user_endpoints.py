@@ -813,9 +813,12 @@ def _update_internal_user_params(
     data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
 ) -> dict:
     non_default_values = {}
+    fields_set = data.fields_set() if hasattr(data, 'fields_set') else set()
+    
     for k, v in data_json.items():
         if k == "max_budget":
-            non_default_values[k] = v
+            if "max_budget" in fields_set:
+                non_default_values[k] = v
         elif (
             v is not None
             and v

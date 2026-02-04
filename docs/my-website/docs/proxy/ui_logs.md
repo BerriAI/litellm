@@ -37,6 +37,40 @@ general_settings:
 
 <Image img={require('../../img/ui_request_logs_content.png')}/>
 
+## Tracing Tools
+
+View which tools were provided and called in your completion requests.
+
+<Image img={require('../../img/ui_tools.png')}/>
+
+**Example:** Make a completion request with tools:
+
+```bash
+curl -X POST 'http://localhost:4000/chat/completions' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "What is the weather?"}],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string"}
+            }
+          }
+        }
+      }
+    ]
+  }'
+```
+
+Check the Logs page to see all tools provided and which ones were called.
 
 ## Stop storing Error Logs in DB
 
