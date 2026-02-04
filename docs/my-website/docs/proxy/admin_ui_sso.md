@@ -47,12 +47,18 @@ Ensure users are assigned to the app in the **Assignments** tab. If Federation B
 This step is required. Without an Access Policy for your app, users will get a `no_matching_policy` error when attempting to log in.
 :::
 
-1. Go to **Security** → **API** → **Authorization Servers**
+1. Go to **Security** → **API**
+
+<Image img={require('../../img/okta_security_api.png')} />
+
 2. Select the **default** authorization server (or your custom one)
-3. In the **Access Policies** tab, create a new policy assigned to your LiteLLM app
+
+<Image img={require('../../img/okta_authorization_server.png')} />
+
+3. Click on **Access Policies** tab, create a new policy assigned to your LiteLLM app
 4. Add a rule that allows the **Authorization Code** grant type
 
-<Image img={require('../../img/okta_access_policy.png')} />
+<Image img={require('../../img/okta_access_policies.png')} />
 
 See [Okta's Access Policy documentation](https://help.okta.com/en-us/content/topics/security/api-access-management/access-policies.htm) for more details.
 
