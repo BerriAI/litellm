@@ -7,7 +7,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # NOTE: tests/test_litellm is large and can exceed 25 minutes on shared runners.
+    # Keep this as a guardrail, but avoid flaky cancels.
+    timeout-minutes: 60
 
     steps:
     - uses: actions/checkout@v4

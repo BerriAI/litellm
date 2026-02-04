@@ -3,15 +3,12 @@
 import json
 import traceback
 from collections import deque
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, Literal, Optional, cast
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.anthropic import UsageDelta
 from litellm.types.utils import AdapterCompletionStreamWrapper
-
-if TYPE_CHECKING:
-    from litellm.types.utils import ModelResponseStream
 
 
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
@@ -140,10 +137,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "index": max(self.current_content_block_index - 1, 0),
                     }
 
-                if (
-                    processed_chunk["type"] == "message_delta"
-                    and self.sent_content_block_finish is False
-                ):
+                if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                     self.holding_chunk = processed_chunk
                     self.sent_content_block_finish = True
                     return {
@@ -170,9 +164,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(
-                "Anthropic Adapter - {}\n{}".format(e, traceback.format_exc())
-            )
+            verbose_logger.error("Anthropic Adapter - {}\n{}".format(e, traceback.format_exc()))
             raise StopAsyncIteration
 
     async def __anext__(self):  # noqa: PLR0915
@@ -229,10 +221,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
-                if (
-                    self.holding_stop_reason_chunk is not None
-                    and getattr(chunk, "usage", None) is not None
-                ):
+                if self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None:
                     # Merge usage into the held stop_reason chunk
                     merged_chunk = self.holding_stop_reason_chunk.copy()
                     if "delta" not in merged_chunk:
@@ -244,7 +233,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "output_tokens": chunk.usage.completion_tokens or 0,
                     }
                     # Add cache tokens if available (for prompt caching support)
-                    if hasattr(chunk.usage, "_cache_creation_input_tokens") and chunk.usage._cache_creation_input_tokens > 0:
+                    if (
+                        hasattr(chunk.usage, "_cache_creation_input_tokens")
+                        and chunk.usage._cache_creation_input_tokens > 0
+                    ):
                         usage_dict["cache_creation_input_tokens"] = chunk.usage._cache_creation_input_tokens
                     if hasattr(chunk.usage, "_cache_read_input_tokens") and chunk.usage._cache_read_input_tokens > 0:
                         usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
@@ -288,10 +280,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         # Return the first queued item
                         return self.chunk_queue.popleft()
 
-                    if (
-                        processed_chunk["type"] == "message_delta"
-                        and self.sent_content_block_finish is False
-                    ):
+                    if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                         # Queue both the content_block_stop and the holding chunk
                         self.chunk_queue.append(
                             {
@@ -300,10 +289,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                        if (
-                            processed_chunk.get("delta", {}).get("stop_reason")
-                            is not None
-                        ):
+                        if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
                             self.chunk_queue.append(processed_chunk)
@@ -384,7 +370,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
 
-    def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
+    def _should_start_new_content_block(self, chunk: Any) -> bool:
         """
         Determine if we should start a new content block based on the processed chunk.
         Override this method with your specific logic for detecting new content blocks.
@@ -396,30 +382,40 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        # Example logic - customize based on your needs:
-        # If chunk indicates a tool call
-        if chunk.choices[0].finish_reason is not None:
-            return False
+        if hasattr(chunk, "choices"):
+            # Chat Completions streaming
+            if chunk.choices[0].finish_reason is not None:
+                return False
 
-        (
-            block_type,
-            content_block_start,
-        ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-            choices=chunk.choices  # type: ignore
-        )
+            (
+                block_type,
+                content_block_start,
+            ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                choices=chunk.choices  # type: ignore
+            )
+        else:
+            # Responses API streaming
+            event_type = LiteLLMAnthropicMessagesAdapter()._get_responses_api_stream_event_type(chunk)
+            if event_type in (
+                "response.completed",
+                "response.incomplete",
+                "response.failed",
+            ):
+                return False
+
+            (
+                block_type,
+                content_block_start,
+            ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_responses_api_event_to_anthropic_content_block(
+                chunk
+            )
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit
-        if block_type == "tool_use":
-            # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
-            from typing import cast
-            from litellm.types.llms.anthropic import ToolUseBlock
-            
-            tool_block = cast(ToolUseBlock, content_block_start)
-            
-            if tool_block.get("name"):
-                truncated_name = tool_block["name"]
-                original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
-                tool_block["name"] = original_name
+        if block_type == "tool_use" and isinstance(content_block_start, dict):
+            tool_block = cast(Dict[str, Any], content_block_start)
+            truncated_name = tool_block.get("name")
+            if isinstance(truncated_name, str) and truncated_name:
+                tool_block["name"] = self.tool_name_mapping.get(truncated_name, truncated_name)
 
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
@@ -428,12 +424,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         # For parallel tool calls, we'll necessarily have a new content block
         # if we get a function name since it signals a new tool call
-        if block_type == "tool_use":
-            from typing import cast
-            from litellm.types.llms.anthropic import ToolUseBlock
-            
-            tool_block = cast(ToolUseBlock, content_block_start)
-            if tool_block.get("name"):
+        if block_type == "tool_use" and isinstance(content_block_start, dict):
+            tool_block = cast(Dict[str, Any], content_block_start)
+            tool_name = tool_block.get("name")
+            if isinstance(tool_name, str) and tool_name:
                 self.current_content_block_type = block_type
                 self.current_content_block_start = content_block_start
                 return True
