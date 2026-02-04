@@ -178,12 +178,28 @@ Because they make up everything!
 ```
 
 
-## Complete Working Example (Cookbook)
+## Complete Working Example
 
-See the full working example in our [LiveKit Agent SDK Cookbook](https://github.com/BerriAI/litellm/tree/main/cookbook/livekit_agent_sdk).
+**[LiveKit Agent SDK Cookbook](https://github.com/BerriAI/litellm/tree/main/cookbook/livekit_agent_sdk)**
+
+Includes:
+- ✅ Simple voice agent (`main.py`)
+- ✅ Config example (`config.example.yaml`)  
+- ✅ How to run guide (`HOW_TO_RUN.md`)
+
+### Quick Test
+
+```bash
+# 1. Start proxy
+poetry run litellm --config cookbook/livekit_agent_sdk/config.example.yaml --port 4000
+
+# 2. Run agent (in new terminal)
+cd cookbook/livekit_agent_sdk
+poetry run python main.py
+```
 
 ## Learn More
 
-- [xAI Realtime API Documentation](/docs/providers/xai_realtime)
-- [LiveKit xAI Plugin Docs](https://docs.livekit.io/agents/models/realtime/plugins/xai/)
+- [xAI Realtime API](/docs/providers/xai_realtime)
+- [LiveKit xAI Plugin](https://docs.livekit.io/agents/models/realtime/plugins/xai/)
 - [LiteLLM Realtime API](/docs/realtime)

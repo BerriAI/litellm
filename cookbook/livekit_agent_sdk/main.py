@@ -32,7 +32,7 @@ async def run_voice_agent():
     print(f"   Proxy: {PROXY_URL}")
     print()
     
-    async with websockets.connect(url, extra_headers=headers) as ws:
+    async with websockets.connect(url, additional_headers=headers) as ws:
         # Receive initial connection event
         initial = json.loads(await ws.recv())
         print(f"✅ Connected! Event: {initial['type']}\n")

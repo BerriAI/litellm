@@ -131,7 +131,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             )
             async with websockets.connect(  # type: ignore
                 url,
-                extra_headers=headers,  # type: ignore
+                additional_headers=headers,  # type: ignore
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_ws:
