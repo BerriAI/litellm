@@ -67,7 +67,7 @@ curl -X POST http://localhost:3000/api/copilotkit \
     "params": {
         "agentId": "default"
     },
-    "body": {
+        "runId": "your_run_id",
         "threadId": "your_thread_id",
         "runId": ""your_run_id"",
         "tools": [],
