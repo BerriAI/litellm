@@ -3111,6 +3111,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    GDM = "gdm"
 
 
 # Create a set of all provider values for quick lookup
