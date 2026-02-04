@@ -616,7 +616,7 @@ def responses(
             tools = cast(
                 Optional[Iterable[ToolParam]],
                 update_responses_tools_with_model_file_ids(
-                    tools=tools,
+                    tools=cast(Optional[List[Dict[str, Any]]], tools),
                     model_id=model_info_id,
                     model_file_id_mapping=model_file_id_mapping,
                 ),
