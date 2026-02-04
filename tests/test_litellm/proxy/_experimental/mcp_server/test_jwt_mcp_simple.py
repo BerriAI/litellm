@@ -205,3 +205,73 @@ async def test_jwt_auth_sets_team_id_for_mcp_route():
                 f"team_id should be 'team-from-jwt' but got '{result['team_id']}'. "
                 "This means JWT auth is not properly setting team_id for MCP routes!"
             )
+
+
+@pytest.mark.asyncio 
+async def test_mcp_route_without_model_still_returns_team_id():
+    """
+    Test that MCP routes (which don't specify a model) still get team_id assigned.
+    
+    Key insight: MCP routes don't require a model in the request, but the JWT auth
+    flow must still assign a team_id so that team MCP permissions are enforced.
+    
+    The flow is:
+    1. JWT token contains team in "groups" field
+    2. find_team_with_model_access() is called with requested_model=None
+    3. Since `not requested_model` is True, model check passes
+    4. Route check passes because "mcp_routes" is in team_allowed_routes
+    5. team_id is returned and set on UserAPIKeyAuth
+    """
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    
+    # Setup
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_ids_jwt_field="groups",
+    )
+    
+    # Team exists - note: models is a list (can be empty or have values)
+    # The key is that when no model is requested, model check is skipped
+    team = LiteLLM_TeamTable(
+        team_id="my-team",
+        models=["gpt-4", "gpt-3.5-turbo"],  # Team has models, but MCP request won't specify one
+    )
+    
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    
+    # JWT with team in groups
+    jwt_payload = {
+        "sub": "user-abc",
+        "groups": ["my-team"],
+        "scope": "",
+    }
+    
+    with patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth:
+        mock_auth.return_value = jwt_payload
+        
+        with patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_team:
+            mock_get_team.return_value = team
+            
+            # Call MCP route with NO MODEL in request_data
+            result = await JWTAuthManager.auth_builder(
+                api_key="jwt-token",
+                jwt_handler=jwt_handler,
+                request_data={},  # <-- NO MODEL SPECIFIED
+                general_settings={},
+                route="/mcp/tools/list",  # MCP route
+                prisma_client=None,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            
+            # Team ID must still be set even though no model was requested
+            assert result["team_id"] == "my-team", (
+                f"Expected team_id='my-team' but got '{result['team_id']}'. "
+                "MCP routes without model should still get team_id from JWT!"
+            )
