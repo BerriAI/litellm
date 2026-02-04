@@ -1,3 +1,9 @@
+import os
+from blockintel_gate import Gate
+gate = Gate(api_key=os.getenv("BLOCKINTEL_API_KEY"))
+
+def _blockintel_guard(ctx):
+    return gate.guard(ctx)
 import base64
 import datetime
 import hashlib
@@ -447,7 +453,11 @@ class OCIChatConfig(BaseConfig):
                 message="Private key is required for OCI authentication. Please provide either oci_key or oci_key_file.",
             )
 
-        signature = private_key.sign(
+        # TODO: set ctx from your request context
+        ctx = {"requestId": "nexus_v1_placeholder", "reason": "kms_sign"}
+        with gate.guard(ctx):
+
+            signature = private_key.sign(
             signing_string.encode("utf-8"),
             padding.PKCS1v15(),
             hashes.SHA256(),

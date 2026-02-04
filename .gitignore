@@ -100,3 +100,4 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+*.nexus.backup
