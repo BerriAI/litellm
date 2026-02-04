@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
@@ -32,45 +32,12 @@ from litellm.types.guardrails import (
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
-    CreateGuardrailRequest,
-    UpdateGuardrailRequest,
 )
 
 #### GUARDRAILS ENDPOINTS ####
 
 router = APIRouter()
 GUARDRAIL_REGISTRY = GuardrailRegistry()
-
-
-async def _check_team_can_configure_guardrails(
-    user_api_key_dict: UserAPIKeyAuth,
-    team_id: Optional[str],
-    prisma_client: Any,
-    user_api_key_cache: Any,
-) -> None:
-    """
-    If the user is not proxy admin and team_id is set, verify the team has
-    allow_team_guardrail_config enabled. Raise HTTPException 403 otherwise.
-    """
-    if team_id is None or team_id == "litellm-dashboard":
-        return
-    user_role = getattr(user_api_key_dict, "user_role", None)
-    if user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
-    from litellm.proxy.auth.auth_checks import get_team_object
-
-    team_table = await get_team_object(
-        team_id=team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        check_db_only=True,
-    )
-    allow_config = getattr(team_table, "allow_team_guardrail_config", False)
-    if not allow_config:
-        raise HTTPException(
-            status_code=403,
-            detail="Guardrail configuration is not enabled for this team. Contact your administrator to enable it.",
-        )
 
 
 def _get_guardrails_list_response(
@@ -97,19 +64,9 @@ def _get_guardrails_list_response(
     dependencies=[Depends(user_api_key_auth)],
     response_model=ListGuardrailsResponse,
 )
-@router.get(
-    "/v2/guardrails/list",
-    tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=ListGuardrailsResponse,
-)
-async def list_guardrails(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def list_guardrails():
     """
-    List the guardrails that are available in the database using GuardrailRegistry
-
-    Now supports both DB-persisted and In-Memory (Config) guardrails.
+    List the guardrails that are available on the proxy server
 
     👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
 
@@ -123,20 +80,71 @@ async def list_guardrails(
     {
         "guardrails": [
             {
+            "guardrail_name": "bedrock-pre-guard",
+            "guardrail_info": {
+                "params": [
+                {
+                    "name": "toxicity_score",
+                    "type": "float",
+                    "description": "Score between 0-1 indicating content toxicity level"
+                },
+                {
+                    "name": "pii_detection",
+                    "type": "boolean"
+                }
+                ]
+            }
+            }
+        ]
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    config = proxy_config.config
+
+    _guardrails_config = cast(Optional[list[dict]], config.get("guardrails"))
+
+    if _guardrails_config is None:
+        return _get_guardrails_list_response([])
+
+    return _get_guardrails_list_response(_guardrails_config)
+
+
+@router.get(
+    "/v2/guardrails/list",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ListGuardrailsResponse,
+)
+async def list_guardrails_v2():
+    """
+    List the guardrails that are available in the database using GuardrailRegistry
+
+    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/v2/guardrails/list" -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrails": [
+            {
                 "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
                 "guardrail_name": "my-bedrock-guard",
                 "litellm_params": {
                     "guardrail": "bedrock",
                     "mode": "pre_call",
                     "guardrailIdentifier": "ff6ujrregl1q",
-                    "guardrailVersion": "1.0",
+                    "guardrailVersion": "DRAFT",
                     "default_on": true
                 },
                 "guardrail_info": {
-                    "description": "Updated Bedrock content moderation guardrail"
-                },
-                "created_at": "2023-11-09T12:34:56.789Z",
-                "updated_at": "2023-11-09T13:45:12.345Z"
+                    "description": "Bedrock content moderation guardrail"
+                }
             }
         ]
     }
@@ -145,29 +153,12 @@ async def list_guardrails(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    # Check if DB is connected
     if prisma_client is None:
-        # Fallback to config only if DB is missing (though prisma_client usually exists)
-        from litellm.proxy.proxy_server import proxy_config
-
-        config = proxy_config.config
-        _guardrails_config = cast(Optional[list[dict]], config.get("guardrails"))
-        if _guardrails_config is None:
-            return _get_guardrails_list_response([])
-        return _get_guardrails_list_response(_guardrails_config)
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        team_id = getattr(user_api_key_dict, "team_id", None)
-        user_role = getattr(user_api_key_dict, "user_role", None)
-
-        filter_team_id = None
-        if user_role != LitellmUserRoles.PROXY_ADMIN or (
-            team_id is not None and team_id != "litellm-dashboard"
-        ):
-            filter_team_id = team_id
-
         guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(
-            prisma_client=prisma_client, team_id=filter_team_id
+            prisma_client=prisma_client
         )
 
         guardrail_configs: List[GuardrailInfoResponse] = []
@@ -182,7 +173,6 @@ async def list_guardrails(
                     created_at=guardrail.get("created_at"),
                     updated_at=guardrail.get("updated_at"),
                     guardrail_definition_location="db",
-                    team_id=guardrail.get("team_id"),
                 )
             )
             seen_guardrail_ids.add(guardrail.get("guardrail_id"))
@@ -190,15 +180,6 @@ async def list_guardrails(
         # get guardrails initialized on litellm config.yaml
         in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
         for guardrail in in_memory_guardrails:
-            # Check access for in-memory guardrails too
-            if filter_team_id:
-                g_team = guardrail.get("team_id")
-
-                # If guardrail has a team_id, it must match.
-                # If guardrail has NO team_id, it is likely a global config guardrail, so we usually allow it.
-                if g_team and g_team != filter_team_id:
-                    continue
-
             # only add guardrails that are not in DB guardrail list already
             if guardrail.get("guardrail_id") not in seen_guardrail_ids:
                 guardrail_configs.append(
@@ -208,7 +189,6 @@ async def list_guardrails(
                         litellm_params=dict(guardrail.get("litellm_params") or {}),
                         guardrail_info=dict(guardrail.get("guardrail_info") or {}),
                         guardrail_definition_location="config",
-                        team_id=guardrail.get("team_id"),
                     )
                 )
                 seen_guardrail_ids.add(guardrail.get("guardrail_id"))
@@ -219,15 +199,16 @@ async def list_guardrails(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class CreateGuardrailRequest(BaseModel):
+    guardrail: Guardrail
+
+
 @router.post(
     "/guardrails",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def create_guardrail(
-    request: CreateGuardrailRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def create_guardrail(request: CreateGuardrailRequest):
     """
     Create a new guardrail
 
@@ -276,21 +257,14 @@ async def create_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        team_id = getattr(user_api_key_dict, "team_id", None)
-        await _check_team_can_configure_guardrails(
-            user_api_key_dict=user_api_key_dict,
-            team_id=team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-        )
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(
-            guardrail=request.guardrail, prisma_client=prisma_client, team_id=team_id
+            guardrail=request.guardrail, prisma_client=prisma_client
         )
 
         guardrail_name = result.get("guardrail_name", "Unknown")
@@ -309,11 +283,13 @@ async def create_guardrail(
             )
 
         return result
-    except HTTPException:
-        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class UpdateGuardrailRequest(BaseModel):
+    guardrail: Guardrail
 
 
 @router.put(
@@ -321,11 +297,7 @@ async def create_guardrail(
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def update_guardrail(
-    guardrail_id: str,
-    request: UpdateGuardrailRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     """
     Update an existing guardrail
 
@@ -374,7 +346,7 @@ async def update_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -389,25 +361,6 @@ async def update_guardrail(
             raise HTTPException(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
-
-        if existing_guardrail.get("team_id"):
-            team_id = getattr(user_api_key_dict, "team_id", None)
-            if getattr(
-                user_api_key_dict, "user_role", None
-            ) != LitellmUserRoles.PROXY_ADMIN or (
-                team_id is not None and team_id != "litellm-dashboard"
-            ):
-                if existing_guardrail.get("team_id") != team_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Not authorized to access this guardrail",
-                    )
-                await _check_team_can_configure_guardrails(
-                    user_api_key_dict=user_api_key_dict,
-                    team_id=existing_guardrail.get("team_id"),
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
 
         result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
@@ -441,9 +394,7 @@ async def update_guardrail(
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_guardrail(
-    guardrail_id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
-):
+async def delete_guardrail(guardrail_id: str):
     """
     Delete a guardrail
 
@@ -463,7 +414,7 @@ async def delete_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -478,25 +429,6 @@ async def delete_guardrail(
             raise HTTPException(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
-
-        if existing_guardrail.get("team_id"):
-            team_id = getattr(user_api_key_dict, "team_id", None)
-            if getattr(
-                user_api_key_dict, "user_role", None
-            ) != LitellmUserRoles.PROXY_ADMIN or (
-                team_id is not None and team_id != "litellm-dashboard"
-            ):
-                if existing_guardrail.get("team_id") != team_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Not authorized to access this guardrail",
-                    )
-                await _check_team_can_configure_guardrails(
-                    user_api_key_dict=user_api_key_dict,
-                    team_id=existing_guardrail.get("team_id"),
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
 
         result = await GUARDRAIL_REGISTRY.delete_guardrail_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
@@ -528,11 +460,7 @@ async def delete_guardrail(
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def patch_guardrail(
-    guardrail_id: str,
-    request: PatchGuardrailRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     """
     Partially update an existing guardrail
 
@@ -579,7 +507,7 @@ async def patch_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -594,25 +522,6 @@ async def patch_guardrail(
             raise HTTPException(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
-
-        if existing_guardrail.get("team_id"):
-            team_id = getattr(user_api_key_dict, "team_id", None)
-            if getattr(
-                user_api_key_dict, "user_role", None
-            ) != LitellmUserRoles.PROXY_ADMIN or (
-                team_id is not None and team_id != "litellm-dashboard"
-            ):
-                if existing_guardrail.get("team_id") != team_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Not authorized to access this guardrail",
-                    )
-                await _check_team_can_configure_guardrails(
-                    user_api_key_dict=user_api_key_dict,
-                    team_id=existing_guardrail.get("team_id"),
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
 
         # Create updated guardrail object
         guardrail_name = (
@@ -685,10 +594,7 @@ async def patch_guardrail(
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_guardrail_info(
-    guardrail_id: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def get_guardrail_info(guardrail_id: str):
     """
     Get detailed information about a specific guardrail by ID
 
@@ -747,19 +653,6 @@ async def get_guardrail_info(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
 
-        if result.get("team_id"):
-            team_id = getattr(user_api_key_dict, "team_id", None)
-            if getattr(
-                user_api_key_dict, "user_role", None
-            ) != LitellmUserRoles.PROXY_ADMIN or (
-                team_id is not None and team_id != "litellm-dashboard"
-            ):
-                if result.get("team_id") != team_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Not authorized to access this guardrail",
-                    )
-
         litellm_params: Optional[Union[LitellmParams, dict]] = result.get(
             "litellm_params"
         )
@@ -782,7 +675,6 @@ async def get_guardrail_info(
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
             guardrail_definition_location=guardrail_definition_location,
-            team_id=result.get("team_id"),
         )
     except HTTPException as e:
         raise e
@@ -1317,9 +1209,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields[
-        "ui_friendly_name"
-    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    tool_permission_fields["ui_friendly_name"] = (
+        ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    )
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1627,10 +1519,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[
-            CustomGuardrail
-        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-            guardrail_name=request.guardrail_name
+        active_guardrail: Optional[CustomGuardrail] = (
+            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+                guardrail_name=request.guardrail_name
+            )
         )
         if active_guardrail is None:
             raise HTTPException(
