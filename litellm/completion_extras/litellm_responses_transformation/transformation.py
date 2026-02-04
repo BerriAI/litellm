@@ -329,6 +329,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else:
                     request_data[key] = value
 
+        if headers:
+            request_data["extra_headers"] = headers
+
         return request_data
 
     @staticmethod

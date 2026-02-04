@@ -27927,7 +27927,9 @@
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 3e-07
+        "output_cost_per_token": 3e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/alibaba/qwen3-coder": {
         "input_cost_per_token": 4e-07,
@@ -27936,7 +27938,9 @@
         "max_output_tokens": 66536,
         "max_tokens": 66536,
         "mode": "chat",
-        "output_cost_per_token": 1.6e-06
+        "output_cost_per_token": 1.6e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/amazon/nova-lite": {
         "input_cost_per_token": 6e-08,
@@ -27945,7 +27949,10 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.4e-07
+        "output_cost_per_token": 2.4e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/amazon/nova-micro": {
         "input_cost_per_token": 3.5e-08,
@@ -27954,7 +27961,9 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 1.4e-07
+        "output_cost_per_token": 1.4e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/amazon/nova-pro": {
         "input_cost_per_token": 8e-07,
@@ -27963,7 +27972,10 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 3.2e-06
+        "output_cost_per_token": 3.2e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/amazon/titan-embed-text-v2": {
         "input_cost_per_token": 2e-08,
@@ -27983,7 +27995,11 @@
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 1.25e-06
+        "output_cost_per_token": 1.25e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/anthropic/claude-3-opus": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -27994,7 +28010,11 @@
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 7.5e-05
+        "output_cost_per_token": 7.5e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/anthropic/claude-3.5-haiku": {
         "cache_creation_input_token_cost": 1e-06,
@@ -28005,7 +28025,11 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 4e-06
+        "output_cost_per_token": 4e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/anthropic/claude-3.5-sonnet": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -28016,7 +28040,11 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/anthropic/claude-3.7-sonnet": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -28027,7 +28055,11 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/anthropic/claude-4-opus": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -28038,7 +28070,11 @@
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 7.5e-05
+        "output_cost_per_token": 7.5e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/anthropic/claude-4-sonnet": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -28049,7 +28085,9 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/cohere/command-a": {
         "input_cost_per_token": 2.5e-06,
@@ -28058,7 +28096,9 @@
         "max_output_tokens": 8000,
         "max_tokens": 8000,
         "mode": "chat",
-        "output_cost_per_token": 1e-05
+        "output_cost_per_token": 1e-05,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/cohere/command-r": {
         "input_cost_per_token": 1.5e-07,
@@ -28067,7 +28107,9 @@
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 6e-07
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/cohere/command-r-plus": {
         "input_cost_per_token": 2.5e-06,
@@ -28076,7 +28118,9 @@
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 1e-05
+        "output_cost_per_token": 1e-05,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/cohere/embed-v4.0": {
         "input_cost_per_token": 1.2e-07,
@@ -28094,7 +28138,8 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.19e-06
+        "output_cost_per_token": 2.19e-06,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/deepseek/deepseek-r1-distill-llama-70b": {
         "input_cost_per_token": 7.5e-07,
@@ -28103,7 +28148,10 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 9.9e-07
+        "output_cost_per_token": 9.9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/deepseek/deepseek-v3": {
         "input_cost_per_token": 9e-07,
@@ -28112,7 +28160,8 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 9e-07
+        "output_cost_per_token": 9e-07,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/google/gemini-2.0-flash": {
         "deprecation_date": "2026-03-31",
@@ -28122,7 +28171,11 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 6e-07
+        "output_cost_per_token": 6e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/google/gemini-2.0-flash-lite": {
         "deprecation_date": "2026-03-31",
@@ -28132,7 +28185,11 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 3e-07
+        "output_cost_per_token": 3e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/google/gemini-2.5-flash": {
         "input_cost_per_token": 3e-07,
@@ -28141,7 +28198,11 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06
+        "output_cost_per_token": 2.5e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/google/gemini-2.5-pro": {
         "input_cost_per_token": 2.5e-06,
@@ -28150,7 +28211,11 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
-        "output_cost_per_token": 1e-05
+        "output_cost_per_token": 1e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/google/gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
@@ -28168,7 +28233,10 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2e-07
+        "output_cost_per_token": 2e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/google/text-embedding-005": {
         "input_cost_per_token": 2.5e-08,
@@ -28204,7 +28272,8 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 7.9e-07
+        "output_cost_per_token": 7.9e-07,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/meta/llama-3-8b": {
         "input_cost_per_token": 5e-08,
@@ -28213,7 +28282,8 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 8e-08
+        "output_cost_per_token": 8e-08,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/meta/llama-3.1-70b": {
         "input_cost_per_token": 7.2e-07,
@@ -28222,7 +28292,8 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 7.2e-07
+        "output_cost_per_token": 7.2e-07,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/meta/llama-3.1-8b": {
         "input_cost_per_token": 5e-08,
@@ -28231,7 +28302,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 8e-08
+        "output_cost_per_token": 8e-08,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/meta/llama-3.2-11b": {
         "input_cost_per_token": 1.6e-07,
@@ -28240,7 +28313,10 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 1.6e-07
+        "output_cost_per_token": 1.6e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/meta/llama-3.2-1b": {
         "input_cost_per_token": 1e-07,
@@ -28258,7 +28334,9 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-07
+        "output_cost_per_token": 1.5e-07,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/meta/llama-3.2-90b": {
         "input_cost_per_token": 7.2e-07,
@@ -28267,7 +28345,10 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 7.2e-07
+        "output_cost_per_token": 7.2e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/meta/llama-3.3-70b": {
         "input_cost_per_token": 7.2e-07,
@@ -28276,7 +28357,9 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 7.2e-07
+        "output_cost_per_token": 7.2e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/meta/llama-4-maverick": {
         "input_cost_per_token": 2e-07,
@@ -28285,7 +28368,8 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 6e-07
+        "output_cost_per_token": 6e-07,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/meta/llama-4-scout": {
         "input_cost_per_token": 1e-07,
@@ -28294,7 +28378,10 @@
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 3e-07
+        "output_cost_per_token": 3e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/mistral/codestral": {
         "input_cost_per_token": 3e-07,
@@ -28303,7 +28390,9 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 9e-07
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/mistral/codestral-embed": {
         "input_cost_per_token": 1.5e-07,
@@ -28321,7 +28410,10 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 2.8e-07
+        "output_cost_per_token": 2.8e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/mistral/magistral-medium": {
         "input_cost_per_token": 2e-06,
@@ -28330,7 +28422,10 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 5e-06
+        "output_cost_per_token": 5e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/mistral/magistral-small": {
         "input_cost_per_token": 5e-07,
@@ -28339,7 +28434,8 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-06
+        "output_cost_per_token": 1.5e-06,
+        "supports_function_calling": true
     },
     "vercel_ai_gateway/mistral/ministral-3b": {
         "input_cost_per_token": 4e-08,
@@ -28348,7 +28444,9 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 4e-08
+        "output_cost_per_token": 4e-08,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/mistral/ministral-8b": {
         "input_cost_per_token": 1e-07,
@@ -28357,7 +28455,10 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 1e-07
+        "output_cost_per_token": 1e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/mistral/mistral-embed": {
         "input_cost_per_token": 1e-07,
@@ -28375,7 +28476,9 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 6e-06
+        "output_cost_per_token": 6e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/mistral/mistral-saba-24b": {
         "input_cost_per_token": 7.9e-07,
@@ -28393,7 +28496,10 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 3e-07
+        "output_cost_per_token": 3e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": {
         "input_cost_per_token": 1.2e-06,
@@ -28402,7 +28508,8 @@
         "max_output_tokens": 2048,
         "max_tokens": 2048,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true
     },
     "vercel_ai_gateway/mistral/pixtral-12b": {
         "input_cost_per_token": 1.5e-07,
@@ -28411,7 +28518,11 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-07
+        "output_cost_per_token": 1.5e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/mistral/pixtral-large": {
         "input_cost_per_token": 2e-06,
@@ -28420,7 +28531,11 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 6e-06
+        "output_cost_per_token": 6e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/moonshotai/kimi-k2": {
         "input_cost_per_token": 5.5e-07,
@@ -28429,7 +28544,9 @@
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 2.2e-06
+        "output_cost_per_token": 2.2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/morph/morph-v3-fast": {
         "input_cost_per_token": 8e-07,
@@ -28456,7 +28573,9 @@
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-06
+        "output_cost_per_token": 1.5e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": {
         "input_cost_per_token": 1.5e-06,
@@ -28474,7 +28593,10 @@
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05
+        "output_cost_per_token": 3e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/openai/gpt-4.1": {
         "cache_creation_input_token_cost": 0.0,
@@ -28485,7 +28607,11 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 8e-06
+        "output_cost_per_token": 8e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/gpt-4.1-mini": {
         "cache_creation_input_token_cost": 0.0,
@@ -28496,7 +28622,11 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 1.6e-06
+        "output_cost_per_token": 1.6e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/gpt-4.1-nano": {
         "cache_creation_input_token_cost": 0.0,
@@ -28507,7 +28637,11 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 4e-07
+        "output_cost_per_token": 4e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/gpt-4o": {
         "cache_creation_input_token_cost": 0.0,
@@ -28518,7 +28652,11 @@
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 1e-05
+        "output_cost_per_token": 1e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/gpt-4o-mini": {
         "cache_creation_input_token_cost": 0.0,
@@ -28529,7 +28667,11 @@
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 6e-07
+        "output_cost_per_token": 6e-07,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/o1": {
         "cache_creation_input_token_cost": 0.0,
@@ -28540,7 +28682,11 @@
         "max_output_tokens": 100000,
         "max_tokens": 100000,
         "mode": "chat",
-        "output_cost_per_token": 6e-05
+        "output_cost_per_token": 6e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/o3": {
         "cache_creation_input_token_cost": 0.0,
@@ -28551,7 +28697,11 @@
         "max_output_tokens": 100000,
         "max_tokens": 100000,
         "mode": "chat",
-        "output_cost_per_token": 8e-06
+        "output_cost_per_token": 8e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/o3-mini": {
         "cache_creation_input_token_cost": 0.0,
@@ -28562,7 +28712,10 @@
         "max_output_tokens": 100000,
         "max_tokens": 100000,
         "mode": "chat",
-        "output_cost_per_token": 4.4e-06
+        "output_cost_per_token": 4.4e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/o4-mini": {
         "cache_creation_input_token_cost": 0.0,
@@ -28573,7 +28726,11 @@
         "max_output_tokens": 100000,
         "max_tokens": 100000,
         "mode": "chat",
-        "output_cost_per_token": 4.4e-06
+        "output_cost_per_token": 4.4e-06,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/openai/text-embedding-3-large": {
         "input_cost_per_token": 1.3e-07,
@@ -28645,7 +28802,10 @@
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/vercel/v0-1.5-md": {
         "input_cost_per_token": 3e-06,
@@ -28654,7 +28814,10 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/xai/grok-2": {
         "input_cost_per_token": 2e-06,
@@ -28663,7 +28826,9 @@
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 1e-05
+        "output_cost_per_token": 1e-05,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/xai/grok-2-vision": {
         "input_cost_per_token": 2e-06,
@@ -28672,7 +28837,10 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 1e-05
+        "output_cost_per_token": 1e-05,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/xai/grok-3": {
         "input_cost_per_token": 3e-06,
@@ -28681,7 +28849,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/xai/grok-3-fast": {
         "input_cost_per_token": 5e-06,
@@ -28690,7 +28860,8 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-05
+        "output_cost_per_token": 2.5e-05,
+        "supports_function_calling": true
     },
     "vercel_ai_gateway/xai/grok-3-mini": {
         "input_cost_per_token": 3e-07,
@@ -28699,7 +28870,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 5e-07
+        "output_cost_per_token": 5e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/xai/grok-3-mini-fast": {
         "input_cost_per_token": 6e-07,
@@ -28708,7 +28881,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 4e-06
+        "output_cost_per_token": 4e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/xai/grok-4": {
         "input_cost_per_token": 3e-06,
@@ -28717,7 +28892,9 @@
         "max_output_tokens": 256000,
         "max_tokens": 256000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/zai/glm-4.5": {
         "input_cost_per_token": 6e-07,
@@ -28726,7 +28903,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 2.2e-06
+        "output_cost_per_token": 2.2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/zai/glm-4.5-air": {
         "input_cost_per_token": 2e-07,
@@ -28735,7 +28914,9 @@
         "max_output_tokens": 96000,
         "max_tokens": 96000,
         "mode": "chat",
-        "output_cost_per_token": 1.1e-06
+        "output_cost_per_token": 1.1e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/zai/glm-4.6": {
         "litellm_provider": "vercel_ai_gateway",
@@ -29912,7 +30093,9 @@
         "mode": "chat",
         "output_cost_per_token": 1e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29925,7 +30108,9 @@
         "mode": "chat",
         "output_cost_per_token": 4e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29938,7 +30123,9 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29951,7 +30138,9 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
