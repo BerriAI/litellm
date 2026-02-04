@@ -903,6 +903,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             full_model, api_base, api_key, "ragflow"
         )
         model = full_model
+    elif custom_llm_provider == "gdm":
+        # GDM is OpenAI compatible at https://ai.gdm.se/api/v1
+        api_base = (
+            api_base
+            or get_secret_str("GDM_API_BASE")
+            or "https://ai.gdm.se/api/v1"
+        )
+        dynamic_api_key = api_key or get_secret_str("GDM_API_KEY")
     elif custom_llm_provider == "langgraph":
         # LangGraph is a custom provider, just need to set api_base
         api_base = (
