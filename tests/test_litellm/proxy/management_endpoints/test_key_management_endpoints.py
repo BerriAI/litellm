@@ -817,12 +817,12 @@ async def test_key_info_returns_object_permission(monkeypatch):
     related object_permission object.
     """
     from unittest.mock import AsyncMock, MagicMock
-    
+
     import pytest
-    
+
     from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
-    
+
     # Mock prisma client
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
