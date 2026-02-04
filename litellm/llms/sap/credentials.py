@@ -184,7 +184,7 @@ def resolve_resource_group(sources: List[Source]) -> Optional[str]:
             return value
     return rg_cred.default
 
-def fetch_credentials(service_key: Optional[str, dict] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
+def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
     """
     Resolution order per key:
       kwargs
@@ -200,9 +200,10 @@ def fetch_credentials(service_key: Optional[str, dict] = None, profile: Optional
     vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     sources = [
-        Source("service key", lambda cv: _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))), # type: ignore[arg-type]
         Source("kwargs",
                lambda cv: _str_or_none(kwargs.get(cv.name))),
+        Source("service key",
+               lambda cv: _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))), # type: ignore[arg-type]
         Source("environment variables",
                lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
         Source("config file",
