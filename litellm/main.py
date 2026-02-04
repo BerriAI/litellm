@@ -2201,14 +2201,24 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "a2a":
             # A2A (Agent-to-Agent) Protocol
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("A2A_API_BASE")
+            # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
+            api_base, api_key, headers = litellm.A2AConfig.resolve_agent_config_from_registry(
+                model=model,
+                api_base=api_base,
+                api_key=api_key,
+                headers=headers,
+                optional_params=optional_params,
             )
-
+            
+            # Fall back to environment variables and defaults
+            api_base = api_base or litellm.api_base or get_secret_str("A2A_API_BASE")
+            
             if api_base is None:
-                raise Exception("api_base is required for A2A provider")
+                raise Exception(
+                    "api_base is required for A2A provider. "
+                    "Either provide api_base parameter, set A2A_API_BASE environment variable, "
+                    "or register the agent in the proxy with model='a2a/<agent-name>'."
+                )
 
             headers = headers or litellm.headers
 
