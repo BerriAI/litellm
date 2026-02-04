@@ -5571,10 +5571,11 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("GDM_API_KEY")
                 or litellm.api_key
             )
-            response = openai_like_embedding.embedding(
+            response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
-                api_base=api_base or "https://ai.gdm.se/api/v1",
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
                 api_key=api_key,
                 logging_obj=logging,
                 timeout=timeout,
@@ -5582,6 +5583,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                litellm_params={},
             )
         else:
             raise LiteLLMUnknownProvider(

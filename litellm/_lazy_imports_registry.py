@@ -289,6 +289,7 @@ LLM_CONFIG_NAMES = (
     "WandbConfig",
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
+    "GDMEmbeddingConfig",
     "DashScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
@@ -1078,6 +1079,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "GigaChatEmbeddingConfig": (
         ".llms.gigachat.embedding.transformation",
         "GigaChatEmbeddingConfig",
+    ),
+    "GDMEmbeddingConfig": (
+        ".llms.gdm.embed.transformation",
+        "GDMEmbeddingConfig",
     ),
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",

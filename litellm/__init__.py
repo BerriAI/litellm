@@ -1479,6 +1479,7 @@ if TYPE_CHECKING:
     from .llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig as ChatGPTResponsesAPIConfig
     from .llms.gigachat.chat.transformation import GigaChatConfig as GigaChatConfig
     from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig as GigaChatEmbeddingConfig
+    from .llms.gdm.embed.transformation import GDMEmbeddingConfig as GDMEmbeddingConfig
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import DashScopeChatConfig as DashScopeChatConfig

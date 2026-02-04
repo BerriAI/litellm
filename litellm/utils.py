@@ -8086,6 +8086,8 @@ class ProviderConfigManager:
             )
 
             return SagemakerEmbeddingConfig.get_model_config(model)
+        elif litellm.LlmProviders.GDM == provider:
+            return litellm.GDMEmbeddingConfig()
         return None
 
     @staticmethod
