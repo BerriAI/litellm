@@ -32,6 +32,23 @@
     }
   },
   "providers": {
+    "a2a": {
+      "display_name": "A2A (Agent-to-Agent) (`a2a`)",
+      "url": "https://docs.litellm.ai/docs/providers/a2a",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "abliteration": {
       "display_name": "Abliteration (`abliteration`)",
       "url": "https://docs.litellm.ai/docs/providers/abliteration",
@@ -2166,7 +2183,8 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "realtime": true
       }
     },
     "xinference": {
