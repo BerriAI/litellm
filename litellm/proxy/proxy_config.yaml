@@ -1,4 +1,14 @@
 model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
   - model_name: bedrock-claude-sonnet-3.5
     litellm_params:
       model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
@@ -22,4 +32,31 @@ model_list:
   - model_name: bedrock-nova-premier
     litellm_params:
       model: "bedrock/us.amazon.nova-premier-v1:0"
-      aws_region_name: "us-east-1"   
+      aws_region_name: "us-east-1"
+
+# MCP Server Configuration
+mcp_servers:
+  # Wikipedia MCP - reliable and works without external deps
+  wikipedia:
+    transport: "stdio"
+    command: "uvx"
+    args: ["mcp-server-fetch"]
+    description: "Fetch web pages and Wikipedia content"
+  deepwiki:
+    transport: "http"
+    url: "https://mcp.deepwiki.com/mcp"
+
+# General Settings
+general_settings:
+  master_key: sk-1234
+  store_model_in_db: false
+
+# LiteLLM Settings
+litellm_settings:
+  # Enable MCP Semantic Tool Filter
+  mcp_semantic_tool_filter:
+    enabled: true
+    embedding_model: "text-embedding-3-small"
+    top_k: 5
+    similarity_threshold: 0.3
+  

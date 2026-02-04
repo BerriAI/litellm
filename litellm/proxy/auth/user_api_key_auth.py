@@ -604,6 +604,21 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if team_object is not None
                     else None,
                 )
+                
+                # Check if model has zero cost - if so, skip all budget checks
+                model = get_model_from_request(request_data, route)
+                skip_budget_checks = False
+                if model is not None and llm_router is not None:
+                    from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                    
+                    skip_budget_checks = _is_model_cost_zero(
+                        model=model, llm_router=llm_router
+                    )
+                    if skip_budget_checks:
+                        verbose_proxy_logger.info(
+                            f"Skipping all budget checks for zero-cost model: {model}"
+                        )
+                
                 # run through common checks
                 _ = await common_checks(
                     request=request,
@@ -617,6 +632,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     llm_router=llm_router,
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
+                    skip_budget_checks=skip_budget_checks,
                 )
 
                 # return UserAPIKeyAuth object
@@ -1008,8 +1024,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     user_obj = None
 
+            # Check 2a. Check if model has zero cost - if so, skip all budget checks
+            model = get_model_from_request(request_data, route)
+            skip_budget_checks = False
+            if model is not None and llm_router is not None:
+                from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                
+                skip_budget_checks = _is_model_cost_zero(
+                    model=model, llm_router=llm_router
+                )
+                if skip_budget_checks:
+                    verbose_proxy_logger.info(
+                        f"Skipping all budget checks for zero-cost model: {model}"
+                    )
+
             # Check 3. Check if user is in their team budget
-            if valid_token.team_member_spend is not None:
+            if not skip_budget_checks and valid_token.team_member_spend is not None:
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
@@ -1073,45 +1103,46 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         param=abbreviate_api_key(api_key=api_key),
                     )
 
-            # Check 4. Token Spend is under budget
-            if RouteChecks.is_llm_api_route(route=route):
-                await _virtual_key_max_budget_check(
+            if not skip_budget_checks:
+                # Check 4. Token Spend is under budget
+                if RouteChecks.is_llm_api_route(route=route):
+                    await _virtual_key_max_budget_check(
+                        valid_token=valid_token,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_obj=user_obj,
+                    )
+
+                # Check 5. Max Budget Alert Check
+                await _virtual_key_max_budget_alert_check(
                     valid_token=valid_token,
                     proxy_logging_obj=proxy_logging_obj,
                     user_obj=user_obj,
                 )
 
-            # Check 5. Max Budget Alert Check
-            await _virtual_key_max_budget_alert_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-                user_obj=user_obj,
-            )
-
-            # Check 6. Soft Budget Check
-            await _virtual_key_soft_budget_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-                user_obj=user_obj,
-            )
-
-            # Check 5. Token Model Spend is under Model budget
-            max_budget_per_model = valid_token.model_max_budget
-            current_model = request_data.get("model", None)
-
-            if (
-                max_budget_per_model is not None
-                and isinstance(max_budget_per_model, dict)
-                and len(max_budget_per_model) > 0
-                and prisma_client is not None
-                and current_model is not None
-                and valid_token.token is not None
-            ):
-                ## GET THE SPEND FOR THIS MODEL
-                await model_max_budget_limiter.is_key_within_model_budget(
-                    user_api_key_dict=valid_token,
-                    model=current_model,
+                # Check 6. Soft Budget Check
+                await _virtual_key_soft_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_obj,
                 )
+
+                # Check 5. Token Model Spend is under Model budget
+                max_budget_per_model = valid_token.model_max_budget
+                current_model = request_data.get("model", None)
+
+                if (
+                    max_budget_per_model is not None
+                    and isinstance(max_budget_per_model, dict)
+                    and len(max_budget_per_model) > 0
+                    and prisma_client is not None
+                    and current_model is not None
+                    and valid_token.token is not None
+                ):
+                    ## GET THE SPEND FOR THIS MODEL
+                    await model_max_budget_limiter.is_key_within_model_budget(
+                        user_api_key_dict=valid_token,
+                        model=current_model,
+                    )
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
@@ -1171,6 +1202,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 llm_router=llm_router,
                 proxy_logging_obj=proxy_logging_obj,
                 valid_token=valid_token,
+                skip_budget_checks=skip_budget_checks,
             )
             # Token passed all checks
             if valid_token is None:

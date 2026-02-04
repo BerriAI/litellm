@@ -1808,6 +1808,46 @@ class ProxyLogging:
             raise e
         return response
 
+    async def post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """
+        Calls async_post_call_response_headers_hook on all CustomLogger callbacks.
+        Merges all returned header dicts (later callbacks override earlier ones).
+
+        Returns:
+            Dict[str, str]: Merged headers from all callbacks.
+        """
+        merged_headers: Dict[str, str] = {}
+        try:
+            for callback in litellm.callbacks:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is not None and isinstance(_callback, CustomLogger):
+                    result = await _callback.async_post_call_response_headers_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_headers=request_headers,
+                    )
+                    if result is not None:
+                        merged_headers.update(result)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error in post_call_response_headers_hook: %s", str(e)
+            )
+        return merged_headers
+
     async def async_post_call_streaming_hook(
         self,
         data: dict,
