@@ -238,8 +238,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
             filter_value_from_dict(cast(dict, message), "cache_control")
             # Remove fields not permitted by FireworksAI that may cause:
             # "Not permitted, field: 'messages[n].provider_specific_fields'"
-            if isinstance(message, dict) and "provider_specific_fields" in message:
-                message.pop("provider_specific_fields", None)
+            if isinstance(message, dict) and "provider_specific_fields" in message:  # type: ignore[typeddict-item]
+                message.pop("provider_specific_fields", None)  # type: ignore[typeddict-item]
 
         return messages
 
