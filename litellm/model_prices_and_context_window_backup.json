@@ -744,7 +744,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_native_streaming": true
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
