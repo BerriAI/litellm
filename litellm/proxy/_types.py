@@ -2061,6 +2061,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
     )
+    cors_allow_origins: Optional[List[str]] = Field(
+        None,
+        description="CORS allowlist origins for the proxy. Defaults to all origins ('*') when unset. When set, only these origins receive CORS headers.",
+    )
+    cors_allow_credentials: Optional[bool] = Field(
+        None,
+        description="Allow CORS credentials. Defaults to False. Requires explicit cors_allow_origins (no wildcard).",
+    )
+    cors_allow_methods: Optional[List[str]] = Field(
+        None,
+        description="CORS allowlist methods for the proxy. Defaults to '*' when unset.",
+    )
+    cors_allow_headers: Optional[List[str]] = Field(
+        None,
+        description="CORS allowlist headers for the proxy. Defaults to '*' when unset.",
+    )
     reject_clientside_metadata_tags: Optional[bool] = Field(
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
