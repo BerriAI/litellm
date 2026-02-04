@@ -1342,7 +1342,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       {isCreateUserModalVisible && (
         <Modal
           title="Create New User"
-          visible={isCreateUserModalVisible}
+          open={isCreateUserModalVisible}
           onCancel={() => setIsCreateUserModalVisible(false)}
           footer={null}
           width={800}
@@ -1359,7 +1359,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       )}
 
       {apiKey && (
-        <Modal visible={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
+        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>
