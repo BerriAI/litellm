@@ -21,15 +21,15 @@ LiteLLM Prisma Client Exception get_generic_data: All connection attempts failed
 
 ### 1. Per-Request Router Creation with Expensive Prometheus Initialization (v1.81.0-v1.81.5)
 
-**Issue:** When `router_settings` exist in the database (global, team, or key level), the system was creating a new `Router` instance for every request. The `Router.__init__` was initializing `PrometheusServicesLogger` which called `REGISTRY.collect()` (O(n) operation) to check if metrics were registered. With many metrics, this became extremely CPU-intensive.
+**Issue:** The hierarchical Key > Team > Global router settings feature (PR #18790) was creating a new `Router` instance for every request when `router_settings` existed in the database. The `Router.__init__` was initializing `PrometheusServicesLogger` which called `REGISTRY.collect()` (O(n) operation) to check if metrics were registered. With many metrics, this became extremely CPU-intensive.
 
-**Fixed in:** PR #20087 - Changed `is_metric_registered()` to use `REGISTRY._names_to_collectors` (O(1)) instead of `REGISTRY.collect()` (O(n))
+**Resolution:** 
+- PR #18790 was **reverted** in commit `35e29c2bcdc05b912a74b2cf40cc2fec32429823`
+- PR #20087 fixed the underlying O(n) Prometheus scan issue for future use
 
-### 2. Redundant Router Creation for Global Settings
+### 2. Stale Router Settings in Database
 
-**Issue:** Even after the Prometheus fix, global `router_settings` from DB were triggering per-request Router creation, but global settings are already applied to the shared `llm_router` at startup.
-
-**Fixed in:** PR #20133 - Skip global settings in hierarchical lookup, only use key/team-specific settings for per-request Router creation.
+**Issue:** Users who had `router_settings` stored in the `LiteLLM_Config` table (global settings) may still experience issues even after the revert, as these settings can still be read during startup.
 
 ### 3. DB Connection Pool Exhaustion (IAM Token Auth)
 
@@ -154,6 +154,8 @@ For deployments with multiple pods:
 ## Related Issues and PRs
 
 - [Issue #19921](https://github.com/BerriAI/litellm/issues/19921) - Performance regression report
+- [PR #18790](https://github.com/BerriAI/litellm/pull/18790) - Key/Team Router Settings feature (reverted)
+- [Commit 35e29c2](https://github.com/BerriAI/litellm/commit/35e29c2bcdc05b912a74b2cf40cc2fec32429823) - Revert of PR #18790
 - [PR #20087](https://github.com/BerriAI/litellm/pull/20087) - Fix Prometheus O(n) scan
 - [PR #20133](https://github.com/BerriAI/litellm/pull/20133) - Skip global router_settings in per-request Router
 - [PR #13140](https://github.com/BerriAI/litellm/pull/13140) - Fix stale Prisma client disconnection
