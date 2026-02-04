@@ -45,7 +45,7 @@ const AddOrgAdmin: FC<AddOrgAdminProps> = ({ userRole, userID, selectedOrganizat
 
       <Modal
         title="Add member"
-        visible={isAddMemberModalVisible}
+        open={isAddMemberModalVisible}
         width={800}
         footer={null}
         onOk={handleMemberOk}

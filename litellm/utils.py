@@ -1453,6 +1453,10 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            
+            # Type assertion: logging_obj is guaranteed to be non-None after function_setup
+            assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
@@ -1771,6 +1775,9 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            
+            # Type assertion: logging_obj is guaranteed to be non-None after function_setup
+            assert logging_obj is not None, "logging_obj should not be None after function_setup"
 
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
@@ -7799,6 +7806,7 @@ class ProviderConfigManager:
             # Simple provider mappings (no model parameter needed)
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
+            LlmProviders.A2A: (lambda: litellm.A2AConfig(), False),
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),

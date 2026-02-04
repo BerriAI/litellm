@@ -239,6 +239,10 @@ from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.a2a_endpoints import router as a2a_router
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
+from litellm.proxy.agent_endpoints.model_list_helpers import (
+    append_agents_to_model_group,
+    append_agents_to_model_info,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -8616,6 +8620,15 @@ async def model_info_v2(
         )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
+    
+    # Append A2A agents to models list
+    all_models = await append_agents_to_model_info(
+        models=all_models,
+        user_api_key_dict=user_api_key_dict,
+    )
+    
+    # Update total count to include agents
+    search_total_count = len(all_models)
 
     return _paginate_models_response(
         all_models=all_models,
@@ -9455,6 +9468,12 @@ async def model_group_info(
     )
     model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
+    )
+    
+    # Append A2A agents to model groups
+    model_groups = await append_agents_to_model_group(
+        model_groups=model_groups,
+        user_api_key_dict=user_api_key_dict,
     )
 
     return {"data": model_groups}

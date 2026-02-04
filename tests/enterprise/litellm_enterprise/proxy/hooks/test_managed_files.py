@@ -587,6 +587,499 @@ def test_update_responses_input_with_multiple_file_ids():
     assert updated_input[0]["content"][1]["text"] == "Compare these files"
 
 
+def test_update_responses_input_with_model_file_id_mapping():
+    """
+    Test that update_responses_input_with_model_file_ids correctly uses
+    model_file_id_mapping to map managed file IDs to provider-specific file IDs.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+
+    # Managed file ID (unified)
+    managed_file_id = "litellm_proxy_file_123"
+    
+    # Model file ID mapping
+    model_file_id_mapping = {
+        managed_file_id: {
+            "model_id_1": "openai_file_abc",
+            "model_id_2": "azure_file_xyz",
+        }
+    }
+    
+    input_data = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "file_id": managed_file_id,
+                },
+                {
+                    "type": "input_text",
+                    "text": "Analyze this file",
+                },
+            ],
+        }
+    ]
+    
+    # Update input with model_id_1 mapping
+    updated_input = update_responses_input_with_model_file_ids(
+        input=input_data,
+        model_id="model_id_1",
+        model_file_id_mapping=model_file_id_mapping,
+    )
+    
+    # Verify the file_id was mapped to the correct provider-specific file ID
+    assert updated_input[0]["content"][0]["file_id"] == "openai_file_abc"
+    
+    # Test with different model_id
+    updated_input_2 = update_responses_input_with_model_file_ids(
+        input=input_data,
+        model_id="model_id_2",
+        model_file_id_mapping=model_file_id_mapping,
+    )
+    
+    assert updated_input_2[0]["content"][0]["file_id"] == "azure_file_xyz"
+
+
+def test_update_responses_tools_with_model_file_id_mapping():
+    """
+    Test that update_responses_tools_with_model_file_ids correctly maps
+    file IDs in code_interpreter tools with container.file_ids.
+    
+    This is a regression test for the issue where managed file IDs in
+    tools.container.file_ids were not being replaced with provider-specific
+    file IDs, causing "string too long" errors from OpenAI.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_tools_with_model_file_ids,
+    )
+
+    # Managed file IDs
+    managed_file_id_1 = "litellm_proxy_file_123"
+    managed_file_id_2 = "litellm_proxy_file_456"
+    
+    # Model file ID mapping
+    model_file_id_mapping = {
+        managed_file_id_1: {
+            "model_id_1": "openai_file_abc",
+        },
+        managed_file_id_2: {
+            "model_id_1": "openai_file_def",
+        },
+    }
+    
+    tools = [
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": [managed_file_id_1, managed_file_id_2],
+            },
+        }
+    ]
+    
+    # Update tools with model mapping
+    updated_tools = update_responses_tools_with_model_file_ids(
+        tools=tools,
+        model_id="model_id_1",
+        model_file_id_mapping=model_file_id_mapping,
+    )
+    
+    # Verify the file IDs were mapped to provider-specific file IDs
+    assert updated_tools[0]["type"] == "code_interpreter"
+    assert updated_tools[0]["container"]["file_ids"] == ["openai_file_abc", "openai_file_def"]
+
+
+def test_update_responses_tools_without_mapping():
+    """
+    Test that update_responses_tools_with_model_file_ids keeps file IDs
+    unchanged when no mapping is provided.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_tools_with_model_file_ids,
+    )
+
+    regular_file_id = "file-abc123"
+    
+    tools = [
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": [regular_file_id],
+            },
+        }
+    ]
+    
+    # Update tools without mapping
+    updated_tools = update_responses_tools_with_model_file_ids(
+        tools=tools,
+        model_id=None,
+        model_file_id_mapping=None,
+    )
+    
+    # Verify the file ID was kept unchanged
+    assert updated_tools[0]["container"]["file_ids"] == [regular_file_id]
+
+
+def test_update_responses_tools_with_mixed_file_ids():
+    """
+    Test that update_responses_tools_with_model_file_ids correctly handles
+    a mix of managed and regular file IDs.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_tools_with_model_file_ids,
+    )
+
+    managed_file_id = "litellm_proxy_file_123"
+    regular_file_id = "file-abc123"
+    
+    model_file_id_mapping = {
+        managed_file_id: {
+            "model_id_1": "openai_file_abc",
+        },
+    }
+    
+    tools = [
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": [managed_file_id, regular_file_id],
+            },
+        }
+    ]
+    
+    # Update tools
+    updated_tools = update_responses_tools_with_model_file_ids(
+        tools=tools,
+        model_id="model_id_1",
+        model_file_id_mapping=model_file_id_mapping,
+    )
+    
+    # Verify managed file ID was mapped and regular file ID was kept
+    assert updated_tools[0]["container"]["file_ids"] == ["openai_file_abc", regular_file_id]
+
+
+def test_get_file_ids_from_responses_tools():
+    """
+    Test that get_file_ids_from_responses_tools correctly extracts
+    file IDs from the tools parameter.
+    """
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    
+    tools = [
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": ["file-123", "file-456"],
+            },
+        }
+    ]
+    
+    file_ids = proxy_managed_files.get_file_ids_from_responses_tools(tools)
+    
+    assert file_ids == ["file-123", "file-456"]
+
+
+def test_get_file_ids_from_responses_tools_multiple_tools():
+    """
+    Test that get_file_ids_from_responses_tools handles multiple tools.
+    """
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    
+    tools = [
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": ["file-123"],
+            },
+        },
+        {
+            "type": "file_search",
+        },
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": ["file-456", "file-789"],
+            },
+        },
+    ]
+    
+    file_ids = proxy_managed_files.get_file_ids_from_responses_tools(tools)
+    
+    # Should extract file IDs only from code_interpreter tools
+    assert file_ids == ["file-123", "file-456", "file-789"]
+
+
+def test_get_file_ids_from_responses_tools_empty():
+    """
+    Test that get_file_ids_from_responses_tools handles empty or None tools.
+    """
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    
+    # Test with None
+    file_ids = proxy_managed_files.get_file_ids_from_responses_tools(None)
+    assert file_ids == []
+    
+    # Test with empty list
+    file_ids = proxy_managed_files.get_file_ids_from_responses_tools([])
+    assert file_ids == []
+    
+    # Test with tools without file_ids
+    tools = [{"type": "file_search"}]
+    file_ids = proxy_managed_files.get_file_ids_from_responses_tools(tools)
+    assert file_ids == []
+
+
+@pytest.mark.asyncio
+async def test_check_file_ids_access_with_unified_file_ids():
+    """
+    Test that check_file_ids_access validates user access to managed file IDs.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    # Create a unified file ID
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    regular_file_id = "file-abc123"
+    
+    # Mock the access check to return True
+    prisma_client = AsyncMock()
+    internal_usage_cache = MagicMock()
+    
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+    
+    # Mock can_user_call_unified_file_id to return True
+    proxy_managed_files.can_user_call_unified_file_id = AsyncMock(return_value=True)
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user_123",
+        parent_otel_span=MagicMock(),
+    )
+    
+    # Should not raise an exception for accessible files
+    await proxy_managed_files.check_file_ids_access(
+        [unified_file_id, regular_file_id],
+        user_api_key_dict,
+    )
+    
+    # Verify can_user_call_unified_file_id was called for the unified file ID
+    proxy_managed_files.can_user_call_unified_file_id.assert_called_once_with(
+        unified_file_id, user_api_key_dict
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_file_ids_access_denied():
+    """
+    Test that check_file_ids_access raises HTTPException when user doesn't have access.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    
+    prisma_client = AsyncMock()
+    internal_usage_cache = MagicMock()
+    
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+    
+    # Mock can_user_call_unified_file_id to return False (access denied)
+    proxy_managed_files.can_user_call_unified_file_id = AsyncMock(return_value=False)
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user_123",
+        parent_otel_span=MagicMock(),
+    )
+    
+    # Should raise HTTPException with 403 status code
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_managed_files.check_file_ids_access(
+            [unified_file_id],
+            user_api_key_dict,
+        )
+    
+    assert exc_info.value.status_code == 403
+    assert "does not have access to the file" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_check_file_ids_access_with_regular_files_only():
+    """
+    Test that check_file_ids_access doesn't check access for regular (non-unified) file IDs.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    regular_file_id_1 = "file-abc123"
+    regular_file_id_2 = "file-xyz789"
+    
+    prisma_client = AsyncMock()
+    internal_usage_cache = MagicMock()
+    
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+    
+    # Mock can_user_call_unified_file_id (should not be called for regular files)
+    proxy_managed_files.can_user_call_unified_file_id = AsyncMock()
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user_123",
+        parent_otel_span=MagicMock(),
+    )
+    
+    # Should not raise exception and should not call can_user_call_unified_file_id
+    await proxy_managed_files.check_file_ids_access(
+        [regular_file_id_1, regular_file_id_2],
+        user_api_key_dict,
+    )
+    
+    # Verify can_user_call_unified_file_id was NOT called
+    proxy_managed_files.can_user_call_unified_file_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_completion_with_file_access_check():
+    """
+    Test that completion call type checks file access before processing.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    
+    internal_usage_cache = MagicMock()
+    internal_usage_cache.async_get_cache = AsyncMock(return_value=None)
+    
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+    
+    # Mock the get_model_file_id_mapping to return empty dict
+    proxy_managed_files.get_model_file_id_mapping = AsyncMock(return_value={})
+    
+    # Mock access check to allow access
+    proxy_managed_files.can_user_call_unified_file_id = AsyncMock(return_value=True)
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user_123",
+        parent_otel_span=MagicMock(),
+    )
+    
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this file?"},
+                    {
+                        "type": "file",
+                        "file": {"file_id": unified_file_id},
+                    },
+                ],
+            }
+        ],
+        "model": "gpt-4",
+    }
+    
+    # Should not raise exception
+    result = await proxy_managed_files.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=data,
+        call_type="acompletion",
+    )
+    
+    # Verify access check was called
+    proxy_managed_files.can_user_call_unified_file_id.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_responses_with_file_access_check():
+    """
+    Test that responses API checks file access for files in both input and tools.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    unified_file_id_1 = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    unified_file_id_2 = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsNzc3Nzc3Nzc7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1YWVo7bGxtX291dHB1dF9maWxlX21vZGVsX2lkLG1vZGVsXzEyMw"
+    
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    
+    internal_usage_cache = MagicMock()
+    internal_usage_cache.async_get_cache = AsyncMock(return_value=None)
+    
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+    
+    # Mock the get_model_file_id_mapping to return empty dict
+    proxy_managed_files.get_model_file_id_mapping = AsyncMock(return_value={})
+    
+    # Mock access check to allow access
+    proxy_managed_files.can_user_call_unified_file_id = AsyncMock(return_value=True)
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user_123",
+        parent_otel_span=MagicMock(),
+    )
+    
+    data = {
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Analyze this"},
+                    {"type": "input_file", "file_id": unified_file_id_1},
+                ],
+            }
+        ],
+        "tools": [
+            {
+                "type": "code_interpreter",
+                "container": {
+                    "type": "auto",
+                    "file_ids": [unified_file_id_2],
+                },
+            }
+        ],
+        "model": "gpt-4",
+    }
+    
+    # Should not raise exception
+    result = await proxy_managed_files.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=data,
+        call_type="aresponses",
+    )
+    
+    # Verify access check was called for both file IDs
+    assert proxy_managed_files.can_user_call_unified_file_id.call_count == 2
+
+
 @pytest.mark.asyncio
 async def test_store_unified_file_id_with_none_file_object():
     """
