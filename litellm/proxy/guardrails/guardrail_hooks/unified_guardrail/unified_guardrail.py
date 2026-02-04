@@ -7,7 +7,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 """
 
 import copy
-from typing import Any, AsyncGenerator, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -18,10 +18,67 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes, CallTypesLiteral, ModelResponseStream
+from litellm.types.utils import (
+    CallTypes,
+    CallTypesLiteral,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
 endpoint_guardrail_translation_mappings = None
+
+
+def _get_guardrailed_texts_from_first_chunk(
+    first_chunk: ModelResponseStream,
+) -> Dict[Tuple[int, Optional[int]], str]:
+    """
+    Extract full guardrailed text per (choice_idx, content_idx) from the first
+    chunk after process_output_streaming_response (which puts it in the first chunk).
+    """
+    result: Dict[Tuple[int, Optional[int]], str] = {}
+    for choice_idx, choice in enumerate(first_chunk.choices):
+        if not isinstance(choice, StreamingChoices):
+            continue
+        content = choice.delta.content
+        if content is None:
+            continue
+        if isinstance(content, str):
+            result[(choice_idx, None)] = content
+        elif isinstance(content, list):
+            for content_idx, content_item in enumerate(content):
+                if "text" in content_item:
+                    result[(choice_idx, content_idx)] = content_item["text"]
+    return result
+
+
+def _chunk_with_content_deltas(
+    base_chunk: ModelResponseStream,
+    deltas: Dict[Tuple[int, Optional[int]], str],
+) -> ModelResponseStream:
+    """
+    Build a new chunk with the same structure as base_chunk but with content
+    replaced by the given deltas per (choice_idx, content_idx). Used to yield
+    the guardrailed delta so masking is preserved without content loss.
+    """
+    out = copy.deepcopy(base_chunk)
+    for choice_idx, choice in enumerate(out.choices):
+        if not isinstance(choice, StreamingChoices):
+            continue
+        content = choice.delta.content
+        if content is None:
+            continue
+        if isinstance(content, str):
+            key: Tuple[int, Optional[int]] = (choice_idx, None)
+            if key in deltas:
+                choice.delta.content = deltas[key]
+        elif isinstance(content, list):
+            for content_idx, content_item in enumerate(content):
+                if "text" in content_item:
+                    key = (choice_idx, content_idx)
+                    if key in deltas:
+                        content_item["text"] = deltas[key]
+    return out
 
 
 class UnifiedLLMGuardrails(CustomLogger):
@@ -312,6 +369,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type = None
         chunk_counter = 0
         responses_so_far: List[Any] = []
+        # Track guardrailed text already sent per (choice_idx, content_idx)
+        # so we can yield only the delta and preserve masking.
+        guardrailed_sent: Dict[Tuple[int, Optional[int]], str] = {}
 
         async for item in response:
             chunk_counter += 1
@@ -353,9 +413,10 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # Deep-copy the current chunk before guardrail processing.
                 # process_output_streaming_response modifies responses_so_far
                 # in-place: it puts the combined guardrailed text in the first
-                # chunk and clears all subsequent chunks to "". Without this
-                # copy, yielding processed_items[-1] would yield an empty
-                # string, permanently losing this chunk's content.
+                # chunk and clears all subsequent chunks to "". We must not
+                # yield the modified last chunk (empty). We yield a chunk
+                # with the guardrailed delta so content is preserved and
+                # masking is retained.
                 original_item = copy.deepcopy(item)
 
                 endpoint_translation = endpoint_guardrail_translation_mappings[
@@ -369,7 +430,20 @@ class UnifiedLLMGuardrails(CustomLogger):
                     user_api_key_dict=user_api_key_dict,
                 )
 
-                yield original_item
+                # First chunk now holds full guardrailed text per choice.
+                # Yield the delta since last sample so we fix content loss
+                # and retain masking (client sees guardrailed output).
+                guardrailed_texts = _get_guardrailed_texts_from_first_chunk(
+                    responses_so_far[0]
+                )
+                deltas: Dict[Tuple[int, Optional[int]], str] = {}
+                for key, full_text in guardrailed_texts.items():
+                    prev_sent = guardrailed_sent.get(key, "")
+                    delta = full_text[len(prev_sent) :]
+                    deltas[key] = delta
+                    guardrailed_sent[key] = full_text
+                chunk_to_yield = _chunk_with_content_deltas(original_item, deltas)
+                yield chunk_to_yield
             else:
                 yield item
 
