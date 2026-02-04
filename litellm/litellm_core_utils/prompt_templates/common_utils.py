@@ -543,10 +543,6 @@ def update_responses_tools_with_model_file_ids(
         model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
                                Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
     """
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
-    )
-    
     if not tools or not isinstance(tools, list):
         return tools
     

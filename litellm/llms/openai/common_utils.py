@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
