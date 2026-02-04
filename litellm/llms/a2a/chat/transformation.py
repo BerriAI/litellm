@@ -2,10 +2,9 @@
 A2A Protocol Transformation for LiteLLM
 """
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Union, cast
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import httpx
-from pydantic import BaseModel
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
