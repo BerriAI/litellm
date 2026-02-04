@@ -166,7 +166,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                 },
-                "update": {},  # don't do anything if it already exists
+                "update": {
+                    "file_object": file_object.model_dump_json(),
+                    "status": file_object.status,
+                    "updated_by": user_api_key_dict.user_id,
+                },  # FIX: Update status and file_object on every operation to keep state in sync
             },
         )
 
@@ -460,8 +464,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if retrieve_object_id
                 else False
             )
-            print(f"🔥potential_llm_object_id: {potential_llm_object_id}")
-            print(f"🔥retrieve_object_id: {retrieve_object_id}")
             if potential_llm_object_id and retrieve_object_id:
                 ## VALIDATE USER HAS ACCESS TO THE OBJECT ##
                 if not await self.can_user_call_unified_object_id(
