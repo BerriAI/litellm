@@ -129,6 +129,7 @@ model LiteLLM_TeamTable {
     team_member_permissions String[] @default([])
     policies         String[] @default([])
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
+    allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
@@ -160,7 +161,8 @@ model LiteLLM_DeletedTeamTable {
     team_member_permissions String[] @default([])
     policies                String[] @default([])
     model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
-    
+    allow_team_guardrail_config Boolean @default(false)
+
     // Original timestamps from team creation/updates
     created_at              DateTime? @map("created_at")
     updated_at              DateTime? @map("updated_at")
@@ -774,6 +776,7 @@ model LiteLLM_GuardrailsTable {
   guardrail_name String @unique
   litellm_params Json
   guardrail_info Json?
+  team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
