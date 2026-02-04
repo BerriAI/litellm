@@ -124,8 +124,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
 
-        # Add the path to the base URL
-        if "services.ai.azure.com" in api_base:
+        # Check if URL already has a complete endpoint path or provider-specific path
+        if self._has_complete_endpoint_path(original_url.path):
+            # URL already has a complete endpoint path, don't modify it
+            new_url = api_base
+        elif "services.ai.azure.com" in api_base:
+            # Add the default path for Azure AI services
             new_url = _add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
         else:
             new_url = _add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
@@ -134,6 +138,44 @@ class AzureAIStudioConfig(OpenAIConfig):
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+
+    def _has_complete_endpoint_path(self, path: str) -> bool:
+        """
+        Check if the URL path already contains a complete API endpoint or a provider-specific path.
+
+        This method detects common endpoint patterns used by various LLM providers
+        on Azure AI Foundry to avoid incorrectly appending additional path segments.
+
+        Args:
+            path: The URL path to check (without query parameters)
+
+        Returns:
+            True if the path appears to be a complete endpoint or provider-specific, False otherwise
+        """
+        # Common endpoint suffixes that indicate a complete URL
+        complete_endpoint_suffixes = (
+            "/v1/messages",
+            "/chat/completions",
+            "/completions",
+            "/v1/complete",
+            "/embeddings",
+        )
+        if path.endswith(complete_endpoint_suffixes):
+            return True
+
+        # Provider-specific paths that indicate the user has already specified
+        provider_specific_paths = (
+            "/anthropic",
+            "/cohere",
+            "/mistral",
+            "/meta",
+            "/ai21",
+            "/deepseek",
+        )
+        if path.endswith(provider_specific_paths):
+            return True
+
+        return False
 
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
