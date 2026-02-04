@@ -182,12 +182,17 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 
 This metric is computed **inside LiteLLM** as `latency_seconds / output_tokens`:
 
-- **Non-streaming requests**: `latency_seconds` is the time from when LiteLLM starts the deployment request to when it receives the final response.
-- **Streaming requests**: `latency_seconds` is the **time-to-first-token (TTFT)** (time until LiteLLM receives the first token from the provider).
+- **Non-streaming requests**: `latency_seconds` is the time from when LiteLLM
+  starts the deployment request to when it receives the final response.
+- **Streaming requests**: `latency_seconds` is the **time-to-first-token
+  (TTFT)** (time until LiteLLM receives the first token from the provider).
 
-Because the timer is taken at the LiteLLM boundary, it reflects **provider latency + any LiteLLM proxy overhead** that occurs during that interval (and can include network overhead).
+Because the timer is taken at the LiteLLM boundary, it reflects **provider
+latency + any LiteLLM proxy overhead** that occurs during that interval (and can
+include network overhead).
 
-If you need a metric that targets *just the provider LLM API call latency*, use `litellm_llm_api_latency_metric`.
+If you need a metric that targets *just the provider LLM API call latency*, use
+`litellm_llm_api_latency_metric`.
 
 #### Fallback (Failover) Metrics
 
