@@ -1478,19 +1478,35 @@ class PrometheusLogger(CustomLogger):
         """
         Determine if a request has an invalid API key based on status code and exception.
 
-        Returns True only when we truly cannot record useful metrics (e.g. missing required
-        data). We no longer skip 401/invalid-key requests - all requests including
-        authentication failures and bad requests must be tracked for debugging, security
-        auditing, abuse detection, and capacity planning.
+        This method prevents invalid authentication attempts from being recorded in
+        Prometheus metrics. A 401 status code is the definitive indicator of authentication
+        failure. Additionally, we check exception messages for authentication error patterns
+        to catch cases where the exception hasn't been converted to a ProxyException yet.
 
         Args:
-            status_code: HTTP status code
-            exception: Exception object (unused, kept for API compatibility)
+            status_code: HTTP status code (401 indicates authentication error)
+            exception: Exception object to check for auth-related error messages
 
         Returns:
-            True if metrics should be skipped (currently always False - track all requests),
+            True if the request has an invalid API key and metrics should be skipped,
             False otherwise
         """
+        if status_code == 401:
+            return True
+
+        # Handle cases where AssertionError is raised before conversion to ProxyException
+        if exception is not None:
+            exception_str = str(exception).lower()
+            auth_error_patterns = [
+                "virtual key expected",
+                "expected to start with 'sk-'",
+                "authentication error",
+                "invalid api key",
+                "api key not valid",
+            ]
+            if any(pattern in exception_str for pattern in auth_error_patterns):
+                return True
+
         return False
 
     def _should_skip_metrics_for_invalid_key(

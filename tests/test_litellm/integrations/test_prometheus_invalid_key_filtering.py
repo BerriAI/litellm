@@ -1,8 +1,8 @@
 """
-Unit tests for Prometheus request tracking.
+Unit tests for Prometheus invalid API key request filtering.
 
-Tests that all requests including 401/invalid-key failures are tracked in metrics
-for debugging, security auditing, abuse detection, and capacity planning.
+Tests functionality that prevents invalid API key requests (401 status codes)
+from being recorded in Prometheus metrics.
 """
 
 import os
@@ -29,14 +29,12 @@ def prometheus_logger():
 
 class ExceptionWithCode:
     """Exception-like object with 'code' attribute (ProxyException pattern)."""
-
     def __init__(self, code):
         self.code = code
 
 
 class ExceptionWithStatusCode:
     """Exception-like object with 'status_code' attribute."""
-
     def __init__(self, status_code):
         self.status_code = status_code
 
@@ -44,25 +42,17 @@ class ExceptionWithStatusCode:
 class TestExtractStatusCode:
     """Test status code extraction from various sources."""
 
-    @pytest.mark.parametrize(
-        "exception_class,code_value,expected",
-        [
-            (ExceptionWithCode, "401", 401),
-            (ExceptionWithStatusCode, 401, 401),
-        ],
-    )
-    def test_extract_from_exception(
-        self, prometheus_logger, exception_class, code_value, expected
-    ):
+    @pytest.mark.parametrize("exception_class,code_value,expected", [
+        (ExceptionWithCode, "401", 401),
+        (ExceptionWithStatusCode, 401, 401),
+    ])
+    def test_extract_from_exception(self, prometheus_logger, exception_class, code_value, expected):
         exception = exception_class(code_value)
         assert prometheus_logger._extract_status_code(exception=exception) == expected
 
     def test_extract_from_kwargs(self, prometheus_logger):
         exception = ExceptionWithCode("401")
-        assert (
-            prometheus_logger._extract_status_code(kwargs={"exception": exception})
-            == 401
-        )
+        assert prometheus_logger._extract_status_code(kwargs={"exception": exception}) == 401
 
     def test_extract_from_enum_values(self, prometheus_logger):
         enum_values = Mock(status_code="401")
@@ -70,62 +60,45 @@ class TestExtractStatusCode:
 
 
 class TestInvalidAPIKeyDetection:
-    """Test that we no longer skip metrics - all requests are tracked."""
+    """Test invalid API key request detection logic."""
 
-    @pytest.mark.parametrize("status_code", [401, 200, 500, None])
-    def test_no_skip_for_any_status_code(self, prometheus_logger, status_code):
-        """All status codes are tracked - never skip metrics."""
-        assert (
-            prometheus_logger._is_invalid_api_key_request(status_code=status_code)
-            is False
-        )
+    @pytest.mark.parametrize("status_code,expected", [
+        (401, True),
+        (200, False),
+        (500, False),
+        (None, False),
+    ])
+    def test_status_code_detection(self, prometheus_logger, status_code, expected):
+        assert prometheus_logger._is_invalid_api_key_request(status_code=status_code) == expected
 
-    def test_auth_error_message_not_skipped(self, prometheus_logger):
-        exception = AssertionError(
-            "LiteLLM Virtual Key expected. Received=invalid-key-12345, expected to start with 'sk-'."
-        )
-        assert (
-            prometheus_logger._is_invalid_api_key_request(
-                status_code=None, exception=exception
-            )
-            is False
-        )
+    def test_auth_error_message_detection(self, prometheus_logger):
+        exception = AssertionError("LiteLLM Virtual Key expected. Received=invalid-key-12345, expected to start with 'sk-'.")
+        assert prometheus_logger._is_invalid_api_key_request(status_code=None, exception=exception) is True
 
-    def test_non_auth_exception_not_skipped(self, prometheus_logger):
+    def test_non_auth_exception_not_detected(self, prometheus_logger):
         exception = ValueError("Some other error")
-        assert (
-            prometheus_logger._is_invalid_api_key_request(
-                status_code=None, exception=exception
-            )
-            is False
-        )
+        assert prometheus_logger._is_invalid_api_key_request(status_code=None, exception=exception) is False
 
 
 class TestSkipMetricsValidation:
-    """Test that we never skip metrics - all requests are tracked."""
+    """Test high-level validation method that orchestrates detection and extraction."""
 
-    def test_no_skip_for_401_exception(self, prometheus_logger):
-        """401 requests are now tracked for security auditing and abuse detection."""
+    def test_skip_for_401_exception(self, prometheus_logger):
+        """Test full flow: extraction -> detection -> skip decision."""
         exception = ExceptionWithCode("401")
-        assert (
-            prometheus_logger._should_skip_metrics_for_invalid_key(exception=exception)
-            is False
-        )
+        assert prometheus_logger._should_skip_metrics_for_invalid_key(exception=exception) is True
 
-    def test_no_skip_for_auth_error_message(self, prometheus_logger):
-        """Auth error messages are now tracked."""
+    def test_skip_for_auth_error_message(self, prometheus_logger):
+        """Test full flow: exception message -> detection -> skip decision."""
         exception = AssertionError("expected to start with 'sk-'")
-        assert (
-            prometheus_logger._should_skip_metrics_for_invalid_key(exception=exception)
-            is False
-        )
+        assert prometheus_logger._should_skip_metrics_for_invalid_key(exception=exception) is True
 
     def test_no_skip_for_valid_request(self, prometheus_logger):
         assert prometheus_logger._should_skip_metrics_for_invalid_key() is False
 
 
 class TestAsyncHooks:
-    """Test async hook methods record metrics for all requests including 401s."""
+    """Test async hook methods skip metrics for invalid API keys."""
 
     @pytest.fixture
     def mock_user_api_key(self):
@@ -142,33 +115,24 @@ class TestAsyncHooks:
         return user_key
 
     @pytest.mark.asyncio
-    async def test_post_call_failure_hook_records_401(
-        self, prometheus_logger, mock_user_api_key
-    ):
-        """401 failures are now recorded for security auditing and abuse detection."""
+    async def test_post_call_failure_hook_skips_401(self, prometheus_logger, mock_user_api_key):
         exception = ExceptionWithCode("401")
         exception.__class__.__name__ = "ProxyException"
 
-        with patch.object(
-            prometheus_logger, "litellm_proxy_failed_requests_metric"
-        ) as mock_failed, patch.object(
-            prometheus_logger, "litellm_proxy_total_requests_metric"
-        ) as mock_total:
-            mock_failed.labels.return_value = Mock(inc=Mock())
-            mock_total.labels.return_value = Mock(inc=Mock())
+        with patch.object(prometheus_logger, 'litellm_proxy_failed_requests_metric') as mock_failed, \
+             patch.object(prometheus_logger, 'litellm_proxy_total_requests_metric') as mock_total:
 
             await prometheus_logger.async_post_call_failure_hook(
-                request_data={"model": "test-model", "metadata": {}},
+                request_data={"model": "test-model"},
                 original_exception=exception,
-                user_api_key_dict=mock_user_api_key,
+                user_api_key_dict=mock_user_api_key
             )
 
-            mock_failed.labels.assert_called_once()
-            mock_total.labels.assert_called_once()
+            mock_failed.labels.assert_not_called()
+            mock_total.labels.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_log_failure_event_records_401(self, prometheus_logger):
-        """401 failures in log_failure_event are now recorded."""
+    async def test_log_failure_event_skips_401(self, prometheus_logger):
         exception = ExceptionWithCode("401")
         kwargs = {
             "model": "test-model",
@@ -176,9 +140,6 @@ class TestAsyncHooks:
                 "metadata": {
                     "user_api_key_hash": "test-key",
                     "user_api_key_user_id": "test-user",
-                    "user_api_key_alias": None,
-                    "user_api_key_team_id": None,
-                    "user_api_key_team_alias": None,
                 },
                 "model_group": "test-model",
             },
@@ -186,16 +147,15 @@ class TestAsyncHooks:
             "litellm_params": {},
         }
 
-        with patch.object(
-            prometheus_logger, "litellm_llm_api_failed_requests_metric"
-        ) as mock_failed, patch.object(
-            prometheus_logger, "set_llm_deployment_failure_metrics"
-        ) as mock_deployment:
-            mock_failed.labels.return_value = Mock(inc=Mock())
+        with patch.object(prometheus_logger, 'litellm_llm_api_failed_requests_metric') as mock_failed, \
+             patch.object(prometheus_logger, 'set_llm_deployment_failure_metrics') as mock_deployment:
 
             await prometheus_logger.async_log_failure_event(
-                kwargs=kwargs, response_obj=None, start_time=None, end_time=None
+                kwargs=kwargs,
+                response_obj=None,
+                start_time=None,
+                end_time=None
             )
 
-            mock_failed.labels.assert_called_once()
-            mock_deployment.assert_called_once()
+            mock_failed.labels.assert_not_called()
+            mock_deployment.assert_not_called()
