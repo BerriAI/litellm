@@ -1,0 +1,149 @@
+# Iron Bank Compatible Dockerfile for LiteLLM
+# 
+# This Dockerfile uses Red Hat UBI (Universal Base Image) as a base,
+# which is compatible with DoD Iron Bank requirements.
+#
+# For production Iron Bank submission, replace with:
+#   registry1.dso.mil/ironbank/redhat/ubi/ubi9-minimal
+#
+# POC uses Docker Hub UBI images as a stand-in for testing.
+
+# Build stage - using UBI9 with full package set for building
+ARG LITELLM_BUILD_IMAGE=registry.access.redhat.com/ubi9/ubi:latest
+ARG LITELLM_RUNTIME_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+# ============== Builder Stage ==============
+FROM $LITELLM_BUILD_IMAGE AS builder
+
+WORKDIR /app
+
+USER root
+
+# Install build dependencies
+# UBI9 ships with Python 3.9 by default, we need Python 3.11+
+RUN dnf install -y \
+    python3.11 \
+    python3.11-pip \
+    python3.11-devel \
+    gcc \
+    gcc-c++ \
+    make \
+    openssl \
+    openssl-devel \
+    libffi-devel \
+    git \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Set Python 3.11 as default
+RUN alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1 \
+    && alternatives --install /usr/bin/pip pip /usr/bin/pip3.11 1
+
+# Upgrade pip
+RUN python3.11 -m pip install --upgrade pip setuptools wheel build
+
+# Copy the current directory contents into the container at /app
+COPY . .
+
+# Build Admin UI (skip if enterprise colors not present)
+RUN chmod +x docker/build_admin_ui_ironbank.sh && ./docker/build_admin_ui_ironbank.sh
+
+# Build the package
+RUN rm -rf dist/* && python3.11 -m build
+
+# Install the package
+RUN pip3.11 install dist/*.whl
+
+# Install dependencies as wheels for offline installation in runtime
+RUN pip3.11 wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+
+# Ensure PyJWT is used (not jwt)
+RUN pip3.11 uninstall jwt -y || true
+RUN pip3.11 uninstall PyJWT -y || true
+RUN pip3.11 install PyJWT==2.9.0 --no-cache-dir
+
+# ============== Runtime Stage ==============
+FROM $LITELLM_RUNTIME_IMAGE AS runtime
+
+USER root
+
+WORKDIR /app
+
+# Install runtime dependencies using microdnf (minimal package manager for ubi-minimal)
+RUN microdnf install -y \
+    python3.11 \
+    python3.11-pip \
+    openssl \
+    tzdata \
+    nodejs \
+    npm \
+    libsndfile \
+    shadow-utils \
+    findutils \
+    && microdnf clean all \
+    && rm -rf /var/cache/yum
+
+# Set Python 3.11 as default
+RUN alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && alternatives --install /usr/bin/pip3 pip3 /usr/bin/pip3.11 1 \
+    && alternatives --install /usr/bin/pip pip /usr/bin/pip3.11 1
+
+# Upgrade npm
+RUN npm install -g npm@latest
+
+# Copy application files
+COPY . .
+
+# Copy the built wheel and dependencies from builder stage
+COPY --from=builder /app/dist/*.whl .
+COPY --from=builder /wheels/ /wheels/
+
+# Install the built wheel and dependencies
+RUN pip3.11 install *.whl /wheels/* --no-index --find-links=/wheels/ \
+    && rm -f *.whl \
+    && rm -rf /wheels
+
+# Remove test files from dependencies to reduce image size
+RUN find /usr/lib -type f -path "*/tornado/test/*" -delete 2>/dev/null || true \
+    && find /usr/lib -type d -path "*/tornado/test" -delete 2>/dev/null || true
+
+# Install semantic_router and aurelio-sdk
+RUN pip3.11 install semantic_router==0.1.11 --no-deps || true \
+    && pip3.11 install aurelio-sdk==0.0.19 || true
+
+# Generate prisma client
+RUN prisma generate --schema=./litellm/proxy/schema.prisma
+
+# Prepare entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
+RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
+
+# Install supervisor for health check separation
+RUN microdnf install -y supervisor && microdnf clean all || \
+    pip3.11 install supervisor
+
+COPY docker/supervisord.conf /etc/supervisord.conf
+
+# Create non-root user for runtime (Iron Bank requirement)
+RUN groupadd -r litellm && useradd -r -g litellm litellm \
+    && chown -R litellm:litellm /app
+
+# Expose the default LiteLLM port
+EXPOSE 4000/tcp
+
+# Set the entrypoint
+ENTRYPOINT ["docker/prod_entrypoint.sh"]
+
+# Default command
+CMD ["--port", "4000"]
+
+# Labels for Iron Bank compliance
+LABEL maintainer="BerriAI" \
+      vendor="BerriAI" \
+      version="1.0" \
+      description="LiteLLM Proxy - Iron Bank Compatible" \
+      io.k8s.display-name="LiteLLM Proxy" \
+      io.openshift.tags="litellm,llm,proxy,ai"
