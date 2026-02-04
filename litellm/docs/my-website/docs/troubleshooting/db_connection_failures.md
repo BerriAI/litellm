@@ -31,6 +31,12 @@ LiteLLM Prisma Client Exception get_generic_data: All connection attempts failed
 
 **Issue:** Users who had `router_settings` stored in the `LiteLLM_Config` table (global settings) may still experience issues even after the revert, as these settings can still be read during startup.
 
+### 3. HTTP Client Cache Not Closing Connections on Expiry
+
+**Issue:** When httpx clients expired from `LLMClientCache` (after 1 hour TTL), they were simply dereferenced without calling `.close()`, leaving their underlying connections open/idle until they timed out on the database/server side. This caused idle connections to accumulate over time.
+
+**Fixed in:** This PR - Added proper cleanup in `LLMClientCache._remove_key()` to close HTTP clients when they expire.
+
 ### 3. DB Connection Pool Exhaustion (IAM Token Auth)
 
 **Issue:** When using `iam_token_db_auth`, the IAM token refresh was creating new Prisma clients without properly disconnecting old ones. This led to connection pool exhaustion over time (6-12 hours).
