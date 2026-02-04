@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from tests.llm_translation.realtime.base_realtime_tests import BaseRealtimeTest
+from tests.llm_translation.base_realtime_tests import BaseRealtimeTest
 
 
 class TestOpenAIRealtime(BaseRealtimeTest):
@@ -20,7 +20,7 @@ class TestOpenAIRealtime(BaseRealtimeTest):
     """
     
     def get_model(self) -> str:
-        return "gpt-4o-realtime-preview-2024-10-01"
+        return "gpt-4o-realtime-preview"
     
     def get_api_key_env_var(self) -> str:
         return "OPENAI_API_KEY"
