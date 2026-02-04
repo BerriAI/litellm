@@ -11,8 +11,6 @@ There was confusion about the correct parameter name for passing headers to `web
 1. **Dec 5, 2025** - Changed `extra_headers` → `additional_headers` (commit `8db7f1b8e4`)
 2. **Dec 18, 2025** - Changed `extra_headers` → `additional_headers` again (PR #17950, commit `9f88d61d10`)
 3. **Jan 15, 2026** - Upgraded `websockets` from 13.1.0 → 15.0.1 (commit `a3cf178e24`, Issue #19089)
-4. **Feb 3, 2026** - **INCORRECTLY** changed `additional_headers` → `extra_headers` (commit `67fc9457e5`)
-5. **Feb 4, 2026** - **CORRECTED** back to `additional_headers` (this update)
 
 ### The Issue & Resolution
 
