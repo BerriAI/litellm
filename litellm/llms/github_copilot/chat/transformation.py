@@ -1,4 +1,4 @@
-from typing import Any, Optional, Tuple, cast, List
+from typing import Optional, Tuple, List
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -51,7 +51,7 @@ class GithubCopilotConfig(OpenAIConfig):
         if not disable_copilot_system_to_assistant:
             for message in messages:
                 if "role" in message and message["role"] == "system":
-                    cast(Any, message)["role"] = "assistant"
+                    message["role"] = "assistant"
         return messages
 
     def validate_environment(
