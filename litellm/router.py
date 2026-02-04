@@ -2736,7 +2736,7 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def aspeech(self, model: str, input: str, voice: str, **kwargs):
+    async def aspeech(self, model: str, input: str, voice: Optional[str] = None, **kwargs):
         """
         Example Usage:
 
@@ -2770,7 +2770,14 @@ class Router:
         """
         try:
             kwargs["input"] = input
-            kwargs["voice"] = voice
+            if voice is not None:
+                kwargs["voice"] = voice
+            
+            extra_body = kwargs.pop("extra_body", None)
+            if isinstance(extra_body, dict):
+                for k, v in extra_body.items():
+                    if k not in kwargs:
+                        kwargs[k] = v
 
             deployment = await self.async_get_available_deployment(
                 model=model,
