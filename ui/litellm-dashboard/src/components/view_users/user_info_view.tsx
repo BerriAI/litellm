@@ -17,6 +17,7 @@ import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "
 import { CopyIcon, CheckIcon } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 
 interface UserInfoViewProps {
   userId: string;
@@ -33,6 +34,7 @@ interface UserInfo {
   user_id: string;
   user_info: {
     user_email: string | null;
+    user_alias: string | null;
     user_role: string | null;
     teams: any[] | null;
     models: string[] | null;
@@ -59,6 +61,7 @@ export default function UserInfoView({
 }: UserInfoViewProps) {
   const [userData, setUserData] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(startInEditMode);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -114,6 +117,7 @@ export default function UserInfoView({
   const handleDelete = async () => {
     try {
       if (!accessToken) return;
+      setIsDeletingUser(true);
       await userDeleteCall(accessToken, [userId]);
       NotificationsManager.success("User deleted successfully");
       if (onDelete) {
@@ -123,7 +127,14 @@ export default function UserInfoView({
     } catch (error) {
       console.error("Error deleting user:", error);
       NotificationsManager.fromBackend("Failed to delete user");
+    } finally {
+      setIsDeleteModalOpen(false);
+      setIsDeletingUser(false);
     }
+  };
+
+  const cancelDelete = () => {
+    setIsDeleteModalOpen(false);
   };
 
   const handleUserUpdate = async (formValues: Record<string, any>) => {
@@ -138,6 +149,7 @@ export default function UserInfoView({
         user_info: {
           ...userData.user_info,
           user_email: formValues.user_email,
+          user_alias: formValues.user_alias,
           models: formValues.models,
           max_budget: formValues.max_budget,
           budget_duration: formValues.budget_duration,
@@ -217,7 +229,7 @@ export default function UserInfoView({
               icon={TrashIcon}
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
+              className="flex items-center text-red-500 border-red-500 hover:text-red-600 hover:border-red-600"
             >
               Delete User
             </Button>
@@ -225,39 +237,33 @@ export default function UserInfoView({
         )}
       </div>
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete User</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this user?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={handleDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={() => setIsDeleteModalOpen(false)}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete User?"
+        message="Are you sure you want to delete this user? This action cannot be undone."
+        resourceInformationTitle="User Information"
+        resourceInformation={[
+          { label: "Email", value: userData.user_info?.user_email },
+          { label: "User ID", value: userData.user_id, code: true },
+          {
+            label: "Global Proxy Role",
+            value:
+              (userData.user_info?.user_role && possibleUIRoles?.[userData.user_info.user_role]?.ui_label) ||
+              userData.user_info?.user_role ||
+              "-",
+          },
+          {
+            label: "Total Spend (USD)",
+            value:
+              userData.user_info?.spend !== null && userData.user_info?.spend !== undefined
+                ? userData.user_info.spend.toFixed(2)
+                : undefined,
+          },
+        ]}
+        onCancel={cancelDelete}
+        onOk={handleDelete}
+        confirmLoading={isDeletingUser}
+      />
 
       <TabGroup defaultIndex={activeTab} onIndexChange={setActiveTab}>
         <TabList className="mb-4">
@@ -318,9 +324,11 @@ export default function UserInfoView({
               </Card>
 
               <Card>
-                <Text>API Keys</Text>
+                <Text>Virtual Keys</Text>
                 <div className="mt-2">
-                  <Text>{userData.keys?.length || 0} keys</Text>
+                  <Text>
+                    {userData.keys?.length || 0} {userData.keys?.length === 1 ? "Key" : "Keys"}
+                  </Text>
                 </div>
               </Card>
 
@@ -343,9 +351,7 @@ export default function UserInfoView({
               <div className="flex justify-between items-center mb-4">
                 <Title>User Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button variant="light" onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </Button>
+                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
 
@@ -384,6 +390,11 @@ export default function UserInfoView({
                   <div>
                     <Text className="font-medium">Email</Text>
                     <Text>{userData.user_info?.user_email || "Not Set"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">User Alias</Text>
+                    <Text>{userData.user_info?.user_alias || "Not Set"}</Text>
                   </div>
 
                   <div>
@@ -462,7 +473,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">API Keys</Text>
+                    <Text className="font-medium">Virtual Keys</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.keys?.length && userData.keys?.length > 0 ? (
                         userData.keys.map((key, index) => (
@@ -471,7 +482,7 @@ export default function UserInfoView({
                           </span>
                         ))
                       ) : (
-                        <Text>No API keys</Text>
+                        <Text>No Virtual Keys</Text>
                       )}
                     </div>
                   </div>

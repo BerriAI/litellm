@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Button, Select as AntdSelect } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
-import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/router_config_builder";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -160,7 +160,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         </Button>,
       ]}
       width={1000}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="space-y-6">
         <Text className="text-gray-600">

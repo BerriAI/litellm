@@ -73,8 +73,21 @@ GOOGLE_CLIENT_SECRET=
 ```shell
 MICROSOFT_CLIENT_ID="84583a4d-"
 MICROSOFT_CLIENT_SECRET="nbk8Q~"
-MICROSOFT_TENANT="5a39737
+MICROSOFT_TENANT="5a39737"
 ```
+
+**Optional: Custom Microsoft SSO Endpoints**
+
+If you need to use custom Microsoft SSO endpoints (e.g., for a custom identity provider, sovereign cloud, or proxy), you can override the default endpoints:
+
+```shell
+MICROSOFT_AUTHORIZATION_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/token"
+MICROSOFT_USERINFO_ENDPOINT="https://your-custom-graph-api.com/v1.0/me"
+```
+
+If these are not set, the default Microsoft endpoints are used based on your tenant.
+
 - Set Redirect URI on your App Registration on https://portal.azure.com/
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
@@ -97,6 +110,42 @@ To set up app roles:
 3. Use one of the supported role names above (e.g., `proxy_admin`)
 4. Assign users to these roles in your Enterprise Application
 5. When users sign in via SSO, LiteLLM will automatically assign them the corresponding role
+
+**Advanced: Custom User Attribute Mapping**
+
+For certain Microsoft Entra ID configurations, you may need to override the default user attribute field names. This is useful when your organization uses custom claims or non-standard attribute names in the SSO response.
+
+**Step 1: Debug SSO Response**
+
+First, inspect the JWT fields returned by your Microsoft SSO provider using the [SSO Debug Route](#debugging-sso-jwt-fields).
+
+1. Add `/sso/debug/callback` as a redirect URL in your Azure App Registration
+2. Navigate to `https://<proxy_base_url>/sso/debug/login`
+3. Complete the SSO flow to see the returned user attributes
+
+**Step 2: Identify Field Attribute Names**
+
+From the debug response, identify the field names used for email, display name, user ID, first name, and last name.
+
+**Step 3: Set Environment Variables**
+
+Override the default attribute names by setting these environment variables:
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `MICROSOFT_USER_EMAIL_ATTRIBUTE` | Field name for user email | `userPrincipalName` |
+| `MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE` | Field name for display name | `displayName` |
+| `MICROSOFT_USER_ID_ATTRIBUTE` | Field name for user ID | `id` |
+| `MICROSOFT_USER_FIRST_NAME_ATTRIBUTE` | Field name for first name | `givenName` |
+| `MICROSOFT_USER_LAST_NAME_ATTRIBUTE` | Field name for last name | `surname` |
+
+**Step 4: Restart the Proxy**
+
+After setting the environment variables, restart the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
 
 </TabItem>
 
@@ -129,6 +178,17 @@ GENERIC_CLIENT_STATE = "some-state" # if the provider needs a state parameter
 GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id is not in the body
 GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
 ```
+
+**Assigning User Roles via SSO**
+
+Use `GENERIC_USER_ROLE_ATTRIBUTE` to specify which attribute in the SSO token contains the user's role. The role value must be one of the following supported LiteLLM roles:
+
+- `proxy_admin` - Admin over the platform
+- `proxy_admin_viewer` - Can login, view all keys, view all spend (read-only)
+- `internal_user` - Can login, view/create/delete their own keys, view their spend
+- `internal_user_view_only` - Can login, view their own keys, view their own spend
+
+Nested attribute paths are supported (e.g., `claims.role` or `attributes.litellm_role`).
 
 - Set Redirect URI, if your provider requires it
     - Set a redirect url = `<your proxy base url>/sso/callback`
@@ -379,4 +439,55 @@ If you need to inspect the JWT fields received from your SSO provider by LiteLLM
 3. View the JWT fields 
 
 Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
+
+
+## Advanced
+
+### Manage User Roles via Azure App Roles
+
+Centralize role management by defining user permissions in Azure Entra ID. LiteLLM will automatically assign roles based on your Azure configuration when users sign in—no need to manually manage roles in LiteLLM.
+
+#### Step 1: Create App Roles on Azure App Registration
+
+1. Navigate to your App Registration on https://portal.azure.com/
+2. Go to **App roles** > **Create app role**
+3. Configure the app role using one of the [supported LiteLLM roles](./access_control.md#global-proxy-roles):
+   - **Display name**: Admin Viewer (or your preferred display name)
+   - **Value**: `proxy_admin_viewer` (must match one of the LiteLLM role values exactly)
+4. Click **Apply** to save the role
+5. Repeat for each LiteLLM role you want to use
+
+
+**Supported LiteLLM role values** (see [full role documentation](./access_control.md#global-proxy-roles)):
+- `proxy_admin` - Full admin access
+- `proxy_admin_viewer` - Read-only admin access
+- `internal_user` - Can create/view/delete own keys
+- `internal_user_viewer` - Can view own keys (read-only)
+
+<Image img={require('../../img/app_roles.png')} style={{ width: '900px', height: 'auto' }} />
+
+---
+
+#### Step 2: Assign Users to App Roles
+
+1. Navigate to **Enterprise Applications** on https://portal.azure.com/
+2. Select your LiteLLM application
+3. Go to **Users and groups** > **Add user/group**
+4. Select the user
+5. Under **Select a role**, choose the app role you created (e.g., `proxy_admin_viewer`)
+6. Click **Assign** to save
+
+<Image img={require('../../img/app_role2.png')} style={{ width: '900px', height: 'auto' }} />
+
+---
+
+#### Step 3: Sign in and verify
+
+1. Sign in to the LiteLLM UI via SSO
+2. LiteLLM will automatically extract the app role from the JWT token
+3. The user will be assigned the corresponding role (you can verify this in the UI by checking the user profile dropdown)
+
+<Image img={require('../../img/app_role3.png')} style={{ width: '900px', height: 'auto' }} />
+
+**Note:** The role from Entra ID will take precedence over any existing role in the LiteLLM database. This ensures your SSO provider is the authoritative source for user roles.
 

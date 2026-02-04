@@ -28,3 +28,34 @@
   --ifm-color-primary-lightest: #4fddbf;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
 }
+
+/* Levo logo sizing and theme switching */
+.levo-logo-container {
+  position: relative;
+}
+
+.levo-logo-container img,
+.levo-logo-container picture,
+.levo-logo-container .ideal-image {
+  max-width: 200px !important;
+  width: 200px !important;
+  height: auto !important;
+}
+
+/* Show light logo by default, hide dark logo */
+.levo-logo-dark {
+  display: none !important;
+}
+
+.levo-logo-light {
+  display: block !important;
+}
+
+/* In dark mode, hide light logo and show dark logo */
+[data-theme='dark'] .levo-logo-light {
+  display: none !important;
+}
+
+[data-theme='dark'] .levo-logo-dark {
+  display: block !important;
+}

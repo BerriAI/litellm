@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { listMCPTools, fetchMCPServers } from "../networking";
+import React, { useEffect, useState, useMemo } from "react";
+import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
 import { Text } from "@tremor/react";
 import { Spin, Checkbox } from "antd";
 import { XIcon } from "lucide-react";
+import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 
 interface MCPToolPermissionsProps {
   accessToken: string;
@@ -20,63 +21,43 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   onChange,
   disabled = false,
 }) => {
-  const [servers, setServers] = useState<MCPServer[]>([]);
+  const { data: allServers = [] } = useMCPServers();
   const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
 
-  // Fetch server details
-  useEffect(() => {
-    const loadServerDetails = async () => {
-      if (selectedServers.length === 0) {
-        setServers([]);
-        return;
-      }
-
-      try {
-        const response = await fetchMCPServers(accessToken);
-        const allServers = Array.isArray(response) ? response : response.data || [];
-        
-        const filteredServers = allServers.filter((server: MCPServer) => 
-          selectedServers.includes(server.server_id)
-        );
-        
-        setServers(filteredServers);
-      } catch (error) {
-        console.error("Error fetching MCP servers:", error);
-        setServers([]);
-      }
-    };
-
-    loadServerDetails();
-  }, [selectedServers, accessToken]);
+  // Filter servers based on selectedServers
+  const servers = useMemo(() => {
+    if (selectedServers.length === 0) return [];
+    return allServers.filter((server: MCPServer) => selectedServers.includes(server.server_id));
+  }, [allServers, selectedServers]);
 
   // Fetch tools for a specific server
   const fetchToolsForServer = async (serverId: string) => {
-    setLoadingTools(prev => ({ ...prev, [serverId]: true }));
-    setToolErrors(prev => ({ ...prev, [serverId]: "" }));
-    
+    setLoadingTools((prev) => ({ ...prev, [serverId]: true }));
+    setToolErrors((prev) => ({ ...prev, [serverId]: "" }));
+
     try {
       const response = await listMCPTools(accessToken, serverId);
-      
+
       if (response.error) {
-        setToolErrors(prev => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
-        setServerTools(prev => ({ ...prev, [serverId]: [] }));
+        setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
+        setServerTools((prev) => ({ ...prev, [serverId]: [] }));
       } else {
-        setServerTools(prev => ({ ...prev, [serverId]: response.tools || [] }));
+        setServerTools((prev) => ({ ...prev, [serverId]: response.tools || [] }));
       }
     } catch (err) {
       console.error(`Error fetching tools for server ${serverId}:`, err);
-      setToolErrors(prev => ({ ...prev, [serverId]: "Failed to fetch tools" }));
-      setServerTools(prev => ({ ...prev, [serverId]: [] }));
+      setToolErrors((prev) => ({ ...prev, [serverId]: "Failed to fetch tools" }));
+      setServerTools((prev) => ({ ...prev, [serverId]: [] }));
     } finally {
-      setLoadingTools(prev => ({ ...prev, [serverId]: false }));
+      setLoadingTools((prev) => ({ ...prev, [serverId]: false }));
     }
   };
 
   // Auto-fetch tools when servers change
   useEffect(() => {
-    servers.forEach(server => {
+    servers.forEach((server) => {
       if (!serverTools[server.server_id] && !loadingTools[server.server_id]) {
         fetchToolsForServer(server.server_id);
       }
@@ -87,9 +68,9 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const handleToolToggle = (serverId: string, toolName: string) => {
     const currentTools = toolPermissions[serverId] || [];
     const newTools = currentTools.includes(toolName)
-      ? currentTools.filter(name => name !== toolName)
+      ? currentTools.filter((name) => name !== toolName)
       : [...currentTools, toolName];
-    
+
     const updatedPermissions = {
       ...toolPermissions,
       [serverId]: newTools,
@@ -99,17 +80,19 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   const handleSelectAll = (serverId: string) => {
     const tools = serverTools[serverId] || [];
-    onChange({
+    const newPermissions = {
       ...toolPermissions,
-      [serverId]: tools.map(t => t.name),
-    });
+      [serverId]: tools.map((t) => t.name),
+    };
+    onChange(newPermissions);
   };
 
   const handleDeselectAll = (serverId: string) => {
-    onChange({
+    const newPermissions = {
       ...toolPermissions,
       [serverId]: [],
-    });
+    };
+    onChange(newPermissions);
   };
 
   if (selectedServers.length === 0) {
@@ -131,12 +114,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
             <div className="flex items-center justify-between p-4 border-b bg-white rounded-t-lg">
               <div>
                 <Text className="font-semibold text-gray-900">{serverName}</Text>
-                {server.description && (
-                  <Text className="text-sm text-gray-500">{server.description}</Text>
-                )}
+                {server.description && <Text className="text-sm text-gray-500">{server.description}</Text>}
               </div>
               <div className="flex items-center gap-3">
                 <button
+                  type="button"
                   className="text-sm text-blue-600 hover:text-blue-700 font-medium"
                   onClick={() => handleSelectAll(server.server_id)}
                   disabled={disabled || isLoading}
@@ -144,6 +126,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   Select All
                 </button>
                 <button
+                  type="button"
                   className="text-sm text-blue-600 hover:text-blue-700 font-medium"
                   onClick={() => handleDeselectAll(server.server_id)}
                   disabled={disabled || isLoading}
@@ -151,6 +134,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   Deselect All
                 </button>
                 <button
+                  type="button"
                   className="text-gray-400 hover:text-gray-600"
                   onClick={() => {
                     // Handle remove server if needed
@@ -197,9 +181,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <Text className="font-medium text-gray-900">{tool.name}</Text>
-                            <Text className="text-sm text-gray-500">
-                              - {tool.description || "No description"}
-                            </Text>
+                            <Text className="text-sm text-gray-500">- {tool.description || "No description"}</Text>
                           </div>
                         </div>
                       </div>

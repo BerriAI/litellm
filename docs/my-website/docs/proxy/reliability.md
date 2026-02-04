@@ -28,7 +28,7 @@ fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}]
 ```python
 from litellm import Router 
 router = Router(
-	model_list=[
+  model_list=[
     {
       "model_name": "gpt-3.5-turbo",
       "litellm_params": {
@@ -47,8 +47,8 @@ router = Router(
         "rpm": 6
       }
     }
-	],
-	fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}] # 👈 KEY CHANGE
+  ],
+  fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}] # 👈 KEY CHANGE
 )
 
 ```
@@ -104,9 +104,9 @@ model_list = [{..}, {..}] # defined in Step 1.
 router = Router(model_list=model_list, fallbacks=[{"bad-model": ["my-good-model"]}])
 
 response = router.completion(
-	model="bad-model",
-	messages=[{"role": "user", "content": "Hey, how's it going?"}],
-	mock_testing_fallbacks=True,
+  model="bad-model",
+  messages=[{"role": "user", "content": "Hey, how's it going?"}],
+  mock_testing_fallbacks=True,
 )
 ```
 
@@ -431,32 +431,32 @@ content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
 from litellm import Router 
 
 router = Router(
-	model_list=[
-		{
-			"model_name": "claude-2",
-			"litellm_params": {
-				"model": "claude-2",
-				"api_key": "",
-				"mock_response": Exception("content filtering policy"),
-			},
-		},
-		{
-			"model_name": "my-fallback-model",
-			"litellm_params": {
-				"model": "claude-2",
-				"api_key": "",
-				"mock_response": "This works!",
-			},
-		},
-	],
-	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
-	# fallbacks=[..], # [OPTIONAL]
-	# context_window_fallbacks=[..], # [OPTIONAL]
+  model_list=[
+    {
+      "model_name": "claude-2",
+      "litellm_params": {
+        "model": "claude-2",
+        "api_key": "",
+        "mock_response": Exception("content filtering policy"),
+      },
+    },
+    {
+      "model_name": "my-fallback-model",
+      "litellm_params": {
+        "model": "claude-2",
+        "api_key": "",
+        "mock_response": "This works!",
+      },
+    },
+  ],
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+  # fallbacks=[..], # [OPTIONAL]
+  # context_window_fallbacks=[..], # [OPTIONAL]
 )
 
 response = router.completion(
-	model="claude-2",
-	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+  model="claude-2",
+  messages=[{"role": "user", "content": "Hey, how's it going?"}],
 )
 ```
 </TabItem>
@@ -466,7 +466,7 @@ In your proxy config.yaml just add this line 👇
 
 ```yaml
 router_settings:
-	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
 ```
 
 Start proxy 
@@ -495,32 +495,32 @@ context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
 from litellm import Router 
 
 router = Router(
-	model_list=[
-		{
-			"model_name": "claude-2",
-			"litellm_params": {
-				"model": "claude-2",
-				"api_key": "",
-				"mock_response": Exception("prompt is too long"),
-			},
-		},
-		{
-			"model_name": "my-fallback-model",
-			"litellm_params": {
-				"model": "claude-2",
-				"api_key": "",
-				"mock_response": "This works!",
-			},
-		},
-	],
-	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
-	# fallbacks=[..], # [OPTIONAL]
-	# content_policy_fallbacks=[..], # [OPTIONAL]
+  model_list=[
+    {
+      "model_name": "claude-2",
+      "litellm_params": {
+        "model": "claude-2",
+        "api_key": "",
+        "mock_response": Exception("prompt is too long"),
+      },
+    },
+    {
+      "model_name": "my-fallback-model",
+      "litellm_params": {
+        "model": "claude-2",
+        "api_key": "",
+        "mock_response": "This works!",
+      },
+    },
+  ],
+  context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+  # fallbacks=[..], # [OPTIONAL]
+  # content_policy_fallbacks=[..], # [OPTIONAL]
 )
 
 response = router.completion(
-	model="claude-2",
-	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+  model="claude-2",
+  messages=[{"role": "user", "content": "Hey, how's it going?"}],
 )
 ```
 </TabItem>
@@ -530,7 +530,7 @@ In your proxy config.yaml just add this line 👇
 
 ```yaml
 router_settings:
-	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+  context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
 ```
 
 Start proxy 
@@ -725,22 +725,22 @@ Filter older instances of a model (e.g. gpt-3.5-turbo) with smaller context wind
 
 ```yaml
 router_settings:
-	enable_pre_call_checks: true # 1. Enable pre-call checks
+  enable_pre_call_checks: true # 1. Enable pre-call checks
 
 model_list:
-	- model_name: gpt-3.5-turbo
-	  litellm_params:
-		model: azure/chatgpt-v-2
-		api_base: os.environ/AZURE_API_BASE
-		api_key: os.environ/AZURE_API_KEY
-		api_version: "2023-07-01-preview"
-	  model_info:
-		base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
-	
-	- model_name: gpt-3.5-turbo
-	  litellm_params:
-		model: gpt-3.5-turbo-1106
-		api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+    model: azure/chatgpt-v-2
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2023-07-01-preview"
+    model_info:
+    base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
+
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+    model: gpt-3.5-turbo-1106
+    api_key: os.environ/OPENAI_API_KEY
 ```
 
 **2. Start proxy**
@@ -766,8 +766,8 @@ text = "What is the meaning of 42?" * 5000
 response = client.chat.completions.create(
     model="gpt-3.5-turbo",
     messages = [
-        {"role": "system", "content": text},
-		{"role": "user", "content": "Who was Alexander?"},
+      {"role": "system", "content": text},
+      {"role": "user", "content": "Who was Alexander?"},
     ],
 )
 
@@ -782,20 +782,20 @@ Fallback to larger models if current model is too small.
 
 ```yaml
 router_settings:
-	enable_pre_call_checks: true # 1. Enable pre-call checks
+  enable_pre_call_checks: true # 1. Enable pre-call checks
 
 model_list:
-	- model_name: gpt-3.5-turbo-small
-	  litellm_params:
-		model: azure/chatgpt-v-2
+  - model_name: gpt-3.5-turbo-small
+    litellm_params:
+    model: azure/chatgpt-v-2
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
       model_info:
       base_model: azure/gpt-4-1106-preview # 2. 👈 (azure-only) SET BASE MODEL
-	
-	- model_name: gpt-3.5-turbo-large
-	  litellm_params:
+
+  - model_name: gpt-3.5-turbo-large
+    litellm_params:
       model: gpt-3.5-turbo-1106
       api_key: os.environ/OPENAI_API_KEY
 
@@ -831,8 +831,8 @@ text = "What is the meaning of 42?" * 5000
 response = client.chat.completions.create(
     model="gpt-3.5-turbo",
     messages = [
-        {"role": "system", "content": text},
-		{"role": "user", "content": "Who was Alexander?"},
+      {"role": "system", "content": text},
+      {"role": "user", "content": "Who was Alexander?"},
     ],
 )
 
@@ -849,9 +849,9 @@ Fallback across providers (e.g. from Azure OpenAI to Anthropic) if you hit conte
 
 ```yaml
 model_list:
-	- model_name: gpt-3.5-turbo-small
-	  litellm_params:
-		model: azure/chatgpt-v-2
+  - model_name: gpt-3.5-turbo-small
+    litellm_params:
+    model: azure/chatgpt-v-2
         api_base: os.environ/AZURE_API_BASE
         api_key: os.environ/AZURE_API_KEY
         api_version: "2023-07-01-preview"
@@ -874,9 +874,9 @@ You can also set default_fallbacks, in case a specific model group is misconfigu
 
 ```yaml
 model_list:
-	- model_name: gpt-3.5-turbo-small
-	  litellm_params:
-		model: azure/chatgpt-v-2
+  - model_name: gpt-3.5-turbo-small
+    litellm_params:
+    model: azure/chatgpt-v-2
         api_base: os.environ/AZURE_API_BASE
         api_key: os.environ/AZURE_API_KEY
         api_version: "2023-07-01-preview"
@@ -906,7 +906,7 @@ Set 'region_name' of deployment.
 
 ```yaml
 router_settings:
-	enable_pre_call_checks: true # 1. Enable pre-call checks
+  enable_pre_call_checks: true # 1. Enable pre-call checks
 
 model_list:
 - model_name: gpt-3.5-turbo

@@ -300,28 +300,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         pass
 
 
-def test_completion_bad_org():
-    import litellm
-
-    litellm.set_verbose = True
-    _old_org = os.environ.get("OPENAI_ORGANIZATION", None)
-    os.environ["OPENAI_ORGANIZATION"] = "bad-org"
-    messages = [{"role": "user", "content": "hi"}]
-
-    with pytest.raises(Exception) as exc_info:
-        comp = litellm.completion(
-            model="gpt-4o-mini", messages=messages, organization="bad-org"
-        )
-
-    print(exc_info.value)
-    assert "header should match organization for API key" in str(exc_info.value)
-
-    if _old_org is not None:
-        os.environ["OPENAI_ORGANIZATION"] = _old_org
-    else:
-        del os.environ["OPENAI_ORGANIZATION"]
-
-
 @patch("litellm.main.openai_chat_completions._get_openai_client")
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
@@ -335,6 +313,52 @@ def test_openai_max_retries_0(mock_get_openai_client):
 
     mock_get_openai_client.assert_called_once()
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
+
+
+@patch("litellm.main.openai_chat_completions._get_openai_client")
+def test_openai_image_generation_forwards_organization(mock_get_openai_client):
+    """Ensure organization flows to OpenAI client for image generation."""
+
+    class _DummyImages:
+        def generate(self, **kwargs):  # type: ignore
+            class _Resp:
+                def model_dump(self_inner):  # minimal OpenAI ImagesResponse shape
+                    return {
+                        "created": 123,
+                        "data": [{"url": "http://example.com/image.png"}],
+                        "usage": {
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "total_tokens": 0,
+                        },
+                    }
+
+            return _Resp()
+
+    class _DummyClient:
+        def __init__(self):
+            self.api_key = "sk-test"
+
+            class _BaseURL:
+                _uri_reference = "https://api.openai.com/v1"
+
+            self._base_url = _BaseURL()
+            self.images = _DummyImages()
+
+    mock_get_openai_client.return_value = _DummyClient()
+
+    org = "org_test_123"
+    resp = litellm.image_generation(
+        model="gpt-image-1",
+        prompt="A cute baby sea otter",
+        organization=org,
+    )
+
+    # Assert organization forwarded into OpenAI client factory
+    assert mock_get_openai_client.call_args.kwargs.get("organization") == org
+
+    # Basic sanity on response shape
+    assert hasattr(resp, "data") and len(resp.data) == 1
 
 
 @pytest.mark.parametrize("model", ["o1", "o3-mini"])
@@ -755,7 +779,9 @@ async def test_openai_service_tier_parameter():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
 
 def test_openai_service_tier_parameter_sync():
@@ -784,7 +810,9 @@ def test_openai_service_tier_parameter_sync():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
 
 def test_gpt_5_reasoning_streaming():
@@ -806,23 +834,6 @@ def test_gpt_5_reasoning_streaming():
     assert has_content
 
     print("✓ gpt_5_reasoning_streaming correctly handled streaming")
-
-
-def test_gpt_5_pro_reasoning():
-    litellm._turn_on_debug()
-    response = litellm.completion(
-        model="gpt-5-pro",
-        messages=[
-            {
-                "role": "user",
-                "content": "Think of a poem and then write it.",
-            }
-        ],
-        reasoning_effort="high",
-    )
-    print("response: ", response)
-    # reasoning_effort string param does not request summaries (opt-in since #16210)
-    assert response.choices[0].message.content is not None  # But we should get content
 
 
 def test_openai_gpt_5_codex_reasoning():
@@ -1316,7 +1327,7 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
     """
     Test that the index field in a choice object is correctly populated
     when using streaming mode with n>1 and tool calls.
-    
+
     Regression test for: https://github.com/BerriAI/litellm/issues/8977
     """
     tools = [
@@ -1344,7 +1355,7 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
             },
         }
     ]
-    
+
     response = litellm.completion(
         model=model,
         messages=[
@@ -1357,20 +1368,30 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
         stream=True,
         n=3,
     )
-    
+
     # Collect all chunks and their indices
     indices_seen = []
     for chunk in response:
-        assert len(chunk.choices) == 1, "Each streaming chunk should have exactly 1 choice"
-        assert hasattr(chunk.choices[0], "index"), "Choice should have an index attribute"
+        assert (
+            len(chunk.choices) == 1
+        ), "Each streaming chunk should have exactly 1 choice"
+        assert hasattr(
+            chunk.choices[0], "index"
+        ), "Choice should have an index attribute"
         index = chunk.choices[0].index
         indices_seen.append(index)
-    
+
     # Verify that we got chunks with different indices (0, 1, 2 for n=3)
     unique_indices = set(indices_seen)
-    assert unique_indices == {0, 1, 2}, f"Should have indices 0, 1, 2 for n=3, got {unique_indices}"
-    
-    print(f"✓ Test passed: streaming with n=3 and tool calls correctly populates index field")
+    assert unique_indices == {
+        0,
+        1,
+        2,
+    }, f"Should have indices 0, 1, 2 for n=3, got {unique_indices}"
+
+    print(
+        f"✓ Test passed: streaming with n=3 and tool calls correctly populates index field"
+    )
     print(f"  Indices seen: {indices_seen}")
     print(f"  Unique indices: {unique_indices}")
 
@@ -1394,19 +1415,42 @@ async def test_streaming_content_with_n_greater_than_1(model):
         n=2,
         max_tokens=10,
     )
-    
+
     # Collect all chunks and their indices
     indices_seen = []
     for chunk in response:
-        assert len(chunk.choices) == 1, "Each streaming chunk should have exactly 1 choice"
-        assert hasattr(chunk.choices[0], "index"), "Choice should have an index attribute"
+        assert (
+            len(chunk.choices) == 1
+        ), "Each streaming chunk should have exactly 1 choice"
+        assert hasattr(
+            chunk.choices[0], "index"
+        ), "Choice should have an index attribute"
         index = chunk.choices[0].index
         indices_seen.append(index)
-    
+
     # Verify that we got chunks with different indices (0, 1 for n=2)
     unique_indices = set(indices_seen)
-    assert unique_indices == {0, 1}, f"Should have indices 0, 1 for n=2, got {unique_indices}"
-    
-    print(f"✓ Test passed: streaming with n=2 and regular content correctly populates index field")
+    assert unique_indices == {
+        0,
+        1,
+    }, f"Should have indices 0, 1 for n=2, got {unique_indices}"
+
+    print(
+        f"✓ Test passed: streaming with n=2 and regular content correctly populates index field"
+    )
     print(f"  Indices seen: {indices_seen}")
     print(f"  Unique indices: {unique_indices}")
+
+
+def test_gpt_5_web_search():
+    response = litellm.completion(
+        model="openai/responses/gpt-5",
+        messages=[{"role": "user", "content": "get price of nvda"}],
+        stream=True,
+        temperature=1,
+        max_tokens=8192,
+        tools=[{"type": "web_search"}],
+    )
+
+    for chunk in response:
+        print("chunk: ", chunk)

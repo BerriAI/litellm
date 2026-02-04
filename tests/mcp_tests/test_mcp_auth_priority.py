@@ -43,7 +43,7 @@ def test_mcp_server_works_without_config_auth_value():
 
 
 @pytest.mark.parametrize("token_key", ["authentication_token", "auth_value"])
-def test_mcp_server_config_auth_value_header_used(token_key):
+async def test_mcp_server_config_auth_value_header_used(token_key):
     """Ensure auth header is sent when auth token configured in config"""
     config = {
         "test_server": {
@@ -55,7 +55,7 @@ def test_mcp_server_config_auth_value_header_used(token_key):
     }
 
     manager = MCPServerManager()
-    manager.load_servers_from_config(config)
+    await manager.load_servers_from_config(config)
 
     server = next(iter(manager.config_mcp_servers.values()))
     client = manager._create_mcp_client(server)

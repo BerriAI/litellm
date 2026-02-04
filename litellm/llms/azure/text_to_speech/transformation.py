@@ -382,6 +382,15 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             return f"https://{region}.{self.TTS_SPEECH_DOMAIN}{self.TTS_ENDPOINT_PATH}"
         return f"https://{self.TTS_SPEECH_DOMAIN}{self.TTS_ENDPOINT_PATH}"
 
+    
+    def is_ssml_input(self, input: str) -> bool:
+        """
+        Returns True if input is SSML, False otherwise
+
+        Based on https://www.w3.org/TR/speech-synthesis/ all SSML must start with <speak>
+        """
+        return "<speak>" in input or "<speak " in input
+
     def transform_text_to_speech_request(
         self,
         model: str,
@@ -402,6 +411,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         - role: Voice role (e.g., "Girl", "Boy", "SeniorFemale", "SeniorMale")
         - lang: Language code for multilingual voices (e.g., "es-ES", "fr-FR")
         
+        Auto-detects SSML:
+        - If input contains <speak>, it's passed through as-is without transformation
+        
         Returns:
             TextToSpeechRequestData: Contains SSML body and Azure-specific headers
         """
@@ -414,7 +426,15 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         )
         headers["X-Microsoft-OutputFormat"] = output_format
         
-        # Build SSML
+        # Auto-detect SSML: if input contains <speak>, pass it through as-is
+        # Similar to Vertex AI behavior - check if input looks like SSML
+        if self.is_ssml_input(input=input):
+            return TextToSpeechRequestData(
+                ssml_body=input,
+                headers=headers,
+            )
+        
+        # Build SSML from plain text
         rate = optional_params.get("rate", "0%")
         style = optional_params.get("style")
         styledegree = optional_params.get("styledegree")

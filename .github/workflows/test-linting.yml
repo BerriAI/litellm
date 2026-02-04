@@ -30,6 +30,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        poetry lock
         poetry install --with dev
         poetry run pip install openai==1.100.1
 

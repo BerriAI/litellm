@@ -12,6 +12,7 @@ import pytest
 from litellm.litellm_core_utils.audio_utils.utils import (
     ProcessedAudioFile,
     calculate_request_duration,
+    get_audio_file_content_hash,
     get_audio_file_for_health_check,
     get_audio_file_name,
     process_audio_file,
@@ -263,3 +264,51 @@ class TestCalculateRequestDuration:
         assert file_obj.tell() == len(
             wav_header
         ), "File position should be restored to original position"
+
+
+class TestGetAudioFileContentHash:
+    """Test the get_audio_file_content_hash function for cache key generation"""
+
+    def test_different_content_same_filename_different_hash(self):
+        """Test that different content with same filename produces different hashes"""
+        content1 = b"audio content 1"
+        content2 = b"audio content 2"
+        filename = "test.mp3"
+
+        hash1 = get_audio_file_content_hash((filename, content1))
+        hash2 = get_audio_file_content_hash((filename, content2))
+
+        assert hash1 != hash2, "Different content should produce different hashes"
+
+    def test_same_content_same_hash(self):
+        """Test that same content produces same hash"""
+        content = b"same audio content"
+        filename1 = "test1.mp3"
+        filename2 = "test2.mp3"
+
+        hash1 = get_audio_file_content_hash((filename1, content))
+        hash2 = get_audio_file_content_hash((filename2, content))
+
+        assert hash1 == hash2, "Same content should produce same hash regardless of filename"
+
+    def test_bytes_input(self):
+        """Test that raw bytes input works"""
+        content = b"raw bytes content"
+        hash1 = get_audio_file_content_hash(content)
+        hash2 = get_audio_file_content_hash(content)
+
+        assert hash1 == hash2, "Same bytes should produce same hash"
+        assert len(hash1) == 64, "SHA-256 hash should be 64 characters"
+
+    def test_fallback_to_filename(self):
+        """Test that function falls back to filename when content extraction fails"""
+        # Use a non-readable object that will trigger fallback
+        class UnreadableFile:
+            def __init__(self, name):
+                self.name = name
+
+        file_obj = UnreadableFile("test.mp3")
+        hash_result = get_audio_file_content_hash(file_obj)
+
+        assert isinstance(hash_result, str)
+        assert len(hash_result) == 64, "Should return valid hash even on fallback"

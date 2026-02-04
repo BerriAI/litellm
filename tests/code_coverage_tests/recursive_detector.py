@@ -30,6 +30,17 @@ IGNORE_FUNCTIONS = [
     "_fix_enum_empty_strings",  # max depth set.,
     "get_access_token",  # max depth set.,
     "_redact_base64",  # max depth set.
+    "_contains_vision_content",  # max depth set.
+    "_read_all_bytes",  # max depth set.
+    "_fix_enum_types",  # max depth set.
+    "_collect_argument_paths",  # max depth set.
+    "_split_text",  # max depth set.
+    "_mask_sequence",  # max depth set.
+    "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
+    "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
+    "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
+    "_validate_inheritance_chain",  # max depth set (default 100) to prevent infinite recursion in policy inheritance validation.
+    "extract_text_from_a2a_message",  # max depth set (default 10) to prevent infinite recursion in A2A message parsing.
 ]
 
 

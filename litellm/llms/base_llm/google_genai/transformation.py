@@ -149,6 +149,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         contents: GenerateContentContentListUnionDict,
         tools: Optional[ToolConfigDict],
         generate_content_config_dict: Dict,
+        system_instruction: Optional[Any] = None,
     ) -> dict:
         """
         Transform the request parameters for the generate content API.
@@ -157,9 +158,8 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             model: The model name
             contents: Input contents
             tools: Tools
-            generate_content_request_params: Request parameters
-            litellm_params: LiteLLM parameters
-            headers: Request headers
+            generate_content_config_dict: Generation config parameters
+            system_instruction: Optional system instruction
 
         Returns:
             Transformed request data

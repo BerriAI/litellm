@@ -6,10 +6,22 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementClient,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
 class CustomPromptManagement(CustomLogger, PromptManagementBase):
+    def __init__(
+        self,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+        **kwargs,
+    ):
+        self.ignore_prompt_manager_model = ignore_prompt_manager_model
+        self.ignore_prompt_manager_optional_params = (
+            ignore_prompt_manager_optional_params
+        )
+
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -18,8 +30,11 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -35,14 +50,16 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
 
     def should_run_prompt_management(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         return True
 
     def _compile_prompt_helper(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
@@ -50,4 +67,17 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
     ) -> PromptManagementClient:
         raise NotImplementedError(
             "Custom prompt management does not support compile prompt helper"
+        )
+
+    async def async_compile_prompt_helper(
+        self,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> PromptManagementClient:
+        raise NotImplementedError(
+            "Custom prompt management does not support async compile prompt helper"
         )

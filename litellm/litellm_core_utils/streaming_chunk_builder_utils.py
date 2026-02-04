@@ -17,6 +17,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
+    ServerToolUse,
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
@@ -67,12 +68,31 @@ class ChunkProcessor:
                 return chunk["id"]
         return ""
 
+    @staticmethod
+    def _get_model_from_chunks(chunks: List[Dict[str, Any]], first_chunk_model: str) -> str:
+        """
+        Get the actual model from chunks, preferring a model that differs from the first chunk.
+
+        For Azure Model Router, the first chunk may have the request model (e.g., 'azure-model-router')
+        while subsequent chunks have the actual model (e.g., 'gpt-4.1-nano-2025-04-14').
+        This method finds the actual model for accurate cost calculation.
+        """
+        # Look for a model in chunks that differs from the first chunk's model
+        for chunk in chunks:
+            chunk_model = chunk.get("model")
+            if chunk_model and chunk_model != first_chunk_model:
+                return chunk_model
+        # Fall back to first chunk's model if no different model found
+        return first_chunk_model
+
     def build_base_response(self, chunks: List[Dict[str, Any]]) -> ModelResponse:
         chunk = self.first_chunk
         id = ChunkProcessor._get_chunk_id(chunks)
         object = chunk["object"]
         created = chunk["created"]
-        model = chunk["model"]
+        first_chunk_model = chunk["model"]
+        # Get the actual model - for Azure Model Router, this finds the real model from later chunks
+        model = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint = chunk.get("system_fingerprint", None)
 
         role = chunk["choices"][0]["delta"]["role"]
@@ -112,7 +132,7 @@ class ChunkProcessor:
         )
         return response
 
-    def get_combined_tool_content(
+    def get_combined_tool_content( # noqa: PLR0915
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
@@ -127,34 +147,93 @@ class ChunkProcessor:
                 tool_calls = delta.get("tool_calls", [])
 
                 for tool_call in tool_calls:
-                    if not tool_call or not hasattr(tool_call, "function"):
+                    # Handle both dict and object formats
+                    if not tool_call:
+                        continue
+                    
+                    # Check if tool_call has function (either as attribute or dict key)
+                    has_function = False
+                    if isinstance(tool_call, dict):
+                        has_function = "function" in tool_call and tool_call["function"] is not None
+                    else:
+                        has_function = hasattr(tool_call, "function") and tool_call.function is not None
+                    
+                    if not has_function:
                         continue
 
-                    index = getattr(tool_call, "index", 0)
+                    # Get index (handle both dict and object)
+                    if isinstance(tool_call, dict):
+                        index = tool_call.get("index", 0)
+                    else:
+                        index = getattr(tool_call, "index", 0)
+                    
                     if index not in tool_call_map:
                         tool_call_map[index] = {
                             "id": None,
                             "name": None,
                             "type": None,
                             "arguments": [],
+                            "provider_specific_fields": None,
                         }
 
-                    if hasattr(tool_call, "id") and tool_call.id:
-                        tool_call_map[index]["id"] = tool_call.id
-                    if hasattr(tool_call, "type") and tool_call.type:
-                        tool_call_map[index]["type"] = tool_call.type
-                    if hasattr(tool_call, "function"):
-                        if (
-                            hasattr(tool_call.function, "name")
-                            and tool_call.function.name
-                        ):
-                            tool_call_map[index]["name"] = tool_call.function.name
-                        if (
-                            hasattr(tool_call.function, "arguments")
-                            and tool_call.function.arguments
-                        ):
-                            tool_call_map[index]["arguments"].append(
-                                tool_call.function.arguments
+                    # Extract id, type, and function data (handle both dict and object)
+                    if isinstance(tool_call, dict):
+                        if tool_call.get("id"):
+                            tool_call_map[index]["id"] = tool_call["id"]
+                        if tool_call.get("type"):
+                            tool_call_map[index]["type"] = tool_call["type"]
+                        
+                        function = tool_call.get("function", {})
+                        if isinstance(function, dict):
+                            if function.get("name"):
+                                tool_call_map[index]["name"] = function["name"]
+                            if function.get("arguments"):
+                                tool_call_map[index]["arguments"].append(function["arguments"])
+                        else:
+                            # function is an object
+                            if hasattr(function, "name") and function.name:
+                                tool_call_map[index]["name"] = function.name
+                            if hasattr(function, "arguments") and function.arguments:
+                                tool_call_map[index]["arguments"].append(function.arguments)
+                    else:
+                        # tool_call is an object
+                        if hasattr(tool_call, "id") and tool_call.id:
+                            tool_call_map[index]["id"] = tool_call.id
+                        if hasattr(tool_call, "type") and tool_call.type:
+                            tool_call_map[index]["type"] = tool_call.type
+                        if hasattr(tool_call, "function"):
+                            if (
+                                hasattr(tool_call.function, "name")
+                                and tool_call.function.name
+                            ):
+                                tool_call_map[index]["name"] = tool_call.function.name
+                            if (
+                                hasattr(tool_call.function, "arguments")
+                                and tool_call.function.arguments
+                            ):
+                                tool_call_map[index]["arguments"].append(
+                                    tool_call.function.arguments
+                                )
+                    
+                    # Preserve provider_specific_fields from streaming chunks
+                    provider_fields = None
+                    if isinstance(tool_call, dict):
+                        provider_fields = tool_call.get("provider_specific_fields")
+                        if not provider_fields and isinstance(tool_call.get("function"), dict):
+                            provider_fields = tool_call["function"].get("provider_specific_fields")
+                    else:
+                        if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
+                            provider_fields = tool_call.provider_specific_fields
+                        elif hasattr(tool_call, "function") and hasattr(tool_call.function, "provider_specific_fields") and tool_call.function.provider_specific_fields:
+                            provider_fields = tool_call.function.provider_specific_fields
+                    
+                    if provider_fields:
+                        # Merge provider_specific_fields if multiple chunks have them
+                        if tool_call_map[index]["provider_specific_fields"] is None:
+                            tool_call_map[index]["provider_specific_fields"] = {}
+                        if isinstance(provider_fields, dict):
+                            tool_call_map[index]["provider_specific_fields"].update(
+                                provider_fields
                             )
 
         # Convert the map to a list of tool calls
@@ -162,18 +241,29 @@ class ChunkProcessor:
             tool_call_data = tool_call_map[index]
             if tool_call_data["id"] and tool_call_data["name"]:
                 combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
-                tool_calls_list.append(
-                    ChatCompletionMessageToolCall(
-                        id=tool_call_data["id"],
-                        function=Function(
-                            arguments=combined_arguments,
-                            name=tool_call_data["name"],
-                        ),
-                        type=tool_call_data["type"] or "function",
-                    )
+                
+                # Build function - provider_specific_fields should be on tool_call level, not function level
+                function = Function(
+                    arguments=combined_arguments,
+                    name=tool_call_data["name"],
                 )
+                
+                # Prepare params for ChatCompletionMessageToolCall
+                tool_call_params = {
+                    "id": tool_call_data["id"],
+                    "function": function,
+                    "type": tool_call_data["type"] or "function",
+                }
+                
+                # Add provider_specific_fields if present (for thought signatures in Gemini 3)
+                if tool_call_data.get("provider_specific_fields"):
+                    tool_call_params["provider_specific_fields"] = tool_call_data["provider_specific_fields"]
+                
+                tool_call = ChatCompletionMessageToolCall(**tool_call_params)
+                tool_calls_list.append(tool_call)
 
         return tool_calls_list
+
 
     def get_combined_function_call_content(
         self, function_call_chunks: List[Dict[str, Any]]
@@ -391,7 +481,8 @@ class ChunkProcessor:
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
-
+        
+        server_tool_use: Optional[ServerToolUse] = None
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
@@ -435,6 +526,8 @@ class ChunkProcessor:
                     completion_tokens_details = usage_chunk_dict[
                         "completion_tokens_details"
                     ]
+                if hasattr(usage_chunk, 'server_tool_use') and usage_chunk.server_tool_use is not None:
+                    server_tool_use = usage_chunk.server_tool_use
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(
@@ -456,6 +549,7 @@ class ChunkProcessor:
             completion_tokens=completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
@@ -486,6 +580,9 @@ class ChunkProcessor:
             "cache_read_input_tokens"
         ]
 
+        server_tool_use: Optional[ServerToolUse] = calculated_usage_per_chunk[
+            "server_tool_use"
+        ]
         web_search_requests: Optional[int] = calculated_usage_per_chunk[
             "web_search_requests"
         ]
@@ -549,6 +646,8 @@ class ChunkProcessor:
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
+        if server_tool_use is not None:
+            returned_usage.server_tool_use = server_tool_use
         if web_search_requests is not None:
             if returned_usage.prompt_tokens_details is None:
                 returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(

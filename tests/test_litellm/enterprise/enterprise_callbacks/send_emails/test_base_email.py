@@ -19,7 +19,8 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 )
 
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
-from litellm.proxy._types import Litellm_EntityType, WebhookEvent
+from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
+from litellm.constants import EMAIL_BUDGET_ALERT_TTL
 
 
 @pytest.fixture(autouse=True)
@@ -605,4 +606,276 @@ async def test_get_email_params_default_templates(monkeypatch):
         )
         
         assert key_params.subject == "LiteLLM: API Key Created"
-        assert key_params.signature == EMAIL_FOOTER 
+        assert key_params.signature == EMAIL_FOOTER
+
+
+@pytest.mark.asyncio
+async def test_send_soft_budget_alert_email(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """Test that send_soft_budget_alert_email sends an email with the correct parameters and content"""
+    event = WebhookEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        event_group=Litellm_EntityType.USER,
+        event="soft_budget_crossed",
+        event_message="Soft Budget Crossed - Total Soft Budget: $100.0",
+        spend=105.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+    )
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "EMAIL_LOGO_URL": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@berri.ai",
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.send_soft_budget_alert_email(event)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert call_args["from_email"] == BaseEmailLogger.DEFAULT_LITELLM_EMAIL
+        assert call_args["to_email"] == ["test@example.com"]
+        assert call_args["subject"] == "LiteLLM: Soft Budget Crossed - Total Soft Budget: $100.0"
+        assert "$100.0" in call_args["html_body"]  # soft_budget
+        assert "$105.0" in call_args["html_body"]  # spend
+        assert "$200.0" in call_args["html_body"]  # max_budget
+
+
+@pytest.mark.asyncio
+async def test_send_soft_budget_alert_email_no_max_budget(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """Test that send_soft_budget_alert_email handles missing max_budget correctly"""
+    event = WebhookEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        event_group=Litellm_EntityType.USER,
+        event="soft_budget_crossed",
+        event_message="Soft Budget Crossed - Total Soft Budget: $100.0",
+        spend=105.0,
+        max_budget=None,
+        soft_budget=100.0,
+    )
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.send_soft_budget_alert_email(event)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert "$100.0" in call_args["html_body"]  # soft_budget
+        assert "$105.0" in call_args["html_body"]  # spend
+        assert "Maximum Budget" not in call_args["html_body"]  # max_budget should not be shown
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_soft_budget_crossed(
+    base_email_logger, mock_send_email
+):
+    """Test that budget_alerts sends email when soft budget is crossed"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        spend=105.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+        event_group=Litellm_EntityType.USER,
+    )
+
+    # Mock the cache to return None (no previous alert sent)
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify email was sent
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert call_args["to_email"] == ["test@example.com"]
+        
+        # Verify cache was set to prevent duplicate alerts
+        mock_cache.async_set_cache.assert_called_once()
+        cache_call_args = mock_cache.async_set_cache.call_args[1]
+        assert cache_call_args["key"] == "email_budget_alerts:soft_budget_crossed:test_user"
+        assert cache_call_args["value"] == "SENT"
+        assert cache_call_args["ttl"] == EMAIL_BUDGET_ALERT_TTL
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_soft_budget_not_crossed(
+    base_email_logger, mock_send_email
+):
+    """Test that budget_alerts does not send email when soft budget is not crossed"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        spend=50.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+        event_group=Litellm_EntityType.USER,
+    )
+
+    mock_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+
+    # Verify email was NOT sent
+    mock_send_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_soft_budget_duplicate_prevention(
+    base_email_logger, mock_send_email
+):
+    """Test that budget_alerts does not send duplicate alerts within TTL period"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        spend=105.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+        event_group=Litellm_EntityType.USER,
+    )
+
+    # Mock the cache to return "SENT" (previous alert already sent)
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value="SENT")
+    base_email_logger.internal_usage_cache = mock_cache
+
+    await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+
+    # Verify email was NOT sent (duplicate prevention)
+    mock_send_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_no_budgets(
+    base_email_logger, mock_send_email
+):
+    """Test that budget_alerts returns early when no budgets are set"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        spend=50.0,
+        max_budget=None,
+        soft_budget=None,
+        event_group=Litellm_EntityType.USER,
+    )
+
+    await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+
+    # Verify email was NOT sent
+    mock_send_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_uses_token_for_cache_key(
+    base_email_logger, mock_send_email
+):
+    """Test that budget_alerts uses token for cache key when available"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        token="hashed_token_123",
+        spend=105.0,
+        max_budget=200.0,
+        soft_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+    )
+
+    # Mock the cache to return None (no previous alert sent)
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify cache key uses token instead of user_id
+        mock_cache.async_set_cache.assert_called_once()
+        cache_call_args = mock_cache.async_set_cache.call_args[1]
+        assert cache_call_args["key"] == "email_budget_alerts:soft_budget_crossed:hashed_token_123"
+
+
+@pytest.mark.asyncio
+async def test_get_email_params_soft_budget_crossed(
+    base_email_logger, mock_lookup_user_email
+):
+    """Test that _get_email_params handles soft_budget_crossed event correctly"""
+    with mock.patch.dict(
+        os.environ,
+        {
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        result = await base_email_logger._get_email_params(
+            email_event=EmailEvent.soft_budget_crossed,
+            user_email="test@example.com",
+            event_message="Soft Budget Crossed - Total Soft Budget: $100.0",
+        )
+
+        # Should use default subject template for soft_budget_crossed
+        assert result.subject == "LiteLLM: Soft Budget Crossed - Total Soft Budget: $100.0"
+        assert result.recipient_email == "test@example.com"
+        assert result.base_url == "http://test.com"
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_max_budget_alert_crossed(
+    base_email_logger, mock_send_email
+):
+    """Test that budget_alerts sends email when max budget alert threshold is crossed"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        spend=165.0,
+        max_budget=200.0,
+        event_group=Litellm_EntityType.USER,
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert call_args["to_email"] == ["test@example.com"]
+        assert "Max Budget Alert" in call_args["subject"]
+        
+        mock_cache.async_set_cache.assert_called_once()
+        cache_call_args = mock_cache.async_set_cache.call_args[1]
+        assert cache_call_args["key"] == "email_budget_alerts:max_budget_alert:test_user"
+        assert cache_call_args["value"] == "SENT"
+        assert cache_call_args["ttl"] == EMAIL_BUDGET_ALERT_TTL

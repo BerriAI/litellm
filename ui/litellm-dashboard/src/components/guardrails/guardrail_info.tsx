@@ -26,6 +26,9 @@ import PiiConfiguration from "./pii_configuration";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
+import ToolPermissionRulesEditor, {
+  ToolPermissionConfig,
+} from "./tool_permission/ToolPermissionRulesEditor";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -83,6 +86,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   } | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [hasUnsavedContentFilterChanges, setHasUnsavedContentFilterChanges] = useState(false);
+  const emptyToolPermissionConfig: ToolPermissionConfig = {
+    rules: [],
+    default_action: "deny",
+    on_disallowed_action: "block",
+    violation_message_template: "",
+  };
+  const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(emptyToolPermissionConfig);
+  const [toolPermissionDirty, setToolPermissionDirty] = useState(false);
 
   // Content Filter data ref (managed by ContentFilterManager)
   const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[] }>({
@@ -180,6 +191,29 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     }
   }, [guardrailData, guardrailProviderSpecificParams, form]);
 
+  const resetToolPermissionEditor = useCallback(() => {
+    if (guardrailData?.litellm_params?.guardrail === "tool_permission") {
+      setToolPermissionConfig({
+        rules: (guardrailData.litellm_params?.rules as ToolPermissionConfig["rules"]) || [],
+        default_action: ((guardrailData.litellm_params?.default_action || "deny") as ToolPermissionConfig["default_action"]).toLowerCase() as ToolPermissionConfig["default_action"],
+        on_disallowed_action: ((guardrailData.litellm_params?.on_disallowed_action || "block") as ToolPermissionConfig["on_disallowed_action"]).toLowerCase() as ToolPermissionConfig["on_disallowed_action"],
+        violation_message_template: guardrailData.litellm_params?.violation_message_template || "",
+      });
+    } else {
+      setToolPermissionConfig(emptyToolPermissionConfig);
+    }
+    setToolPermissionDirty(false);
+  }, [guardrailData]);
+
+  useEffect(() => {
+    resetToolPermissionEditor();
+  }, [resetToolPermissionEditor]);
+
+  const handleToolPermissionConfigChange = (config: ToolPermissionConfig) => {
+    setToolPermissionConfig(config);
+    setToolPermissionDirty(true);
+  };
+
   const handlePiiEntitySelect = (entity: string) => {
     setSelectedPiiEntities((prev) => {
       if (prev.includes(entity)) {
@@ -237,21 +271,41 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       }
 
       // Only add Content Filter patterns if there are changes
-      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter") {
+      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter" && hasUnsavedContentFilterChanges) {
         const originalPatterns = guardrailData.litellm_params?.patterns || [];
         const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
 
         const formattedData = formatContentFilterDataForAPI(
-          contentFilterDataRef.current.patterns,
-          contentFilterDataRef.current.blockedWords,
+          contentFilterDataRef.current.patterns || [],
+          contentFilterDataRef.current.blockedWords || [],
         );
 
-        if (JSON.stringify(originalPatterns) !== JSON.stringify(formattedData.patterns)) {
-          updateData.litellm_params.patterns = formattedData.patterns;
-        }
+        updateData.litellm_params.patterns = formattedData.patterns;
+        updateData.litellm_params.blocked_words = formattedData.blocked_words;
+      }
 
-        if (JSON.stringify(originalBlockedWords) !== JSON.stringify(formattedData.blocked_words)) {
-          updateData.litellm_params.blocked_words = formattedData.blocked_words;
+      if (guardrailData.litellm_params?.guardrail === "tool_permission") {
+        const originalRules = guardrailData.litellm_params?.rules || [];
+        const currentRules = toolPermissionConfig.rules || [];
+        const rulesChanged = JSON.stringify(originalRules) !== JSON.stringify(currentRules);
+
+        const originalDefault = (guardrailData.litellm_params?.default_action || "deny").toLowerCase();
+        const currentDefault = (toolPermissionConfig.default_action || "deny").toLowerCase();
+        const defaultChanged = originalDefault !== currentDefault;
+
+        const originalOnDisallowed = (guardrailData.litellm_params?.on_disallowed_action || "block").toLowerCase();
+        const currentOnDisallowed = (toolPermissionConfig.on_disallowed_action || "block").toLowerCase();
+        const onDisallowedChanged = originalOnDisallowed !== currentOnDisallowed;
+
+        const originalMessage = guardrailData.litellm_params?.violation_message_template || "";
+        const currentMessage = toolPermissionConfig.violation_message_template || "";
+        const messageChanged = originalMessage !== currentMessage;
+
+        if (toolPermissionDirty || rulesChanged || defaultChanged || onDisallowedChanged || messageChanged) {
+          updateData.litellm_params.rules = currentRules;
+          updateData.litellm_params.default_action = currentDefault;
+          updateData.litellm_params.on_disallowed_action = currentOnDisallowed;
+          updateData.litellm_params.violation_message_template = currentMessage || null;
         }
       }
 
@@ -273,7 +327,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       console.log("currentProvider: ", currentProvider);
 
       // Use pre-fetched provider params to copy recognised params
-      if (guardrailProviderSpecificParams && currentProvider) {
+      const isToolPermissionGuardrail = guardrailData.litellm_params?.guardrail === "tool_permission";
+      if (guardrailProviderSpecificParams && currentProvider && !isToolPermissionGuardrail) {
         const providerKey = guardrail_provider_map[currentProvider]?.toLowerCase();
         const providerSpecificParams = guardrailProviderSpecificParams[providerKey] || {};
 
@@ -297,6 +352,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
         console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
+          if (paramName === "patterns" || paramName === "blocked_words") {
+            return;
+          }
           // Check for both direct parameter name and nested optional_params object
           let paramValue = values[paramName];
           if (paramValue === undefined || paramValue === null || paramValue === "") {
@@ -488,6 +546,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                 </Card>
               )}
 
+            {guardrailData.litellm_params?.guardrail === "tool_permission" && (
+              <Card className="mt-6">
+                <ToolPermissionRulesEditor value={toolPermissionConfig} disabled />
+              </Card>
+            )}
+
             {/* Content Filter Configuration Display */}
             <ContentFilterManager
               guardrailData={guardrailData}
@@ -575,39 +639,48 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
                     <Divider orientation="left">Provider Settings</Divider>
 
-                    {/* Provider-specific fields */}
-                    <GuardrailProviderFields
-                      selectedProvider={
-                        Object.keys(guardrail_provider_map).find(
-                          (key) => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail,
-                        ) || null
-                      }
-                      accessToken={accessToken}
-                      providerParams={guardrailProviderSpecificParams}
-                      value={guardrailData.litellm_params}
-                    />
+                    {guardrailData.litellm_params?.guardrail === "tool_permission" ? (
+                      <ToolPermissionRulesEditor
+                        value={toolPermissionConfig}
+                        onChange={setToolPermissionConfig}
+                      />
+                    ) : (
+                      <>
+                        {/* Provider-specific fields */}
+                        <GuardrailProviderFields
+                          selectedProvider={
+                            Object.keys(guardrail_provider_map).find(
+                              (key) => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail,
+                            ) || null
+                          }
+                          accessToken={accessToken}
+                          providerParams={guardrailProviderSpecificParams}
+                          value={guardrailData.litellm_params}
+                        />
 
-                    {/* Optional parameters */}
-                    {guardrailProviderSpecificParams &&
-                      (() => {
-                        const currentProvider = Object.keys(guardrail_provider_map).find(
-                          (key) => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail,
-                        );
-                        if (!currentProvider) return null;
+                        {/* Optional parameters */}
+                        {guardrailProviderSpecificParams &&
+                          (() => {
+                            const currentProvider = Object.keys(guardrail_provider_map).find(
+                              (key) => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail,
+                            );
+                            if (!currentProvider) return null;
 
-                        const providerKey = guardrail_provider_map[currentProvider]?.toLowerCase();
-                        const providerFields = guardrailProviderSpecificParams[providerKey];
+                            const providerKey = guardrail_provider_map[currentProvider]?.toLowerCase();
+                            const providerFields = guardrailProviderSpecificParams[providerKey];
 
-                        if (!providerFields || !providerFields.optional_params) return null;
+                            if (!providerFields || !providerFields.optional_params) return null;
 
-                        return (
-                          <GuardrailOptionalParams
-                            optionalParams={providerFields.optional_params}
-                            parentFieldKey="optional_params"
-                            values={guardrailData.litellm_params}
-                          />
-                        );
-                      })()}
+                            return (
+                              <GuardrailOptionalParams
+                                optionalParams={providerFields.optional_params}
+                                parentFieldKey="optional_params"
+                                values={guardrailData.litellm_params}
+                              />
+                            );
+                          })()}
+                      </>
+                    )}
 
                     <Divider orientation="left">Advanced Settings</Divider>
                     <Form.Item label="Guardrail Information" name="guardrail_info">
@@ -619,6 +692,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                         onClick={() => {
                           setIsEditing(false);
                           setHasUnsavedContentFilterChanges(false);
+                          resetToolPermissionEditor();
                         }}
                       >
                         Cancel
@@ -672,6 +746,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       <Text className="font-medium">Last Updated</Text>
                       <div>{formatDate(guardrailData.updated_at)}</div>
                     </div>
+
+                    {guardrailData.litellm_params?.guardrail === "tool_permission" && (
+                      <ToolPermissionRulesEditor value={toolPermissionConfig} disabled />
+                    )}
                   </div>
                 )}
               </Card>

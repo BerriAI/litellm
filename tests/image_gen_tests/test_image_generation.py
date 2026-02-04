@@ -112,10 +112,26 @@ class TestVertexImageGeneration(BaseImageGenTest):
 
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
-            "model": "vertex_ai/imagegeneration@006",
+            "model": "vertex_ai/imagen-3.0-fast-generate-001",
             "vertex_ai_project": "pathrise-convert-1606954137718",
             "vertex_ai_location": "us-central1",
             "n": 1,
+        }
+
+
+class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
+    """Test Gemini image generation models (Nano Banana)"""
+    def get_base_image_generation_call_args(self) -> dict:
+        # comment this when running locally
+        load_vertex_ai_credentials()
+
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {
+            "model": "vertex_ai/gemini-2.5-flash-image",
+            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_location": "us-central1",
+            "n": 1,
+            "size": "1024x1024",
         }
 
 
@@ -156,6 +172,7 @@ class TestOpenAIGPTImage1(BaseImageGenTest):
         return {"model": "gpt-image-1"}
 
 
+@pytest.mark.skip(reason="Recraft image generation API only tested locally")
 class TestRecraftImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "recraft/recraftv3"}
@@ -165,15 +182,14 @@ class TestAimlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "aiml/flux-pro/v1.1"}
 
-
-class TestFAL_AI_ImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "fal_ai/fal-ai/imagen4/preview"}
-
-
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-001"}
+
+@pytest.mark.skip(reason="Runwayml image generation API only tested locally")
+class TestRunwaymlImageGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "runwayml/gen4_image"}
 
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):

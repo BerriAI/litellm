@@ -38,10 +38,21 @@ def test_litellm_proxy_server():
 
 
 def test_package_dependencies():
+    """
+    Test that all optional dependencies are correctly specified in extras.
+    """
     try:
-        import tomli
         import pathlib
         import litellm
+        
+        # Try to import tomllib (Python 3.11+) or tomli (older versions)
+        try:
+            import tomllib as tomli
+        except ImportError:
+            try:
+                import tomli
+            except ImportError:
+                pytest.skip("tomli/tomllib not available - skipping dependency check")
 
         # Get the litellm package root path
         litellm_path = pathlib.Path(litellm.__file__).parent.parent

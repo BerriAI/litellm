@@ -3,7 +3,8 @@ import Image from '@theme/IdealImage';
 # Enterprise
 
 :::info
-✨ SSO is free for up to 5 users. After that, an enterprise license is required. [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
+- ✨ SSO is free for up to 5 users. After that, an enterprise license is required. [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
+- Who is Enterprise for? Companies giving access to 100+ users **OR** 10+ AI use-cases. If you're not sure, [get in touch with us](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) to discuss your needs.
 :::
 
 For companies that need SSO, user management and professional support for LiteLLM Proxy
@@ -16,7 +17,7 @@ Get free 7-day trial key [here](https://www.litellm.ai/enterprise#trial)
 
 Includes all enterprise features.
 
-<Image img={require('../img/enterprise_vs_oss.png')} />
+<Image img={require('../img/enterprise_vs_oss_2.png')} />
 
 [**Procurement available via AWS / Azure Marketplace**](./data_security.md#legalcompliance-faqs)
 
@@ -40,7 +41,7 @@ Self-Managed Enterprise deployments require our team to understand your exact ne
 
 ### How does deployment with Enterprise License work? 
 
-You just deploy [our docker image](https://docs.litellm.ai/docs/proxy/deploy) and get an enterprise license key to add to your environment to unlock additional functionality (SSO, Prometheus metrics, etc.). 
+You just deploy [our docker image](https://docs.litellm.ai/docs/proxy/deploy) and get an enterprise license key to add to your environment to unlock additional functionality (SSO, etc.). 
 
 ```env
 LITELLM_LICENSE="eyJ..."
@@ -72,6 +73,18 @@ You can find [supported data regions litellm here](../docs/data_security#support
 
 
 ## Frequently Asked Questions
+
+### How to set up and verify your Enterprise License
+
+1. Add your license key to the environment:
+
+```env
+LITELLM_LICENSE="eyJ..."
+```
+
+2. Restart LiteLLM Proxy.
+
+3. Open `http://<your-proxy-host>:<port>/` — the Swagger page should show **"Enterprise Edition"** in the description. If it doesn't, check that the key is correct, unexpired, and that the proxy was fully restarted.
 
 ### SLA's + Professional Support
 

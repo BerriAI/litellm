@@ -228,7 +228,7 @@ const Createuser: React.FC<CreateuserProps> = ({
       <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
       <Modal
         title="Invite User"
-        visible={isModalVisible}
+        open={isModalVisible}
         width={800}
         footer={null}
         onOk={handleOk}
@@ -298,6 +298,9 @@ const Createuser: React.FC<CreateuserProps> = ({
                 <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
                   <Select2.Option key="all-proxy-models" value="all-proxy-models">
                     All Proxy Models
+                  </Select2.Option>
+                  <Select2.Option key="no-default-models" value="no-default-models">
+                    No Default Models
                   </Select2.Option>
                   {userModels.map((model) => (
                     <Select2.Option key={model} value={model}>

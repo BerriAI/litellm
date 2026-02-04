@@ -311,6 +311,21 @@ response = embedding(
 print(response.data)
 ```
 
+### Audio Transcription
+
+```python
+from litellm import transcription
+
+audio_file = open("path/to/your/audio.wav", "rb")
+
+response = transcription(
+    model="ovhcloud/whisper-large-v3-turbo",
+    file=audio_file
+)
+
+print(response.text)
+```
+
 ## Usage with LiteLLM Proxy Server
 
 Here's how to call a OVHCloud AI Endpoints model with the LiteLLM Proxy Server

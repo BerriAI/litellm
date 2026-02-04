@@ -1,55 +1,60 @@
-import React, { useState, useEffect } from "react";
-import { Typography } from "antd";
-import { teamDeleteCall, Organization, fetchMCPAccessGroups } from "./networking";
-import { fetchTeams } from "./common_components/fetch_teams";
-import { PencilAltIcon, RefreshIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { Button as Button2, Modal, Form, Input, Select as Select2, Tooltip } from "antd";
-import NumericalInput from "./shared/numerical_input";
-import {
-  fetchAvailableModelsForTeamOrKey,
-  getModelDisplayName,
-  unfurlWildcardModelsInList,
-} from "./key_team_helpers/fetch_available_models_team_key";
-import { Select, SelectItem } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { getGuardrailsList } from "./networking";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
-import { isAdminRole } from "@/utils/roles";
+import { isProxyAdminRole } from "@/utils/roles";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
+import { FilterInput } from "@/components/common_components/Filters/FilterInput";
+import { FiltersButton } from "@/components/common_components/Filters/FiltersButton";
+import { ResetFiltersButton } from "@/components/common_components/Filters/ResetFiltersButton";
+import { Search, User } from "lucide-react";
 import {
+  Accordion,
+  AccordionBody,
+  AccordionHeader,
+  Badge,
+  Button,
+  Card,
+  Col,
+  Grid,
+  Icon,
+  Select,
+  SelectItem,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeaderCell,
   TableRow,
-  TextInput,
-  Card,
-  Icon,
-  Button,
-  Badge,
-  Col,
   Text,
-  Grid,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Tab,
+  TextInput,
 } from "@tremor/react";
-import AvailableTeamsPanel from "@/components/team/available_teams";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
-import type { KeyResponse, Team } from "./key_team_helpers/key_list";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
+import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
+import AgentSelector from "./agent_management/AgentSelector";
+import { fetchTeams } from "./common_components/fetch_teams";
+import ModelAliasManager from "./common_components/ModelAliasManager";
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./common_components/RouterSettingsAccordion";
+import {
+  fetchAvailableModelsForTeamOrKey,
+  getModelDisplayName,
+  unfurlWildcardModelsInList,
+} from "./key_team_helpers/fetch_available_models_team_key";
+import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
-import ModelAliasManager from "./common_components/ModelAliasManager";
 import NotificationsManager from "./molecules/notifications_manager";
+import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
+import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -77,8 +82,11 @@ interface EditTeamModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
-import { teamCreateCall, Member, v2TeamListCall } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { Member, teamCreateCall, v2TeamListCall } from "./networking";
+import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -148,6 +156,18 @@ const getAdminOrganizations = (
   return [];
 };
 
+const getOrganizationAlias = (
+  organizationId: string | null | undefined,
+  organizations: Organization[] | null | undefined,
+): string => {
+  if (!organizationId || !organizations) {
+    return organizationId || "N/A";
+  }
+
+  const organization = organizations.find((org) => org.organization_id === organizationId);
+  return organization?.organization_alias || organizationId;
+};
+
 // @deprecated
 const Teams: React.FC<TeamProps> = ({
   teams,
@@ -160,6 +180,7 @@ const Teams: React.FC<TeamProps> = ({
   premiumUser = false,
 }) => {
   console.log(`organizations: ${JSON.stringify(organizations)}`);
+  const { data: organizationsData } = useOrganizations();
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
@@ -196,18 +217,19 @@ const Teams: React.FC<TeamProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
+  const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [perTeamInfo, setPerTeamInfo] = useState<Record<string, PerTeamInfo>>({});
-
+  const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -298,6 +320,8 @@ const Teams: React.FC<TeamProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleMemberOk = () => {
@@ -311,6 +335,8 @@ const Teams: React.FC<TeamProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleMemberCancel = () => {
@@ -319,9 +345,9 @@ const Teams: React.FC<TeamProps> = ({
     memberForm.resetFields();
   };
 
-  const handleDelete = async (team_id: string) => {
+  const handleDelete = async (team: Team) => {
     // Set the team to delete and open the confirmation modal
-    setTeamToDelete(team_id);
+    setTeamToDelete(team);
     setIsDeleteModalOpen(true);
   };
 
@@ -331,25 +357,22 @@ const Teams: React.FC<TeamProps> = ({
     }
 
     try {
-      await teamDeleteCall(accessToken, teamToDelete);
-      // Successfully completed the deletion. Update the state to trigger a rerender.
+      setIsTeamDeleting(true);
+      await teamDeleteCall(accessToken, teamToDelete.team_id);
       await fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+      NotificationsManager.success("Team deleted successfully");
     } catch (error) {
-      console.error("Error deleting the team:", error);
-      // Handle any error situations, such as displaying an error message to the user.
+      NotificationsManager.fromBackend("Error deleting the team: " + error);
+    } finally {
+      setIsTeamDeleting(false);
+      setIsDeleteModalOpen(false);
+      setTeamToDelete(null);
     }
-
-    // Close the confirmation modal and reset the teamToDelete
-    setIsDeleteModalOpen(false);
-    setTeamToDelete(null);
-    setDeleteConfirmInput("");
   };
 
   const cancelDelete = () => {
-    // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
-    setDeleteConfirmInput("");
   };
 
   useEffect(() => {
@@ -410,6 +433,20 @@ const Teams: React.FC<TeamProps> = ({
           formValues.metadata = JSON.stringify(metadata);
         }
 
+        if (formValues.secret_manager_settings) {
+          if (typeof formValues.secret_manager_settings === "string") {
+            if (formValues.secret_manager_settings.trim() === "") {
+              delete formValues.secret_manager_settings;
+            } else {
+              try {
+                formValues.secret_manager_settings = JSON.parse(formValues.secret_manager_settings);
+              } catch (e) {
+                throw new Error("Failed to parse secret manager settings: " + e);
+              }
+            }
+          }
+        }
+
         // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
@@ -453,9 +490,35 @@ const Teams: React.FC<TeamProps> = ({
           delete formValues.allowed_mcp_access_groups;
         }
 
+        // Handle agent permissions
+        if (formValues.allowed_agents_and_groups) {
+          const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          if (agents && agents.length > 0) {
+            formValues.object_permission.agents = agents;
+          }
+          if (accessGroups && accessGroups.length > 0) {
+            formValues.object_permission.agent_access_groups = accessGroups;
+          }
+          delete formValues.allowed_agents_and_groups;
+        }
+
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
           formValues.model_aliases = modelAliases;
+        }
+
+        // Add router_settings if any are defined
+        if (routerSettings?.router_settings) {
+          // Only include router_settings if it has at least one non-null value
+          const hasValues = Object.values(routerSettings.router_settings).some(
+            (value) => value !== null && value !== undefined && value !== "",
+          );
+          if (hasValues) {
+            formValues.router_settings = routerSettings.router_settings;
+          }
         }
 
         const response: any = await teamCreateCall(accessToken, formValues);
@@ -469,6 +532,8 @@ const Teams: React.FC<TeamProps> = ({
         form.resetFields();
         setLoggingSettings([]);
         setModelAliases({});
+        setRouterSettings(null);
+        setRouterSettingsKey((prev) => prev + 1);
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -607,6 +672,7 @@ const Teams: React.FC<TeamProps> = ({
               is_proxy_admin={userRole == "Admin"}
               userModels={userModels}
               editTeam={editTeam}
+              premiumUser={premiumUser}
             />
           ) : (
             <TabGroup className="gap-2 h-[75vh] w-full">
@@ -614,7 +680,7 @@ const Teams: React.FC<TeamProps> = ({
                 <div className="flex">
                   <Tab>Your Teams</Tab>
                   <Tab>Available Teams</Tab>
-                  {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
+                  {isProxyAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
                 </div>
                 <div className="flex items-center space-x-2">
                   {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
@@ -640,91 +706,34 @@ const Teams: React.FC<TeamProps> = ({
                             {/* Search and Filter Controls */}
                             <div className="flex flex-wrap items-center gap-3">
                               {/* Team Alias Search */}
-                              <div className="relative w-64">
-                                <input
-                                  type="text"
-                                  placeholder="Search by Team Name..."
-                                  className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                  value={filters.team_alias}
-                                  onChange={(e) => handleFilterChange("team_alias", e.target.value)}
-                                />
-                                <svg
-                                  className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                                  />
-                                </svg>
-                              </div>
+                              <FilterInput
+                                placeholder="Search by Team Name..."
+                                value={filters.team_alias}
+                                onChange={(value) => handleFilterChange("team_alias", value)}
+                                icon={Search}
+                              />
 
                               {/* Filter Button */}
-                              <button
-                                className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? "bg-gray-100" : ""}`}
+                              <FiltersButton
                                 onClick={() => setShowFilters(!showFilters)}
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                                  />
-                                </svg>
-                                Filters
-                                {(filters.team_id || filters.team_alias || filters.organization_id) && (
-                                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                                )}
-                              </button>
+                                active={showFilters}
+                                hasActiveFilters={!!(filters.team_id || filters.team_alias || filters.organization_id)}
+                              />
 
                               {/* Reset Filters Button */}
-                              <button
-                                className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                                onClick={handleFilterReset}
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                                  />
-                                </svg>
-                                Reset Filters
-                              </button>
+                              <ResetFiltersButton onClick={handleFilterReset} />
                             </div>
 
                             {/* Additional Filters */}
                             {showFilters && (
                               <div className="flex flex-wrap items-center gap-3 mt-3">
                                 {/* Team ID Search */}
-                                <div className="relative w-64">
-                                  <input
-                                    type="text"
-                                    placeholder="Enter Team ID"
-                                    className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                    value={filters.team_id}
-                                    onChange={(e) => handleFilterChange("team_id", e.target.value)}
-                                  />
-                                  <svg
-                                    className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth={2}
-                                      d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                                    />
-                                  </svg>
-                                </div>
+                                <FilterInput
+                                  placeholder="Enter Team ID"
+                                  value={filters.team_id}
+                                  onChange={(value) => handleFilterChange("team_id", value)}
+                                  icon={User}
+                                />
 
                                 {/* Organization Dropdown */}
                                 <div className="w-64">
@@ -755,291 +764,242 @@ const Teams: React.FC<TeamProps> = ({
                               <TableHeaderCell>Models</TableHeaderCell>
                               <TableHeaderCell>Organization</TableHeaderCell>
                               <TableHeaderCell>Info</TableHeaderCell>
+                              <TableHeaderCell>Actions</TableHeaderCell>
                             </TableRow>
                           </TableHead>
 
                           <TableBody>
-                            {teams && teams.length > 0
-                              ? teams
-                                  .filter((team) => {
-                                    if (!currentOrg) return true;
-                                    return team.organization_id === currentOrg.organization_id;
-                                  })
-                                  .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                                  .map((team: any) => (
-                                    <TableRow key={team.team_id}>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {team["team_alias"]}
-                                      </TableCell>
-                                      <TableCell>
-                                        <div className="overflow-hidden">
-                                          <Tooltip title={team.team_id}>
-                                            <Button
-                                              size="xs"
-                                              variant="light"
-                                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                              onClick={() => {
-                                                // Add click handler
-                                                setSelectedTeamId(team.team_id);
-                                              }}
-                                            >
-                                              {team.team_id.slice(0, 7)}...
-                                            </Button>
-                                          </Tooltip>
-                                        </div>
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {formatNumberWithCommas(team["spend"], 4)}
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {team["max_budget"] !== null && team["max_budget"] !== undefined
-                                          ? team["max_budget"]
-                                          : "No limit"}
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "8-x",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                        className={team.models.length > 3 ? "px-0" : ""}
-                                      >
-                                        <div className="flex flex-col">
-                                          {Array.isArray(team.models) ? (
-                                            <div className="flex flex-col">
-                                              {team.models.length === 0 ? (
-                                                <Badge size={"xs"} className="mb-1" color="red">
-                                                  <Text>All Proxy Models</Text>
-                                                </Badge>
-                                              ) : (
-                                                <>
-                                                  <div className="flex items-start">
-                                                    {team.models.length > 3 && (
-                                                      <div>
-                                                        <Icon
-                                                          icon={
-                                                            expandedAccordions[team.team_id]
-                                                              ? ChevronDownIcon
-                                                              : ChevronRightIcon
-                                                          }
-                                                          className="cursor-pointer"
-                                                          size="xs"
-                                                          onClick={() => {
-                                                            setExpandedAccordions((prev) => ({
-                                                              ...prev,
-                                                              [team.team_id]: !prev[team.team_id],
-                                                            }));
-                                                          }}
-                                                        />
-                                                      </div>
-                                                    )}
-                                                    <div className="flex flex-wrap gap-1">
-                                                      {team.models.slice(0, 3).map((model: string, index: number) =>
-                                                        model === "all-proxy-models" ? (
-                                                          <Badge key={index} size={"xs"} color="red">
-                                                            <Text>All Proxy Models</Text>
-                                                          </Badge>
-                                                        ) : (
-                                                          <Badge key={index} size={"xs"} color="blue">
-                                                            <Text>
-                                                              {model.length > 30
-                                                                ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                                : getModelDisplayName(model)}
-                                                            </Text>
-                                                          </Badge>
-                                                        ),
-                                                      )}
-                                                      {team.models.length > 3 && !expandedAccordions[team.team_id] && (
-                                                        <Badge size={"xs"} color="gray" className="cursor-pointer">
+                            {teams && teams.length > 0 ? (
+                              teams
+                                .filter((team) => {
+                                  if (!currentOrg) return true;
+                                  return team.organization_id === currentOrg.organization_id;
+                                })
+                                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                                .map((team: any) => (
+                                  <TableRow key={team.team_id}>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {team["team_alias"]}
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="overflow-hidden">
+                                        <Tooltip title={team.team_id}>
+                                          <Button
+                                            size="xs"
+                                            variant="light"
+                                            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                                            onClick={() => {
+                                              // Add click handler
+                                              setSelectedTeamId(team.team_id);
+                                            }}
+                                          >
+                                            {team.team_id.slice(0, 7)}...
+                                          </Button>
+                                        </Tooltip>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {formatNumberWithCommas(team["spend"], 4)}
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {team["max_budget"] !== null && team["max_budget"] !== undefined
+                                        ? team["max_budget"]
+                                        : "No limit"}
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "8-x",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                      className={team.models.length > 3 ? "px-0" : ""}
+                                    >
+                                      <div className="flex flex-col">
+                                        {Array.isArray(team.models) ? (
+                                          <div className="flex flex-col">
+                                            {team.models.length === 0 ? (
+                                              <Badge size={"xs"} className="mb-1" color="red">
+                                                <Text>All Proxy Models</Text>
+                                              </Badge>
+                                            ) : (
+                                              <>
+                                                <div className="flex items-start">
+                                                  {team.models.length > 3 && (
+                                                    <div>
+                                                      <Icon
+                                                        icon={
+                                                          expandedAccordions[team.team_id]
+                                                            ? ChevronDownIcon
+                                                            : ChevronRightIcon
+                                                        }
+                                                        className="cursor-pointer"
+                                                        size="xs"
+                                                        onClick={() => {
+                                                          setExpandedAccordions((prev) => ({
+                                                            ...prev,
+                                                            [team.team_id]: !prev[team.team_id],
+                                                          }));
+                                                        }}
+                                                      />
+                                                    </div>
+                                                  )}
+                                                  <div className="flex flex-wrap gap-1">
+                                                    {team.models.slice(0, 3).map((model: string, index: number) =>
+                                                      model === "all-proxy-models" ? (
+                                                        <Badge key={index} size={"xs"} color="red">
+                                                          <Text>All Proxy Models</Text>
+                                                        </Badge>
+                                                      ) : (
+                                                        <Badge key={index} size={"xs"} color="blue">
                                                           <Text>
-                                                            +{team.models.length - 3}{" "}
-                                                            {team.models.length - 3 === 1
-                                                              ? "more model"
-                                                              : "more models"}
+                                                            {model.length > 30
+                                                              ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                              : getModelDisplayName(model)}
                                                           </Text>
                                                         </Badge>
-                                                      )}
-                                                      {expandedAccordions[team.team_id] && (
-                                                        <div className="flex flex-wrap gap-1">
-                                                          {team.models.slice(3).map((model: string, index: number) =>
-                                                            model === "all-proxy-models" ? (
-                                                              <Badge key={index + 3} size={"xs"} color="red">
-                                                                <Text>All Proxy Models</Text>
-                                                              </Badge>
-                                                            ) : (
-                                                              <Badge key={index + 3} size={"xs"} color="blue">
-                                                                <Text>
-                                                                  {model.length > 30
-                                                                    ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                                    : getModelDisplayName(model)}
-                                                                </Text>
-                                                              </Badge>
-                                                            ),
-                                                          )}
-                                                        </div>
-                                                      )}
-                                                    </div>
+                                                      ),
+                                                    )}
+                                                    {team.models.length > 3 && !expandedAccordions[team.team_id] && (
+                                                      <Badge size={"xs"} color="gray" className="cursor-pointer">
+                                                        <Text>
+                                                          +{team.models.length - 3}{" "}
+                                                          {team.models.length - 3 === 1 ? "more model" : "more models"}
+                                                        </Text>
+                                                      </Badge>
+                                                    )}
+                                                    {expandedAccordions[team.team_id] && (
+                                                      <div className="flex flex-wrap gap-1">
+                                                        {team.models.slice(3).map((model: string, index: number) =>
+                                                          model === "all-proxy-models" ? (
+                                                            <Badge key={index + 3} size={"xs"} color="red">
+                                                              <Text>All Proxy Models</Text>
+                                                            </Badge>
+                                                          ) : (
+                                                            <Badge key={index + 3} size={"xs"} color="blue">
+                                                              <Text>
+                                                                {model.length > 30
+                                                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                                  : getModelDisplayName(model)}
+                                                              </Text>
+                                                            </Badge>
+                                                          ),
+                                                        )}
+                                                      </div>
+                                                    )}
                                                   </div>
-                                                </>
-                                              )}
-                                            </div>
-                                          ) : null}
-                                        </div>
-                                      </TableCell>
-
-                                      <TableCell>{team.organization_id}</TableCell>
-                                      <TableCell>
-                                        <Text>
-                                          {perTeamInfo &&
-                                            team.team_id &&
-                                            perTeamInfo[team.team_id] &&
-                                            perTeamInfo[team.team_id].keys &&
-                                            perTeamInfo[team.team_id].keys.length}{" "}
-                                          Keys
-                                        </Text>
-                                        <Text>
-                                          {perTeamInfo &&
-                                            team.team_id &&
-                                            perTeamInfo[team.team_id] &&
-                                            perTeamInfo[team.team_id].team_info &&
-                                            perTeamInfo[team.team_id].team_info.members_with_roles &&
-                                            perTeamInfo[team.team_id].team_info.members_with_roles.length}{" "}
-                                          Members
-                                        </Text>
-                                      </TableCell>
-                                      <TableCell>
-                                        {userRole == "Admin" ? (
-                                          <>
-                                            <Icon
-                                              icon={PencilAltIcon}
-                                              size="sm"
-                                              onClick={() => {
-                                                setSelectedTeamId(team.team_id);
-                                                setEditTeam(true);
-                                              }}
-                                            />
-                                            <Icon
-                                              onClick={() => handleDelete(team.team_id)}
-                                              icon={TrashIcon}
-                                              size="sm"
-                                              data-testid="delete-team-button"
-                                            />
-                                          </>
+                                                </div>
+                                              </>
+                                            )}
+                                          </div>
                                         ) : null}
-                                      </TableCell>
-                                    </TableRow>
-                                  ))
-                              : null}
+                                      </div>
+                                    </TableCell>
+
+                                    <TableCell>
+                                      {getOrganizationAlias(team.organization_id, organizationsData || organizations)}
+                                    </TableCell>
+                                    <TableCell>
+                                      <Text>
+                                        {perTeamInfo &&
+                                          team.team_id &&
+                                          perTeamInfo[team.team_id] &&
+                                          perTeamInfo[team.team_id].keys &&
+                                          perTeamInfo[team.team_id].keys.length}{" "}
+                                        Keys
+                                      </Text>
+                                      <Text>
+                                        {perTeamInfo &&
+                                          team.team_id &&
+                                          perTeamInfo[team.team_id] &&
+                                          perTeamInfo[team.team_id].team_info &&
+                                          perTeamInfo[team.team_id].team_info.members_with_roles &&
+                                          perTeamInfo[team.team_id].team_info.members_with_roles.length}{" "}
+                                        Members
+                                      </Text>
+                                    </TableCell>
+                                    <TableCell>
+                                      {userRole == "Admin" ? (
+                                        <>
+                                          <TableIconActionButton
+                                            variant="Edit"
+                                            onClick={() => {
+                                              setSelectedTeamId(team.team_id);
+                                              setEditTeam(true);
+                                            }}
+                                            dataTestId="edit-team-button"
+                                            tooltipText="Edit team"
+                                          />
+                                          <TableIconActionButton
+                                            variant="Delete"
+                                            onClick={() => handleDelete(team)}
+                                            dataTestId="delete-team-button"
+                                            tooltipText="Delete team"
+                                          />
+                                        </>
+                                      ) : null}
+                                    </TableCell>
+                                  </TableRow>
+                                ))
+                            ) : (
+                              <TableRow>
+                                <TableCell colSpan={9} className="text-center">
+                                  <div className="flex flex-col items-center justify-center py-4">
+                                    <Text className="text-lg font-medium mb-2">No teams found</Text>
+                                    <Text className="text-sm">Adjust your filters or create a new team</Text>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
                           </TableBody>
                         </Table>
-                        {isDeleteModalOpen &&
-                          (() => {
-                            const team = teams?.find((t) => t.team_id === teamToDelete);
-                            const teamName = team?.team_alias || "";
-                            const keyCount = team?.keys?.length || 0;
-                            const isValid = deleteConfirmInput === teamName;
-                            return (
-                              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                                <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
-                                  <div>
-                                    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-                                      <h3 className="text-lg font-semibold text-gray-900">Delete Team</h3>
-                                      <button
-                                        onClick={() => {
-                                          cancelDelete();
-                                          setDeleteConfirmInput("");
-                                        }}
-                                        className="text-gray-400 hover:text-gray-500 focus:outline-none"
-                                      >
-                                        <XIcon size={20} />
-                                      </button>
-                                    </div>
-                                    <div className="px-6 py-4">
-                                      {keyCount > 0 && (
-                                        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
-                                          <div className="text-red-500 mt-0.5">
-                                            <AlertTriangleIcon size={20} />
-                                          </div>
-                                          <div>
-                                            <p className="text-base font-medium text-red-600">
-                                              Warning: This team has {keyCount} associated key{keyCount > 1 ? "s" : ""}.
-                                            </p>
-                                            <p className="text-base text-red-600 mt-2">
-                                              Deleting the team will also delete all associated keys. This action is
-                                              irreversible.
-                                            </p>
-                                          </div>
-                                        </div>
-                                      )}
-                                      <p className="text-base text-gray-600 mb-5">
-                                        Are you sure you want to force delete this team and all its keys?
-                                      </p>
-                                      <div className="mb-5">
-                                        <label className="block text-base font-medium text-gray-700 mb-2">
-                                          {`Type `}
-                                          <span className="underline">{teamName}</span>
-                                          {` to confirm deletion:`}
-                                        </label>
-                                        <input
-                                          type="text"
-                                          value={deleteConfirmInput}
-                                          onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                                          placeholder="Enter team name exactly"
-                                          className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
-                                          autoFocus
-                                        />
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
-                                    <button
-                                      onClick={() => {
-                                        cancelDelete();
-                                        setDeleteConfirmInput("");
-                                      }}
-                                      className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                                    >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      onClick={confirmDelete}
-                                      disabled={!isValid}
-                                      className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"}`}
-                                    >
-                                      Force Delete
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })()}
+                        <DeleteResourceModal
+                          isOpen={isDeleteModalOpen}
+                          title="Delete Team?"
+                          alertMessage={
+                            teamToDelete?.keys?.length === 0
+                              ? undefined
+                              : `Warning: This team has ${teamToDelete?.keys?.length} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`
+                          }
+                          message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
+                          resourceInformationTitle="Team Information"
+                          resourceInformation={[
+                            { label: "Team ID", value: teamToDelete?.team_id, code: true },
+                            { label: "Team Name", value: teamToDelete?.team_alias },
+                            { label: "Keys", value: teamToDelete?.keys?.length },
+                            { label: "Members", value: teamToDelete?.members_with_roles?.length },
+                          ]}
+                          requiredConfirmation={teamToDelete?.team_alias}
+                          onCancel={cancelDelete}
+                          onOk={confirmDelete}
+                          confirmLoading={isTeamDeleting}
+                        />
                       </Card>
                     </Col>
                   </Grid>
@@ -1047,7 +1007,7 @@ const Teams: React.FC<TeamProps> = ({
                 <TabPanel>
                   <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
                 </TabPanel>
-                {isAdminRole(userRole || "") && (
+                {isProxyAdminRole(userRole || "") && (
                   <TabPanel>
                     <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
                   </TabPanel>
@@ -1058,7 +1018,7 @@ const Teams: React.FC<TeamProps> = ({
           {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Modal
               title="Create Team"
-              visible={isTeamModalVisible}
+              open={isTeamModalVisible}
               width={1000}
               footer={null}
               onOk={handleOk}
@@ -1125,11 +1085,11 @@ const Teams: React.FC<TeamProps> = ({
                           rules={
                             isOrgAdmin
                               ? [
-                                  {
-                                    required: true,
-                                    message: "Please select an organization",
-                                  },
-                                ]
+                                {
+                                  required: true,
+                                  message: "Please select an organization",
+                                },
+                              ]
                               : []
                           }
                           help={
@@ -1188,18 +1148,25 @@ const Teams: React.FC<TeamProps> = ({
                         </Tooltip>
                       </span>
                     }
+                    rules={[
+                      {
+                        required: true,
+                        message: "Please select at least one model",
+                      },
+                    ]}
                     name="models"
                   >
-                    <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                      <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                        All Proxy Models
-                      </Select2.Option>
-                      {modelsToPick.map((model) => (
-                        <Select2.Option key={model} value={model}>
-                          {getModelDisplayName(model)}
-                        </Select2.Option>
-                      ))}
-                    </Select2>
+                    <ModelSelect
+                      value={form.getFieldValue("models") || []}
+                      onChange={(values) => form.setFieldValue("models", values)}
+                      organizationID={form.getFieldValue("organization_id")}
+                      options={{
+                        includeSpecialOptions: true,
+                        showAllProxyModelsOverride: !form.getFieldValue("organization_id"),
+                      }}
+                      context="team"
+                      dataTestId="create-team-models-select"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -1280,6 +1247,36 @@ const Teams: React.FC<TeamProps> = ({
                         <Input.TextArea rows={4} />
                       </Form.Item>
                       <Form.Item
+                        label="Secret Manager Settings"
+                        name="secret_manager_settings"
+                        help={
+                          premiumUser
+                            ? "Enter secret manager configuration as a JSON object."
+                            : "Premium feature - Upgrade to manage secret manager settings."
+                        }
+                        rules={[
+                          {
+                            validator: async (_, value) => {
+                              if (!value) {
+                                return Promise.resolve();
+                              }
+                              try {
+                                JSON.parse(value);
+                                return Promise.resolve();
+                              } catch (error) {
+                                return Promise.reject(new Error("Please enter valid JSON"));
+                              }
+                            },
+                          },
+                        ]}
+                      >
+                        <Input.TextArea
+                          rows={4}
+                          placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                          disabled={!premiumUser}
+                        />
+                      </Form.Item>
+                      <Form.Item
                         label={
                           <span>
                             Guardrails{" "}
@@ -1307,6 +1304,30 @@ const Teams: React.FC<TeamProps> = ({
                             value: name,
                             label: name,
                           }))}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Disable Global Guardrails{" "}
+                            <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="disable_global_guardrails"
+                        className="mt-4"
+                        valuePropName="checked"
+                        help="Bypass global guardrails for this team"
+                      >
+                        <Switch
+                          disabled={!premiumUser}
+                          checkedChildren={
+                            premiumUser ? "Yes" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
+                          unCheckedChildren={
+                            premiumUser ? "No" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
                         />
                       </Form.Item>
                       <Form.Item
@@ -1386,6 +1407,34 @@ const Teams: React.FC<TeamProps> = ({
 
                   <Accordion className="mt-8 mb-8">
                     <AccordionHeader>
+                      <b>Agent Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Agents{" "}
+                            <Tooltip title="Select which agents or access groups this team can access">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_agents_and_groups"
+                        className="mt-4"
+                        help="Select agents or access groups this team can access"
+                      >
+                        <AgentSelector
+                          onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                          value={form.getFieldValue("allowed_agents_and_groups")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select agents or access groups (optional)"
+                        />
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-8 mb-8">
+                    <AccordionHeader>
                       <b>Logging Settings</b>
                     </AccordionHeader>
                     <AccordionBody>
@@ -1394,6 +1443,23 @@ const Teams: React.FC<TeamProps> = ({
                           value={loggingSettings}
                           onChange={setLoggingSettings}
                           premiumUser={premiumUser}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Router Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4 w-full">
+                        <RouterSettingsAccordion
+                          key={routerSettingsKey}
+                          accessToken={accessToken || ""}
+                          value={routerSettings || undefined}
+                          onChange={setRouterSettings}
+                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
                         />
                       </div>
                     </AccordionBody>

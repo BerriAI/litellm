@@ -93,6 +93,67 @@ class GuardrailConverseContentBlock(TypedDict, total=False):
     text: GuardrailConverseTextBlock
 
 
+class CitationWebLocationBlock(TypedDict, total=False):
+    """
+    Web location block for Nova grounding citations.
+    Contains the URL and domain from web search results.
+
+    Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+    """
+
+    url: str
+    domain: str
+
+
+class CitationLocationBlock(TypedDict, total=False):
+    """
+    Location block containing the web location for a citation.
+    """
+
+    web: CitationWebLocationBlock
+
+
+class CitationReferenceBlock(TypedDict, total=False):
+    """
+    Citation reference block containing a single citation with its location.
+
+    Each citation contains:
+    - location.web.url: The URL of the source
+    - location.web.domain: The domain of the source
+    """
+
+    location: CitationLocationBlock
+
+
+class CitationsContentBlock(TypedDict, total=False):
+    """
+    Citations content block returned by Nova grounding (web search) tool.
+
+    When Nova grounding is enabled via systemTool, the model may return
+    citationsContent blocks containing web search citation references.
+
+    Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+
+    Example response structure:
+        {
+            "citationsContent": {
+                "citations": [
+                    {
+                        "location": {
+                            "web": {
+                                "url": "https://example.com/article",
+                                "domain": "example.com"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    """
+
+    citations: List[CitationReferenceBlock]
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -103,6 +164,7 @@ class ContentBlock(TypedDict, total=False):
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
     guardContent: GuardrailConverseContentBlock
+    citationsContent: CitationsContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -128,14 +190,19 @@ class ConverseTokenUsageBlock(TypedDict):
     cacheWriteInputTokens: int
 
 
-class ConverseResponseBlock(TypedDict):
+class ServiceTierBlock(TypedDict):
+    type: Literal["priority", "default", "flex"]
+
+
+class ConverseResponseBlock(TypedDict, total=False):
     additionalModelResponseFields: dict
     metrics: ConverseMetricsBlock
-    output: ConverseResponseOutputBlock
-    stopReason: (
-        str  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
-    )
-    usage: ConverseTokenUsageBlock
+    output: Required[ConverseResponseOutputBlock]
+    stopReason: Required[
+        str
+    ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
+    usage: Required[ConverseTokenUsageBlock]
+    serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
 
 class ToolJsonSchemaBlock(TypedDict, total=False):
@@ -154,8 +221,24 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
+class SystemToolBlock(TypedDict, total=False):
+    """
+    System tool block for Nova grounding and other built-in tools.
+
+    Example:
+        {
+            "systemTool": {
+                "name": "nova_grounding"
+            }
+        }
+    """
+
+    name: Required[str]
+
+
 class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]
     cachePoint: Optional[CachePointBlock]
 
 
@@ -205,11 +288,13 @@ class ContentBlockStartEvent(TypedDict, total=False):
 class ContentBlockDeltaEvent(TypedDict, total=False):
     """
     Either 'text' or 'toolUse' will be specified for Converse API streaming response.
+    May also include 'citationsContent' when Nova grounding is enabled.
     """
 
     text: str
     toolUse: ToolBlockDeltaEvent
     reasoningContent: BedrockConverseReasoningContentBlockDelta
+    citationsContent: CitationsContentBlock
 
 
 class PerformanceConfigBlock(TypedDict):
@@ -226,6 +311,7 @@ class CommonRequestObject(
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
     performanceConfig: Optional[PerformanceConfigBlock]
+    serviceTier: Optional[ServiceTierBlock]
     requestMetadata: Optional[Dict[str, str]]
 
 
@@ -311,6 +397,7 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+    output_dimension: int
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
@@ -425,6 +512,133 @@ class TwelveLabsAsyncInvokeStatusResponse(TypedDict):
     outputDataConfig: TwelveLabsOutputDataConfig
     clientRequestToken: Optional[str]
     failureMessage: Optional[str]
+
+
+# Amazon Nova Multimodal Embeddings types
+NOVA_EMBEDDING_PURPOSES = Literal[
+    "GENERIC_INDEX",
+    "GENERIC_RETRIEVAL",
+    "TEXT_RETRIEVAL",
+    "IMAGE_RETRIEVAL",
+    "VIDEO_RETRIEVAL",
+    "DOCUMENT_RETRIEVAL",
+    "AUDIO_RETRIEVAL",
+    "CLASSIFICATION",
+    "CLUSTERING",
+]
+
+NOVA_EMBEDDING_DIMENSIONS = Literal[256, 384, 1024, 3072]
+
+NOVA_TRUNCATION_MODES = Literal["START", "END", "NONE"]
+
+NOVA_DETAIL_LEVELS = Literal["STANDARD_IMAGE", "DOCUMENT_IMAGE"]
+
+NOVA_EMBEDDING_MODES = Literal["AUDIO_VIDEO_COMBINED", "AUDIO_VIDEO_SEPARATE"]
+
+NOVA_EMBEDDING_TYPES = Literal[
+    "TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"
+]
+
+
+class NovaSourceS3Location(TypedDict):
+    uri: str
+
+
+class NovaSourceObject(TypedDict, total=False):
+    bytes: str  # base64 encoded
+    s3Location: NovaSourceS3Location
+
+
+class NovaTextParams(TypedDict, total=False):
+    truncationMode: NOVA_TRUNCATION_MODES
+    value: str
+    source: NovaSourceObject
+
+
+class NovaImageParams(TypedDict, total=False):
+    format: str  # png, jpeg, gif, webp
+    source: Required[NovaSourceObject]
+    detailLevel: NOVA_DETAIL_LEVELS
+
+
+class NovaVideoParams(TypedDict, total=False):
+    format: str  # mp4, mov, mkv, webm, flv, mpeg, mpg, wmv, 3gp
+    source: Required[NovaSourceObject]
+    embeddingMode: Required[NOVA_EMBEDDING_MODES]
+
+
+class NovaAudioParams(TypedDict, total=False):
+    format: str  # mp3, wav, ogg
+    source: Required[NovaSourceObject]
+
+
+class NovaTextSegmentationConfig(TypedDict, total=False):
+    maxLengthChars: int  # 800-50,000, default 32,000
+
+
+class NovaMediaSegmentationConfig(TypedDict, total=False):
+    durationSeconds: int  # 1-30, default 5
+
+
+class NovaTextParamsWithSegmentation(NovaTextParams, total=False):
+    segmentationConfig: NovaTextSegmentationConfig
+
+
+class NovaVideoParamsWithSegmentation(NovaVideoParams, total=False):
+    segmentationConfig: NovaMediaSegmentationConfig
+
+
+class NovaAudioParamsWithSegmentation(NovaAudioParams, total=False):
+    segmentationConfig: NovaMediaSegmentationConfig
+
+
+class NovaSingleEmbeddingParams(TypedDict, total=False):
+    embeddingPurpose: Required[NOVA_EMBEDDING_PURPOSES]
+    embeddingDimension: NOVA_EMBEDDING_DIMENSIONS
+    text: NovaTextParams
+    image: NovaImageParams
+    video: NovaVideoParams
+    audio: NovaAudioParams
+
+
+class NovaSegmentedEmbeddingParams(TypedDict, total=False):
+    embeddingPurpose: Required[NOVA_EMBEDDING_PURPOSES]
+    embeddingDimension: NOVA_EMBEDDING_DIMENSIONS
+    text: NovaTextParamsWithSegmentation
+    image: NovaImageParams
+    video: NovaVideoParamsWithSegmentation
+    audio: NovaAudioParamsWithSegmentation
+
+
+class NovaEmbeddingRequest(TypedDict, total=False):
+    schemaVersion: str  # "nova-multimodal-embed-v1"
+    taskType: Literal["SINGLE_EMBEDDING", "SEGMENTED_EMBEDDING"]
+    singleEmbeddingParams: NovaSingleEmbeddingParams
+    segmentedEmbeddingParams: NovaSegmentedEmbeddingParams
+
+
+class NovaEmbeddingItem(TypedDict, total=False):
+    embeddingType: NOVA_EMBEDDING_TYPES
+    embedding: Required[List[float]]
+    truncatedCharLength: int  # Only for text
+
+
+class NovaEmbeddingResponse(TypedDict):
+    embeddings: List[NovaEmbeddingItem]
+
+
+class NovaS3OutputDataConfig(TypedDict):
+    s3Uri: str
+
+
+class NovaOutputDataConfig(TypedDict):
+    s3OutputDataConfig: NovaS3OutputDataConfig
+
+
+class NovaAsyncInvokeRequest(TypedDict):
+    modelId: str
+    modelInput: NovaEmbeddingRequest
+    outputDataConfig: NovaOutputDataConfig
 
 
 AmazonEmbeddingRequest = Union[
@@ -679,10 +893,11 @@ class BedrockInputDataConfig(TypedDict):
     s3InputDataConfig: BedrockS3InputDataConfig
 
 
-class BedrockS3OutputDataConfig(TypedDict):
+class BedrockS3OutputDataConfig(TypedDict, total=False):
     """S3 output data configuration for Bedrock batch jobs."""
 
     s3Uri: str
+    s3EncryptionKeyId: Optional[str]
 
 
 class BedrockOutputDataConfig(TypedDict):
@@ -745,3 +960,8 @@ class BedrockGetBatchResponse(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
+
+class BedrockToolBlock(TypedDict, total=False):
+    toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]  # For Nova grounding
+    cachePoint: Optional[CachePointBlock]

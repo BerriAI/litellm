@@ -23,7 +23,7 @@ class FalAIImagen4Config(FalAIBaseConfig):
     
     Model variants:
     - fal-ai/imagen4/preview (Standard): $0.05 per image
-    - fal-ai/imagen4/preview/fast (Fast): $0.04 per image
+    - fal-ai/imagen4/preview/fast (Fast): $0.02 per image
     - fal-ai/imagen4/preview/ultra (Ultra): $0.06 per image
     
     Documentation: https://fal.ai/models/fal-ai/imagen4/preview

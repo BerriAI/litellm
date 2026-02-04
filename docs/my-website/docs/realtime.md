@@ -5,6 +5,13 @@ import TabItem from '@theme/TabItem';
 
 Use this to loadbalance across Azure + OpenAI. 
 
+Supported Providers:
+- OpenAI
+- Azure
+- Google AI Studio (Gemini)
+- Vertex AI
+- Bedrock
+
 ## Proxy Usage
 
 ### Add model to config 

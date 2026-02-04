@@ -1,10 +1,10 @@
+import { getSpendString } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Badge, Button } from "@tremor/react";
+import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
-import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
-import { Button, Badge } from "@tremor/react";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (row: LogEntry, provider: string) => {
@@ -49,46 +49,6 @@ export type LogEntry = {
 };
 
 export const columns: ColumnDef<LogEntry>[] = [
-  {
-    id: "expander",
-    header: () => null,
-    cell: ({ row }) => {
-      // Convert the cell function to a React component to properly use hooks
-      const ExpanderCell = () => {
-        const [localExpanded, setLocalExpanded] = React.useState(row.getIsExpanded());
-
-        // Memoize the toggle handler to prevent unnecessary re-renders
-        const toggleHandler = React.useCallback(() => {
-          setLocalExpanded((prev) => !prev);
-          row.getToggleExpandedHandler()();
-        }, [row]);
-
-        return row.getCanExpand() ? (
-          <button
-            onClick={toggleHandler}
-            style={{ cursor: "pointer" }}
-            aria-label={localExpanded ? "Collapse row" : "Expand row"}
-            className="w-6 h-6 flex items-center justify-center focus:outline-none"
-          >
-            <svg
-              className={`w-4 h-4 transform transition-transform duration-75 ${localExpanded ? "rotate-90" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        ) : (
-          <span className="w-6 h-6 flex items-center justify-center">●</span>
-        );
-      };
-
-      // Return the component
-      return <ExpanderCell />;
-    },
-  },
   {
     header: "Time",
     accessorKey: "startTime",
@@ -145,7 +105,11 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Cost",
     accessorKey: "spend",
-    cell: (info: any) => <span>${formatNumberWithCommas(info.getValue() || 0, 6)}</span>,
+    cell: (info: any) => (
+      <Tooltip title={`$${String(info.getValue() || 0)} `}>
+        <span>{getSpendString(info.getValue() || 0)}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "Duration (s)",
