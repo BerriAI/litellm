@@ -18,6 +18,7 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    anthropic_proxy_route,
     bedrock_llm_proxy_route,
     create_pass_through_route,
     llm_passthrough_factory_proxy_route,
@@ -2365,3 +2366,264 @@ class TestOpenAIPassthroughRoute:
             
             # Verify result
             assert result == {"id": "asst_123", "object": "assistant"}
+
+
+class TestAnthropicPassThroughCredentialHandling:
+    """
+    Tests for credential priority logic in anthropic_proxy_route.
+    
+    The credential handling should follow this priority:
+    1. Client x-api-key header -> forward as-is (custom_headers={})
+    2. Client Authorization header -> forward as-is (custom_headers={})
+    3. No client auth -> use server credentials if available
+    4. No credentials anywhere -> forward without auth (custom_headers={})
+    """
+
+    @pytest.mark.asyncio
+    async def test_client_x_api_key_takes_priority(self):
+        """
+        When client provides x-api-key header, server credentials should NOT be injected.
+        The client's key is forwarded via _forward_headers=True.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {
+            "x-api-key": "client-provided-key",
+            "content-type": "application/json",
+        }
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="server-api-key",
+        ) as mock_get_credentials, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={"result": "success"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Server credentials should NOT be fetched when client provides x-api-key
+            mock_get_credentials.assert_not_called()
+
+            # custom_headers should be empty - client auth forwarded via _forward_headers
+            call_args = mock_create_route.call_args[1]
+            assert call_args["custom_headers"] == {}
+            assert call_args["_forward_headers"] is True
+
+    @pytest.mark.asyncio
+    async def test_client_authorization_header_takes_priority(self):
+        """
+        When client provides Authorization header (OAuth token), server credentials
+        should NOT be injected. This enables Claude Code Max OAuth flow.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {
+            "authorization": "Bearer oauth-token-from-claude-code",
+            "content-type": "application/json",
+        }
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="server-api-key",
+        ) as mock_get_credentials, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={"result": "success"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Server credentials should NOT be fetched when client provides Authorization
+            mock_get_credentials.assert_not_called()
+
+            # custom_headers should be empty - client auth forwarded via _forward_headers
+            call_args = mock_create_route.call_args[1]
+            assert call_args["custom_headers"] == {}
+            assert call_args["_forward_headers"] is True
+
+    @pytest.mark.asyncio
+    async def test_server_credentials_used_when_no_client_auth(self):
+        """
+        When client provides NO authentication headers, server credentials
+        should be injected into custom_headers.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {
+            "content-type": "application/json",
+            # No x-api-key or authorization header
+        }
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="server-configured-api-key",
+        ) as mock_get_credentials, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={"result": "success"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Server credentials SHOULD be fetched
+            mock_get_credentials.assert_called_once_with(
+                custom_llm_provider="anthropic",
+                region_name=None,
+            )
+
+            # custom_headers should contain server API key
+            call_args = mock_create_route.call_args[1]
+            assert call_args["custom_headers"] == {"x-api-key": "server-configured-api-key"}
+
+    @pytest.mark.asyncio
+    async def test_no_credentials_when_server_not_configured(self):
+        """
+        When client provides NO auth and server has NO credentials configured,
+        custom_headers should be empty (let Anthropic return auth error).
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {
+            "content-type": "application/json",
+        }
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,  # No server credentials configured
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={"error": "auth failed"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # custom_headers should be empty - no credentials to inject
+            call_args = mock_create_route.call_args[1]
+            assert call_args["custom_headers"] == {}
+
+    @pytest.mark.asyncio
+    async def test_both_client_headers_present(self):
+        """
+        When client provides BOTH x-api-key and Authorization headers,
+        server credentials should still NOT be injected.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {
+            "x-api-key": "client-api-key",
+            "authorization": "Bearer oauth-token",
+            "content-type": "application/json",
+        }
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="server-api-key",
+        ) as mock_get_credentials, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={"result": "success"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            mock_get_credentials.assert_not_called()
+            call_args = mock_create_route.call_args[1]
+            assert call_args["custom_headers"] == {}
+
+    @pytest.mark.asyncio
+    async def test_target_url_construction(self):
+        """
+        Verify the target URL is correctly constructed from ANTHROPIC_API_BASE
+        and the endpoint path.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"x-api-key": "test-key"}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route, patch.dict(
+            os.environ, {"ANTHROPIC_API_BASE": "https://custom-anthropic.example.com"}
+        ):
+            mock_endpoint_func = AsyncMock(return_value={"result": "success"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://custom-anthropic.example.com/v1/messages"
