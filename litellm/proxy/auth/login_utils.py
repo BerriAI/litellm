@@ -34,58 +34,6 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
-async def expire_previous_ui_session_tokens(
-    user_id: str, prisma_client: Optional[PrismaClient]
-) -> None:
-    """
-    Expire (block) all other valid UI session tokens for a user.
-
-    This prevents accumulation of multiple valid UI session tokens that
-    are supposed to be short-lived test keys. Only affects keys with
-    team_id = "litellm-dashboard" and that haven't expired yet.
-
-    Args:
-        user_id: The user ID whose previous UI session tokens should be expired
-        prisma_client: Database client for performing the update
-    """
-    if prisma_client is None:
-        return
-
-    try:
-        from datetime import datetime, timezone
-
-        current_time = datetime.now(timezone.utc)
-
-        # Find all unblocked AND non-expired UI session tokens for this user
-        ui_session_tokens = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={
-                "user_id": user_id,
-                "team_id": "litellm-dashboard",
-                "OR": [
-                    {"blocked": None},  # Tokens that have never been blocked (null)
-                    {"blocked": False},  # Tokens explicitly set to not blocked
-                ],
-                "expires": {"gt": current_time},  # Only get tokens that haven't expired
-            }
-        )
-
-        if not ui_session_tokens:
-            return
-
-        # Block all the found tokens
-        tokens_to_block = [token.token for token in ui_session_tokens if token.token]
-
-        if tokens_to_block:
-            await prisma_client.db.litellm_verificationtoken.update_many(
-                where={"token": {"in": tokens_to_block}}, data={"blocked": True}
-            )
-
-    except Exception:
-        # Silently fail - don't block login if cleanup fails
-        # This is a best-effort operation
-        pass
-
-
 def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
     """
     Get UI username and password from environment variables or master key.
@@ -297,11 +245,6 @@ async def authenticate_user(  # noqa: PLR0915
         )
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
-        user_team_id = getattr(_user_row, "team_id", "litellm-dashboard")
-
-        # if user_team_id is None, set it to "litellm-dashboard"
-        if user_team_id is None:
-            user_team_id = "litellm-dashboard"
 
         if _password is None:
             raise ProxyException(
@@ -328,7 +271,7 @@ async def authenticate_user(  # noqa: PLR0915
                         "config": {},
                         "spend": 0,
                         "user_id": user_id,
-                        "team_id": user_team_id,
+                        "team_id": "litellm-dashboard",
                     },
                 )
             else:
@@ -397,3 +340,4 @@ def create_ui_token_object(
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
     )
+
