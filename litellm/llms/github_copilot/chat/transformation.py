@@ -1,11 +1,15 @@
-from typing import Any, Optional, Tuple, cast, List
+from typing import Any, List, Optional, Tuple, cast
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 
 from ..authenticator import Authenticator
-from ..common_utils import GetAPIKeyError, GITHUB_COPILOT_API_BASE, get_copilot_default_headers
+from ..common_utils import (
+    GITHUB_COPILOT_API_BASE,
+    GetAPIKeyError,
+    get_copilot_default_headers,
+)
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -43,9 +47,26 @@ class GithubCopilotConfig(OpenAIConfig):
         messages,
         model: str,
     ):
-        # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
-        # No conversion needed - just return messages as-is
-        return messages
+        import litellm
+
+        # Check if system-to-assistant conversion is disabled
+        if litellm.disable_copilot_system_to_assistant:
+            # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
+            # No conversion needed - just return messages as-is
+            return messages
+        
+        # Default behavior: convert system messages to assistant for compatibility
+        transformed_messages = []
+        for message in messages:
+            if message.get("role") == "system":
+                # Convert system message to assistant message
+                transformed_message = message.copy()
+                transformed_message["role"] = "assistant"
+                transformed_messages.append(transformed_message)
+            else:
+                transformed_messages.append(message)
+        
+        return transformed_messages
 
     def validate_environment(
         self,
@@ -88,7 +109,7 @@ class GithubCopilotConfig(OpenAIConfig):
         For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
         """
         from litellm.utils import supports_reasoning
-        
+
         # Get base OpenAI parameters
         base_params = super().get_supported_openai_params(model)
 
