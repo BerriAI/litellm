@@ -804,6 +804,108 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_key_info_returns_object_permission(monkeypatch):
+    """
+    Test that /key/info correctly returns the object_permission relation.
+    
+    This test verifies that when calling /key/info for a key with object_permission_id,
+    the response includes the full object_permission object with fields like
+    mcp_access_groups, mcp_servers, vector_stores, agents, etc.
+    
+    Regression test for bug where object_permission_id was returned but not the
+    related object_permission object.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import pytest
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    
+    # Mock key with object_permission_id
+    test_key_token = "hashed_test_token_123"
+    test_object_permission_id = "objperm_info_test_123"
+    
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = test_object_permission_id
+    mock_key_info.user_id = "user123"
+    mock_key_info.team_id = None
+    mock_key_info.litellm_budget_table = None
+    
+    # Mock the dict/model_dump methods
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "object_permission_id": test_object_permission_id,
+        "user_id": "user123",
+        "team_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+    
+    # Mock find_unique for the key lookup
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    
+    # Mock object permission record
+    mock_object_permission = MagicMock()
+    mock_object_permission.model_dump.return_value = {
+        "object_permission_id": test_object_permission_id,
+        "mcp_access_groups": ["test_group_1", "test_group_2"],
+        "mcp_servers": ["server_1"],
+        "vector_stores": ["vs_1", "vs_2"],
+        "agents": ["agent_1"],
+    }
+    mock_object_permission.dict.return_value = mock_object_permission.model_dump.return_value
+    
+    # Mock find_unique for object permission lookup
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=mock_object_permission
+    )
+    
+    # Create user API key dict
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test-key-456",
+    )
+    
+    # Call info_key_fn
+    result = await info_key_fn(
+        key="sk-test-key-456",
+        user_api_key_dict=user_api_key_dict,
+    )
+    
+    # Assertions
+    assert "info" in result
+    assert "object_permission_id" in result["info"]
+    assert result["info"]["object_permission_id"] == test_object_permission_id
+    
+    # CRITICAL: Verify that object_permission object is included in response
+    assert "object_permission" in result["info"], (
+        "object_permission field missing from /key/info response. "
+        "Expected full object_permission object to be attached."
+    )
+    
+    # Verify object_permission contains the expected fields
+    obj_perm = result["info"]["object_permission"]
+    assert obj_perm["object_permission_id"] == test_object_permission_id
+    assert obj_perm["mcp_access_groups"] == ["test_group_1", "test_group_2"]
+    assert obj_perm["mcp_servers"] == ["server_1"]
+    assert obj_perm["vector_stores"] == ["vs_1", "vs_2"]
+    assert obj_perm["agents"] == ["agent_1"]
+    
+    # Verify the object permission was actually queried from database
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_called_once_with(
+        where={"object_permission_id": test_object_permission_id}
+    )
+
+
 def test_get_new_token_with_valid_key():
     """Test get_new_token function when provided with a valid key that starts with 'sk-'"""
     from litellm.proxy._types import RegenerateKeyRequest
