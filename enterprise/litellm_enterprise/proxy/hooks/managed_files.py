@@ -166,7 +166,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                 },
-                "update": {},  # don't do anything if it already exists
+                "update": {
+                    "file_object": file_object.model_dump_json(),
+                    "status": file_object.status,
+                    "updated_by": user_api_key_dict.user_id,
+                },  # FIX: Update status and file_object on every operation to keep state in sync
             },
         )
 
@@ -354,6 +358,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
         return False
 
+    async def check_file_ids_access(
+        self, file_ids: List[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Check if the user has access to a list of file IDs.
+        Only checks managed (unified) file IDs.
+        
+        Args:
+            file_ids: List of file IDs to check access for
+            user_api_key_dict: User API key authentication details
+            
+        Raises:
+            HTTPException: If user doesn't have access to any of the files
+        """
+        for file_id in file_ids:
+            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+            if is_unified_file_id:
+                if not await self.can_user_call_unified_file_id(
+                    file_id, user_api_key_dict
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+                    )
+
     async def async_pre_call_hook(  # noqa: PLR0915
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -369,6 +398,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if (
             call_type == CallTypes.afile_content.value
             or call_type == CallTypes.afile_delete.value
+            or call_type == CallTypes.afile_retrieve.value
+            or call_type == CallTypes.afile_content.value
         ):
             await self.check_managed_file_id_access(data, user_api_key_dict)
 
@@ -385,6 +416,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if messages:
                 file_ids = self.get_file_ids_from_messages(messages)
                 if file_ids:
+                    # Check user has access to all managed files
+                    await self.check_file_ids_access(file_ids, user_api_key_dict)
+                    
                     # Check if any files are stored in storage backends and need base64 conversion
                     # This is needed for Vertex AI/Gemini which requires base64 content
                     is_vertex_ai = model and ("vertex_ai" in model or "gemini" in model.lower())
@@ -400,15 +434,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
-            # Handle managed files in responses API input
+            # Handle managed files in responses API input and tools
+            file_ids = []
+            
+            # Extract file IDs from input parameter
             input_data = data.get("input")
             if input_data:
-                file_ids = self.get_file_ids_from_responses_input(input_data)
-                if file_ids:
-                    model_file_id_mapping = await self.get_model_file_id_mapping(
-                        file_ids, user_api_key_dict.parent_otel_span
-                    )
-                    data["model_file_id_mapping"] = model_file_id_mapping
+                file_ids.extend(self.get_file_ids_from_responses_input(input_data))
+            
+            # Extract file IDs from tools parameter (e.g., code_interpreter container)
+            tools = data.get("tools")
+            if tools:
+                file_ids.extend(self.get_file_ids_from_responses_tools(tools))
+            
+            if file_ids:
+                # Check user has access to all managed files
+                await self.check_file_ids_access(file_ids, user_api_key_dict)
+                
+                model_file_id_mapping = await self.get_model_file_id_mapping(
+                    file_ids, user_api_key_dict.parent_otel_span
+                )
+                data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
             potential_file_id = (
@@ -433,12 +479,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data["model_file_id_mapping"] = model_file_id_mapping
         elif (
             call_type == CallTypes.aretrieve_batch.value
+            or call_type == CallTypes.acancel_batch.value
             or call_type == CallTypes.acancel_fine_tuning_job.value
             or call_type == CallTypes.aretrieve_fine_tuning_job.value
         ):
             accessor_key: Optional[str] = None
             retrieve_object_id: Optional[str] = None
-            if call_type == CallTypes.aretrieve_batch.value:
+            if (
+                call_type == CallTypes.aretrieve_batch.value
+                or call_type == CallTypes.acancel_batch.value
+            ):
                 accessor_key = "batch_id"
             elif (
                 call_type == CallTypes.acancel_fine_tuning_job.value
@@ -603,6 +653,41 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         file_id = content_item.get("file_id")
                         if file_id:
                             file_ids.append(file_id)
+        
+        return file_ids
+
+    def get_file_ids_from_responses_tools(
+        self, tools: List[Dict[str, Any]]
+    ) -> List[str]:
+        """
+        Gets file ids from responses API tools parameter.
+        
+        The tools can contain code_interpreter with container.file_ids:
+        [
+            {
+                "type": "code_interpreter",
+                "container": {"type": "auto", "file_ids": ["file-123", "file-456"]}
+            }
+        ]
+        """
+        file_ids: List[str] = []
+        
+        if not isinstance(tools, list):
+            return file_ids
+        
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            
+            # Check for code_interpreter with container file_ids
+            if tool.get("type") == "code_interpreter":
+                container = tool.get("container")
+                if isinstance(container, dict):
+                    container_file_ids = container.get("file_ids")
+                    if isinstance(container_file_ids, list):
+                        for file_id in container_file_ids:
+                            if isinstance(file_id, str):
+                                file_ids.append(file_id)
         
         return file_ids
 
@@ -966,8 +1051,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
+            # Remove conflicting keys from data to avoid duplicate keyword arguments
+            filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span

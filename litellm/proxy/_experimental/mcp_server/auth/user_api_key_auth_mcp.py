@@ -387,6 +387,9 @@ class MCPRequestHandler:
             user_api_key_cache,
         )
 
+        verbose_logger.debug(
+            f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
+        )
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
 

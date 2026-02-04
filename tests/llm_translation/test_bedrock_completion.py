@@ -2356,9 +2356,8 @@ def test_bedrock_no_default_message():
     assistant_messages = [
         msg for msg in formatted_messages if msg["role"] == "assistant"
     ]
-    assert len(assistant_messages) == 2
-    assert assistant_messages[0]["content"][0]["text"] == "."
-    assert assistant_messages[1]["content"][0]["text"] == "Valid response"
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0]["content"][0]["text"] == "Valid response"
 
 
 @pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
@@ -3984,12 +3983,11 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
+                model="bedrock/us.amazon.nova-pro-v1:0",
                 messages=messages,
                 web_search_options={},  # Enables Nova grounding
                 max_tokens=500,
                 client=client,
-                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
             )
         except Exception:
             pass  # Expected - we're just checking the request structure
@@ -4059,13 +4057,12 @@ def test_bedrock_nova_grounding_with_function_tools():
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
+                model="bedrock/us.amazon.nova-pro-v1:0",
                 messages=messages,
                 tools=tools,
                 web_search_options={},  # Also enable web grounding
                 max_tokens=500,
                 client=client,
-                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
             )
         except Exception:
             pass  # Expected - we're just checking the request structure
@@ -4121,12 +4118,11 @@ async def test_bedrock_nova_grounding_async():
     with patch.object(client, "post", new=AsyncMock()) as mock_post:
         try:
             await litellm.acompletion(
-                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
+                model="bedrock/us.amazon.nova-pro-v1:0",
                 messages=messages,
                 web_search_options={},
                 max_tokens=500,
                 client=client,
-                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
             )
         except Exception:
             pass  # Expected - we're just checking the request structure

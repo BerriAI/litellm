@@ -27,6 +27,10 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.datadog.datadog_mock_client import (
+    should_use_datadog_mock,
+    create_mock_datadog_client,
+)
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_hostname,
     get_datadog_service,
@@ -81,6 +85,12 @@ class DataDogLogger(
         """
         try:
             verbose_logger.debug("Datadog: in init datadog logger")
+            
+            self.is_mock_mode = should_use_datadog_mock()
+            
+            if self.is_mock_mode:
+                create_mock_datadog_client()
+                verbose_logger.debug("[DATADOG MOCK] Datadog logger initialized in mock mode")
 
             #########################################################
             # Handle datadog_params set as litellm.datadog_params
@@ -220,6 +230,9 @@ class DataDogLogger(
                 len(self.log_queue),
                 self.intake_url,
             )
+            
+            if self.is_mock_mode:
+                verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             response = await self.async_send_compressed_data(self.log_queue)
             if response.status_code == 413:
@@ -232,11 +245,16 @@ class DataDogLogger(
                     f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
                 )
 
-            verbose_logger.debug(
-                "Datadog: Response from datadog API status_code: %s, text: %s",
-                response.status_code,
-                response.text,
-            )
+            if self.is_mock_mode:
+                verbose_logger.debug(
+                    f"[DATADOG MOCK] Batch of {len(self.log_queue)} events successfully mocked"
+                )
+            else:
+                verbose_logger.debug(
+                    "Datadog: Response from datadog API status_code: %s, text: %s",
+                    response.status_code,
+                    response.text,
+                )
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"

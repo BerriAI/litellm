@@ -76,6 +76,75 @@ db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
+def _is_model_cost_zero(
+    model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
+) -> bool:
+    """
+    Check if a model has zero cost (no configured pricing).
+    
+    Uses the router's get_model_group_info method to get pricing information.
+    
+    Args:
+        model: The model name or list of model names
+        llm_router: The LiteLLM router instance
+    
+    Returns:
+        bool: True if all costs for the model are zero, False otherwise
+    """
+    if model is None or llm_router is None:
+        return False
+    
+    # Handle list of models
+    model_list = [model] if isinstance(model, str) else model
+    
+    for model_name in model_list:
+        try:
+            # Use router's get_model_group_info method directly for better reliability
+            model_group_info = llm_router.get_model_group_info(model_group=model_name)
+            
+            if model_group_info is None:
+                # Model not found or no pricing info available
+                # Conservative approach: assume it has cost
+                verbose_proxy_logger.debug(
+                    f"No model group info found for {model_name}, assuming it has cost"
+                )
+                return False
+            
+            # Check costs for this model
+            # Only allow bypass if BOTH costs are explicitly set to 0 (not None)
+            input_cost = model_group_info.input_cost_per_token
+            output_cost = model_group_info.output_cost_per_token
+            
+            # If costs are not explicitly configured (None), assume it has cost
+            if input_cost is None or output_cost is None:
+                verbose_proxy_logger.debug(
+                    f"Model {model_name} has undefined cost (input: {input_cost}, output: {output_cost}), assuming it has cost"
+                )
+                return False
+            
+            # If either cost is non-zero, return False
+            if input_cost > 0 or output_cost > 0:
+                verbose_proxy_logger.debug(
+                    f"Model {model_name} has non-zero cost (input: {input_cost}, output: {output_cost})"
+                )
+                return False
+            
+            # This model has zero cost explicitly configured
+            verbose_proxy_logger.debug(
+                f"Model {model_name} has zero cost explicitly configured (input: {input_cost}, output: {output_cost})"
+            )
+            
+        except Exception as e:
+            # If we can't determine the cost, assume it has cost (conservative approach)
+            verbose_proxy_logger.debug(
+                f"Error checking cost for model {model_name}: {str(e)}, assuming it has cost"
+            )
+            return False
+    
+    # All models checked have zero cost
+    return True
+
+
 async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -88,6 +157,7 @@ async def common_checks(
     proxy_logging_obj: ProxyLogging,
     valid_token: Optional[UserAPIKeyAuth],
     request: Request,
+    skip_budget_checks: bool = False,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -139,64 +209,66 @@ async def common_checks(
             user_object=user_object,
         )
 
-    # 3. If team is in budget
-    await _team_max_budget_check(
-        team_object=team_object,
-        proxy_logging_obj=proxy_logging_obj,
-        valid_token=valid_token,
-    )
+    # If this is a free model, skip all budget checks
+    if not skip_budget_checks:
+        # 3. If team is in budget
+        await _team_max_budget_check(
+            team_object=team_object,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=valid_token,
+        )
 
-    # 3.1. If organization is in budget
-    await _organization_max_budget_check(
-        valid_token=valid_token,
-        team_object=team_object,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+        # 3.1. If organization is in budget
+        await _organization_max_budget_check(
+            valid_token=valid_token,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
-    await _tag_max_budget_check(
-        request_body=request_body,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        valid_token=valid_token,
-    )
+        await _tag_max_budget_check(
+            request_body=request_body,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=valid_token,
+        )
 
-    # 4. If user is in budget
-    ## 4.1 check personal budget, if personal key
-    if (
-        (team_object is None or team_object.team_id is None)
-        and user_object is not None
-        and user_object.max_budget is not None
-    ):
-        user_budget = user_object.max_budget
-        if user_budget < user_object.spend:
-            raise litellm.BudgetExceededError(
-                current_cost=user_object.spend,
-                max_budget=user_budget,
-                message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
-            )
+        # 4. If user is in budget
+        ## 4.1 check personal budget, if personal key
+        if (
+            (team_object is None or team_object.team_id is None)
+            and user_object is not None
+            and user_object.max_budget is not None
+        ):
+            user_budget = user_object.max_budget
+            if user_budget < user_object.spend:
+                raise litellm.BudgetExceededError(
+                    current_cost=user_object.spend,
+                    max_budget=user_budget,
+                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+                )
 
-    ## 4.2 check team member budget, if team key
-    await _check_team_member_budget(
-        team_object=team_object,
-        user_object=user_object,
-        valid_token=valid_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+        ## 4.2 check team member budget, if team key
+        await _check_team_member_budget(
+            team_object=team_object,
+            user_object=user_object,
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
-    # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
-    if end_user_object is not None and end_user_object.litellm_budget_table is not None:
-        end_user_budget = end_user_object.litellm_budget_table.max_budget
-        if end_user_budget is not None and end_user_object.spend > end_user_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=end_user_object.spend,
-                max_budget=end_user_budget,
-                message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
-            )
+        # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
+        if end_user_object is not None and end_user_object.litellm_budget_table is not None:
+            end_user_budget = end_user_object.litellm_budget_table.max_budget
+            if end_user_budget is not None and end_user_object.spend > end_user_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=end_user_object.spend,
+                    max_budget=end_user_budget,
+                    message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
+                )
 
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
@@ -247,6 +319,7 @@ async def common_checks(
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
         litellm.max_budget > 0
+        and not skip_budget_checks
         and global_proxy_spend is not None
         # only run global budget checks for OpenAI routes
         # Reason - the Admin UI should continue working if the proxy crosses it's global budget
