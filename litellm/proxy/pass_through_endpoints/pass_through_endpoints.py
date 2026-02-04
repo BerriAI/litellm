@@ -498,6 +498,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_project_id=user_api_key_dict.project_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
@@ -2025,8 +2026,8 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
                 if route_type == "exact" and route == registered_path:
                     return True
@@ -2045,8 +2046,8 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
 
                 if route_type == "exact" and route == registered_path:
