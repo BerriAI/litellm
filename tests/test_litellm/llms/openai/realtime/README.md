@@ -1,69 +1,84 @@
 # OpenAI Realtime Handler Tests
 
-## Important Context: `extra_headers` vs `additional_headers`
+## Important Context: `additional_headers` vs `extra_headers`
 
 ### Background
 
-There was confusion about the correct parameter name for passing headers to `websockets.connect()`. This README documents the issue for future maintainers.
+There was confusion about the correct parameter name for passing headers to `websockets.connect()`. This README documents the resolution for future maintainers.
 
 ### Timeline of Changes
 
 1. **Dec 5, 2025** - Changed `extra_headers` → `additional_headers` (commit `8db7f1b8e4`)
 2. **Dec 18, 2025** - Changed `extra_headers` → `additional_headers` again (PR #17950, commit `9f88d61d10`)
 3. **Jan 15, 2026** - Upgraded `websockets` from 13.1.0 → 15.0.1 (commit `a3cf178e24`, Issue #19089)
-4. **Feb 3, 2026** - Changed `additional_headers` → `extra_headers` (commit `67fc9457e5`)
-5. **Feb 4, 2026** - Updated tests to match current code (this PR)
+4. **Feb 3, 2026** - **INCORRECTLY** changed `additional_headers` → `extra_headers` (commit `67fc9457e5`)
+5. **Feb 4, 2026** - **CORRECTED** back to `additional_headers` (this update)
 
-### The Issue
+### The Issue & Resolution
 
 **The `websockets` library changed its API between versions:**
 
-- **websockets 13.1.0**: Supported `additional_headers` parameter ✅
-- **websockets 15.0.1**: Only supports `extra_headers` parameter ✅
+- **websockets < 14.0**: Used `extra_headers` parameter ✅
+- **websockets >= 14.0**: Uses `additional_headers` parameter ✅
 
-When websockets was upgraded on Jan 15, 2026, the code still used `additional_headers`, which **completely broke the realtime API** for users:
+**LiteLLM uses websockets 15.0.1** (per requirements.txt), which requires `additional_headers`.
 
-```python
-# This raised: TypeError: got an unexpected keyword argument 'additional_headers'
-await websockets.connect(url, additional_headers={...})
+### Verification
+
+You can verify the correct parameter name:
+
+```bash
+poetry run python -c "import websockets; import inspect; print(inspect.signature(websockets.connect))"
 ```
 
-### The Fix
+This shows: `additional_headers: 'HeadersLike | None' = None` for websockets 15.0.1.
 
-The Feb 3 commit correctly changed the code to use `extra_headers`, which is the **only parameter accepted** by websockets 15.0.1:
+### Current Implementation (Correct)
 
 ```python
-# Correct for websockets 15.0.1+
-await websockets.connect(url, extra_headers={...})
+# ✅ Correct for websockets 15.0.1+
+await websockets.connect(url, additional_headers={
+    "Authorization": f"Bearer {api_key}",
+    "OpenAI-Beta": "realtime=v1"
+})
 ```
 
-However, the tests weren't updated at that time, causing CI failures.
+### Impact
 
-### Current State (Feb 2026)
+This is NOT just a test fix - this was a **critical bug** that affected all realtime APIs:
+- OpenAI realtime
+- Azure realtime
+- xAI realtime
+- Any pass-through realtime connections
 
-✅ **Code uses `extra_headers`** - Correct for websockets 15.0.1+  
-✅ **Tests check for `extra_headers`** - Updated to match the working code  
-✅ **No risk to users** - This is a bug fix, not a regression
+Using `extra_headers` with websockets 15.0.1 resulted in:
+```
+TypeError: connect() got an unexpected keyword argument 'extra_headers'
+```
 
 ### For Future Maintainers
 
-**If you see tests failing related to `additional_headers` vs `extra_headers`:**
+If you see test failures related to header parameters:
 
-1. Check the websockets version in `requirements.txt`
-2. Verify which parameter the websockets library accepts:
-   ```python
-   import inspect
-   import websockets
-   print(inspect.signature(websockets.connect))
+1. **Check installed websockets version:**
+   ```bash
+   poetry run python -c "import websockets; print(websockets.__version__)"
    ```
-3. Ensure both code AND tests use the correct parameter name
 
-**Do NOT change back to `additional_headers`** unless:
-- We downgrade to websockets <14.0, OR
-- The websockets library re-introduces this parameter (unlikely)
+2. **Check requirements.txt** for the specified version
 
-### Reference
+3. **Verify the correct parameter:**
+   - websockets >= 14.0: use `additional_headers`
+   - websockets < 14.0: use `extra_headers`
 
-- websockets documentation: https://websockets.readthedocs.io/
-- websockets changelog: https://websockets.readthedocs.io/en/stable/project/changelog.html
-- Issue #19089: Websocket version error (fixed by upgrading to 15.0.1)
+4. **Ensure consistency** across all files:
+   - `litellm/llms/openai/realtime/handler.py`
+   - `litellm/llms/azure/realtime/handler.py`
+   - `litellm/llms/custom_httpx/llm_http_handler.py`
+   - `litellm/realtime_api/main.py`
+   - `litellm/proxy/pass_through_endpoints/pass_through_endpoints.py`
+
+**Current Status (Feb 2026):**
+- ✅ websockets version: 15.0.1
+- ✅ Correct parameter: `additional_headers`
+- ✅ All handlers updated and working
