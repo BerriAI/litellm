@@ -13,7 +13,6 @@ Use PointGuardAI to add advanced AI safety and security checks to your LLM appli
 Get your API credentials from PointGuardAI:
 - Organization Code
 - API Base URL
-- API Email
 - API Key
 - Policy Configuration Name
 
@@ -34,13 +33,10 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "pre_call"  # supported values: "pre_call", "post_call", "during_call"
-      api_key: os.environ/POINTGUARDAI_API_KEY
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       org_code: os.environ/POINTGUARDAI_ORG_CODE
-      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
-      model_provider_name: "provider-name"  # Optional - for example, "Open AI"
-      model_name: "model-name"              # Optional - for example, "gpt-4"
+      api_key: os.environ/POINTGUARDAI_API_KEY
+      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
 ```
 
 #### Supported values for `mode`
@@ -54,7 +50,6 @@ guardrails:
 ```bash title="Set environment variables"
 export POINTGUARDAI_ORG_CODE="your-org-code"
 export POINTGUARDAI_API_URL_BASE="https://api.eval1.appsoc.com"
-export POINTGUARDAI_API_EMAIL="your-email@company.com"
 export POINTGUARDAI_API_KEY="your-api-key"
 export POINTGUARDAI_CONFIG_NAME="your-policy-config-name"
 export OPENAI_API_KEY="sk-proj-xxxx...XxxX"
@@ -166,33 +161,35 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "during_call"
-      api_key: os.environ/POINTGUARDAI_API_KEY
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       org_code: os.environ/POINTGUARDAI_ORG_CODE
-      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
-      ### OPTIONAL ###
-      # model_provider_name: "OpenAI"  # Model provider name for logging
-      # model_name: "gpt-4"  # Model name for logging
+      api_key: os.environ/POINTGUARDAI_API_KEY
+      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
 ```
 
-### Parameter Reference
+### LiteLLM Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `guardrail` | `str` | Yes | Must be set to `pointguard_ai` |
+| `mode` | `str` | Yes | When to run: `"pre_call"`, `"post_call"`, or `"during_call"` |
+| `guardrail_name` | `str` | No | Custom name for this guardrail configuration |
+
+### PointGuardAI Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `api_key` | `str` | `POINTGUARDAI_API_KEY` env var | Your PointGuardAI API key |
-| `api_email` | `str` | `POINTGUARDAI_API_EMAIL` env var | Email associated with your PointGuardAI account |
 | `org_code` | `str` | `POINTGUARDAI_ORG_CODE` env var | Your organization code in PointGuardAI |
+| `api_base` | `str` | `POINTGUARDAI_API_URL_BASE` env var or `https://api.eval1.appsoc.com)` |
+| `api_key` | `str` | `POINTGUARDAI_API_KEY` env var | Your PointGuardAI API key |
 | `policy_config_name` | `str` | `POINTGUARDAI_CONFIG_NAME` env var | Name of the policy configuration to use |
-| `api_base` | `str` | `POINTGUARDAI_API_URL_BASE` env var | Base URL for PointGuardAI API |
-| `mode` | `str` | Required | When to run: `"pre_call"`, `"post_call"`, or `"during_call"` |
-| `model_provider_name` | `str` | `None` | Optional model provider name for logging and context |
-| `model_name` | `str` | `None` | Optional model name for logging and context |
+
 
 ### Default Behavior
 
-- All parameters (`api_key`, `api_email`, `org_code`, `policy_config_name`, `api_base`) are required
+- All parameters (`api_key`, `org_code`, `policy_config_name`, `api_base`) are required
 - If environment variables are set, they are automatically used as defaults
+- If `api_base` is not provided, it defaults to `https://api.eval1.appsoc.com`
 - The guardrail validates content according to your PointGuardAI policy configuration
 - Violations result in an HTTP 400 exception with detailed violation information
 - Content can be blocked or modified based on your policy settings
@@ -210,11 +207,8 @@ guardrails:
       mode: "pre_call"
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       api_key: os.environ/POINTGUARDAI_API_KEY
       policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
-      model_provider_name: "OpenAI"  # Optional
-      model_name: "gpt-4"            # Optional
       
   # During-call guardrail - runs in parallel with LLM call
   - guardrail_name: "pointguardai-guard"
@@ -223,11 +217,9 @@ guardrails:
       mode: "during_call"
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       api_key: os.environ/POINTGUARDAI_API_KEY
       policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
-      model_provider_name: "OpenAI"  # Optional
-      model_name: "gpt-4"            # Optional
+      api_base: os.environ/POINTGUARDAI_API_URL_BASE
       
   # Post-call guardrail - validates both input and output after LLM response
   - guardrail_name: "pointguardai-post-guard"
@@ -236,44 +228,32 @@ guardrails:
       mode: "post_call"
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       api_key: os.environ/POINTGUARDAI_API_KEY
       policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
-      model_provider_name: "OpenAI"  # Optional
-      model_name: "gpt-4"            # Optional
 ```
 
 
 ## Supported Detection Types
 
-PointGuardAI provides comprehensive content moderation and safety checks including:
-
-- **Prompt Injection Detection**: Identifies attempts to manipulate AI behavior
-- **Jailbreaking Attempts**: Detects efforts to bypass safety guidelines
-- **Data Leakage Prevention (DLP)**: Prevents sensitive information exposure
-- **Policy Violations**: Custom policy enforcement based on your organization's rules
-- **Content Moderation**: Filters harmful or inappropriate content
-
-The specific checks and policies are configured in your PointGuardAI dashboard. For the comprehensive list of available policies and configuration options, refer to the [PointGuardAI Documentation](https://docs.pointguardai.com).
+PointGuardAI provides guardrails for DLP and AI threats (Prompt Injection, Toxicity, etc). Please refer to PointGuard platform documentation for more details.
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `POINTGUARDAI_API_KEY` | Your PointGuardAI API key |
-| `POINTGUARDAI_API_EMAIL` | Email associated with your PointGuardAI account |
 | `POINTGUARDAI_ORG_CODE` | Your organization code |
 | `POINTGUARDAI_CONFIG_NAME` | Name of the policy configuration to use |
-| `POINTGUARDAI_API_URL_BASE` | Base URL for PointGuardAI API (e.g., https://api.eval1.appsoc.com) |
+| `POINTGUARDAI_API_URL_BASE` | Base URL for PointGuardAI API. The endpoint may differ by environment (staging, prod, etc). Obtain the correct endpoint from the PointGuardAI platform UI. Defaults to `https://api.appsoc.com` if not provided |
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Authentication Errors**: Ensure your API key, email, and org code are correct
+1. **Authentication Errors**: Ensure your API key and org code are correct
 2. **Configuration Not Found**: Verify your policy config name exists in PointGuardAI
 3. **API Timeout**: Check your network connectivity to PointGuardAI services
-4. **Missing Required Parameters**: Ensure all required parameters (api_key, api_email, org_code, policy_config_name, api_base) are provided
+4. **Missing Required Parameters**: Ensure all required parameters (api_key, org_code, policy_config_name, api_base) are provided
 
 ### Debug Mode
 
@@ -292,8 +272,3 @@ This will show detailed logs of the PointGuardAI API requests and responses.
 - Integrate with your existing security and compliance workflows
 - Test different modes (`pre_call`, `post_call`, `during_call`) to find the best fit for your use case
 
-## Links
-
-- [PointGuardAI Documentation](https://docs.pointguardai.com)
-- [PointGuardAI Dashboard](https://dashboard.pointguardai.com)
-- [PointGuardAI Support](https://support.pointguardai.com)
