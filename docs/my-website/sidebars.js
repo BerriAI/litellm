@@ -850,7 +850,14 @@ const sidebars = {
             "providers/watsonx/audio_transcription",
           ]
         },
-        "providers/xai",
+        {
+          type: "category",
+          label: "xAI",
+          items: [
+            "providers/xai",
+            "providers/xai_realtime",
+          ]
+        },
         "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
