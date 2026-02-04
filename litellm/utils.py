@@ -8202,6 +8202,12 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GDM == provider:
+            from litellm.llms.gdm.transcription.transformation import (
+                GDMTranscriptionConfig,
+            )
+
+            return GDMTranscriptionConfig()
         return None
 
     @staticmethod
