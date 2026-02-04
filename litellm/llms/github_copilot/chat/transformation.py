@@ -1,4 +1,4 @@
-from typing import Any, Optional, Tuple, cast, List
+from typing import List, Optional, Tuple
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -25,9 +25,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = (
-            self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -51,7 +49,7 @@ class GithubCopilotConfig(OpenAIConfig):
         if not disable_copilot_system_to_assistant:
             for message in messages:
                 if "role" in message and message["role"] == "system":
-                    cast(Any, message)["role"] = "assistant"
+                    message["role"] = "assistant"
         return messages
 
     def validate_environment(
@@ -87,7 +85,7 @@ class GithubCopilotConfig(OpenAIConfig):
         For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
         """
         from litellm.utils import supports_reasoning
-        
+
         # Get base OpenAI parameters
         base_params = super().get_supported_openai_params(model)
 
@@ -118,7 +116,7 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         Check if any message contains vision content (images).
         Returns True if any message has content with vision-related types, otherwise False.
-        
+
         Checks for:
         - image_url content type (OpenAI format)
         - Content items with type 'image_url'
