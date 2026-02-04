@@ -5,7 +5,7 @@ import { SearchTool, AvailableSearchProvider } from "./types";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { Button as AntdButton } from "antd";
-import { SearchToolTester } from "./search_tool_tester";
+import { SearchToolTester } from "./SearchToolTester";
 
 interface SearchToolViewProps {
   searchTool: SearchTool;
@@ -53,11 +53,10 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
               size="small"
               icon={copiedStates["search-tool-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(searchTool.search_tool_name, "search-tool-name")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["search-tool-name"]
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["search-tool-name"]
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+                }`}
             />
           </div>
           <div className="flex items-center cursor-pointer">
@@ -67,11 +66,10 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
               size="small"
               icon={copiedStates["search-tool-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(searchTool.search_tool_id, "search-tool-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["search-tool-id"]
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["search-tool-id"]
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+                }`}
             />
           </div>
         </div>

@@ -27,7 +27,7 @@ import Organizations, { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
 import PromptsPanel from "@/components/prompts";
 import PublicModelHub from "@/components/public_model_hub";
-import { SearchTools } from "@/components/search_tools";
+import { SearchTools } from "@/components/SearchTools";
 import Settings from "@/components/settings";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import TagManagement from "@/components/tag_management";

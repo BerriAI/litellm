@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Modal, Form, Input, Select } from "antd";
 import { Button, Title, Text, Grid, Col } from "@tremor/react";
 import { DataTable } from "../view_logs/table";
-import { searchToolColumns } from "./search_tool_columns";
+import { searchToolColumns } from "./SearchToolColumn";
 import {
   fetchSearchTools,
   updateSearchTool,
@@ -13,8 +13,8 @@ import {
 import { SearchTool, AvailableSearchProvider } from "./types";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "../molecules/notifications_manager";
-import { SearchToolView } from "./search_tool_view";
-import CreateSearchTool from "./create_search_tool";
+import { SearchToolView } from "./SearchToolView";
+import CreateSearchTool from "./CreateSearchTools";
 
 interface SearchToolsProps {
   accessToken: string | null;

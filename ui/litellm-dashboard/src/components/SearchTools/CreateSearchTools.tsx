@@ -7,7 +7,7 @@ import { SearchTool, AvailableSearchProvider } from "./types";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useQuery } from "@tanstack/react-query";
-import SearchConnectionTest from "./search_connection_test";
+import SearchConnectionTest from "./SearchConnectionTest";
 import Image from "next/image";
 
 const { TextArea } = Input;
@@ -97,8 +97,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
         },
         search_tool_info: formValues.description
           ? {
-              description: formValues.description,
-            }
+            description: formValues.description,
+          }
           : undefined,
       };
 
@@ -130,7 +130,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     try {
       // Validate required fields for testing
       await form.validateFields(["search_provider", "api_key"]);
-      
+
       setIsTestingConnection(true);
       // Generate a new test ID (using timestamp for uniqueness)
       setConnectionTestId(`test-${Date.now()}`);
@@ -225,8 +225,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                 optionLabelProp="label"
               >
                 {availableProviders.map((provider) => (
-                  <Select.Option 
-                    key={provider.provider_name} 
+                  <Select.Option
+                    key={provider.provider_name}
                     value={provider.provider_name}
                     label={
                       <SearchProviderLabel
