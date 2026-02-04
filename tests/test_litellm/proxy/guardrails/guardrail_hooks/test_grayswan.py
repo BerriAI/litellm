@@ -34,8 +34,9 @@ def test_prepare_payload_uses_dynamic_overrides(
         "policy_id": "dynamic-policy",
         "reasoning_mode": "thinking",
     }
+    request_data = {}
 
-    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body)
+    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, request_data)
 
     assert payload["messages"] == messages
     assert payload["categories"] == {"custom": "override"}
@@ -47,8 +48,9 @@ def test_prepare_payload_falls_back_to_guardrail_defaults(
     grayswan_guardrail: GraySwanGuardrail,
 ) -> None:
     messages = [{"role": "user", "content": "hello"}]
+    request_data = {}
 
-    payload = grayswan_guardrail._prepare_payload(messages, {})
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
 
     assert payload["categories"] == {"safety": "general policy"}
     assert payload["policy_id"] == "default-policy"
@@ -60,8 +62,9 @@ def test_prepare_payload_includes_dynamic_metadata(
 ) -> None:
     messages = [{"role": "user", "content": "hello"}]
     dynamic_body = {"metadata": {"trace_id": "trace-123", "tags": ["a", "b"]}}
+    request_data = {}
 
-    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body)
+    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, request_data)
 
     assert payload["metadata"] == dynamic_body["metadata"]
 
