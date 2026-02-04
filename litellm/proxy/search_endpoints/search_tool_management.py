@@ -143,11 +143,18 @@ async def list_search_tools():
         ]
         
         for search_tool in search_tools_from_db:
+            litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+            masked_litellm_params_dict = _get_masked_values(
+                litellm_params_dict,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
+            
             search_tool_configs.append(
                 SearchToolInfoResponse(
                     search_tool_id=search_tool.get("search_tool_id"),
                     search_tool_name=search_tool.get("search_tool_name", ""),
-                    litellm_params=dict(search_tool.get("litellm_params", {})),
+                    litellm_params=masked_litellm_params_dict,
                     search_tool_info=search_tool.get("search_tool_info"),
                     created_at=_convert_datetime_to_str(search_tool.get("created_at")),
                     updated_at=_convert_datetime_to_str(search_tool.get("updated_at")),
