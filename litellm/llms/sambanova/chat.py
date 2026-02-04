@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -97,6 +98,40 @@ class SambanovaConfig(OpenAIGPTConfig):
                 optional_params[param] = value
         return optional_params
 
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform request and add SambaNova-specific headers.
+
+        Adds X-Integration-Source header for analytics tracking.
+        Priority: User parameter > Env var > Default value ("litellm")
+        """
+        
+        integration_source = (
+            optional_params.get('extra_body',{}).pop("integration_source", None) 
+            or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE")
+            or "litellm"
+        )
+
+        # Add to extra_headers for OpenAI SDK
+        if "extra_headers" not in optional_params:
+            optional_params["extra_headers"] = {}
+        optional_params["extra_headers"]["X-Integration-Source"] = integration_source
+
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
@@ -117,7 +152,7 @@ class SambanovaConfig(OpenAIGPTConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Transform messages to handle content list conversion.
-        
+
         SambaNova API doesn't support content as a list - only string content.
         This converts content lists like [{"type": "text", "text": "..."}] to strings.
         """
