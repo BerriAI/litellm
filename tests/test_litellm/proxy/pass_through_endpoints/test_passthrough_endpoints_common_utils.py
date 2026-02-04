@@ -10,7 +10,7 @@ import pytest
 from fastapi import Request, Response
 from fastapi.testclient import TestClient
 
-from litellm.passthrough.utils import CommonUtils
+from litellm.passthrough.utils import CommonUtils, HttpPassThroughEndpointHelpers
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -96,3 +96,41 @@ def test_encode_bedrock_runtime_modelid_arn_edge_cases():
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Ftest-profile.v1/invoke"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
+
+
+def test_forward_headers_strips_litellm_api_key():
+    """x-litellm-api-key should not be forwarded to upstream providers."""
+    request_headers = {
+        "x-litellm-api-key": "sk-litellm-secret-key",
+        "content-type": "application/json",
+        "x-api-key": "sk-ant-api-key",
+    }
+
+    result = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        request_headers=request_headers.copy(),
+        headers={},
+        forward_headers=True,
+    )
+
+    assert "x-litellm-api-key" not in result
+    assert result.get("content-type") == "application/json"
+    assert result.get("x-api-key") == "sk-ant-api-key"
+
+
+def test_forward_headers_strips_host_and_content_length():
+    """host and content-length should not be forwarded."""
+    request_headers = {
+        "host": "api.anthropic.com",
+        "content-length": "1234",
+        "content-type": "application/json",
+    }
+
+    result = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        request_headers=request_headers.copy(),
+        headers={},
+        forward_headers=True,
+    )
+
+    assert "host" not in result
+    assert "content-length" not in result
+    assert result.get("content-type") == "application/json"

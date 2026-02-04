@@ -36,11 +36,10 @@ class BasePassthroughUtils:
         e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
         """
         if forward_headers is True:
-            # Header We Should NOT forward
             request_headers.pop("content-length", None)
             request_headers.pop("host", None)
+            request_headers.pop("x-litellm-api-key", None)
 
-            # Combine request headers with custom headers
             headers = {**request_headers, **headers}
 
         # Always process x-pass- prefixed headers (strip prefix and forward)
