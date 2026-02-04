@@ -19,6 +19,7 @@ export interface SearchTool {
   search_tool_info?: SearchToolInfo;
   created_at?: string;
   updated_at?: string;
+  is_from_config?: boolean;
 }
 
 export interface SearchToolsResponse {
