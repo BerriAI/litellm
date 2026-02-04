@@ -151,6 +151,7 @@ const sidebars = {
       items: [
         "tutorials/claude_agent_sdk",
         "tutorials/google_adk",
+        "tutorials/livekit_xai_realtime",
       ]
     },
 
