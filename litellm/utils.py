@@ -199,6 +199,8 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
+_CALL_TYPE_ENUM_MAP: dict = {ct.value: ct for ct in CallTypes}
+
 # +-----------------------------------------------+
 # |                                               |
 # |           Give Feedback / Get Help            |
@@ -1451,6 +1453,10 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            
+            # Type assertion: logging_obj is guaranteed to be non-None after function_setup
+            assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
@@ -1746,6 +1752,7 @@ def client(original_function):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
+        _update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
@@ -1768,6 +1775,9 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            
+            # Type assertion: logging_obj is guaranteed to be non-None after function_setup
+            assert logging_obj is not None, "logging_obj should not be None after function_setup"
 
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
@@ -1786,9 +1796,10 @@ def client(original_function):  # noqa: PLR0915
                     )
 
             # [OPTIONAL] CHECK CACHE
-            print_verbose(
-                f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
-            )
+            if _is_debugging_on():
+                print_verbose(
+                    f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
+                )
             _caching_handler_response: "Optional[CachingHandlerResponse]" = (
                 await _llm_caching_handler._async_get_cache(
                     model=model or "",
@@ -1864,10 +1875,7 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
-                    update_response_metadata = getattr(
-                        sys.modules[__name__], "update_response_metadata"
-                    )
-                    update_response_metadata(
+                    _update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
                         model=model,
@@ -1887,11 +1895,12 @@ def client(original_function):  # noqa: PLR0915
                 rules_obj=rules_obj,
             )
             # Only run if call_type is a valid value in CallTypes
-            if call_type in [ct.value for ct in CallTypes]:
+            _call_type_enum = _CALL_TYPE_ENUM_MAP.get(call_type)
+            if _call_type_enum is not None:
                 result = await async_post_call_success_deployment_hook(
                     request_data=kwargs,
                     response=result,
-                    call_type=CallTypes(call_type),
+                    call_type=_call_type_enum,
                 )
 
             ## Add response to cache
@@ -1931,10 +1940,7 @@ def client(original_function):  # noqa: PLR0915
                     end_time=end_time,
                 )
 
-            update_response_metadata = getattr(
-                sys.modules[__name__], "update_response_metadata"
-            )
-            update_response_metadata(
+            _update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
                 model=model,
@@ -2644,7 +2650,14 @@ def get_supported_regions(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        supported_regions = model_info.get("supported_regions", None)
+        # Get the key used in model_cost to look up supported_regions
+        # since ModelInfoBase doesn't include this field
+        model_key = model_info.get("key")
+        if model_key is None:
+            return None
+
+        model_cost_data = litellm.model_cost.get(model_key, {})
+        supported_regions = model_cost_data.get("supported_regions", None)
         if supported_regions is None:
             return None
 
@@ -3242,7 +3255,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             object = litellm.AmazonTitanMultimodalEmbeddingG1Config()
         elif "amazon.titan-embed-text-v2:0" in model:
             object = litellm.AmazonTitanV2Config()
-        elif "cohere.embed-multilingual-v3" in model:
+        elif "cohere.embed-multilingual-v3" in model or "cohere.embed-v4" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
         elif "twelvelabs" in model or "marengo" in model:
             object = litellm.TwelveLabsMarengoEmbeddingConfig()
@@ -7793,6 +7806,7 @@ class ProviderConfigManager:
             # Simple provider mappings (no model parameter needed)
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
+            LlmProviders.A2A: (lambda: litellm.A2AConfig(), False),
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),

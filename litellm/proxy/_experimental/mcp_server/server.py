@@ -1840,6 +1840,43 @@ if MCP_AVAILABLE:
             raw_headers,
         )
 
+    def _strip_stale_mcp_session_header(
+        scope: Scope,
+        mgr: "StreamableHTTPSessionManager",
+    ) -> None:
+        """
+        Strip stale ``mcp-session-id`` headers so the session manager
+        creates a fresh session instead of returning 404 "Session not found".
+
+        When clients like VSCode reconnect after a reload they may resend a
+        session id that has already been cleaned up.  Rather than letting the
+        SDK return a 404 error loop, we detect the stale id and remove the
+        header so a brand-new session is created transparently.
+
+        Fixes https://github.com/BerriAI/litellm/issues/20292
+        """
+        _mcp_session_header = b"mcp-session-id"
+        _session_id: Optional[str] = None
+        for header_name, header_value in scope.get("headers", []):
+            if header_name == _mcp_session_header:
+                _session_id = header_value.decode("utf-8", errors="replace")
+                break
+
+        if _session_id is None:
+            return
+
+        known_sessions = getattr(mgr, "_server_instances", None)
+        if known_sessions is not None and _session_id not in known_sessions:
+            verbose_logger.warning(
+                "MCP session ID '%s' not found in active sessions. "
+                "Stripping stale header to force new session creation.",
+                _session_id,
+            )
+            scope["headers"] = [
+                (k, v) for k, v in scope["headers"]
+                if k != _mcp_session_header
+            ]
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -1895,6 +1932,8 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 # Give it a moment to start up
                 await asyncio.sleep(0.1)
+
+            _strip_stale_mcp_session_header(scope, session_manager)
 
             await session_manager.handle_request(scope, receive, send)
         except Exception as e:

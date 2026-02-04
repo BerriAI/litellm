@@ -91,7 +91,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal != true) {
-    console.log = function () {};
+    console.log = function () { };
   }
 
   const baseUrl = useBaseUrl();
@@ -565,7 +565,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               <Modal
                 title="Manage Allowed IP Addresses"
                 width={800}
-                visible={isAllowedIPModalVisible}
+                open={isAllowedIPModalVisible}
                 onCancel={() => setIsAllowedIPModalVisible(false)}
                 footer={[
                   <Button className="mx-1" key="add" onClick={() => setIsAddIPModalVisible(true)}>
@@ -602,7 +602,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
               <Modal
                 title="Add Allowed IP Address"
-                visible={isAddIPModalVisible}
+                open={isAddIPModalVisible}
                 onCancel={() => setIsAddIPModalVisible(false)}
                 footer={null}
               >
@@ -618,7 +618,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
               <Modal
                 title="Confirm Delete"
-                visible={isDeleteIPModalVisible}
+                open={isDeleteIPModalVisible}
                 onCancel={() => setIsDeleteIPModalVisible(false)}
                 onOk={confirmDeleteIP}
                 footer={[
@@ -636,7 +636,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               {/* UI Access Control Modal */}
               <Modal
                 title="UI Access Control Settings"
-                visible={isUIAccessControlModalVisible}
+                open={isUIAccessControlModalVisible}
                 width={600}
                 footer={null}
                 onOk={handleUIAccessControlOk}

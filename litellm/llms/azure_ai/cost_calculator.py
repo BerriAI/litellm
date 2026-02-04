@@ -77,16 +77,35 @@ def cost_per_token(
     
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+    
+    Raises:
+        ValueError: If the model is not found in the cost map and cost cannot be calculated
+            (except for Model Router models where we return just the routing flat cost)
     """
+    prompt_cost = 0.0
+    completion_cost = 0.0
+    
     # Calculate base cost using generic cost calculator
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="azure_ai",
-    )
+    # This may raise an exception if the model is not in the cost map
+    try:
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider="azure_ai",
+        )
+    except Exception as e:
+        # For Model Router, the model name (e.g., "azure-model-router") may not be in the cost map
+        # because it's a routing service, not an actual model. In this case, we continue
+        # to calculate just the routing flat cost.
+        if not _is_azure_model_router(model):
+            # Re-raise for non-router models - they should have pricing defined
+            raise
+        verbose_logger.debug(
+            f"Azure AI Model Router: model '{model}' not in cost map, calculating routing flat cost only. Error: {e}"
+        )
     
     # Add flat cost for Azure Model Router
-    # The flat cost is defined in model_prices_and_context_window.json for azure_ai/azure-model-router
+    # The flat cost is defined in model_prices_and_context_window.json for azure_ai/model_router
     if _is_azure_model_router(model):
         router_flat_cost = calculate_azure_model_router_flat_cost(model, usage.prompt_tokens)
         
