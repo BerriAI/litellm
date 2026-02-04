@@ -1633,16 +1633,8 @@ class ProxyLogging:
         if RouteChecks.is_llm_api_route(route) is not True:
             return False
 
-        proxy_only_error_types = {
-            ProxyErrorTypes.auth_error,
-            ProxyErrorTypes.key_model_access_denied,
-            ProxyErrorTypes.team_model_access_denied,
-            ProxyErrorTypes.user_model_access_denied,
-            ProxyErrorTypes.org_model_access_denied,
-            ProxyErrorTypes.token_not_found_in_db,
-        }
         return isinstance(original_exception, HTTPException) or (
-            error_type in proxy_only_error_types
+            error_type == ProxyErrorTypes.auth_error
         )
 
     async def _handle_logging_proxy_only_error(
