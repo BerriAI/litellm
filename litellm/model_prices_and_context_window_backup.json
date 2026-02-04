@@ -15397,7 +15397,7 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_native_streaming": true,
+        "supports_native_streaming": true
     },
     "gemini/gemini-2.5-pro-exp-03-25": {
         "cache_read_input_token_cost": 0.0,
