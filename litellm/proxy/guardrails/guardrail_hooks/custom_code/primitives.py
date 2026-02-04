@@ -7,7 +7,7 @@ and provide safe, sandboxed functionality for common guardrail operations.
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
@@ -234,7 +234,7 @@ def _basic_json_schema_validate(
     Uses an iterative approach with a stack to avoid recursion limits.
     max_depth limits nesting to prevent infinite loops from circular schemas.
     """
-    type_map = {
+    type_map: Dict[str, Union[Type, Tuple[Type, ...]]] = {
         "object": dict,
         "array": list,
         "string": str,
@@ -245,7 +245,7 @@ def _basic_json_schema_validate(
     }
 
     # Stack of (obj, schema, depth) tuples to process
-    stack: List[tuple] = [(obj, schema, 0)]
+    stack: List[Tuple[Any, Dict[str, Any], int]] = [(obj, schema, 0)]
 
     while stack:
         current_obj, current_schema, depth = stack.pop()
@@ -258,7 +258,7 @@ def _basic_json_schema_validate(
         schema_type = current_schema.get("type")
         if schema_type:
             expected_type = type_map.get(schema_type)
-            if expected_type and not isinstance(current_obj, expected_type):
+            if expected_type is not None and not isinstance(current_obj, expected_type):
                 return False
 
         # Check required fields and properties for dicts
