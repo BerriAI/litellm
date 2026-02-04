@@ -23,7 +23,10 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.llms.bedrock.common_utils import (
+    get_anthropic_beta_from_headers,
+    is_claude_4_5_on_bedrock,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -147,8 +150,6 @@ class AmazonAnthropicClaudeMessagesConfig(
                                     ttl = cache_control["ttl"]
                                     if is_claude_4_5 and ttl in ["5m", "1h"]:
                                         continue
-                                    if ttl in ["5m", "1h"]:
-                                        continue
 
                                     cache_control.pop("ttl", None)
 
@@ -218,22 +219,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model is Claude 4.5
         """
-        model_lower = model.lower()
-        claude_4_5_patterns = [
-            "sonnet-4.5",
-            "sonnet_4.5",
-            "sonnet-4-5",
-            "sonnet_4_5",
-            "haiku-4.5",
-            "haiku_4.5",
-            "haiku-4-5",
-            "haiku_4_5",
-            "opus-4.5",
-            "opus_4.5",
-            "opus-4-5",
-            "opus_4_5",
-        ]
-        return any(pattern in model_lower for pattern in claude_4_5_patterns)
+        return is_claude_4_5_on_bedrock(model)
 
     def _supports_tool_search_on_bedrock(self, model: str) -> bool:
         """
