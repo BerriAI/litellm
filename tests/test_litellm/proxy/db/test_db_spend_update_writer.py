@@ -132,7 +132,7 @@ async def test_update_daily_spend_with_null_entity_id():
     assert create_data["model"] == "gpt-4"
     assert create_data["custom_llm_provider"] == "openai"
     assert create_data["mcp_namespaced_tool_name"] == ""
-    assert create_data["endpoint"] is None
+    assert create_data["endpoint"] == ""
     assert create_data["prompt_tokens"] == 10
     assert create_data["completion_tokens"] == 20
     assert create_data["spend"] == 0.1
@@ -194,7 +194,7 @@ async def test_update_daily_spend_sorting():
                     "model_group": None,
                     "mcp_namespaced_tool_name": "",
                     "custom_llm_provider": "openai",
-                    "endpoint": None,
+                    "endpoint": "",
                     "prompt_tokens": 10,
                     "completion_tokens": 20,
                     "spend": 0.1,

@@ -1227,7 +1227,7 @@ class DBSpendUpdateWriter:
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
-                                "endpoint": transaction.get("endpoint"),
+                                "endpoint": transaction.get("endpoint") or "",
                                 "prompt_tokens": transaction["prompt_tokens"],
                                 "completion_tokens": transaction["completion_tokens"],
                                 "spend": transaction["spend"],
