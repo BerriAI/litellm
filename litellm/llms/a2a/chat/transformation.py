@@ -2,10 +2,9 @@
 A2A Protocol Transformation for LiteLLM
 """
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Union, cast
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import httpx
-from pydantic import BaseModel
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -27,6 +26,68 @@ class A2AConfig(BaseConfig):
     Handles transformation between OpenAI and A2A JSON-RPC 2.0 formats.
     """
     
+    @staticmethod
+    def resolve_agent_config_from_registry(
+        model: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        headers: Optional[Dict[str, Any]],
+        optional_params: Dict[str, Any],
+    ) -> tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        """
+        Resolve agent configuration from registry if model format is "a2a/<agent-name>".
+        
+        Extracts agent name from model string and looks up configuration in the
+        agent registry (if available in proxy context).
+        
+        Args:
+            model: Model string (e.g., "a2a/my-agent")
+            api_base: Explicit api_base (takes precedence over registry)
+            api_key: Explicit api_key (takes precedence over registry)
+            headers: Explicit headers (takes precedence over registry)
+            optional_params: Dict to merge additional litellm_params into
+        
+        Returns:
+            Tuple of (api_base, api_key, headers) with registry values filled in
+        """
+        # Extract agent name from model (e.g., "a2a/my-agent" -> "my-agent")
+        agent_name = model.split("/", 1)[1] if "/" in model else None
+        
+        # Only lookup if agent name exists and some config is missing
+        if not agent_name or (api_base is not None and api_key is not None and headers is not None):
+            return api_base, api_key, headers
+        
+        # Try registry lookup (only available in proxy context)
+        try:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+            )
+            
+            agent = global_agent_registry.get_agent_by_name(agent_name)
+            if agent:
+                # Get api_base from agent card URL
+                if api_base is None and agent.agent_card_params:
+                    api_base = agent.agent_card_params.get("url")
+                
+                # Get api_key, headers, and other params from litellm_params
+                if agent.litellm_params:
+                    if api_key is None:
+                        api_key = agent.litellm_params.get("api_key")
+                    
+                    if headers is None:
+                        agent_headers = agent.litellm_params.get("headers")
+                        if agent_headers:
+                            headers = agent_headers
+                    
+                    # Merge other litellm_params (timeout, max_retries, etc.)
+                    for key, value in agent.litellm_params.items():
+                        if key not in ["api_key", "api_base", "headers", "model"] and key not in optional_params:
+                            optional_params[key] = value
+        except ImportError:
+            pass  # Registry not available (not running in proxy context)
+        
+        return api_base, api_key, headers
+    
     def get_supported_openai_params(self, model: str) -> List[str]:
         """Return list of supported OpenAI parameters"""
         return [
@@ -46,9 +107,14 @@ class A2AConfig(BaseConfig):
         """
         Map OpenAI parameters to A2A parameters.
         
-        For A2A protocol, we don't need to map most parameters since
-        they're handled in the transform_request method.
+        For A2A protocol, we need to map the stream parameter so
+        transform_request can determine which JSON-RPC method to use.
         """
+        # Map stream parameter
+        for param, value in non_default_params.items():
+            if param == "stream" and value is True:
+                optional_params["stream"] = value
+        
         return optional_params
     
     def validate_environment(
@@ -160,8 +226,9 @@ class A2AConfig(BaseConfig):
         
         # Build JSON-RPC 2.0 request
         # For A2A protocol, the method is "message/send" for non-streaming
-        # and "message/stream" for streaming (handled by optional_params["stream"])
-        method = "message/stream" if optional_params.get("stream") else "message/send"
+        # and "message/stream" for streaming
+        stream = optional_params.get("stream", False)
+        method = "message/stream" if stream else "message/send"
         
         request_data = {
             "jsonrpc": "2.0",
