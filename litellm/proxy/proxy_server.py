@@ -4786,7 +4786,8 @@ class ProxyStartupEvent:
         if hook:
             verbose_proxy_logger.debug("✅ Semantic tool filter hook registered")
             litellm.logging_callback_manager.add_litellm_callback(hook)
-        else:
+        elif mcp_semantic_filter_config is not None and mcp_semantic_filter_config.get("enabled", False):
+            # Only warn if user explicitly enabled it but initialization failed
             verbose_proxy_logger.warning("❌ Semantic tool filter hook not initialized")
 
     @classmethod
