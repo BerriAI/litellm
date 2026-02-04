@@ -1,14 +1,14 @@
-import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Typography } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput } from "@tremor/react";
-import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
-import { SearchTool, AvailableSearchProvider } from "./types";
 import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "../molecules/notifications_manager";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import SearchConnectionTest from "./SearchConnectionTest";
+import { Button, TextInput } from "@tremor/react";
+import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import Image from "next/image";
+import React, { useState } from "react";
+import NotificationsManager from "../molecules/notifications_manager";
+import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
+import SearchConnectionTest from "./SearchConnectionTest";
+import { AvailableSearchProvider, SearchTool } from "./types";
 
 const { TextArea } = Input;
 

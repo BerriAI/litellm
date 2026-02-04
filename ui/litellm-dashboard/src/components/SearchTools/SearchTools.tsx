@@ -1,21 +1,21 @@
-import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Modal, Form, Input, Select, Table, Spin } from "antd";
+import { isAdminRole } from "@/utils/roles";
 import { LoadingOutlined } from "@ant-design/icons";
-import { Button, Title, Text } from "@tremor/react";
-import { searchToolColumns } from "./SearchToolColumn";
+import { useQuery } from "@tanstack/react-query";
+import { Button, Text, Title } from "@tremor/react";
+import { Form, Input, Modal, Select, Spin, Table } from "antd";
+import React, { useState } from "react";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import NotificationsManager from "../molecules/notifications_manager";
 import {
-  fetchSearchTools,
-  updateSearchTool,
   deleteSearchTool,
   fetchAvailableSearchProviders,
+  fetchSearchTools,
+  updateSearchTool,
 } from "../networking";
-import { SearchTool, AvailableSearchProvider } from "./types";
-import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "../molecules/notifications_manager";
-import { SearchToolView } from "./SearchToolView";
 import CreateSearchTool from "./CreateSearchTools";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import { searchToolColumns } from "./SearchToolColumn";
+import { SearchToolView } from "./SearchToolView";
+import { AvailableSearchProvider, SearchTool } from "./types";
 
 interface SearchToolsProps {
   accessToken: string | null;

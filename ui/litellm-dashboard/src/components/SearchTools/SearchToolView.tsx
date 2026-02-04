@@ -1,11 +1,11 @@
-import React, { useState } from "react";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { Title, Card, Button, Text, Grid } from "@tremor/react";
-import { SearchTool, AvailableSearchProvider } from "./types";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { Button, Card, Grid, Text, Title } from "@tremor/react";
 import { Button as AntdButton } from "antd";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import React, { useState } from "react";
 import { SearchToolTester } from "./SearchToolTester";
+import { AvailableSearchProvider, SearchTool } from "./types";
 
 interface SearchToolViewProps {
   searchTool: SearchTool;
@@ -54,8 +54,8 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
               icon={copiedStates["search-tool-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(searchTool.search_tool_name, "search-tool-name")}
               className={`left-2 z-10 transition-all duration-200 ${copiedStates["search-tool-name"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                 }`}
             />
           </div>
@@ -67,8 +67,8 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
               icon={copiedStates["search-tool-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(searchTool.search_tool_id, "search-tool-id")}
               className={`left-2 z-10 transition-all duration-200 ${copiedStates["search-tool-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                 }`}
             />
           </div>
