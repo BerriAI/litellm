@@ -54,7 +54,7 @@ pip install litellm==1.74.9.post2
 
 ## Auto-Router
 
-<Image img={require('../../img/release_notes/auto_router.png')} />
+<Image img={require('@site/img/release_notes/auto_router.png')} />
 
 <br/>
 
@@ -69,7 +69,7 @@ This is great for internal use cases where you don't want **users** to think abo
 
 ## Model-level Guardrails
 
-<Image img={require('../../img/release_notes/model_level_guardrails.jpg')} />
+<Image img={require('@site/img/release_notes/model_level_guardrails.jpg')} />
 
 <br/>
 
@@ -99,7 +99,7 @@ guardrails:
 ---
 ## MCP Header Propagation
 
-<Image img={require('../../img/release_notes/mcp_header_propogation.png')} />
+<Image img={require('@site/img/release_notes/mcp_header_propogation.png')} />
 
 <br/>
 

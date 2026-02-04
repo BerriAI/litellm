@@ -144,7 +144,7 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 ### Team / Key Based Logging on UI
 
 <Image 
-  img={require('../../img/release_notes/team_key_logging.png')}
+  img={require('@site/img/release_notes/team_key_logging.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -161,7 +161,7 @@ For developers using LiteLLM, their logs are automatically routed to their speci
 ### Azure Content Safety Guardrails
 
 <Image 
-  img={require('../../img/azure_content_safety_guardrails.jpg')}
+  img={require('@site/img/azure_content_safety_guardrails.jpg')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

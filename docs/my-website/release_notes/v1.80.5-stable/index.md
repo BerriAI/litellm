@@ -60,7 +60,7 @@ pip install litellm==1.80.5
 ### Prompt Management
 
 <Image 
-  img={require('../../img/prompt_history.png')}
+  img={require('@site/img/prompt_history.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

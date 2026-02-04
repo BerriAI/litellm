@@ -49,7 +49,7 @@ litellm /path/to/config.yaml
 
 **Step 3: View Spend Logs**
 
-<Image img={require('../../img/spend_logs_table.png')} />
+<Image img={require('@site/img/spend_logs_table.png')} />
 
 ## Cost Per Token (e.g. Azure)
 

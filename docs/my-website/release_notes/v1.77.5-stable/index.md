@@ -55,7 +55,7 @@ pip install litellm==1.77.5
 
 ### Performance Improvements - 54% RPS Improvement
 
-<Image img={require('../../img/release_notes/perf_77_5.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/release_notes/perf_77_5.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 

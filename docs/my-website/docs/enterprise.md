@@ -17,7 +17,7 @@ Get free 7-day trial key [here](https://www.litellm.ai/enterprise#trial)
 
 Includes all enterprise features.
 
-<Image img={require('../img/enterprise_vs_oss_2.png')} />
+<Image img={require('@site/img/enterprise_vs_oss_2.png')} />
 
 [**Procurement available via AWS / Azure Marketplace**](./data_security.md#legalcompliance-faqs)
 
@@ -114,17 +114,17 @@ Pricing is based on usage. We can figure out a price that works for your team, o
 
 ### 1. Create keys
 
-<Image img={require('../img/litellm_hosted_ui_create_key.png')} />
+<Image img={require('@site/img/litellm_hosted_ui_create_key.png')} />
 
 ### 2. Add Models
 
-<Image img={require('../img/litellm_hosted_ui_add_models.png')}/>
+<Image img={require('@site/img/litellm_hosted_ui_add_models.png')}/>
 
 ### 3. Track spend 
 
-<Image img={require('../img/litellm_hosted_usage_dashboard.png')} />
+<Image img={require('@site/img/litellm_hosted_usage_dashboard.png')} />
 
 
 ### 4. Configure load balancing 
 
-<Image img={require('../img/litellm_hosted_ui_router.png')} />
+<Image img={require('@site/img/litellm_hosted_ui_router.png')} />

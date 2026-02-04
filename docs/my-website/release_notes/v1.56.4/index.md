@@ -48,11 +48,11 @@ LiteLLM will add `#transform=inline` to the url of the image_url, if the model i
 
 - `Test Key` Tab displays `model` used in response
 
-<Image img={require('../../img/release_notes/ui_model.png')} />
+<Image img={require('@site/img/release_notes/ui_model.png')} />
 
 - `Test Key` Tab renders content in `.md`, `.py` (any code/markdown format)
 
-<Image img={require('../../img/release_notes/ui_format.png')} />
+<Image img={require('@site/img/release_notes/ui_format.png')} />
 
 
 ## Dependency Upgrades

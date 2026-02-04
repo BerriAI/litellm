@@ -28,11 +28,11 @@ In these tests the baseline latency characteristics are measured against a fake-
 | Custom | LiteLLM Overhead Duration (ms) | 12 | 29 | 43 | 14.74 | 1035.7 |
 |  | Aggregated | 100 | 430 | 930 | 138.6 | 2071.4 |
 
-<!-- <Image img={require('../img/1_instance_proxy.png')} /> -->
+<!-- <Image img={require('@site/img/1_instance_proxy.png')} /> -->
 
 <!-- ## **Horizontal Scaling - 10K RPS**
 
-<Image img={require('../img/instances_vs_rps.png')} /> -->
+<Image img={require('@site/img/instances_vs_rps.png')} /> -->
 
 
 ### 4 Instances

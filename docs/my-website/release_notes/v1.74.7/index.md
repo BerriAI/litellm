@@ -55,7 +55,7 @@ pip install litellm==1.74.7.post2
 
 ## Vector Stores API
 
-<Image img={require('../../img/release_notes/vector_stores.png')} />
+<Image img={require('@site/img/release_notes/vector_stores.png')} />
 
 
 This release introduces support for using VertexAI RAG Engine, PG Vector, Bedrock Knowledge Bases, and OpenAI Vector Stores with LiteLLM.
@@ -81,7 +81,7 @@ This brings the following benefits for LiteLLM users:
 
 ## Bulk Editing Users
 
-<Image img={require('../../img/bulk_edit_graphic.png')} />
+<Image img={require('@site/img/bulk_edit_graphic.png')} />
 
 v1.74.7-stable introduces Bulk Editing Users on the UI. This is useful for:
 - granting all existing users to a default team (useful for controlling access / tracking spend by team)
@@ -93,7 +93,7 @@ v1.74.7-stable introduces Bulk Editing Users on the UI. This is useful for:
 
 ## Health Check Server
 
-<Image alt="Separate Health App Architecture" img={require('../../img/separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
+<Image alt="Separate Health App Architecture" img={require('@site/img/separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
 
 This release brings reliability improvements that prevent unnecessary pod restarts during high traffic. Previously, when the main LiteLLM app was busy serving traffic, health endpoints would timeout even when pods were healthy. 
  

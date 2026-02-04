@@ -57,7 +57,7 @@ pip install litellm==1.78.0.post1
 ### MCP Gateway - Control Tool Access by Team, Key
 
 <Image 
-  img={require('../../img/release_notes/tool_control.png')}
+  img={require('@site/img/release_notes/tool_control.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -75,7 +75,7 @@ This makes it easier for Proxy Admins to govern MCP Tool Access.
 
 ## Performance - 70% Lower p99 Latency
 
-<Image img={require('../../img/release_notes/1_78_0_perf.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/release_notes/1_78_0_perf.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 

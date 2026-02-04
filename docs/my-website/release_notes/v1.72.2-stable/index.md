@@ -64,7 +64,7 @@ pip install litellm==1.72.2.post1
 ## `/v1/messages` Performance Improvements
 
 <Image 
-  img={require('../../img/release_notes/v1_messages_perf.png')}
+  img={require('@site/img/release_notes/v1_messages_perf.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -77,7 +77,7 @@ This is great for real time use cases with large requests (eg. multi turn conver
 ## Multi-Instance Rate Limiting Improvements
 
 <Image 
-  img={require('../../img/release_notes/multi_instance_rate_limits_v3.jpg')}
+  img={require('@site/img/release_notes/multi_instance_rate_limits_v3.jpg')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -95,7 +95,7 @@ These changes are currently behind the feature flag - `EXPERIMENTAL_ENABLE_MULTI
 ## Audit Logs on UI
 
 <Image 
-  img={require('../../img/release_notes/ui_audit_log.png')}
+  img={require('@site/img/release_notes/ui_audit_log.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

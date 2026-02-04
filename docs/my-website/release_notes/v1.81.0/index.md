@@ -48,13 +48,13 @@ pip install litellm==1.81.0
 - **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
 - **Major Change** - [50MB limit on image URL downloads](#major-change---chatcompletions-image-url-download-size-limit) to improve reliability
 - **Performance** - [25% CPU Usage Reduction](#performance---25-cpu-usage-reduction) by removing premature model.dump() calls from the hot path
-- **Deleted Keys Audit Table on UI** - [View deleted keys and teams for audit purposes](../../docs/proxy/deleted_keys_teams.md) with spend and budget information at the time of deletion
+- **Deleted Keys Audit Table on UI** - [View deleted keys and teams for audit purposes](https://docs.litellm.ai/docs/proxy/deleted_keys_teams) with spend and budget information at the time of deletion
 
 ---
 
 ## Claude Code - Web Search Across All Providers
 
-<Image img={require('../../img/release_notes/claude_code_websearch.png')} />
+<Image img={require('@site/img/release_notes/claude_code_websearch.png')} />
 
 This release brings web search support to Claude Code across all LiteLLM providers (Bedrock, Azure, Vertex AI, and more), enabling AI coding assistants to search the web for real-time information.
 
@@ -164,9 +164,9 @@ LiteLLM now reduces CPU usage by removing premature `model.dump()` calls from th
 
 ## Deleted Keys Audit Table on UI
 
-<Image img={require('../../img/ui_deleted_keys_table.png')} />
+<Image img={require('@site/img/ui_deleted_keys_table.png')} />
 
-LiteLLM now provides a comprehensive audit table for deleted API keys and teams directly in the UI. This feature allows you to easily track the spend of deleted keys, view their associated team information, and maintain accurate financial records for auditing and compliance purposes. The table displays key details including key aliases, team associations, and spend information captured at the time of deletion. For more information on how to use this feature, see the [Deleted Keys & Teams documentation](../../docs/proxy/deleted_keys_teams.md).
+LiteLLM now provides a comprehensive audit table for deleted API keys and teams directly in the UI. This feature allows you to easily track the spend of deleted keys, view their associated team information, and maintain accurate financial records for auditing and compliance purposes. The table displays key details including key aliases, team associations, and spend information captured at the time of deletion. For more information on how to use this feature, see the [Deleted Keys & Teams documentation](https://docs.litellm.ai/docs/proxy/deleted_keys_teams).
 
 ---
 

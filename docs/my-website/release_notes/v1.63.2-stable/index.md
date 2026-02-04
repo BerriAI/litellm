@@ -31,7 +31,7 @@ This release will be live on 03/09/2025
 
 ::: 
 
-<Image img={require('../../img/release_notes/v1632_release.jpg')} />
+<Image img={require('@site/img/release_notes/v1632_release.jpg')} />
 
 
 ## Demo Instance
@@ -51,7 +51,7 @@ Here's a Demo Instance to test changes:
 
 ## LLM Translation
 
-<Image img={require('../../img/release_notes/anthropic_thinking.jpg')}/>
+<Image img={require('@site/img/release_notes/anthropic_thinking.jpg')}/>
 
 1. Support `/openai/` passthrough for Assistant endpoints. [Get Started](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
 2. Bedrock Claude - fix tool calling transformation on invoke route. [Get Started](../../docs/providers/bedrock#usage---function-calling--tool-calling)
@@ -64,19 +64,19 @@ Here's a Demo Instance to test changes:
 9. Bedrock - handle thinking blocks in assistant message. [Get Started](https://docs.litellm.ai/docs/providers/bedrock#usage---thinking--reasoning-content)
 10. Anthropic - Return `signature` on streaming. [Get Started](https://docs.litellm.ai/docs/providers/bedrock#usage---thinking--reasoning-content)
 - Note: We've also migrated from `signature_delta` to `signature`. [Read more](https://docs.litellm.ai/release_notes/v1.63.0)
-11. Support format param for specifying image type. [Get Started](../../docs/completion/vision.md#explicitly-specify-image-type)
-12. Anthropic - `/v1/messages` endpoint - `thinking` param support. [Get Started](../../docs/anthropic_unified.md)
+11. Support format param for specifying image type. [Get Started](https://docs.litellm.ai/docs/completion/vision#explicitly-specify-image-type)
+12. Anthropic - `/v1/messages` endpoint - `thinking` param support. [Get Started](../../docs/anthropic_unified/)
 - Note: this refactors the [BETA] unified `/v1/messages` endpoint, to just work for the Anthropic API. 
 13. Vertex AI - handle $id in response schema when calling vertex ai. [Get Started](https://docs.litellm.ai/docs/providers/vertex#json-schema)
 
 ## Spend Tracking Improvements
 
 1. Batches API - Fix cost calculation to run on retrieve_batch. [Get Started](https://docs.litellm.ai/docs/batches)
-2. Batches API - Log batch models in spend logs / standard logging payload. [Get Started](../../docs/proxy/logging_spec.md#standardlogginghiddenparams)
+2. Batches API - Log batch models in spend logs / standard logging payload. [Get Started](https://docs.litellm.ai/docs/proxy/logging_spec#standardlogginghiddenparams)
 
 ## Management Endpoints / UI
 
-<Image img={require('../../img/release_notes/error_logs.jpg')} />
+<Image img={require('@site/img/release_notes/error_logs.jpg')} />
 
 1. Virtual Keys Page
     - Allow team/org filters to be searchable on the Create Key Page

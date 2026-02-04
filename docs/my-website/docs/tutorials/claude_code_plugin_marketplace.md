@@ -18,19 +18,19 @@ LiteLLM AI Gateway acts as a central registry for Claude Code plugins. Admins ca
 
 In the LiteLLM Admin UI, click on **Claude Code Plugins** in the left navigation menu.
 
-<Image img={require('../../img/claude_code_marketplace/step1_navigate_plugins.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step1_navigate_plugins.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ### Step 2: View the Plugins List
 
 You'll see the list of all registered plugins. From here you can add, enable, disable, or delete plugins.
 
-<Image img={require('../../img/claude_code_marketplace/step3_plugins_list.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step3_plugins_list.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ### Step 3: Add a New Plugin
 
 Click **+ Add New Plugin** to register a plugin in your marketplace.
 
-<Image img={require('../../img/claude_code_marketplace/step4_add_plugin.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step4_add_plugin.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ### Step 4: Fill in Plugin Details
 
@@ -44,19 +44,19 @@ Enter the plugin information:
 - **Category**: Plugin category for organization
 - **Keywords**: Search terms
 
-<Image img={require('../../img/claude_code_marketplace/step5_plugin_form.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step5_plugin_form.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ### Step 5: Submit the Plugin
 
 After filling in the details, click **Add Plugin** to register it.
 
-<Image img={require('../../img/claude_code_marketplace/step9_submit.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step9_submit.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ### Step 6: Enable/Disable Plugins
 
 Toggle plugins on or off to control what appears in the public marketplace. Only **enabled** plugins are visible to engineers.
 
-<Image img={require('../../img/claude_code_marketplace/step11_enable_plugin.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step11_enable_plugin.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ## Engineer Guide: Installing Plugins
 
@@ -68,7 +68,7 @@ Add your company's LiteLLM marketplace to Claude Code:
 claude plugin marketplace add http://your-litellm-proxy:4000/claude-code/marketplace.json
 ```
 
-<Image img={require('../../img/claude_code_marketplace/step12_cli_marketplace.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step12_cli_marketplace.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ### Step 2: Browse Available Plugins
 
@@ -86,13 +86,13 @@ Install any plugin from the marketplace:
 claude plugin install my-plugin@litellm
 ```
 
-<Image img={require('../../img/claude_code_marketplace/step15_cli_paste.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step15_cli_paste.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ### Step 4: Verify Installation
 
 The plugin is now installed and ready to use:
 
-<Image img={require('../../img/claude_code_marketplace/step16_cli_complete.jpeg')} style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/claude_code_marketplace/step16_cli_complete.jpeg')} style={{ width: '800px', height: 'auto' }} />
 
 ## API Reference
 
