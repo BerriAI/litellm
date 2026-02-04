@@ -59,7 +59,18 @@ class OpenAIRealtime(OpenAIChatCompletion):
         Returns:
             SSL configuration (None, True, or SSLContext)
         """
-        return None if url.startswith("ws://") else get_shared_realtime_ssl_context()
+        if url.startswith("ws://"):
+            return None
+        
+        # Use the shared SSL context which respects custom CA certs and SSL settings
+        ssl_config = get_shared_realtime_ssl_context()
+        
+        # If ssl_config is False (ssl_verify=False), websockets library needs True instead
+        # to establish connection without verification (False would fail)
+        if ssl_config is False:
+            return True
+        
+        return ssl_config
     
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
@@ -120,7 +131,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             )
             async with websockets.connect(  # type: ignore
                 url,
-                additional_headers=headers,  # type: ignore
+                extra_headers=headers,  # type: ignore
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_ws:
