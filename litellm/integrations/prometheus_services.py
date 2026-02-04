@@ -110,10 +110,12 @@ class PrometheusServicesLogger:
         names_to_collectors = getattr(self.REGISTRY, "_names_to_collectors", None)
         if names_to_collectors is not None:
             return metric_name in names_to_collectors
-        for metric in self.REGISTRY.collect():
-            if metric_name == metric.name:
-                return True
-        return False
+        # Fallback: try to get the metric directly rather than iterating all collectors
+        try:
+            # Use _get_metric which accesses _names_to_collectors directly
+            return self._get_metric(metric_name) is not None
+        except Exception:
+            return False
 
     def _get_metric(self, metric_name):
         """

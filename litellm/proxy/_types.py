@@ -3153,6 +3153,10 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ConnectError,
     httpx.ReadError,
     httpx.ReadTimeout,
+    httpx.WriteError,
+    httpx.PoolTimeout,
+    httpx.ConnectTimeout,
+    httpx.RemoteProtocolError,
 )
 
 
