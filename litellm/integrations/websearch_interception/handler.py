@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
-from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
+from litellm.constants import DEFAULT_MAX_TOKENS, LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import filter_internal_params
 from litellm.integrations.websearch_interception.tools import (
@@ -413,6 +413,26 @@ class WebSearchInterceptionLogger(CustomLogger):
                 "max_tokens",
                 kwargs.get("max_tokens", 1024)  # Default to 1024 if not found
             )
+
+            # Validate and adjust max_tokens if needed to meet Anthropic's requirement
+            # Anthropic requires: max_tokens > thinking.budget_tokens
+            if "thinking" in anthropic_messages_optional_request_params:
+                thinking_param = anthropic_messages_optional_request_params.get("thinking", {})
+                if isinstance(thinking_param, dict) and thinking_param.get("type") == "enabled":
+                    budget_tokens = thinking_param.get("budget_tokens", 0)
+
+                    # Check if adjustment is needed
+                    if budget_tokens > 0 and max_tokens <= budget_tokens:
+                        # Use a formula that ensures sufficient tokens for response
+                        # Follow pattern from litellm/llms/base_llm/chat/transformation.py
+                        original_max_tokens = max_tokens
+                        max_tokens = budget_tokens + DEFAULT_MAX_TOKENS
+
+                        verbose_logger.warning(
+                            f"WebSearchInterception: max_tokens ({original_max_tokens}) <= budget_tokens ({budget_tokens}). "
+                            f"Adjusting max_tokens to {max_tokens} (budget_tokens + DEFAULT_MAX_TOKENS={DEFAULT_MAX_TOKENS}) "
+                            f"to meet Anthropic's requirement"
+                        )
 
             verbose_logger.debug(
                 f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request"
