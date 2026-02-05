@@ -618,7 +618,7 @@ class JWTHandler:
         ]
 
         audience = os.getenv("JWT_AUDIENCE")
-        decode_options = None
+        decode_options: dict[str, bool] | None = None
         if audience is None:
             decode_options = {"verify_aud": False}
 
