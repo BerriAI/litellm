@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
-from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
+from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME, DEFAULT_MAX_TOKENS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool,
@@ -398,27 +398,87 @@ class WebSearchInterceptionLogger(CustomLogger):
         try:
             # Extract max_tokens from optional params or kwargs
             # max_tokens is a required parameter for anthropic_messages.acreate()
-            max_tokens = anthropic_messages_optional_request_params.get(
+            max_tokens = int(anthropic_messages_optional_request_params.get(
                 "max_tokens",
                 kwargs.get("max_tokens", 1024)  # Default to 1024 if not found
-            )
+            ))
 
             verbose_logger.debug(
                 f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request"
             )
 
-            # Create a copy of optional params without max_tokens (since we pass it explicitly)
-            optional_params_without_max_tokens = {
+            # Validate and adjust max_tokens if needed to meet Anthropic's requirement
+            # Anthropic requires: max_tokens > budget_tokens
+            # This follows the same pattern as litellm/llms/base_llm/chat/transformation.py:127-145
+            if "thinking" in anthropic_messages_optional_request_params:
+                thinking_param = anthropic_messages_optional_request_params.get("thinking", {})
+                if isinstance(thinking_param, dict) and thinking_param.get("type") == "enabled":
+                    budget_tokens = int(thinking_param.get("budget_tokens", 0))
+
+                    verbose_logger.debug(
+                        f"WebSearchInterception: thinking parameter from request: {thinking_param}"
+                    )
+                    verbose_logger.debug(
+                        f"WebSearchInterception: thinking.budget_tokens={budget_tokens}, max_tokens={max_tokens}"
+                    )
+
+                    # Check if adjustment is needed (same logic as base transformation)
+                    if budget_tokens > 0 and max_tokens <= budget_tokens:
+                        # Use the same formula as base transformation:
+                        # max_tokens = budget_tokens + DEFAULT_MAX_TOKENS
+                        original_max_tokens = max_tokens
+                        max_tokens = budget_tokens + DEFAULT_MAX_TOKENS
+
+                        verbose_logger.debug(
+                            f"WebSearchInterception: max_tokens ({original_max_tokens}) <= budget_tokens ({budget_tokens}). "
+                            f"Adjusting max_tokens to {max_tokens} (budget_tokens + DEFAULT_MAX_TOKENS) "
+                            f"to meet Anthropic's requirement. This follows the same pattern as "
+                            f"litellm/llms/base_llm/chat/transformation.py"
+                        )
+
+            # Create a copy of optional params without max_tokens, thinking, messages, and model
+            # max_tokens is passed explicitly (with adjusted value if needed)
+            # thinking is removed from here to avoid duplication (kept in litellm_params)
+            # messages and model are passed explicitly
+            optional_params_without_duplicates = {
                 k: v for k, v in anthropic_messages_optional_request_params.items()
-                if k != 'max_tokens'
+                if k not in ('max_tokens', 'thinking', 'messages', 'model')
             }
 
-            # Remove internal websearch interception flags from kwargs before follow-up request
-            # These flags are used internally and should not be passed to the LLM provider
+            # Remove internal websearch interception flags and explicitly-passed params from kwargs
+            # Keep thinking in litellm_params - we've already adjusted max_tokens to satisfy the constraint
             kwargs_for_followup = {
                 k: v for k, v in kwargs.items()
                 if not k.startswith('_websearch_interception')
+                and k not in ('max_tokens', 'thinking', 'messages', 'model')
             }
+
+            # Adjust thinking.budget_tokens in litellm_params to preserve extended thinking
+            # while satisfying the constraint: budget_tokens < max_tokens
+            if 'litellm_params' in kwargs_for_followup and isinstance(kwargs_for_followup['litellm_params'], dict):
+                litellm_params_copy = kwargs_for_followup['litellm_params'].copy()
+                if 'thinking' in litellm_params_copy and isinstance(litellm_params_copy['thinking'], dict):
+                    thinking_copy = litellm_params_copy['thinking'].copy()
+                    original_budget = thinking_copy.get('budget_tokens', 0)
+
+                    if original_budget > 0:
+                        # Adjust budget_tokens to work with client's max_tokens
+                        # Use 50% of max_tokens (min 128) to preserve thinking while satisfying constraint
+                        adjusted_budget = max(128, int(max_tokens * 0.5))
+                        thinking_copy['budget_tokens'] = adjusted_budget
+                        litellm_params_copy['thinking'] = thinking_copy
+                        kwargs_for_followup['litellm_params'] = litellm_params_copy
+
+                        verbose_logger.debug(
+                            f"WebSearchInterception: Adjusted thinking.budget_tokens from {original_budget} "
+                            f"to {adjusted_budget} (50% of max_tokens={max_tokens}) to preserve extended thinking"
+                        )
+                    else:
+                        # No budget_tokens set, keep thinking as-is
+                        kwargs_for_followup['litellm_params'] = litellm_params_copy
+                elif 'thinking' in litellm_params_copy:
+                    # thinking exists but isn't a dict or has no budget_tokens, keep it
+                    kwargs_for_followup['litellm_params'] = litellm_params_copy
 
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
@@ -429,12 +489,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Using model name: {full_model_name}"
             )
-            
+
             final_response = await anthropic_messages.acreate(
                 max_tokens=max_tokens,
                 messages=follow_up_messages,
                 model=full_model_name,
-                **optional_params_without_max_tokens,
+                **optional_params_without_duplicates,
                 **kwargs_for_followup,
             )
             verbose_logger.debug(
@@ -465,6 +525,8 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             # Determine search provider from router's search_tools
             search_provider: Optional[str] = None
+            api_key: Optional[str] = None
+            api_base: Optional[str] = None
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
                     # Find specific search tool by name
@@ -474,7 +536,10 @@ class WebSearchInterceptionLogger(CustomLogger):
                     ]
                     if matching_tools:
                         search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get("search_provider")
+                        litellm_params = search_tool.get("litellm_params", {})
+                        search_provider = litellm_params.get("search_provider")
+                        api_key = litellm_params.get("api_key")
+                        api_base = litellm_params.get("api_base")
                         verbose_logger.debug(
                             f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
                             f"with provider '{search_provider}'"
@@ -488,7 +553,10 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # If no specific tool or not found, use first available
                 if not search_provider and llm_router.search_tools:
                     first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get("search_provider")
+                    litellm_params = first_tool.get("litellm_params", {})
+                    search_provider = litellm_params.get("search_provider")
+                    api_key = litellm_params.get("api_key")
+                    api_base = litellm_params.get("api_base")
                     verbose_logger.debug(
                         f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
                     )
@@ -505,7 +573,10 @@ class WebSearchInterceptionLogger(CustomLogger):
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
             result = await litellm.asearch(
-                query=query, search_provider=search_provider
+                query=query,
+                search_provider=search_provider,
+                api_key=api_key,
+                api_base=api_base,
             )
 
             # Format using transformation function
