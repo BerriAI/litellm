@@ -63,6 +63,18 @@ class LiteLLMCompletionTransformationHandler:
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
 
+        # Reconstruct fully-qualified model name (provider/model) before
+        # delegating to litellm.completion, which calls get_llm_provider
+        # internally. Without this, models whose ID on the provider contains
+        # a prefix matching a known provider name (e.g. "openrouter/free"
+        # on OpenRouter) get double-stripped.
+        # See: https://github.com/BerriAI/litellm/issues/16353
+        _custom_provider = litellm_completion_request.get("custom_llm_provider") or kwargs.get("custom_llm_provider")
+        if _custom_provider and "model" in litellm_completion_request:
+            litellm_completion_request["model"] = (
+                f"{_custom_provider}/{litellm_completion_request['model']}"
+            )
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
@@ -111,6 +123,18 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
+
+        # Reconstruct fully-qualified model name (provider/model) before
+        # delegating to litellm.acompletion, which calls get_llm_provider
+        # internally. Without this, models whose ID on the provider contains
+        # a prefix matching a known provider name (e.g. "openrouter/free"
+        # on OpenRouter) get double-stripped.
+        # See: https://github.com/BerriAI/litellm/issues/16353
+        _custom_provider = acompletion_args.get("custom_llm_provider")
+        if _custom_provider and "model" in acompletion_args:
+            acompletion_args["model"] = (
+                f"{_custom_provider}/{acompletion_args['model']}"
+            )
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
