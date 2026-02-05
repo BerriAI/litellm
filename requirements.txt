@@ -1,5 +1,6 @@
 # LITELLM PROXY DEPENDENCIES #
 pycryptodome==3.23.0 # rsa
+rsa==4.9.1 # rsa
 prance==25.4.8.0
 openapi-spec-validator==0.7.2
 anyio==4.8.0 # openai + http req.
