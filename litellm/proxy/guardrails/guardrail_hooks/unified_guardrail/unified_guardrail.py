@@ -50,6 +50,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         Runs on only Input
         Use this if you want to MODIFY the input
         """
+
         global endpoint_guardrail_translation_mappings
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -84,6 +85,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
                 return data
         except ValueError:
+
             return data  # handle unmapped call types
 
         endpoint_translation = endpoint_guardrail_translation_mappings[
