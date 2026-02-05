@@ -41,13 +41,12 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   const [isDirty, setIsDirty] = useState(false);
   const [embeddingModels, setEmbeddingModels] = useState<ModelGroup[]>([]);
   const [loadingModels, setLoadingModels] = useState(true);
-  
+
   // Test section state
   const [testQuery, setTestQuery] = useState("");
   const [testModel, setTestModel] = useState<string>("gpt-4o");
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [isTesting, setIsTesting] = useState(false);
-  const [showCurl, setShowCurl] = useState(false);
 
   const schema = data?.field_schema;
   const values = data?.values ?? {};
@@ -194,7 +193,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                   >
                     <Switch disabled={isUpdating} />
                   </Form.Item>
-                  
+
                   <Typography.Text type="secondary" style={{ display: "block", marginTop: -16, marginBottom: 16 }}>
                     {schema?.properties?.enabled?.description}
                   </Typography.Text>
@@ -299,8 +298,6 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                 onTest={handleTest}
                 filterEnabled={!!values.enabled}
                 testResult={testResult}
-                showCurl={showCurl}
-                setShowCurl={setShowCurl}
                 curlCommand={getCurlCommand(testModel, testQuery)}
               />
             </Col>
