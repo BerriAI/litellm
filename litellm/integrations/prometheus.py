@@ -1683,6 +1683,108 @@ class PrometheusLogger(CustomLogger):
             )
             pass
 
+    def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
+        """Get value from dict or Pydantic model."""
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _extract_deployment_failure_label_values(
+        self, request_kwargs: dict
+    ) -> Dict[str, Optional[str]]:
+        """
+        Extract label values for deployment failure metrics from all available
+        sources in request_kwargs. Falls back to litellm_params metadata and
+        user_api_key_auth when standard_logging_payload has None values.
+        """
+        standard_logging_payload = (
+            request_kwargs.get("standard_logging_object", {}) or {}
+        )
+        _litellm_params = request_kwargs.get("litellm_params", {}) or {}
+        _metadata_raw = self._safe_get(standard_logging_payload, "metadata") or {}
+        if isinstance(_metadata_raw, dict):
+            _metadata = _metadata_raw
+        else:
+            _metadata = {
+                "user_api_key_alias": getattr(
+                    _metadata_raw, "user_api_key_alias", None
+                ),
+                "user_api_key_team_id": getattr(
+                    _metadata_raw, "user_api_key_team_id", None
+                ),
+                "user_api_key_team_alias": getattr(
+                    _metadata_raw, "user_api_key_team_alias", None
+                ),
+                "user_api_key_hash": getattr(_metadata_raw, "user_api_key_hash", None),
+                "requester_ip_address": getattr(
+                    _metadata_raw, "requester_ip_address", None
+                ),
+                "user_agent": getattr(_metadata_raw, "user_agent", None),
+            }
+        _litellm_params_metadata = _litellm_params.get("metadata", {}) or {}
+
+        # Extract user_api_key_auth if present (proxy injects this, skipped in merge)
+        user_api_key_auth = _litellm_params_metadata.get("user_api_key_auth")
+
+        def _get_api_key_alias() -> Optional[str]:
+            val = _metadata.get("user_api_key_alias")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_alias")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "key_alias", None)
+            return None
+
+        def _get_team_id() -> Optional[str]:
+            val = _metadata.get("user_api_key_team_id")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_team_id")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "team_id", None)
+            return None
+
+        def _get_team_alias() -> Optional[str]:
+            val = _metadata.get("user_api_key_team_alias")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_team_alias")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "team_alias", None)
+            return None
+
+        def _get_hashed_api_key() -> Optional[str]:
+            val = _metadata.get("user_api_key_hash")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_hash")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "api_key", None) or getattr(
+                    user_api_key_auth, "api_key_hash", None
+                )
+            return None
+
+        return {
+            "api_key_alias": _get_api_key_alias(),
+            "team": _get_team_id(),
+            "team_alias": _get_team_alias(),
+            "hashed_api_key": _get_hashed_api_key(),
+            "client_ip": _metadata.get("requester_ip_address")
+            or _litellm_params_metadata.get("requester_ip_address"),
+            "user_agent": _metadata.get("user_agent")
+            or _litellm_params_metadata.get("user_agent"),
+        }
+
     def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
         """
         Sets Failure metrics when an LLM API call fails
@@ -1707,6 +1809,21 @@ class PrometheusLogger(CustomLogger):
             model_id = standard_logging_payload.get("model_id", None)
             exception = request_kwargs.get("exception", None)
 
+            # Fallback: model_id from litellm_metadata.model_info
+            if model_id is None:
+                _model_info = (
+                    (_litellm_params.get("litellm_metadata") or {}).get("model_info")
+                    or (_litellm_params.get("metadata") or {}).get("model_info")
+                    or {}
+                )
+                model_id = _model_info.get("id")
+
+            # Fallback: model_group from litellm_metadata
+            if model_group is None:
+                model_group = (_litellm_params.get("litellm_metadata") or {}).get(
+                    "model_group"
+                ) or (_litellm_params.get("metadata") or {}).get("model_group")
+
             llm_provider = _litellm_params.get("custom_llm_provider", None)
 
             if self._should_skip_metrics_for_invalid_key(
@@ -1714,9 +1831,37 @@ class PrometheusLogger(CustomLogger):
                 standard_logging_payload=standard_logging_payload,
             ):
                 return
-            hashed_api_key = standard_logging_payload.get("metadata", {}).get(
+
+            # Extract context labels from all available sources (fix for None labels)
+            fallback_values = self._extract_deployment_failure_label_values(
+                request_kwargs
+            )
+            _metadata = standard_logging_payload.get("metadata", {}) or {}
+            hashed_api_key = fallback_values.get("hashed_api_key") or _metadata.get(
                 "user_api_key_hash"
             )
+            api_key_alias = fallback_values.get("api_key_alias") or _metadata.get(
+                "user_api_key_alias"
+            )
+            team = fallback_values.get("team") or _metadata.get("user_api_key_team_id")
+            team_alias = fallback_values.get("team_alias") or _metadata.get(
+                "user_api_key_team_alias"
+            )
+            client_ip = fallback_values.get("client_ip") or _metadata.get(
+                "requester_ip_address"
+            )
+            user_agent = fallback_values.get("user_agent") or _metadata.get(
+                "user_agent"
+            )
+
+            # exception_status: prefer status_code, fallback to exception class for known types
+            exception_status = None
+            if exception is not None:
+                exception_status = str(getattr(exception, "status_code", None))
+                if exception_status == "None" or not exception_status:
+                    code = getattr(exception, "code", None)
+                    if code is not None:
+                        exception_status = str(code)
 
             # Create enum_values for the label factory (always create for use in different metrics)
             enum_values = UserAPIKeyLabelValues(
@@ -1724,26 +1869,18 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
-                exception_status=(
-                    str(getattr(exception, "status_code", None)) if exception else None
-                ),
+                exception_status=exception_status,
                 exception_class=(
                     self._get_exception_class_name(exception) if exception else None
                 ),
-                requested_model=model_group,
+                requested_model=model_group or litellm_model_name,
                 hashed_api_key=hashed_api_key,
-                api_key_alias=standard_logging_payload["metadata"][
-                    "user_api_key_alias"
-                ],
-                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                team_alias=standard_logging_payload["metadata"][
-                    "user_api_key_team_alias"
-                ],
+                api_key_alias=api_key_alias,
+                team=team,
+                team_alias=team_alias,
                 tags=standard_logging_payload.get("request_tags", []),
-                client_ip=standard_logging_payload["metadata"].get(
-                    "requester_ip_address"
-                ),
-                user_agent=standard_logging_payload["metadata"].get("user_agent"),
+                client_ip=client_ip,
+                user_agent=user_agent,
             )
 
             """

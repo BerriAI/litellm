@@ -14,14 +14,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
-    ToolPermissionGuardrailConfigModel,
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    ContentFilterCategoryConfig,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    ContentFilterCategoryConfig,
+from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
+    ToolPermissionGuardrailConfigModel,
 )
 
 """
@@ -68,6 +68,7 @@ class SupportedGuardrailIntegrations(Enum):
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
+    CUSTOM_CODE = "custom_code"
 
 
 class Role(Enum):
@@ -296,13 +297,7 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
     )
-    presidio_filter_scope: Literal["input", "output", "both"] = Field(
-        default="both",
-        description=(
-            "Where to apply Presidio checks: 'input' runs on user → model traffic, "
-            "'output' runs on model → user traffic, and 'both' applies to both."
-        ),
-    )
+
     presidio_score_thresholds: Optional[Dict[Union[PiiEntityType, str], float]] = Field(
         default=None,
         description=(
@@ -654,6 +649,12 @@ class BaseLitellmParams(
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Additional provider-specific parameters for generic guardrail APIs",
+    )
+
+    # Custom code guardrail params
+    custom_code: Optional[str] = Field(
+        default=None,
+        description="Python-like code containing the apply_guardrail function for custom guardrail logic",
     )
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())

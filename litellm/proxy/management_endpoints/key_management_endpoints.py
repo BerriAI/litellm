@@ -37,13 +37,6 @@ from litellm.proxy._experimental.mcp_server.db import (
 )
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
-from litellm.types.proxy.management_endpoints.key_management_endpoints import (
-    BulkUpdateKeyRequest,
-    BulkUpdateKeyRequestItem,
-    BulkUpdateKeyResponse,
-    FailedKeyUpdate,
-    SuccessfulKeyUpdate,
-)
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _delete_cache_key_object,
@@ -82,6 +75,13 @@ from litellm.proxy.utils import (
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret
+from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+    BulkUpdateKeyRequest,
+    BulkUpdateKeyRequestItem,
+    BulkUpdateKeyResponse,
+    FailedKeyUpdate,
+    SuccessfulKeyUpdate,
+)
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
@@ -2381,6 +2381,10 @@ async def info_key_fn(
             # if using pydantic v1
             key_info = key_info.dict()
         key_info.pop("token")
+        
+        # Attach object_permission if object_permission_id is set
+        key_info = await attach_object_permission_to_dict(key_info, prisma_client)
+        
         return {"key": key, "info": key_info}
     except Exception as e:
         raise handle_exception_on_proxy(e)

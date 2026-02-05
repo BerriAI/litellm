@@ -319,9 +319,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             return response
 
         if not response_output:
-            verbose_proxy_logger.debug(
-                "OpenAI Responses API: Empty output in response"
-            )
+            verbose_proxy_logger.debug("OpenAI Responses API: Empty output in response")
             return response
 
         # Step 1: Extract all text content and tool calls from response output
@@ -427,27 +425,30 @@ class OpenAIResponsesHandler(BaseTranslation):
                 handle_raw_dict_callback=None,
             )
 
-            tool_calls = model_response_choices[0].message.tool_calls
-            text = model_response_choices[0].message.content
-            guardrail_inputs = GenericGuardrailAPIInputs()
-            if text:
-                guardrail_inputs["texts"] = [text]
-            if tool_calls:
-                guardrail_inputs["tool_calls"] = cast(
-                    List[ChatCompletionToolCallChunk], tool_calls
-                )
-            # Include model information from the response if available
-            response_model = final_chunk.get("response", {}).get("model")
-            if response_model:
-                guardrail_inputs["model"] = response_model
-            if tool_calls or text:
-                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                    inputs=guardrail_inputs,
-                    request_data={},
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
-                return responses_so_far
+            if model_response_choices:
+                tool_calls = model_response_choices[0].message.tool_calls
+                text = model_response_choices[0].message.content
+                guardrail_inputs = GenericGuardrailAPIInputs()
+                if text:
+                    guardrail_inputs["texts"] = [text]
+                if tool_calls:
+                    guardrail_inputs["tool_calls"] = cast(
+                        List[ChatCompletionToolCallChunk], tool_calls
+                    )
+                # Include model information from the response if available
+                response_model = final_chunk.get("response", {}).get("model")
+                if response_model:
+                    guardrail_inputs["model"] = response_model
+                if tool_calls or text:
+                    _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                        inputs=guardrail_inputs,
+                        request_data={},
+                        input_type="response",
+                        logging_obj=litellm_logging_obj,
+                    )
+                    return responses_so_far
+            else:
+                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
         # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
         # tool_calls = model_response_stream.choices[0].tool_calls
         # convert openai response to model response
@@ -513,11 +514,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                         # Check if it's an OutputText with text
                         if isinstance(content_item, OutputText):
                             if content_item.text:
-
                                 return True
                         elif isinstance(content_item, dict):
                             if content_item.get("text"):
-
                                 return True
         return False
 
