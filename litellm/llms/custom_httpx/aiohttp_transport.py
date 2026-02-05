@@ -245,6 +245,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             data = request.stream  # type: ignore
             request.headers.pop("transfer-encoding", None)  # handled by aiohttp
 
+        # Only pass ssl kwarg when explicitly configured, to avoid
+        # overriding the session/connector defaults with None (which is
+        # not a valid value for aiohttp's ssl parameter).
+        ssl_kwargs: Dict[str, Union[bool, ssl.SSLContext]] = {}
+        if ssl_verify is not None:
+            ssl_kwargs["ssl"] = ssl_verify
+
         response = await client_session.request(
             method=request.method,
             url=YarlURL(str(request.url), encoded=True),
@@ -258,8 +265,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 connect=timeout.get("pool"),
             ),
             proxy=proxy,
-            ssl=ssl_verify,
             server_hostname=sni_hostname,
+            **ssl_kwargs,
         ).__aenter__()
 
         return response
