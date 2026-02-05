@@ -4477,7 +4477,7 @@ workflows:
             # - litellm_proxy_unit_testing_part1
             # - litellm_proxy_unit_testing_part2
             # - litellm_security_tests
-            # - installing_litellm_on_python
+            - installing_litellm_on_python
             # - installing_litellm_on_python_3_13
             # - proxy_logging_guardrails_model_info_tests
             # - proxy_spend_accuracy_tests
