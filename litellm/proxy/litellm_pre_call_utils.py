@@ -74,12 +74,14 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For all /thread or /assistant endpoints we need to call this "litellm_metadata"
 
-    For ALL other endpoints we call this "metadata
+    For ALL other endpoints we call this "metadata"
     """
-    if RouteChecks._is_assistants_api_request(request):
+    path = request.url.path
+
+    if "thread" in path or "assistant" in path:
         return "litellm_metadata"
 
-    if any(route in request.url.path for route in LITELLM_METADATA_ROUTES):
+    if any(route in path for route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
 
     return "metadata"
