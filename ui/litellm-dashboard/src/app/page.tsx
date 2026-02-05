@@ -4,7 +4,7 @@ import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
-import AdminPanel from "@/components/admins";
+import AdminPanel from "@/components/Admins";
 import AgentsPanel from "@/components/agents";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
