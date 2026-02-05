@@ -12,8 +12,14 @@ import {
   TabList,
   TabPanel,
   TabPanels,
+  Table,
+  TableHead,
+  TableRow,
+  TableHeaderCell,
+  TableBody,
+  TableCell,
 } from "@tremor/react";
-import { Select, Tooltip } from "antd";
+import { Select } from "antd";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
@@ -61,6 +67,200 @@ interface UserAgentActivityProps {
   onDateChange?: (value: DateRangePickerValue) => void; // Optional - not used anymore
 }
 
+// DEMO: Clean agent name mapping for display
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  "claude-code-max": "Claude Code Max",
+  "codex-cli": "Codex CLI",
+  "GithubCopilot": "GitHub Copilot IDE",
+  "go-gh": "GitHub Copilot CLI",
+};
+
+// DEMO: Helper function to clean agent names for display
+const cleanAgentName = (raw: string): string => {
+  // Strip "User-Agent:" prefix
+  let name = raw.replace(/^User-Agent:\s*/i, "");
+  
+  // Handle versioned strings (e.g., "GithubCopilot/1.155.0")
+  if (name.startsWith("GithubCopilot")) return "GitHub Copilot IDE";
+  if (name === "go-gh") return "GitHub Copilot CLI";
+  if (name.startsWith("Mozilla/")) return "Browser";
+  
+  return AGENT_DISPLAY_NAMES[name] || name;
+};
+
+// DEMO: Hardcoded agent summary data for demo purposes
+const DEMO_AGENTS = [
+  {
+    name: "GitHub Copilot IDE",
+    raw_ua: "GithubCopilot/1.155.0",
+    success_requests: 34219,
+    total_tokens: 42100000,
+    total_cost: 1247.92,
+  },
+  {
+    name: "Claude Code",
+    raw_ua: "claude-code",
+    success_requests: 12847,
+    total_tokens: 18200000,
+    total_cost: 842.30,
+  },
+  {
+    name: "Claude Code Max",
+    raw_ua: "claude-code-max",
+    success_requests: 8421,
+    total_tokens: 11700000,
+    total_cost: 523.18,
+  },
+  {
+    name: "Codex CLI",
+    raw_ua: "codex-cli",
+    success_requests: 5102,
+    total_tokens: 7100000,
+    total_cost: 312.45,
+  },
+  {
+    name: "GitHub Copilot CLI",
+    raw_ua: "go-gh",
+    success_requests: 2340,
+    total_tokens: 3200000,
+    total_cost: 98.67,
+  },
+];
+
+// DEMO: Hardcoded DAU data for demo purposes (7 days with realistic weekday/weekend pattern)
+const DEMO_DAU = [
+  { date: "2026-01-30", "GitHub Copilot IDE": 18, "Claude Code": 12, "Claude Code Max": 6, "Codex CLI": 4, "GitHub Copilot CLI": 3 },
+  { date: "2026-01-31", "GitHub Copilot IDE": 20, "Claude Code": 14, "Claude Code Max": 7, "Codex CLI": 5, "GitHub Copilot CLI": 3 },
+  { date: "2026-02-01", "GitHub Copilot IDE": 15, "Claude Code": 10, "Claude Code Max": 5, "Codex CLI": 3, "GitHub Copilot CLI": 2 },
+  { date: "2026-02-02", "GitHub Copilot IDE": 14, "Claude Code": 9,  "Claude Code Max": 4, "Codex CLI": 3, "GitHub Copilot CLI": 2 },
+  { date: "2026-02-03", "GitHub Copilot IDE": 22, "Claude Code": 16, "Claude Code Max": 8, "Codex CLI": 6, "GitHub Copilot CLI": 4 },
+  { date: "2026-02-04", "GitHub Copilot IDE": 24, "Claude Code": 18, "Claude Code Max": 9, "Codex CLI": 7, "GitHub Copilot CLI": 5 },
+  { date: "2026-02-05", "GitHub Copilot IDE": 26, "Claude Code": 19, "Claude Code Max": 10, "Codex CLI": 8, "GitHub Copilot CLI": 5 },
+];
+
+// DEMO: Agent names for chart categories (excludes Browser/Mozilla)
+const DEMO_AGENT_CATEGORIES = ["GitHub Copilot IDE", "Claude Code", "Claude Code Max", "Codex CLI", "GitHub Copilot CLI"];
+
+// DEMO: Available teams for filtering
+const DEMO_TEAMS_LIST = ["All Teams", "Operations AI", "Platform", "Voice", "Dispatch"];
+
+// DEMO: Budget data per agent (monthly budget and current usage)
+const DEMO_BUDGETS: Record<string, { budget: number; used: number }> = {
+  "GitHub Copilot IDE": { budget: 2000, used: 1248 },
+  "Claude Code": { budget: 1500, used: 842 },
+  "Claude Code Max": { budget: 1000, used: 523 },
+  "Codex CLI": { budget: 500, used: 312 },
+  "GitHub Copilot CLI": { budget: 200, used: 99 },
+};
+
+// DEMO: Guardrails enabled per agent
+const DEMO_GUARDRAILS: Record<string, string[]> = {
+  "GitHub Copilot IDE": ["PII Redaction", "IP Protection"],
+  "Claude Code": ["PII Redaction", "Prompt Injection"],
+  "Claude Code Max": ["PII Redaction", "Prompt Injection"],
+  "Codex CLI": ["PII Redaction"],
+  "GitHub Copilot CLI": ["PII Redaction"],
+};
+
+// DEMO: User data for computing team stats (mirrors per_user_usage.tsx)
+const DEMO_USERS_FOR_TEAMS = [
+  { user_email: "alice@company.com", team: "Operations AI", user_agent: "Claude Code", successful_requests: 2841, total_tokens: 3800000, spend: 176.20 },
+  { user_email: "bob@company.com", team: "Dispatch", user_agent: "Codex CLI", successful_requests: 2103, total_tokens: 2900000, spend: 129.45 },
+  { user_email: "charlie@company.com", team: "Platform", user_agent: "GitHub Copilot IDE", successful_requests: 5612, total_tokens: 6800000, spend: 203.12 },
+  { user_email: "diana@company.com", team: "Voice", user_agent: "Claude Code Max", successful_requests: 1987, total_tokens: 2400000, spend: 112.80 },
+  { user_email: "eve@company.com", team: "Platform", user_agent: "GitHub Copilot IDE", successful_requests: 4231, total_tokens: 5100000, spend: 152.67 },
+  { user_email: "frank@company.com", team: "Dispatch", user_agent: "GitHub Copilot CLI", successful_requests: 1876, total_tokens: 2600000, spend: 98.34 },
+  { user_email: "grace@company.com", team: "Voice", user_agent: "Claude Code", successful_requests: 1542, total_tokens: 2100000, spend: 89.50 },
+];
+
+// DEMO: Function to compute team stats from filtered user data
+const computeTeamStats = (users: typeof DEMO_USERS_FOR_TEAMS, selectedAgents: string[]) => {
+  // Filter users by selected agents
+  const filteredUsers = users.filter((user) => {
+    if (selectedAgents.length === 0) return true;
+    return selectedAgents.includes(user.user_agent);
+  });
+
+  // Group by team
+  const teamMap = new Map<string, { active_users: number; total_requests: number; total_tokens: number; total_cost: number }>();
+  
+  filteredUsers.forEach((user) => {
+    const existing = teamMap.get(user.team) || { active_users: 0, total_requests: 0, total_tokens: 0, total_cost: 0 };
+    teamMap.set(user.team, {
+      active_users: existing.active_users + 1,
+      total_requests: existing.total_requests + user.successful_requests,
+      total_tokens: existing.total_tokens + user.total_tokens,
+      total_cost: existing.total_cost + user.spend,
+    });
+  });
+
+  // Convert to array and sort by total_requests
+  return Array.from(teamMap.entries())
+    .map(([team, stats]) => ({ team, ...stats }))
+    .sort((a, b) => b.total_requests - a.total_requests);
+};
+
+// DEMO: Budget progress bar component
+const BudgetProgressBar: React.FC<{ budget: number; used: number }> = ({ budget, used }) => {
+  const percentage = Math.round((used / budget) * 100);
+  
+  // Color based on percentage: green < 60%, amber 60-80%, red > 80%
+  let fillColor = "#22c55e"; // green
+  if (percentage >= 80) {
+    fillColor = "#ef4444"; // red
+  } else if (percentage >= 60) {
+    fillColor = "#eab308"; // amber
+  }
+  
+  return (
+    <div className="mt-3">
+      <div className="flex justify-between items-center mb-1">
+        <Text className="text-xs text-gray-500">Budget: ${budget.toLocaleString()}/mo</Text>
+        <Text className="text-xs text-gray-500">{percentage}%</Text>
+      </div>
+      <div 
+        style={{ 
+          height: "6px", 
+          borderRadius: "3px", 
+          backgroundColor: "#e5e7eb",
+          overflow: "hidden"
+        }}
+      >
+        <div 
+          style={{ 
+            height: "100%", 
+            width: `${percentage}%`, 
+            backgroundColor: fillColor,
+            borderRadius: "3px",
+            transition: "width 0.3s ease"
+          }} 
+        />
+      </div>
+    </div>
+  );
+};
+
+// DEMO: Guardrails line component
+const GuardrailsLine: React.FC<{ guardrails: string[] }> = ({ guardrails }) => {
+  if (!guardrails || guardrails.length === 0) return null;
+  
+  return (
+    <div 
+      style={{ 
+        borderTop: "1px solid #e5e7eb", 
+        paddingTop: "8px", 
+        marginTop: "8px" 
+      }}
+    >
+      <Text className="text-xs text-gray-500">
+        <span style={{ color: "#22c55e", marginRight: "4px" }}>✓</span>
+        {guardrails.join(", ")}
+      </Text>
+    </div>
+  );
+};
+
 const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole, dateValue, onDateChange }) => {
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
@@ -77,6 +277,12 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
+
+  // DEMO: Team filter state
+  const [selectedTeam, setSelectedTeam] = useState<string>("All Teams");
+
+  // DEMO: Agent filter state (for filtering by demo agent names)
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
 
   // Separate loading states for each endpoint
   const [dauLoading, setDauLoading] = useState(false);
@@ -206,20 +412,14 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     return () => clearTimeout(timeoutId);
   }, [accessToken, dateValue, selectedTags]);
 
-  // Helper function to extract user agent from tag
+  // Helper function to extract user agent from tag and clean it for display
   const extractUserAgent = (tag: string): string => {
+    let name = tag;
     if (tag.startsWith("User-Agent: ")) {
-      return tag.replace("User-Agent: ", "");
+      name = tag.replace("User-Agent: ", "");
     }
-    return tag;
-  };
-
-  // Helper function to truncate user agent name (used with Ant Design Tooltip)
-  const truncateUserAgent = (userAgent: string): string => {
-    if (userAgent.length > 15) {
-      return userAgent.substring(0, 15) + "...";
-    }
-    return userAgent;
+    // Apply clean agent name mapping
+    return cleanAgentName(name);
   };
 
   // Get all user agents for each chart type based on their specific data
@@ -379,102 +579,151 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
               <Subtitle>Performance metrics for different user agents</Subtitle>
             </div>
 
-            {/* User Agent Filter */}
-            <div className="w-96">
-              <Text className="text-sm font-medium block mb-2">Filter by User Agents</Text>
-              <Select
-                mode="multiple"
-                placeholder="All User Agents"
-                value={selectedTags}
-                onChange={setSelectedTags}
-                style={{ width: "100%" }}
-                showSearch={true}
-                allowClear={true}
-                loading={tagsLoading}
-                optionFilterProp="label"
-                className="rounded-md"
-                maxTagCount="responsive"
-              >
-                {availableTags.map((tag) => {
-                  const userAgent = extractUserAgent(tag);
-                  const displayName = userAgent.length > 50 ? `${userAgent.substring(0, 50)}...` : userAgent;
-                  return (
-                    <Select.Option key={tag} value={tag} label={displayName} title={userAgent}>
-                      {displayName}
+            {/* DEMO: Filter dropdowns - Team and User Agent */}
+            <div className="flex gap-4">
+              {/* Team Filter */}
+              <div className="w-48">
+                <Text className="text-sm font-medium block mb-2">Filter by Team</Text>
+                <Select
+                  placeholder="All Teams"
+                  value={selectedTeam}
+                  onChange={setSelectedTeam}
+                  style={{ width: "100%" }}
+                  className="rounded-md"
+                >
+                  {DEMO_TEAMS_LIST.map((team) => (
+                    <Select.Option key={team} value={team}>
+                      {team}
                     </Select.Option>
-                  );
-                })}
-              </Select>
+                  ))}
+                </Select>
+              </div>
+
+              {/* DEMO: User Agent Filter - Using hardcoded demo agents */}
+              <div className="w-64">
+                <Text className="text-sm font-medium block mb-2">Filter by User Agents</Text>
+                <Select
+                  mode="multiple"
+                  placeholder="All User Agents"
+                  value={selectedAgents}
+                  onChange={setSelectedAgents}
+                  style={{ width: "100%" }}
+                  showSearch={true}
+                  allowClear={true}
+                  optionFilterProp="label"
+                  className="rounded-md"
+                  maxTagCount="responsive"
+                >
+                  {DEMO_AGENT_CATEGORIES.map((agent) => (
+                    <Select.Option key={agent} value={agent} label={agent}>
+                      {agent}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </div>
             </div>
           </div>
 
           {/* Date Range Picker is controlled by parent component */}
 
-          {/* Top 4 User Agents Cards */}
+          {/* DEMO: Top 5 User Agents Cards - Using hardcoded demo data */}
           {summaryLoading ? (
             <ChartLoader isDateChanging={false} />
           ) : (
-            <Grid numItems={4} className="gap-4">
-              {(summaryData.results || []).slice(0, 4).map((tag, index) => {
-                const userAgent = extractUserAgent(tag.tag);
-                const displayName = truncateUserAgent(userAgent);
+            <Grid numItems={5} className="gap-4">
+              {DEMO_AGENTS.map((agent, index) => {
                 return (
                   <Card key={index}>
-                    <Tooltip title={userAgent} placement="top">
-                      <Title className="truncate">{displayName}</Title>
-                    </Tooltip>
+                    <Title>{agent.name}</Title>
                     <div className="mt-4 space-y-3">
                       <div>
                         <Text className="text-sm text-gray-600">Success Requests</Text>
-                        <Metric className="text-lg">{formatAbbreviatedNumber(tag.successful_requests)}</Metric>
+                        <Metric className="text-lg">{formatAbbreviatedNumber(agent.success_requests)}</Metric>
                       </div>
                       <div>
                         <Text className="text-sm text-gray-600">Total Tokens</Text>
-                        <Metric className="text-lg">{formatAbbreviatedNumber(tag.total_tokens)}</Metric>
+                        <Metric className="text-lg">{formatAbbreviatedNumber(agent.total_tokens)}</Metric>
                       </div>
                       <div>
                         <Text className="text-sm text-gray-600">Total Cost</Text>
-                        <Metric className="text-lg">${formatAbbreviatedNumber(tag.total_spend, 4)}</Metric>
+                        <Metric className="text-lg">${formatAbbreviatedNumber(agent.total_cost, 2)}</Metric>
                       </div>
                     </div>
                   </Card>
                 );
               })}
-              {/* Fill remaining slots if less than 4 agents */}
-              {Array.from({ length: Math.max(0, 4 - (summaryData.results || []).length) }).map((_, index) => (
-                <Card key={`empty-${index}`}>
-                  <Title>No Data</Title>
-                  <div className="mt-4 space-y-3">
-                    <div>
-                      <Text className="text-sm text-gray-600">Success Requests</Text>
-                      <Metric className="text-lg">-</Metric>
-                    </div>
-                    <div>
-                      <Text className="text-sm text-gray-600">Total Tokens</Text>
-                      <Metric className="text-lg">-</Metric>
-                    </div>
-                    <div>
-                      <Text className="text-sm text-gray-600">Total Cost</Text>
-                      <Metric className="text-lg">-</Metric>
-                    </div>
-                  </div>
-                </Card>
-              ))}
             </Grid>
           )}
         </div>
       </Card>
 
-      {/* Main TabGroup for DAU/WAU/MAU vs Per User Usage */}
+      {/* DEMO: Main TabGroup - Per User Usage first, Per Team Usage second, then DAU/WAU/MAU */}
       <Card>
         <TabGroup>
           <TabList className="mb-6">
+            <Tab>Per User Usage</Tab>
+            <Tab>Per Team Usage</Tab>
             <Tab>DAU/WAU/MAU</Tab>
-            <Tab>Per User Usage (Last 30 Days)</Tab>
           </TabList>
 
           <TabPanels>
-            {/* DAU/WAU/MAU Tab Panel */}
+            {/* Per User Usage Tab Panel - First */}
+            <TabPanel>
+              <PerUserUsage
+                accessToken={accessToken}
+                selectedTags={selectedTags}
+                selectedTeam={selectedTeam}
+                selectedAgents={selectedAgents}
+                formatAbbreviatedNumber={formatAbbreviatedNumber}
+              />
+            </TabPanel>
+
+            {/* DEMO: Per Team Usage Tab Panel - Second (filtered by selected agents) */}
+            <TabPanel>
+              <div className="mb-6">
+                <Title>Per Team Usage</Title>
+                <Subtitle>Usage metrics grouped by team</Subtitle>
+              </div>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Team</TableHeaderCell>
+                    <TableHeaderCell className="text-right">Active Users</TableHeaderCell>
+                    <TableHeaderCell className="text-right">Total Requests</TableHeaderCell>
+                    <TableHeaderCell className="text-right">Total Tokens</TableHeaderCell>
+                    <TableHeaderCell className="text-right">Total Cost</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {computeTeamStats(DEMO_USERS_FOR_TEAMS, selectedAgents).map((team, index) => (
+                    <TableRow 
+                      key={index} 
+                      className="cursor-pointer hover:bg-gray-50"
+                      onClick={() => setSelectedTeam(team.team)}
+                    >
+                      <TableCell>
+                        <Text className="font-medium">{team.team}</Text>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Text>{team.active_users}</Text>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Text>{formatAbbreviatedNumber(team.total_requests)}</Text>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Text>{formatAbbreviatedNumber(team.total_tokens)}</Text>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Text>${formatAbbreviatedNumber(team.total_cost, 2)}</Text>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <Text className="text-xs text-gray-500 mt-4">Click a team row to filter the page by that team</Text>
+            </TabPanel>
+
+            {/* DAU/WAU/MAU Tab Panel - Third */}
             <TabPanel>
               <div className="mb-6">
                 <Title>DAU, WAU & MAU per Agent</Title>
@@ -493,19 +742,17 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                     <div className="mb-4">
                       <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
                     </div>
-                    {dauLoading ? (
-                      <ChartLoader isDateChanging={false} />
-                    ) : (
-                      <BarChart
-                        data={dailyChartData}
-                        index="date"
-                        categories={allDauTags.map(extractUserAgent)}
-                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                        yAxisWidth={60}
-                        showLegend={true}
-                        stack={true}
-                      />
-                    )}
+                    {/* DEMO: Using hardcoded DAU data instead of API data */}
+                    <BarChart
+                      data={DEMO_DAU}
+                      index="date"
+                      categories={DEMO_AGENT_CATEGORIES}
+                      colors={["blue", "purple", "violet", "cyan", "green"]}
+                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                      yAxisWidth={60}
+                      showLegend={true}
+                      stack={true}
+                    />
                   </TabPanel>
 
                   <TabPanel>
@@ -547,15 +794,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                   </TabPanel>
                 </TabPanels>
               </TabGroup>
-            </TabPanel>
-
-            {/* Per User Usage Tab Panel */}
-            <TabPanel>
-              <PerUserUsage
-                accessToken={accessToken}
-                selectedTags={selectedTags}
-                formatAbbreviatedNumber={formatAbbreviatedNumber}
-              />
             </TabPanel>
           </TabPanels>
         </TabGroup>

@@ -41,12 +41,116 @@ interface PerUserAnalyticsResponse {
 interface PerUserUsageProps {
   accessToken: string | null;
   selectedTags: string[];
+  selectedTeam?: string;  // DEMO: Team filter
+  selectedAgents?: string[];  // DEMO: Agent filter
   formatAbbreviatedNumber: (value: number, decimalPlaces?: number) => string;
 }
 
-const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, formatAbbreviatedNumber }) => {
+// DEMO: Clean agent name mapping for display
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  "claude-code-max": "Claude Code Max",
+  "codex-cli": "Codex CLI",
+  "GithubCopilot": "GitHub Copilot IDE",
+  "go-gh": "GitHub Copilot CLI",
+};
+
+// DEMO: Helper function to clean agent names for display
+const cleanAgentName = (raw: string | null): string => {
+  if (!raw) return "Unknown";
+  
+  // Strip "User-Agent:" prefix
+  let name = raw.replace(/^User-Agent:\s*/i, "");
+  
+  // Handle versioned strings (e.g., "GithubCopilot/1.155.0")
+  if (name.startsWith("GithubCopilot")) return "GitHub Copilot IDE";
+  if (name === "go-gh") return "GitHub Copilot CLI";
+  if (name.startsWith("Mozilla/")) return "Browser";
+  
+  return AGENT_DISPLAY_NAMES[name] || name;
+};
+
+// DEMO: Helper function to get auth method based on agent name
+const getAuthMethod = (agentName: string | null): string => {
+  const clean = cleanAgentName(agentName);
+  
+  if (clean === "Claude Code Max") return "Client OAuth (Anthropic)";
+  if (clean === "GitHub Copilot IDE") return "Client OAuth (GitHub)";
+  if (clean === "GitHub Copilot CLI") return "Client OAuth (GitHub)";
+  
+  // Claude Code and Codex CLI use proxy-managed keys
+  return "AI Gateway Key";
+};
+
+// DEMO: Auth badge component with colored styling and clear distinction
+const AuthBadge: React.FC<{ method: string }> = ({ method }) => {
+  const isClientOAuth = method.startsWith("Client OAuth");
+  
+  // Client OAuth = green (user's own credentials, client-side)
+  // AI Gateway Key = blue (proxy-managed, server-side)
+  const style: React.CSSProperties = {
+    display: "inline-block",
+    padding: "3px 10px",
+    borderRadius: "6px",
+    fontSize: "12px",
+    fontWeight: 600,
+    backgroundColor: isClientOAuth ? "#dcfce7" : "#dbeafe",  // green-100 or blue-100
+    color: isClientOAuth ? "#166534" : "#1e40af",              // green-800 or blue-800
+    border: isClientOAuth ? "1px solid #86efac" : "1px solid #93c5fd", // green-300 or blue-300
+  };
+  
+  return <span style={style}>{method}</span>;
+};
+
+// DEMO: Extended interface for demo users with auth method and team
+interface DemoUserMetrics extends PerUserMetrics {
+  auth_method: string;
+  team: string;
+}
+
+// DEMO: User to team mapping
+const USER_TEAM_MAP: Record<string, string> = {
+  "alice@company.com": "Operations AI",
+  "bob@company.com": "Dispatch",
+  "charlie@company.com": "Platform",
+  "diana@company.com": "Voice",
+  "eve@company.com": "Platform",
+  "frank@company.com": "Dispatch",
+  "grace@company.com": "Voice",
+};
+
+// DEMO: Hardcoded per-user data for demo purposes with auth method and team
+// - "AI Gateway Key" = credentials managed by LiteLLM proxy (server-side)
+// - "Client OAuth (Provider)" = user's own OAuth credentials (client-side, BYOK)
+const DEMO_USERS: DemoUserMetrics[] = [
+  { user_id: "user-1", user_email: "alice@company.com", team: "Operations AI", auth_method: "AI Gateway Key", user_agent: "Claude Code", successful_requests: 2841, failed_requests: 8, total_requests: 2849, total_tokens: 3800000, spend: 176.20 },
+  { user_id: "user-2", user_email: "bob@company.com", team: "Dispatch", auth_method: "AI Gateway Key", user_agent: "Codex CLI", successful_requests: 2103, failed_requests: 7, total_requests: 2110, total_tokens: 2900000, spend: 129.45 },
+  { user_id: "user-3", user_email: "charlie@company.com", team: "Platform", auth_method: "Client OAuth (GitHub)", user_agent: "GitHub Copilot IDE", successful_requests: 5612, failed_requests: 3, total_requests: 5615, total_tokens: 6800000, spend: 203.12 },
+  { user_id: "user-4", user_email: "diana@company.com", team: "Voice", auth_method: "Client OAuth (Anthropic)", user_agent: "Claude Code Max", successful_requests: 1987, failed_requests: 8, total_requests: 1995, total_tokens: 2400000, spend: 112.80 },
+  { user_id: "user-5", user_email: "eve@company.com", team: "Platform", auth_method: "Client OAuth (GitHub)", user_agent: "GitHub Copilot IDE", successful_requests: 4231, failed_requests: 2, total_requests: 4233, total_tokens: 5100000, spend: 152.67 },
+  { user_id: "user-6", user_email: "frank@company.com", team: "Dispatch", auth_method: "Client OAuth (GitHub)", user_agent: "GitHub Copilot CLI", successful_requests: 1876, failed_requests: 3, total_requests: 1879, total_tokens: 2600000, spend: 98.34 },
+  { user_id: "user-7", user_email: "grace@company.com", team: "Voice", auth_method: "AI Gateway Key", user_agent: "Claude Code", successful_requests: 1542, failed_requests: 2, total_requests: 1544, total_tokens: 2100000, spend: 89.50 },
+];
+
+const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, selectedTeam, selectedAgents, formatAbbreviatedNumber }) => {
   // Maximum number of user agent categories to show in charts to prevent color palette overflow
   const MAX_USER_AGENTS = 8;
+
+  // DEMO: Filter users by selected team and selected agents
+  const filteredUsers = DEMO_USERS.filter((user) => {
+    // Filter by team
+    if (selectedTeam && selectedTeam !== "All Teams" && user.team !== selectedTeam) {
+      return false;
+    }
+    // Filter by agents
+    if (selectedAgents && selectedAgents.length > 0) {
+      const userAgentClean = cleanAgentName(user.user_agent);
+      if (!selectedAgents.includes(userAgentClean)) {
+        return false;
+      }
+    }
+    return true;
+  });
   const [perUserData, setPerUserData] = useState<PerUserAnalyticsResponse>({
     results: [],
     total_count: 0,
@@ -105,13 +209,15 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
         </TabList>
 
         <TabPanels>
-          {/* Tab 1: Existing User Details Table */}
+          {/* DEMO: Tab 1 - User Details Table with hardcoded demo data, Team, and Auth Method columns */}
           <TabPanel>
             <Table>
               <TableHead>
                 <TableRow>
                   <TableHeaderCell>User ID</TableHeaderCell>
                   <TableHeaderCell>User Email</TableHeaderCell>
+                  <TableHeaderCell>Team</TableHeaderCell>
+                  <TableHeaderCell>Auth Method</TableHeaderCell>
                   <TableHeaderCell>User Agent</TableHeaderCell>
                   <TableHeaderCell className="text-right">Success Generations</TableHeaderCell>
                   <TableHeaderCell className="text-right">Total Tokens</TableHeaderCell>
@@ -120,7 +226,8 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
                 </TableRow>
               </TableHead>
               <TableBody>
-                {perUserData.results.slice(0, 10).map((item: PerUserMetrics, index: number) => (
+                {/* DEMO: Using filtered demo users data with team and auth method */}
+                {filteredUsers.map((item: DemoUserMetrics, index: number) => (
                   <TableRow key={index}>
                     <TableCell>
                       <Text className="font-medium">{item.user_id}</Text>
@@ -129,7 +236,13 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
                       <Text>{item.user_email || "N/A"}</Text>
                     </TableCell>
                     <TableCell>
-                      <Text>{item.user_agent || "Unknown"}</Text>
+                      <Text className="text-gray-600">{item.team}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <AuthBadge method={item.auth_method} />
+                    </TableCell>
+                    <TableCell>
+                      <Text>{cleanAgentName(item.user_agent)}</Text>
                     </TableCell>
                     <TableCell className="text-right">
                       <Text>{formatAbbreviatedNumber(item.successful_requests)}</Text>
@@ -141,34 +254,15 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
                       <Text>{formatAbbreviatedNumber(item.failed_requests)}</Text>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Text>${formatAbbreviatedNumber(item.spend, 4)}</Text>
+                      <Text>${formatAbbreviatedNumber(item.spend, 2)}</Text>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-
-            {perUserData.results.length > 10 && (
-              <div className="mt-4 flex justify-between items-center">
-                <Text className="text-sm text-gray-500">Showing 10 of {perUserData.total_count} results</Text>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="secondary" onClick={handlePrevPage} disabled={currentPage === 1}>
-                    Previous
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={handleNextPage}
-                    disabled={currentPage >= perUserData.total_pages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            )}
           </TabPanel>
 
-          {/* Tab 2: Usage Distribution Histogram */}
+          {/* DEMO: Tab 2 - Usage Distribution Histogram with filtered demo data */}
           <TabPanel>
             <div className="mb-4">
               <Title className="text-lg">User Usage Distribution</Title>
@@ -177,10 +271,10 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
 
             <BarChart
               data={(() => {
-                // Get top user agents by frequency first
+                // DEMO: Get unique clean agent names from filtered demo data
                 const userAgentCounts = new Map<string, number>();
-                perUserData.results.forEach((item: PerUserMetrics) => {
-                  const agent = item.user_agent || "Unknown";
+                filteredUsers.forEach((item: PerUserMetrics) => {
+                  const agent = cleanAgentName(item.user_agent);
                   userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
                 });
 
@@ -199,10 +293,10 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
                   "100K+ requests": { range: [100000, Infinity], agents: {} as Record<string, number> },
                 };
 
-                // Count users in each category by user agent (only for top user agents)
-                perUserData.results.forEach((item: PerUserMetrics) => {
+                // DEMO: Count users in each category by user agent (using filtered data)
+                filteredUsers.forEach((item: PerUserMetrics) => {
                   const successCount = item.successful_requests;
-                  const userAgent = item.user_agent || "Unknown";
+                  const userAgent = cleanAgentName(item.user_agent);
 
                   // Only process if this is one of the top user agents
                   if (topUserAgents.includes(userAgent)) {
@@ -231,10 +325,10 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
               })()}
               index="category"
               categories={(() => {
-                // Count user agents by frequency and get top ones
+                // DEMO: Count user agents by frequency and get top ones with clean names (using filtered data)
                 const userAgentCounts = new Map<string, number>();
-                perUserData.results.forEach((item: PerUserMetrics) => {
-                  const agent = item.user_agent || "Unknown";
+                filteredUsers.forEach((item: PerUserMetrics) => {
+                  const agent = cleanAgentName(item.user_agent);
                   userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
                 });
 
