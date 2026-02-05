@@ -175,7 +175,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   useEffect(() => {
     checkSSOConfiguration();
-  }, [accessToken, premiumUser]);
+  }, [accessToken, premiumUser, checkSSOConfiguration]);
 
   const handleUIAccessControlOk = () => {
     setIsUIAccessControlModalVisible(false);
@@ -342,7 +342,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
           </div>
           <Callout title="Login without SSO" color="teal">
             If you need to login without sso, you can access{" "}
-            <a href={nonSssoUrl} target="_blank">
+            <a href={nonSssoUrl} target="_blank" rel="noopener noreferrer">
               <b>{nonSssoUrl}</b>{" "}
             </a>
           </Callout>
