@@ -5398,6 +5398,137 @@ export const updateUISettings = async (accessToken: string, settings: any) => {
   }
 };
 
+export const getMCPSemanticFilterSettings = async (accessToken: string) => {
+  /**
+   * Get MCP semantic filter configuration
+   */
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/get/mcp_semantic_filter_settings`
+      : `/get/mcp_semantic_filter_settings`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get MCP semantic filter settings:", error);
+    throw error;
+  }
+};
+
+export const updateMCPSemanticFilterSettings = async (
+  accessToken: string,
+  settings: Record<string, any>
+) => {
+  /**
+   * Update MCP semantic filter settings
+   * Settings will be applied across all pods within 10 seconds
+   */
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/update/mcp_semantic_filter_settings`
+      : `/update/mcp_semantic_filter_settings`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update MCP semantic filter settings:", error);
+    throw error;
+  }
+};
+
+export const testMCPSemanticFilter = async (
+  accessToken: string,
+  model: string,
+  query: string
+) => {
+  /**
+   * Test MCP semantic filter by making a responses API call
+   * Returns both the response data and headers containing filter information
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/responses` : `/v1/responses`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: model,
+        input: [
+          {
+            role: "user",
+            content: query,
+            type: "message",
+          },
+        ],
+        tools: [
+          {
+            type: "mcp",
+            server_url: "litellm_proxy",
+            require_approval: "never",
+          },
+        ],
+        tool_choice: "required",
+      }),
+    });
+
+    // Extract headers before checking response status
+    const filterHeader = response.headers.get("x-litellm-semantic-filter");
+    const toolsHeader = response.headers.get("x-litellm-semantic-filter-tools");
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    // Return both data and headers
+    return {
+      data,
+      headers: {
+        filter: filterHeader,
+        tools: toolsHeader,
+      },
+    };
+  } catch (error) {
+    console.error("Failed to test MCP semantic filter:", error);
+    throw error;
+  }
+};
+
 export const getGuardrailsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
@@ -7603,6 +7734,89 @@ export const applyGuardrail = async (
     return data;
   } catch (error) {
     console.error("Failed to apply guardrail:", error);
+    throw error;
+  }
+};
+
+export interface TestCustomCodeGuardrailRequest {
+  custom_code: string;
+  test_input: {
+    texts: string[];
+    images?: string[];
+    tools?: Record<string, any>[];
+    tool_calls?: Record<string, any>[];
+    structured_messages?: Record<string, any>[];
+    model?: string;
+  };
+  input_type?: "request" | "response";
+  request_data?: {
+    model?: string;
+    user_id?: string;
+    team_id?: string;
+    end_user_id?: string;
+    metadata?: Record<string, any>;
+  };
+}
+
+export interface TestCustomCodeGuardrailResponse {
+  success: boolean;
+  result?: {
+    action: "allow" | "block" | "modify";
+    reason?: string;
+    texts?: string[];
+    images?: string[];
+    tool_calls?: Record<string, any>[];
+    detection_info?: Record<string, any>;
+    warning?: string;
+  };
+  error?: string;
+  error_type?: "compilation" | "execution";
+}
+
+export const testCustomCodeGuardrail = async (
+  accessToken: string,
+  request: TestCustomCodeGuardrailRequest
+): Promise<TestCustomCodeGuardrailResponse> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/test_custom_code`
+      : `/guardrails/test_custom_code`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      let errorMessage = "Failed to test custom code guardrail";
+
+      try {
+        const errorJson = JSON.parse(errorData);
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        } else if (errorJson.detail) {
+          errorMessage = errorJson.detail;
+        } else if (errorJson.message) {
+          errorMessage = errorJson.message;
+        }
+      } catch (e) {
+        errorMessage = errorData || errorMessage;
+      }
+
+      handleError(errorData);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Test custom code guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to test custom code guardrail:", error);
     throw error;
   }
 };

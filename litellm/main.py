@@ -1199,6 +1199,13 @@ def completion(  # type: ignore # noqa: PLR0915
         headers = {}
     if extra_headers is not None:
         headers.update(extra_headers)
+    # Inject proxy auth headers if configured
+    if litellm.proxy_auth is not None:
+        try:
+            proxy_headers = litellm.proxy_auth.get_auth_headers()
+            headers.update(proxy_headers)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get proxy auth headers: {e}")
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -2201,14 +2208,24 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "a2a":
             # A2A (Agent-to-Agent) Protocol
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("A2A_API_BASE")
+            # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
+            api_base, api_key, headers = litellm.A2AConfig.resolve_agent_config_from_registry(
+                model=model,
+                api_base=api_base,
+                api_key=api_key,
+                headers=headers,
+                optional_params=optional_params,
             )
-
+            
+            # Fall back to environment variables and defaults
+            api_base = api_base or litellm.api_base or get_secret_str("A2A_API_BASE")
+            
             if api_base is None:
-                raise Exception("api_base is required for A2A provider")
+                raise Exception(
+                    "api_base is required for A2A provider. "
+                    "Either provide api_base parameter, set A2A_API_BASE environment variable, "
+                    "or register the agent in the proxy with model='a2a/<agent-name>'."
+                )
 
             headers = headers or litellm.headers
 
@@ -2486,6 +2503,20 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             headers = headers or litellm.headers
+
+            # Add GitHub Copilot headers (same as /responses endpoint does)
+            if custom_llm_provider == "github_copilot":
+                from litellm.llms.github_copilot.common_utils import (
+                    get_copilot_default_headers,
+                )
+                from litellm.llms.github_copilot.authenticator import Authenticator
+
+                copilot_auth = Authenticator()
+                copilot_api_key = copilot_auth.get_api_key()
+                copilot_headers = get_copilot_default_headers(copilot_api_key)
+                if extra_headers:
+                    copilot_headers.update(extra_headers)
+                extra_headers = copilot_headers
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
@@ -4587,6 +4618,13 @@ def embedding(  # noqa: PLR0915
         headers = {}
     if extra_headers is not None:
         headers.update(extra_headers)
+    # Inject proxy auth headers if configured
+    if litellm.proxy_auth is not None:
+        try:
+            proxy_headers = litellm.proxy_auth.get_auth_headers()
+            headers.update(proxy_headers)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get proxy auth headers: {e}")
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)

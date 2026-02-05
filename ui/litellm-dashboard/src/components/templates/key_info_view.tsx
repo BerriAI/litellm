@@ -1,9 +1,10 @@
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Button as AntdButton, Form, Tooltip } from "antd";
+import { Button as AntdButton, Form, Tag, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
@@ -14,12 +15,11 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
-import { keyDeleteCall, keyUpdateCall, getPolicyInfoWithGuardrails } from "../networking";
+import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -206,8 +206,8 @@ export default function KeyInfoView({
             ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
-                  litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-                }
+                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+              }
               : {}),
           };
         } catch (error) {
@@ -225,8 +225,8 @@ export default function KeyInfoView({
           ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
-                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-              }
+              litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+            }
             : {}),
         };
       }
@@ -334,7 +334,6 @@ export default function KeyInfoView({
     });
     return `${dateStr} at ${timeStr}`;
   };
-  console.log("userRole", userRole);
 
   const canModifyKey =
     isProxyAdminRole(userRole || "") ||
@@ -364,11 +363,10 @@ export default function KeyInfoView({
               size="small"
               icon={copiedStates["key-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(currentKeyData.token_id || currentKeyData.token, "key-id")}
-              className={`ml-2 transition-all duration-200${
-                copiedStates["key-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`ml-2 transition-all duration-200${copiedStates["key-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
           </div>
 
@@ -691,10 +689,10 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                              {tag}
-                            </span>
-                          ))
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {tag}
+                          </span>
+                        ))
                         : "No tags specified"}
                     </div>
                   </div>
@@ -704,24 +702,39 @@ export default function KeyInfoView({
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                              {prompt}
-                            </span>
-                          ))
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {prompt}
+                          </span>
+                        ))
                         : "No prompts specified"}
                     </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Allowed Routes</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
+                        currentKeyData.allowed_routes.map((route, index) => (
+                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+                            {route}
+                          </span>
+                        ))
+                      ) : (
+                        <Tag color="green">All routes allowed</Tag>
+                      )}
+                    </div>
                   </div>
 
                   <div>
                     <Text className="font-medium">Allowed Pass Through Routes</Text>
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
-                      currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                        currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                              {route}
-                            </span>
-                          ))
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {route}
+                          </span>
+                        ))
                         : "No pass through routes specified"}
                     </Text>
                   </div>

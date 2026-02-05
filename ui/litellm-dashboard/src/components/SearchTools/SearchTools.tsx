@@ -1,20 +1,21 @@
-import React, { useState } from "react";
+import { isAdminRole } from "@/utils/roles";
+import { LoadingOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Modal, Form, Input, Select } from "antd";
-import { Button, Title, Text, Grid, Col } from "@tremor/react";
-import { DataTable } from "../view_logs/table";
-import { searchToolColumns } from "./search_tool_columns";
+import { Button, Text, Title } from "@tremor/react";
+import { Form, Input, Modal, Select, Spin, Table } from "antd";
+import React, { useState } from "react";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import NotificationsManager from "../molecules/notifications_manager";
 import {
-  fetchSearchTools,
-  updateSearchTool,
   deleteSearchTool,
   fetchAvailableSearchProviders,
+  fetchSearchTools,
+  updateSearchTool,
 } from "../networking";
-import { SearchTool, AvailableSearchProvider } from "./types";
-import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "../molecules/notifications_manager";
-import { SearchToolView } from "./search_tool_view";
-import CreateSearchTool from "./create_search_tool";
+import CreateSearchTool from "./CreateSearchTools";
+import { searchToolColumns } from "./SearchToolColumn";
+import { SearchToolView } from "./SearchToolView";
+import { AvailableSearchProvider, SearchTool } from "./types";
 
 interface SearchToolsProps {
   accessToken: string | null;
@@ -22,24 +23,6 @@ interface SearchToolsProps {
   userID: string | null;
 }
 
-const DeleteModal: React.FC<{
-  isModalOpen: boolean;
-  title: string;
-  confirmDelete: () => void;
-  cancelDelete: () => void;
-}> = ({ isModalOpen, title, confirmDelete, cancelDelete }) => {
-  if (!isModalOpen) return null;
-  return (
-    <Modal open={isModalOpen} onOk={confirmDelete} okType="danger" onCancel={cancelDelete}>
-      <Grid numItems={1} className="gap-2 w-full">
-        <Title>{title}</Title>
-        <Col numColSpan={1}>
-          <p>Are you sure you want to delete this search tool?</p>
-        </Col>
-      </Grid>
-    </Modal>
-  );
-};
 
 const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID }) => {
   const {
@@ -72,6 +55,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   // State
   const [toolIdToDelete, setToolToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [editTool, setEditTool] = useState(false);
   const [isCreateModalVisible, setCreateModalVisible] = useState(false);
@@ -116,22 +100,30 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     if (toolIdToDelete == null || accessToken == null) {
       return;
     }
+    setIsDeleting(true);
     try {
       await deleteSearchTool(accessToken, toolIdToDelete);
       NotificationsManager.success("Deleted search tool successfully");
+      setIsDeleteModalOpen(false);
+      setToolToDelete(null);
       refetch();
     } catch (error) {
       console.error("Error deleting the search tool:", error);
       NotificationsManager.error("Failed to delete search tool");
+    } finally {
+      setIsDeleting(false);
     }
-    setIsDeleteModalOpen(false);
-    setToolToDelete(null);
   };
 
   const cancelDelete = () => {
     setIsDeleteModalOpen(false);
     setToolToDelete(null);
   };
+
+  const toolToDelete = searchTools?.find((t) => t.search_tool_id === toolIdToDelete);
+  const providerInfo = toolToDelete
+    ? availableProviders.find((p) => p.provider_name === toolToDelete.litellm_params.search_provider)
+    : null;
 
   const handleCreateSuccess = (newSearchTool: SearchTool) => {
     setCreateModalVisible(false);
@@ -231,26 +223,46 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       />
     ) : (
       <div className="w-full h-full">
-        <div className="w-full px-6 mt-6">
-          <DataTable
-            data={searchTools || []}
+        <Spin spinning={isLoadingTools} indicator={<LoadingOutlined spin />} size="large">
+          <Table
+            bordered
+            dataSource={searchTools || []}
             columns={columns}
-            renderSubComponent={() => <div></div>}
-            getRowCanExpand={() => false}
-            isLoading={isLoadingTools}
-            noDataMessage="No search tools configured"
+            rowKey={(record) => record.search_tool_id || record.search_tool_name}
+            pagination={false}
+            locale={{
+              emptyText: "No search tools configured",
+            }}
+            size="small"
           />
-        </div>
+        </Spin>
+
       </div>
     );
 
   return (
     <div className="w-full h-full p-6">
-      <DeleteModal
-        isModalOpen={isDeleteModalOpen}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
         title="Delete Search Tool"
-        confirmDelete={confirmDelete}
-        cancelDelete={cancelDelete}
+        message="Are you sure you want to delete this search tool? This action cannot be undone."
+        resourceInformationTitle="Search Tool Information"
+        resourceInformation={
+          toolToDelete
+            ? [
+              { label: "Name", value: toolToDelete.search_tool_name },
+              { label: "ID", value: toolToDelete.search_tool_id, code: true },
+              {
+                label: "Provider",
+                value: providerInfo?.ui_friendly_name || toolToDelete.litellm_params.search_provider,
+              },
+              { label: "Description", value: toolToDelete.search_tool_info?.description || "-" },
+            ]
+            : []
+        }
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeleting}
       />
 
       <CreateSearchTool

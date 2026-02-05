@@ -79,6 +79,7 @@ const sidebars = {
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
+          "proxy/guardrails/custom_code_guardrail",
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
           "proxy/guardrails/zscaler_ai_guard",
@@ -150,7 +151,9 @@ const sidebars = {
       },
       items: [
         "tutorials/claude_agent_sdk",
+        "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
+        "tutorials/livekit_xai_realtime",
       ]
     },
 
@@ -469,6 +472,7 @@ const sidebars = {
           label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
+            "a2a_invoking_agents",
             "a2a_cost_tracking",
             "a2a_agent_permissions"
           ],
@@ -850,7 +854,14 @@ const sidebars = {
             "providers/watsonx/audio_transcription",
           ]
         },
-        "providers/xai",
+        {
+          type: "category",
+          label: "xAI",
+          items: [
+            "providers/xai",
+            "providers/xai_realtime",
+          ]
+        },
         "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",

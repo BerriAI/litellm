@@ -12,6 +12,11 @@ else:
     LitellmRouter = Any
 
 
+def _is_a2a_agent_model(model_name: Any) -> bool:
+    """Check if the model name is for an A2A agent (a2a/ prefix)."""
+    return isinstance(model_name, str) and model_name.startswith("a2a/")
+
+
 ROUTE_ENDPOINT_MAPPING = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -322,6 +327,15 @@ async def route_request(
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**data)
+            elif _is_a2a_agent_model(data.get("model", "")):
+                from litellm.proxy.agent_endpoints.a2a_routing import (
+                    route_a2a_agent_request,
+                )
+                
+                result = route_a2a_agent_request(data, route_type)
+                if result is not None:
+                    return result
+                # Fall through to raise exception below if result is None
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)

@@ -3218,3 +3218,123 @@ def test_video_metadata_only_for_gemini_3():
     assert file_part_3 is not None
     assert "media_resolution" in file_part_3, "Gemini 3 should have media_resolution"
     assert "video_metadata" in file_part_3, "Gemini 3 should have video_metadata"
+
+
+
+def test_chunk_parser_handles_prompt_feedback_block():
+    """Test chunk_parser correctly handles promptFeedback.blockReason"""
+    from unittest.mock import Mock
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Arrange - mock a blocked response
+    blocked_chunk = {
+        "promptFeedback": {
+            "blockReason": "PROHIBITED_CONTENT",
+            "blockReasonMessage": "The prompt is blocked due to prohibited contents"
+        },
+        "responseId": "test_response_id",
+        "modelVersion": "gemini-3-pro-preview"
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj
+    )
+
+    # Act
+    result = streaming_obj.chunk_parser(blocked_chunk)
+
+    # Assert
+    assert result is not None, "Result should not be None"
+    assert len(result.choices) == 1, "Should have exactly one choice"
+    assert result.choices[0].finish_reason == "content_filter", f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].delta.content is None, "content should be None"
+
+
+def test_chunk_parser_handles_prompt_feedback_safety_block():
+    """Test chunk_parser handles different blockReason types (SAFETY)"""
+    from unittest.mock import Mock
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Arrange - mock a SAFETY blocked response
+    blocked_chunk = {
+        "promptFeedback": {
+            "blockReason": "SAFETY",
+            "blockReasonMessage": "The prompt is blocked due to safety concerns"
+        },
+        "responseId": "test_safety_response_id",
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj
+    )
+
+    # Act
+    result = streaming_obj.chunk_parser(blocked_chunk)
+
+    # Assert
+    assert result is not None
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "content_filter"
+
+
+def test_chunk_parser_handles_prompt_feedback_block_with_usage():
+    """Test chunk_parser correctly extracts usageMetadata when promptFeedback.blockReason is present"""
+    from unittest.mock import Mock
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Arrange - 模拟一个包含 usageMetadata 的 blocked response
+    blocked_chunk = {
+        "promptFeedback": {
+            "blockReason": "PROHIBITED_CONTENT",
+            "blockReasonMessage": "The prompt is blocked due to prohibited contents"
+        },
+        "responseId": "test_response_id_with_usage",
+        "modelVersion": "gemini-3-pro-preview",
+        "usageMetadata": {
+            "promptTokenCount": 8175,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 8175
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj
+    )
+
+    # Act
+    result = streaming_obj.chunk_parser(blocked_chunk)
+
+    # Assert - 验证 content_filter 响应和 usage 都被正确处理
+    assert result is not None, "Result should not be None"
+    assert len(result.choices) == 1, "Should have exactly one choice"
+    assert result.choices[0].finish_reason == "content_filter", f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].delta.content is None, "content should be None"
+
+    # 验证 usage 信息被正确提取
+    assert hasattr(result, "usage"), "result should have usage attribute"
+    assert result.usage is not None, "usage should not be None"
+    assert result.usage.prompt_tokens == 8175, f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
+    assert result.usage.completion_tokens == 0, f"completion_tokens should be 0, got {result.usage.completion_tokens}"
+    assert result.usage.total_tokens == 8175, f"total_tokens should be 8175, got {result.usage.total_tokens}"
+

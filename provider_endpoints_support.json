@@ -2183,7 +2183,8 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "realtime": true
       }
     },
     "xinference": {
