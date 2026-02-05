@@ -33,7 +33,7 @@ from .base import OpenAIGuardrailBase
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues, OpenAIModerationResponse
+    from litellm.types.llms.openai import OpenAIModerationResponse
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
     from litellm.types.utils import ModelResponse, ModelResponseStream
 
