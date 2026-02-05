@@ -250,12 +250,6 @@ ElevenLabs provides high-quality text-to-speech capabilities through their TTS A
 | Eleven v3 | `elevenlabs/eleven_v3` | Most expressive model. 70+ languages, audio tags support for sound effects and pauses. |
 | Eleven Multilingual v2 | `elevenlabs/eleven_multilingual_v2` | Default TTS model. 29 languages, stable and production-ready. |
 
-:::tip
-
-ElevenLabs integration is model-agnostic — any valid `model_id` from ElevenLabs will work (e.g. `elevenlabs/eleven_turbo_v2`). The models listed above are officially registered for cost tracking.
-
-:::
-
 ### Quick Start
 
 #### LiteLLM Python SDK
