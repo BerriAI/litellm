@@ -97,15 +97,35 @@ class TestOpus46AdaptiveThinking:
     def test_budget_tokens_to_effort_mapping(self):
         """Unit test for _budget_tokens_to_effort threshold mapping."""
         # At or below LOW threshold -> low
-        assert AnthropicConfig._budget_tokens_to_effort(DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET) == "low"
+        assert (
+            AnthropicConfig._budget_tokens_to_effort(
+                DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+            )
+            == "low"
+        )
         assert AnthropicConfig._budget_tokens_to_effort(512) == "low"
 
         # Above LOW but at or below MEDIUM threshold -> medium
-        assert AnthropicConfig._budget_tokens_to_effort(DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET) == "medium"
-        assert AnthropicConfig._budget_tokens_to_effort(DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET + 1) == "medium"
+        assert (
+            AnthropicConfig._budget_tokens_to_effort(
+                DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+            )
+            == "medium"
+        )
+        assert (
+            AnthropicConfig._budget_tokens_to_effort(
+                DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET + 1
+            )
+            == "medium"
+        )
 
         # Above MEDIUM threshold -> high
-        assert AnthropicConfig._budget_tokens_to_effort(DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET + 1) == "high"
+        assert (
+            AnthropicConfig._budget_tokens_to_effort(
+                DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET + 1
+            )
+            == "high"
+        )
         assert AnthropicConfig._budget_tokens_to_effort(10000) == "high"
 
     def test_opus_4_5_unchanged(self):
@@ -132,12 +152,22 @@ class TestOpus46BetaHeader:
     def test_opus_4_6_no_effort_beta_header(self):
         """is_effort_used returns False for Opus 4.6 (effort is GA)."""
         optional_params = {"output_config": {"effort": "high"}}
-        assert self.model_info.is_effort_used(optional_params, model="claude-opus-4-6-20250924") is False
+        assert (
+            self.model_info.is_effort_used(
+                optional_params, model="claude-opus-4-6-20250924"
+            )
+            is False
+        )
 
     def test_opus_4_5_still_gets_effort_beta_header(self):
         """is_effort_used returns True for Opus 4.5 with reasoning_effort."""
         optional_params = {"reasoning_effort": "high"}
-        assert self.model_info.is_effort_used(optional_params, model="claude-opus-4-5-20250514") is True
+        assert (
+            self.model_info.is_effort_used(
+                optional_params, model="claude-opus-4-5-20250514"
+            )
+            is True
+        )
 
 
 class TestIsThinkingEnabledAdaptive:
@@ -148,11 +178,18 @@ class TestIsThinkingEnabledAdaptive:
 
     def test_is_thinking_enabled_recognizes_adaptive(self):
         """Base class is_thinking_enabled recognizes type='adaptive'."""
-        assert self.config.is_thinking_enabled({"thinking": {"type": "adaptive"}}) is True
+        assert (
+            self.config.is_thinking_enabled({"thinking": {"type": "adaptive"}}) is True
+        )
 
     def test_is_thinking_enabled_still_recognizes_enabled(self):
         """Base class is_thinking_enabled still recognizes type='enabled'."""
-        assert self.config.is_thinking_enabled({"thinking": {"type": "enabled", "budget_tokens": 4096}}) is True
+        assert (
+            self.config.is_thinking_enabled(
+                {"thinking": {"type": "enabled", "budget_tokens": 4096}}
+            )
+            is True
+        )
 
     def test_is_thinking_enabled_recognizes_reasoning_effort(self):
         """Base class is_thinking_enabled recognizes reasoning_effort."""

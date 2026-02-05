@@ -430,8 +430,13 @@ class AmazonConverseConfig(BaseConfig):
             optional_params.update(reasoning_config)
         else:
             # Check if Opus 4.6 -- use adaptive thinking
-            if any(p in model.lower() for p in ["opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6"]):
-                optional_params["thinking"] = AnthropicConfig._get_adaptive_thinking_param()
+            if any(
+                p in model.lower()
+                for p in ["opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6"]
+            ):
+                optional_params[
+                    "thinking"
+                ] = AnthropicConfig._get_adaptive_thinking_param()
             else:
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort
