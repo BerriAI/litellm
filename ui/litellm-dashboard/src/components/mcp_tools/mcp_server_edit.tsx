@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, Tooltip } from "antd";
+import { Form, Select, Button as AntdButton, Tooltip, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
+import StdioConfiguration from "./StdioConfiguration";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -39,6 +40,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
+  const transportType = Form.useWatch("transport", form) as string | undefined;
+  const isStdioTransport = transportType === "stdio";
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   
@@ -124,12 +127,26 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }));
   }, [mcpServer.static_headers]);
 
+  const initialEnvJson = React.useMemo(() => {
+    const env = mcpServer.env ?? undefined;
+    if (!env || Object.keys(env).length === 0) {
+      return "";
+    }
+    try {
+      return JSON.stringify(env, null, 2);
+    } catch {
+      return "";
+    }
+  }, [mcpServer.env]);
+
+
   const initialValues = React.useMemo(
     () => ({
       ...mcpServer,
       static_headers: initialStaticHeaders,
+      env_json: initialEnvJson,
     }),
-    [mcpServer, initialStaticHeaders],
+    [mcpServer, initialStaticHeaders, initialEnvJson],
   );
 
   // Initialize cost config from existing server data
@@ -210,9 +227,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   }, [mcpServer, accessToken, oauthAccessToken]);
 
   const fetchTools = async () => {
-    if (!accessToken || !mcpServer.url) {
-      return;
-    }
+    if (!accessToken) return;
+
+    // HTTP/SSE requires a URL; stdio does not.
+    if (mcpServer.transport !== "stdio" && !mcpServer.url) return;
 
     if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !oauthAccessToken) {
       return;
@@ -232,6 +250,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         authorization_url: mcpServer.authorization_url,
         token_url: mcpServer.token_url,
         registration_url: mcpServer.registration_url,
+        command: mcpServer.command,
+        args: mcpServer.args,
+        env: mcpServer.env,
       };
 
       const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
@@ -282,6 +303,27 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     return existingOptions;
   };
 
+  const handleTransportChange = (value: string) => {
+    // Clear fields that are not relevant for the selected transport.
+    if (value === "stdio") {
+      form.setFieldsValue({
+        url: undefined,
+        auth_type: undefined,
+        credentials: undefined,
+        authorization_url: undefined,
+        token_url: undefined,
+        registration_url: undefined,
+      });
+    } else {
+      form.setFieldsValue({
+        command: undefined,
+        args: undefined,
+        env_json: undefined,
+        stdio_config: undefined,
+      });
+    }
+  };
+
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
     try {
@@ -289,6 +331,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       const {
         static_headers: staticHeadersList,
         credentials: credentialValues,
+        stdio_config: rawStdioConfig,
+        env_json: rawEnvJson,
+        command: rawCommand,
+        args: rawArgs,
         allow_all_keys: allowAllKeysRaw,
         ...restValues
       } = values;
@@ -328,12 +374,104 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             }, {})
           : undefined;
 
+      let stdioFields: Record<string, any> = {};
+
+      if (restValues.transport === "stdio") {
+        // Prefer JSON config if provided (matches Create screen behavior)
+        if (rawStdioConfig) {
+          try {
+            const stdioConfig = JSON.parse(rawStdioConfig);
+
+            let actualConfig = stdioConfig;
+            if (stdioConfig?.mcpServers && typeof stdioConfig.mcpServers === "object") {
+              const serverNames = Object.keys(stdioConfig.mcpServers);
+              if (serverNames.length > 0) {
+                actualConfig = stdioConfig.mcpServers[serverNames[0]];
+              }
+            }
+
+            const parsedArgs = Array.isArray(actualConfig?.args)
+              ? actualConfig.args.map((v: any) => String(v)).filter((v: string) => v.trim() !== "")
+              : [];
+
+            const parsedEnv =
+              actualConfig?.env && typeof actualConfig.env === "object" && !Array.isArray(actualConfig.env)
+                ? Object.entries(actualConfig.env).reduce((acc: Record<string, string>, [k, v]) => {
+                    if (k == null || String(k).trim() === "") return acc;
+                    acc[String(k)] = v == null ? "" : String(v);
+                    return acc;
+                  }, {})
+                : {};
+
+            stdioFields = {
+              command: actualConfig?.command ? String(actualConfig.command) : undefined,
+              args: parsedArgs,
+              env: parsedEnv,
+            };
+
+            if (!stdioFields.command) {
+              NotificationsManager.fromBackend("Stdio configuration must include a command");
+              return;
+            }
+          } catch {
+            NotificationsManager.fromBackend("Invalid JSON in stdio configuration");
+            return;
+          }
+        } else {
+          // Dedicated fields path (command/args + env JSON)
+          let parsedEnv: Record<string, string> = {};
+          if (rawEnvJson) {
+            try {
+              const env = JSON.parse(rawEnvJson);
+              if (env && typeof env === "object" && !Array.isArray(env)) {
+                parsedEnv = Object.entries(env).reduce((acc: Record<string, string>, [k, v]) => {
+                  if (k == null || String(k).trim() === "") return acc;
+                  acc[String(k)] = v == null ? "" : String(v);
+                  return acc;
+                }, {});
+              }
+            } catch {
+              NotificationsManager.fromBackend("Invalid JSON in stdio env configuration");
+              return;
+            }
+          }
+          const parsedArgs = Array.isArray(rawArgs)
+            ? rawArgs.map((v: any) => String(v)).filter((v: string) => v.trim() !== "")
+            : [];
+
+          const parsedCommand = rawCommand ? String(rawCommand).trim() : "";
+          if (!parsedCommand) {
+            NotificationsManager.fromBackend("Stdio transport requires a command");
+            return;
+          }
+
+          stdioFields = {
+            command: parsedCommand,
+            args: parsedArgs,
+            env: parsedEnv,
+          };
+        }
+      }
+
       // Prepare the payload with cost configuration and permission fields
+      const mcpInfoServerName =
+        restValues.server_name ||
+        restValues.url ||
+        mcpServer.server_name ||
+        mcpServer.url ||
+        restValues.alias ||
+        mcpServer.alias ||
+        "unknown";
+
       const payload: Record<string, any> = {
         ...restValues,
+        ...stdioFields,
+        // Remove UI-only fields
+        stdio_config: undefined,
+        env_json: undefined,
         server_id: mcpServer.server_id,
         mcp_info: {
-          server_name: restValues.server_name || restValues.url,
+          server_name: mcpInfoServerName,
           description: restValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
@@ -379,7 +517,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 },
               ]}
             >
-              <TextInput />
+              <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
             </Form.Item>
             <Form.Item
               label="Alias"
@@ -390,38 +528,115 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 },
               ]}
             >
-              <TextInput onChange={() => setAliasManuallyEdited(true)} />
+              <Input
+                onChange={() => setAliasManuallyEdited(true)}
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
             </Form.Item>
             <Form.Item label="Description" name="description">
-              <TextInput />
-            </Form.Item>
-            <Form.Item
-              label="MCP Server URL"
-              name="url"
-              rules={[
-                { required: true, message: "Please enter a server URL" },
-                { validator: (_, value) => validateMCPServerUrl(value) },
-              ]}
-            >
-              <TextInput />
+              <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
             </Form.Item>
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
-              <Select>
+              <Select onChange={handleTransportChange}>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="http">HTTP</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
-              <Select>
-                <Select.Option value="none">None</Select.Option>
-                <Select.Option value="api_key">API Key</Select.Option>
-                <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                <Select.Option value="basic">Basic Auth</Select.Option>
-                <Select.Option value="oauth2">OAuth</Select.Option>
+                <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
               </Select>
             </Form.Item>
 
-            {shouldShowAuthValueField && (
+            {/* URL/Auth fields are only applicable for HTTP/SSE */}
+            {!isStdioTransport && (
+              <Form.Item
+                label="MCP Server URL"
+                name="url"
+                rules={[
+                  { required: true, message: "Please enter a server URL" },
+                  { validator: (_, value) => validateMCPServerUrl(value) },
+                ]}
+              >
+                <Input
+                  placeholder="https://your-mcp-server.com"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {!isStdioTransport && (
+              <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
+                <Select>
+                  <Select.Option value="none">None</Select.Option>
+                  <Select.Option value="api_key">API Key</Select.Option>
+                  <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                  <Select.Option value="basic">Basic Auth</Select.Option>
+                  <Select.Option value="oauth2">OAuth</Select.Option>
+                </Select>
+              </Form.Item>
+            )}
+
+            {isStdioTransport && (
+              <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+                <p className="text-sm text-gray-600">
+                  Configure the stdio transport used to launch the MCP server process. You can either fill in the fields
+                  below or paste a JSON configuration.
+                </p>
+
+                <Form.Item
+                  label="Command"
+                  name="command"
+                  rules={[{ required: true, message: "Please enter a command for stdio transport" }]}
+                >
+                  <Input
+                    placeholder="e.g., npx"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  label="Args"
+                  name="args"
+                >
+                  <Select
+                    mode="tags"
+                    size="large"
+                    tokenSeparators={[","]}
+                    placeholder="Add args (press enter or comma)"
+                    className="rounded-lg"
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  label="Environment (JSON object)"
+                  name="env_json"
+                  rules={[
+                    {
+                      validator: (_, value) => {
+                        if (!value) return Promise.resolve();
+                        try {
+                          const parsed = JSON.parse(value);
+                          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                            return Promise.resolve();
+                          }
+                          return Promise.reject(new Error("Env must be a JSON object"));
+                        } catch {
+                          return Promise.reject(new Error("Please enter valid JSON"));
+                        }
+                      },
+                    },
+                  ]}
+                >
+                  <Input.TextArea
+                    rows={6}
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
+                    placeholder={`{\n  \"KEY\": \"value\"\n}`}
+                  />
+                </Form.Item>
+
+                {/* Optional JSON config (if provided, it overrides command/args/env on save) */}
+                <StdioConfiguration isVisible={true} required={false} />
+              </div>
+            )}
+
+            {!isStdioTransport && shouldShowAuthValueField && (
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
@@ -441,15 +656,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   },
                 ]}
               >
-                <TextInput
-                  type="password"
+                <Input.Password
                   placeholder="Enter token or secret (leave blank to keep existing)"
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
               </Form.Item>
             )}
 
-            {isOAuthAuthType && (
+            {!isStdioTransport && isOAuthAuthType && (
               <>
                 <Form.Item
                   label={
@@ -462,8 +676,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name={["credentials", "client_id"]}
                 >
-                  <TextInput
-                    type="password"
+                  <Input.Password
                     placeholder="Enter OAuth client ID (leave blank to keep existing)"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -479,8 +692,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name={["credentials", "client_secret"]}
                 >
-                  <TextInput
-                    type="password"
+                  <Input.Password
                     placeholder="Enter OAuth client secret (leave blank to keep existing)"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -515,7 +727,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name="authorization_url"
                 >
-                  <TextInput
+                  <Input
                     placeholder="https://example.com/oauth/authorize"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -531,7 +743,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name="token_url"
                 >
-                  <TextInput
+                  <Input
                     placeholder="https://example.com/oauth/token"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
@@ -547,7 +759,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   }
                   name="registration_url"
                 >
-                  <TextInput
+                  <Input
                     placeholder="https://example.com/oauth/register"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
