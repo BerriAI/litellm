@@ -1703,6 +1703,8 @@ const buildDailyActivityUrl = (
   params.append("end_date", formatDate(endTime));
   params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
   params.append("page", page.toString());
+  // Send timezone offset so backend can adjust date range for UTC storage
+  params.append("timezone", new Date().getTimezoneOffset().toString());
 
   if (extraQueryParams) {
     Object.entries(extraQueryParams).forEach(([key, value]) => {
@@ -3567,6 +3569,8 @@ export const userDailyActivityAggregatedCall = async (accessToken: string, start
     };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
+    // Send timezone offset so backend can adjust date range for UTC storage
+    queryParams.append("timezone", new Date().getTimezoneOffset().toString());
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
