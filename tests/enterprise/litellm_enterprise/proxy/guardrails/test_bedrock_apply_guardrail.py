@@ -75,17 +75,16 @@ async def test_bedrock_apply_guardrail_blocked():
             },
         )
 
-        # Test the apply_guardrail method should raise an exception
-        with pytest.raises(Exception) as exc_info:
+        # Test the apply_guardrail method propagates HTTPException (AWS error) to the client
+        with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["This is blocked content"]},
                 request_data={},
                 input_type="request",
             )
 
-        # The apply_guardrail method wraps the original exception in a generic Exception
-        assert "Bedrock guardrail failed:" in str(exc_info.value)
-        assert "Violated guardrail policy" in str(exc_info.value)
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -270,7 +269,7 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
             },
         )
 
-        with pytest.raises(Exception, match="policy") as exc_info:
+        with pytest.raises(HTTPException, match="policy") as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["blocked"]},
                 request_data=request_data,
@@ -280,8 +279,9 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
         assert mock_api.called
         _, kwargs = mock_api.call_args
         assert kwargs["messages"] == [request_messages[-1]]
-        # The apply_guardrail method wraps the original exception in a generic Exception
-        assert "Bedrock guardrail failed:" in str(exc_info.value)
+        # HTTPException from guardrail is propagated so the client gets the AWS message
+        assert exc_info.value.status_code == 400
+        assert "policy" in str(exc_info.value.detail)
 
 
 def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
