@@ -414,11 +414,11 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     anthropic_content = anthropic_response.get("content")
     assert anthropic_content is not None
     assert len(anthropic_content) == 2
-    assert cast(Any, anthropic_content[0]).type == "text"
-    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
-    assert cast(Any, anthropic_content[1]).type == "tool_use"
-    assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
-    assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
+    assert anthropic_content[0]["type"] == "text"
+    assert anthropic_content[0]["text"] == "Let me grab the current weather."
+    assert anthropic_content[1]["type"] == "tool_use"
+    assert anthropic_content[1]["id"] == "call_tool_combo"
+    assert anthropic_content[1]["input"] == {"location": "Paris"}
     assert anthropic_response.get("stop_reason") == "tool_use"
 
 
@@ -1522,13 +1522,13 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     assert len(anthropic_content) == 2
     
     # First block should be thinking
-    assert cast(Any, anthropic_content[0]).type == "thinking"
-    assert "Considering Letter Frequency" in cast(Any, anthropic_content[0]).thinking
-    assert cast(Any, anthropic_content[0]).signature is None
+    assert anthropic_content[0]["type"] == "thinking"
+    assert "Considering Letter Frequency" in anthropic_content[0]["thinking"]
+    assert anthropic_content[0].get("signature") is None
     
     # Second block should be text
-    assert cast(Any, anthropic_content[1]).type == "text"
-    assert cast(Any, anthropic_content[1]).text == "There are **3** \"r\"s in the word strawberry."
+    assert anthropic_content[1]["type"] == "text"
+    assert anthropic_content[1]["text"] == "There are **3** \"r\"s in the word strawberry."
     
     assert anthropic_response.get("stop_reason") == "end_turn"
 
