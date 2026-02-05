@@ -503,6 +503,10 @@ class Router:
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
 
+        # Proxy-level defaults for guardrail retries (used when guardrail config does not set num_retries/retry_after)
+        self.guardrail_num_retries = None
+        self.guardrail_retry_after = None
+
         ## SETTING FALLBACKS ##
         ### validate if it's set + in correct format
         _fallbacks = fallbacks or litellm.fallbacks
@@ -7586,6 +7590,8 @@ class Router:
             "model_group_retry_policy",
             "retry_policy",
             "model_group_alias",
+            "guardrail_num_retries",
+            "guardrail_retry_after",
         ]
 
         for var in vars_to_include:
@@ -7616,6 +7622,8 @@ class Router:
             "context_window_fallbacks",
             "model_group_retry_policy",
             "model_group_alias",
+            "guardrail_num_retries",
+            "guardrail_retry_after",
         ]
 
         _int_settings = [
@@ -7624,6 +7632,7 @@ class Router:
             "retry_after",
             "allowed_fails",
             "cooldown_time",
+            "guardrail_num_retries",
         ]
 
         _existing_router_settings = self.get_settings()

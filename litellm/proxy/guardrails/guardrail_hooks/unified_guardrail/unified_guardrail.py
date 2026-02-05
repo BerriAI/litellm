@@ -11,6 +11,10 @@ from typing import Any, AsyncGenerator, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.proxy.guardrails.guardrail_retries import (
+    get_guardrail_retry_config,
+    run_guardrail_with_retries,
+)
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -91,10 +95,16 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
-        data = await endpoint_translation.process_input_messages(
-            data=data,
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=data.get("litellm_logging_obj"),
+        num_retries, retry_after = get_guardrail_retry_config(guardrail_to_apply)
+        data = await run_guardrail_with_retries(
+            coro_factory=lambda: endpoint_translation.process_input_messages(
+                data=data,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=data.get("litellm_logging_obj"),
+            ),
+            num_retries=num_retries,
+            retry_after=retry_after,
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
 
         # Add guardrail to applied guardrails header
@@ -148,10 +158,16 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
-        return await endpoint_translation.process_input_messages(
-            data=data,
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=data.get("litellm_logging_obj"),
+        num_retries, retry_after = get_guardrail_retry_config(guardrail_to_apply)
+        return await run_guardrail_with_retries(
+            coro_factory=lambda: endpoint_translation.process_input_messages(
+                data=data,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=data.get("litellm_logging_obj"),
+            ),
+            num_retries=num_retries,
+            retry_after=retry_after,
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
 
     async def async_post_call_success_hook(
@@ -213,11 +229,17 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
-        response = await endpoint_translation.process_output_response(
-            response=response,  # type: ignore
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=data.get("litellm_logging_obj"),
-            user_api_key_dict=user_api_key_dict,
+        num_retries, retry_after = get_guardrail_retry_config(guardrail_to_apply)
+        response = await run_guardrail_with_retries(
+            coro_factory=lambda: endpoint_translation.process_output_response(
+                response=response,  # type: ignore
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+            ),
+            num_retries=num_retries,
+            retry_after=retry_after,
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(
@@ -362,11 +384,19 @@ class UnifiedLLMGuardrails(CustomLogger):
                     CallTypes(call_type)
                 ]()
 
-                await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=responses_so_far,
-                    guardrail_to_apply=guardrail_to_apply,
-                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                    user_api_key_dict=user_api_key_dict,
+                num_retries, retry_after = get_guardrail_retry_config(
+                    guardrail_to_apply
+                )
+                await run_guardrail_with_retries(
+                    coro_factory=lambda: endpoint_translation.process_output_streaming_response(
+                        responses_so_far=responses_so_far,
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                        user_api_key_dict=user_api_key_dict,
+                    ),
+                    num_retries=num_retries,
+                    retry_after=retry_after,
+                    guardrail_name=guardrail_to_apply.guardrail_name,
                 )
 
                 yield original_item
@@ -388,9 +418,15 @@ class UnifiedLLMGuardrails(CustomLogger):
                 CallTypes(call_type)
             ]()
 
-            await endpoint_translation.process_output_streaming_response(
-                responses_so_far=responses_so_far,
-                guardrail_to_apply=guardrail_to_apply,
-                litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                user_api_key_dict=user_api_key_dict,
+            num_retries, retry_after = get_guardrail_retry_config(guardrail_to_apply)
+            await run_guardrail_with_retries(
+                coro_factory=lambda: endpoint_translation.process_output_streaming_response(
+                    responses_so_far=responses_so_far,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
+                ),
+                num_retries=num_retries,
+                retry_after=retry_after,
+                guardrail_name=guardrail_to_apply.guardrail_name,
             )

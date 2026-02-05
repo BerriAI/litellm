@@ -657,6 +657,16 @@ class BaseLitellmParams(
         description="Python-like code containing the apply_guardrail function for custom guardrail logic",
     )
 
+    # Guardrail retry config (mirrors router num_retries / retry_after)
+    num_retries: Optional[int] = Field(
+        default=None,
+        description="Number of retries for failed guardrail calls (e.g. default 2 when not set; 0 to disable)",
+    )
+    retry_after: Optional[float] = Field(
+        default=None,
+        description="Minimum seconds to wait before retrying a failed guardrail call (used in backoff)",
+    )
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
