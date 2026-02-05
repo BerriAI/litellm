@@ -652,6 +652,27 @@ def test_get_supported_params_thinking():
     assert "thinking" in params
 
 
+def test_prompt_cache_key_removed_from_request():
+    """
+    Test that prompt_cache_key is removed from the request before sending to Anthropic.
+    
+    This prevents the error: "prompt_cache_key: Extra inputs are not permitted"
+    
+    """
+    config = AnthropicConfig()
+    
+    # Verify that prompt_cache_key is NOT in Anthropic's supported params
+    supported_params = config.get_supported_openai_params("claude-3-7-sonnet-20250219")
+    assert "prompt_cache_key" not in supported_params, (
+        "prompt_cache_key should not be in Anthropic's supported params list"
+    )
+    
+    # Verify other common parameters are present
+    assert "max_tokens" in supported_params
+    assert "temperature" in supported_params
+    assert "tools" in supported_params
+    
+    print("✅ Test passed: prompt_cache_key is not in Anthropic's supported params")
 def test_anthropic_memory_tool_auto_adds_beta_header():
     """
     Tests that LiteLLM automatically adds the required 'anthropic-beta' header

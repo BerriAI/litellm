@@ -386,6 +386,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
 
+        # 4. Handle anthropic_beta from user headers
+        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
+        if anthropic_beta_list:
+            anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it)
         self._remove_ttl_from_cache_control(anthropic_messages_request)
 

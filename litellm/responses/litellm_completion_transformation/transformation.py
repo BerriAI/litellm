@@ -3,7 +3,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 """
 
 from collections.abc import Sequence
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Mapping, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
@@ -13,6 +13,9 @@ from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+)
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -102,6 +105,24 @@ class LiteLLMCompletionResponsesConfig:
         ]
 
     @staticmethod
+    def filter_unsupported_params(
+        params: Mapping[str, Any],
+        model: str,
+        custom_llm_provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return params with only those supported by the provider."""
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if supported_params:
+            # Only add params if they're in supported_params
+            final_params: Dict[str, Any] = {}
+            params_dict = dict(params)
+            for p in params_dict:
+                if p in supported_params:
+                    final_params[p] = params_dict[p]
+            return final_params
+        return dict(params)
     def _transform_tool_choice(
         tool_choice: Any,
     ) -> Optional[Union[str, Dict[str, Any]]]:
@@ -180,6 +201,14 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
+        responses_api_request = cast(
+            ResponsesAPIOptionalRequestParams,
+            LiteLLMCompletionResponsesConfig.filter_unsupported_params(
+                params=responses_api_request,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            ),
+        )
         # Extract reasoning_effort from reasoning parameter
         reasoning_effort = None
         reasoning_param = responses_api_request.get("reasoning")
@@ -211,6 +240,7 @@ class LiteLLMCompletionResponsesConfig:
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
+            "prompt_cache_key": responses_api_request.get("prompt_cache_key"),
             "reasoning_effort": reasoning_effort,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
