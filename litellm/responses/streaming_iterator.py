@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import traceback
 from datetime import datetime
@@ -309,7 +310,9 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
         try:
+            ctx = contextvars.copy_context()
             executor.submit(
+                ctx.run,
                 self.logging_obj.failure_handler,
                 exception,
                 traceback_exception,
@@ -418,12 +421,14 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             )
         )
 
+        ctx = contextvars.copy_context()
         executor.submit(
+            ctx.run,
             self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=None,
-            start_time=self.start_time,
-            end_time=datetime.now(),
+            logging_response,
+            self.start_time,
+            datetime.now(),
+            None,
         )
         self._run_post_success_hooks(end_time=datetime.now())
 
@@ -515,12 +520,14 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             cache_hit=None,
         )
 
+        ctx = contextvars.copy_context()
         executor.submit(
+            ctx.run,
             self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=None,
-            start_time=self.start_time,
-            end_time=datetime.now(),
+            logging_response,
+            self.start_time,
+            datetime.now(),
+            None,
         )
         self._run_post_success_hooks(end_time=datetime.now())
 
