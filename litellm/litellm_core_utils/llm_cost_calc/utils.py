@@ -189,9 +189,25 @@ def _get_token_base_cost(
     cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
 
     ## CHECK IF ABOVE THRESHOLD
+    # Optimization: collect threshold keys first to avoid sorting all model_info keys.
+    # Most models don't have threshold pricing, so we can return early.
+    threshold_keys = [
+        k for k in model_info if k.startswith("input_cost_per_token_above_")
+    ]
+    if not threshold_keys:
+        return (
+            prompt_base_cost,
+            completion_base_cost,
+            cache_creation_cost,
+            cache_creation_cost_above_1hr,
+            cache_read_cost,
+        )
+
+    # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: Optional[float] = None
-    for key, value in sorted(model_info.items(), reverse=True):
-        if key.startswith("input_cost_per_token_above_") and value is not None:
+    for key in sorted(threshold_keys, reverse=True):
+        value = model_info.get(key)
+        if value is not None:
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
