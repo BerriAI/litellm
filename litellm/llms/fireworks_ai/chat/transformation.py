@@ -239,7 +239,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             # Remove fields not permitted by FireworksAI that may cause:
             # "Not permitted, field: 'messages[n].provider_specific_fields'"
             if isinstance(message, dict) and "provider_specific_fields" in message:
-                message.pop("provider_specific_fields", None)
+                cast(dict, message).pop("provider_specific_fields", None)
 
         return messages
 

@@ -98,6 +98,40 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 }
 
 
+class MCPSemanticFilterSettings(BaseModel):
+    """Configuration for MCP Semantic Tool Filter"""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable semantic filtering of MCP tools based on query relevance",
+    )
+
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="Embedding model to use for semantic similarity (e.g., 'text-embedding-3-small', 'text-embedding-ada-002')",
+    )
+
+    top_k: int = Field(
+        default=10,
+        description="Number of most relevant tools to return",
+        ge=1,
+        le=100,
+    )
+
+    similarity_threshold: float = Field(
+        default=0.3,
+        description="Minimum similarity score for tool inclusion (0.0 to 1.0, where 1.0 = exact match)",
+        ge=0.0,
+        le=1.0,
+    )
+
+
+class MCPSemanticFilterSettingsResponse(SettingsResponse):
+    """Response model for MCP semantic filter settings"""
+
+    pass
+
+
 @router.get(
     "/get/allowed_ips",
     tags=["Budget & Spend Tracking"],
@@ -325,7 +359,7 @@ async def update_default_team_member_budget(
 
 
 async def _update_litellm_setting(
-    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams],
+    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
     settings_key: str,
     in_memory_var: Any,
     success_message: str,
@@ -767,6 +801,70 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
         "status": "success",
         "theme_config": theme_data,
     }
+
+
+@router.get(
+    "/get/mcp_semantic_filter_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=MCPSemanticFilterSettingsResponse,
+)
+async def get_mcp_semantic_filter_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get MCP semantic filter configuration.
+    Returns current settings for semantic tool filtering.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    config = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="mcp_semantic_tool_filter",
+        settings_class=MCPSemanticFilterSettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/mcp_semantic_filter_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_mcp_semantic_filter_settings(
+    settings: MCPSemanticFilterSettings,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update MCP semantic filter settings in database.
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    result = await _update_litellm_setting(
+        settings=settings,
+        settings_key="mcp_semantic_tool_filter",
+        in_memory_var=None,
+        success_message="MCP Semantic Filter settings updated successfully. Changes will be applied across all pods within 10 seconds.",
+    )
+    try:
+        from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+        if prisma_client is not None:
+            await proxy_config._init_semantic_filter_settings_in_db(
+                prisma_client=prisma_client
+            )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to reinitialize MCP semantic filter settings immediately: {e}"
+        )
+
+    return result
 
 
 @router.get(

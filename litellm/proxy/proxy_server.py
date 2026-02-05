@@ -47,6 +47,7 @@ from litellm.constants import (
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+    LITELLM_UI_ALLOW_HEADERS,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -1214,6 +1215,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
@@ -3918,6 +3920,93 @@ class ProxyConfig:
 
             await CacheSettingsManager.init_cache_settings_in_db(
                 prisma_client=prisma_client, proxy_config=self
+            )
+
+        if self._should_load_db_object(object_type="semantic_filter_settings"):
+            await self._init_semantic_filter_settings_in_db(
+                prisma_client=prisma_client
+            )
+
+    async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize MCP semantic filter settings from database.
+        Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
+        """
+        import json
+
+        import litellm
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        try:
+            # Load litellm_settings from DB
+            config_record = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "litellm_settings"}
+            )
+
+            if config_record is None or config_record.param_value is None:
+                return
+
+            litellm_settings = config_record.param_value
+            if isinstance(litellm_settings, str):
+                litellm_settings = json.loads(litellm_settings)
+
+            mcp_semantic_filter_config = litellm_settings.get(
+                "mcp_semantic_tool_filter", None
+            )
+
+            if mcp_semantic_filter_config is None:
+                return
+
+            # Check if settings have changed (compare with in-memory state)
+            if hasattr(self, "_last_semantic_filter_config"):
+                if self._last_semantic_filter_config == mcp_semantic_filter_config:
+                    # If hook is missing or router isn't built yet, reinitialize anyway
+                    active_hooks = (
+                        litellm.logging_callback_manager.get_custom_loggers_for_type(
+                            SemanticToolFilterHook
+                        )
+                    )
+                    if active_hooks:
+                        for active_hook in active_hooks:
+                            if isinstance(active_hook, SemanticToolFilterHook):
+                                if (
+                                    active_hook.filter is not None
+                                    and active_hook.filter.tool_router is not None
+                                ):
+                                    verbose_proxy_logger.debug(
+                                        "Semantic filter settings unchanged, skipping reinitialization"
+                                    )
+                                    return
+                    verbose_proxy_logger.info(
+                        "Semantic filter settings unchanged, but hook is missing or uninitialized. Reinitializing."
+                    )
+
+            # Remove old hooks using logging callback manager
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                litellm.callbacks, SemanticToolFilterHook
+            )
+
+            # Initialize new hook if enabled
+            if mcp_semantic_filter_config.get("enabled", False):
+                global llm_router
+                hook = await SemanticToolFilterHook.initialize_from_config(
+                    config=mcp_semantic_filter_config,
+                    llm_router=llm_router,
+                )
+                if hook:
+                    litellm.logging_callback_manager.add_litellm_callback(hook)
+                    verbose_proxy_logger.info(
+                        "MCP Semantic Filter reinitialized from DB"
+                    )
+            else:
+                verbose_proxy_logger.info("MCP Semantic Filter disabled")
+
+            # Store current config for comparison next time
+            self._last_semantic_filter_config = mcp_semantic_filter_config.copy()
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error initializing semantic filter settings from DB: {e}"
             )
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
