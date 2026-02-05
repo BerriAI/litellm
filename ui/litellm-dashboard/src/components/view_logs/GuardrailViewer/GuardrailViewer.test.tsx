@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen } from "../../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
 import {
   makeBedrockResponse,
   makeEntity,
@@ -62,20 +62,26 @@ describe("GuardrailViewer", () => {
   it("toggles main section open/closed and chevron rotation class", async () => {
     const user = userEvent.setup();
     const data = makeGuardrailInformation();
-    renderWithProviders(<GuardrailViewer data={data} />);
+    const { container } = renderWithProviders(<GuardrailViewer data={data} />);
 
-    const header = screen.getByText("Guardrail Information").closest("div")!;
-    // Initially expanded
-    expect(screen.getByText("Click to collapse")).toBeInTheDocument();
+    const header = screen.getByText("Guardrail Information").closest(".ant-collapse-header")!;
+    // Initially expanded (content is visible)
+    expect(screen.getByText("Masked Entity Summary")).toBeInTheDocument();
+    
     // Click to collapse
     await user.click(header);
-    expect(screen.getByText("Click to expand")).toBeInTheDocument();
-    // Details gone
-    expect(screen.queryByText("Masked Entity Summary")).not.toBeInTheDocument();
+    // Wait for collapse animation and content to be hidden
+    await waitFor(() => {
+      const contentBox = container.querySelector(".ant-collapse-content-box");
+      expect(contentBox).not.toBeVisible();
+    });
 
     // Click to expand again
     await user.click(header);
-    expect(screen.getByText("Click to collapse")).toBeInTheDocument();
+    // Wait for expand animation
+    await waitFor(() => {
+      expect(screen.getByText("Masked Entity Summary")).toBeVisible();
+    });
   });
 
   it("defaults to presidio provider when guardrail_provider is undefined", async () => {

@@ -2,7 +2,8 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from collections.abc import Sequence
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
@@ -366,6 +367,78 @@ class LiteLLMCompletionResponsesConfig:
                 ChatCompletionResponseMessage,
             ]
         ] = []
+
+        if isinstance(input, str):
+            messages.append(ChatCompletionUserMessage(role="user", content=input))
+        elif isinstance(input, list):
+            existing_tool_call_ids: Set[str] = set()
+            for _input in input:
+                chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                    input_item=_input
+                )
+
+                if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+                    input_item=_input
+                ):
+                    call_id_raw = _input.get("call_id") or _input.get("id") or ""
+                    if call_id_raw:
+                        existing_tool_call_ids.add(str(call_id_raw))
+
+                #########################################################
+                # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
+                # preserving the ordering of tool call outputs. Some models require the tool 
+                # result to immediately follow the assistant tool call. 
+                #########################################################
+                if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
+                    input_item=_input
+                ):
+                    if not chat_completion_messages:
+                        continue
+
+                    deduped_in_place: List[Any] = []
+                    for m in chat_completion_messages:
+                        role = ""
+                        if isinstance(m, dict):
+                            role = str(m.get("role") or "")
+                        else:
+                            role = str(getattr(m, "role", "") or "")
+
+                        # Drop assistant tool_calls wrappers if we already have this call_id
+                        if role == "assistant":
+                            tool_calls: Any = (
+                                m.get("tool_calls")
+                                if isinstance(m, dict)
+                                else getattr(m, "tool_calls", None)
+                            )
+                            call_id = ""
+                            if (
+                                isinstance(tool_calls, Sequence)
+                                and not isinstance(tool_calls, (str, bytes))
+                                and len(tool_calls) > 0
+                            ):
+                                first_call = tool_calls[0]
+                                call_id_raw = (
+                                    first_call.get("id")
+                                    if isinstance(first_call, dict)
+                                    else getattr(first_call, "id", None)
+                                )
+                                if call_id_raw:
+                                    call_id = str(call_id_raw)
+                            if call_id and call_id in existing_tool_call_ids:
+                                continue
+                            if call_id:
+                                existing_tool_call_ids.add(call_id)
+
+                        deduped_in_place.append(m)
+
+                    messages.extend(deduped_in_place)
+                    continue
+
+                messages.extend(chat_completion_messages)
+        return messages
+
+    @staticmethod
+    def _deduplicate_tool_call_output_messages(
         tool_call_output_messages: List[
             Union[
                 AllMessageValues,
@@ -373,28 +446,68 @@ class LiteLLMCompletionResponsesConfig:
                 ChatCompletionMessageToolCall,
                 ChatCompletionResponseMessage,
             ]
+        ],
+        existing_tool_call_ids: Set[str],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """Return tool call outputs after dropping assistant entries with duplicate call_ids."""
+        if not tool_call_output_messages:
+            return []
+
+        filtered_messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
         ] = []
+        seen_tool_call_ids: Set[str] = set(existing_tool_call_ids)
 
-        if isinstance(input, str):
-            messages.append(ChatCompletionUserMessage(role="user", content=input))
-        elif isinstance(input, list):
-            for _input in input:
-                chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-                    input_item=_input
-                )
+        for tool_call_message in tool_call_output_messages:
+            if isinstance(tool_call_message, dict):
+                role = tool_call_message.get("role", "")
+            else:
+                role = getattr(tool_call_message, "role", "")
+            call_id = ""
 
-                #########################################################
-                # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
-                #########################################################
-                if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
-                    input_item=_input
-                ):
-                    tool_call_output_messages.extend(chat_completion_messages)
+            if role == "assistant":
+                tool_calls: Any = None
+                if isinstance(tool_call_message, dict):
+                    tool_calls = tool_call_message.get("tool_calls")
                 else:
-                    messages.extend(chat_completion_messages)
+                    tool_calls = getattr(tool_call_message, "tool_calls", None)
 
-        messages.extend(tool_call_output_messages)
-        return messages
+                if (
+                    isinstance(tool_calls, Sequence)
+                    and not isinstance(tool_calls, (str, bytes))
+                    and len(tool_calls) > 0
+                ):
+                    first_call = tool_calls[0]
+                    call_id_raw = None
+                    if isinstance(first_call, dict):
+                        call_id_raw = first_call.get("id")
+                    else:
+                        call_id_raw = getattr(first_call, "id", None)
+
+                    if call_id_raw:
+                        call_id = str(call_id_raw)
+
+            if call_id and call_id in seen_tool_call_ids and role == "assistant":
+                continue
+
+            if call_id and role == "assistant":
+                seen_tool_call_ids.add(call_id)
+
+            filtered_messages.append(tool_call_message)
+
+        return filtered_messages
 
     @staticmethod
     def _ensure_tool_call_output_has_corresponding_tool_call(
@@ -733,10 +846,82 @@ class LiteLLMCompletionResponsesConfig:
         # Empty call_id means we can't create a valid tool message
         if not call_id:
             return []
-        
+
+        def _normalize_function_call_output_to_tool_content(
+            output: Any,
+        ) -> Any:
+            """
+            Normalize Responses API function_call_output.output into a shape that downstream
+            chat adapters (esp. Gemini) can reliably consume.
+
+            OpenAI Responses API typically uses:
+            - output: string
+
+            Some clients/adapters send:
+            - output: [{"type": "input_text", "text": "..."}, {"type": "input_image", ...}]
+
+            For chat tool messages we normalize to either:
+            - string (preferred)
+            - list of {"type": "text"|"image_url", ...} blocks (for multimodal tool outputs)
+            """
+            if output is None:
+                return ""
+            if isinstance(output, str):
+                return output
+
+            # Some adapters represent tool output as a list of "input_*" parts
+            if isinstance(output, list):
+                normalized_blocks: List[Dict[str, Any]] = []
+                text_acc: List[str] = []
+                for part in output:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = part.get("type")
+                    if part_type in ("input_text", "output_text", "text"):
+                        txt = part.get("text")
+                        if isinstance(txt, str) and txt:
+                            text_acc.append(txt)
+                            normalized_blocks.append({"type": "text", "text": txt})
+                    elif part_type in ("input_image", "image_url"):
+                        image_url_val = part.get("image_url") or part.get("url")
+                        if isinstance(image_url_val, dict):
+                            url = image_url_val.get("url")
+                            if isinstance(url, str) and url:
+                                normalized_blocks.append(
+                                    {"type": "image_url", "image_url": {"url": url}}
+                                )
+                        elif isinstance(image_url_val, str) and image_url_val:
+                            normalized_blocks.append(
+                                {"type": "image_url", "image_url": {"url": image_url_val}}
+                            )
+
+                # Prefer structured blocks if we have images; otherwise return a string.
+                if any(b.get("type") == "image_url" for b in normalized_blocks):
+                    # Ensure we include any accumulated text as text blocks too
+                    return normalized_blocks
+                if text_acc:
+                    return "".join(text_acc)
+                try:
+                    # last resort: keep something meaningful for providers that require a string
+                    import json as _json
+
+                    return _json.dumps(output)
+                except Exception:
+                    return str(output)
+
+            # Fallback for dict/number/etc.
+            try:
+                import json as _json
+
+                return _json.dumps(output)
+            except Exception:
+                return str(output)
+
         tool_output_message = ChatCompletionToolMessage(
             role="tool",
-            content=tool_call_output.get("output") or "",
+            content=_normalize_function_call_output_to_tool_content(
+                tool_call_output.get("output")
+            ),
             tool_call_id=str(call_id),
         )
 
@@ -1228,6 +1413,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             user=getattr(chat_completion_response, "user", None),
         )
+        responses_api_response._hidden_params = getattr(chat_completion_response, "_hidden_params", {})
         return responses_api_response
 
     @staticmethod
@@ -1558,13 +1744,15 @@ class LiteLLMCompletionResponsesConfig:
             and usage.prompt_tokens_details is not None
         ):
             prompt_details = usage.prompt_tokens_details
-            input_details_dict: Dict[str, Optional[int]] = {}
+            input_details_dict: Dict[str, int] = {}
 
             if (
                 hasattr(prompt_details, "cached_tokens")
                 and prompt_details.cached_tokens is not None
             ):
                 input_details_dict["cached_tokens"] = prompt_details.cached_tokens
+            else:
+                input_details_dict["cached_tokens"] = 0
 
             if (
                 hasattr(prompt_details, "text_tokens")
@@ -1589,7 +1777,7 @@ class LiteLLMCompletionResponsesConfig:
             and usage.completion_tokens_details is not None
         ):
             completion_details = usage.completion_tokens_details
-            output_details_dict: Dict[str, Optional[int]] = {}
+            output_details_dict: Dict[str, int] = {}
             if (
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
@@ -1597,6 +1785,8 @@ class LiteLLMCompletionResponsesConfig:
                 output_details_dict["reasoning_tokens"] = (
                     completion_details.reasoning_tokens
                 )
+            else:
+                output_details_dict["reasoning_tokens"] = 0
 
             if (
                 hasattr(completion_details, "text_tokens")

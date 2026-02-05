@@ -1,5 +1,5 @@
 ---
-title: "v1.81.0 - Claude Code - Web Search Across All Providers"
+title: "v1.81.0-stable - Claude Code - Web Search Across All Providers"
 slug: "v1-81-0"
 date: 2026-01-18T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:v1.81.0
+docker.litellm.ai/berriai/litellm:v1.81.0-stable
 ```
 
 </TabItem>
@@ -62,7 +62,7 @@ This means you can now use Claude Code's web search tool with any provider, not 
 
 Proxy Admins can configure web search interception in their LiteLLM proxy config to enable this capability for their teams using Claude Code with Bedrock, Azure, or any other supported provider.
 
-[**Learn more →**](../../docs/tutorials/claude_code_websearch.md)
+[**Learn more →**](https://docs.litellm.ai/docs/tutorials/claude_code_websearch)
 
 ---
 

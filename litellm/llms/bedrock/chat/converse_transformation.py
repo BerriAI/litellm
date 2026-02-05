@@ -30,6 +30,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
+
+from ..common_utils import is_claude_4_5_on_bedrock
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -53,7 +55,13 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
+from litellm.utils import (
+    add_dummy_tool,
+    any_assistant_message_has_thinking_blocks,
+    has_tool_call_blocks,
+    last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_reasoning,
+)
 
 from ..common_utils import (
     BedrockError,
@@ -68,6 +76,13 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "computer_",
     "bash_",
     "text_editor_",
+]
+
+# Beta header patterns that are not supported by Bedrock Converse API
+# These will be filtered out to prevent errors
+UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
+    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
+    "prompt-caching",  # Prompt caching not supported in Converse API
 ]
 
 
@@ -292,6 +307,37 @@ class AmazonConverseConfig(BaseConfig):
         # Check if the model is specifically Nova Lite 2
         return "nova-2-lite" in model_without_region
 
+    def _map_web_search_options(
+        self, web_search_options: dict, model: str
+    ) -> Optional[BedrockToolBlock]:
+        """
+        Map web_search_options to Nova grounding systemTool.
+
+        Nova grounding (web search) is only supported on Amazon Nova models.
+        Returns None for non-Nova models.
+
+        Args:
+            web_search_options: The web_search_options dict from the request
+            model: The model identifier string
+
+        Returns:
+            BedrockToolBlock with systemTool for Nova models, None otherwise
+
+        Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+        """
+        # Only Nova models support nova_grounding
+        # Model strings can be like: "amazon.nova-pro-v1:0", "us.amazon.nova-pro-v1:0", etc.
+        if "nova" not in model.lower():
+            verbose_logger.debug(
+                f"web_search_options passed but model {model} is not a Nova model. "
+                "Nova grounding is only supported on Amazon Nova models."
+            )
+            return None
+
+        # Nova doesn't support search_context_size or user_location params
+        # (unlike Anthropic), so we just enable grounding with no options
+        return BedrockToolBlock(systemTool={"name": "nova_grounding"})
+
     def _transform_reasoning_effort_to_reasoning_config(
         self, reasoning_effort: str
     ) -> dict:
@@ -432,6 +478,10 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("tools")
 
+        # Nova models support web_search_options (mapped to nova_grounding systemTool)
+        if base_model.startswith("amazon.nova"):
+            supported_params.append("web_search_options")
+
         if litellm.utils.supports_tool_choice(
             model=model, custom_llm_provider=self.custom_llm_provider
         ) or litellm.utils.supports_tool_choice(
@@ -566,6 +616,37 @@ class AmazonConverseConfig(BaseConfig):
             transformed_tools.append(transformed_tool)
 
         return transformed_tools
+
+    def _filter_unsupported_beta_headers_for_bedrock(
+        self, model: str, beta_list: list
+    ) -> list:
+        """
+        Remove beta headers that are not supported on Bedrock Converse API for the given model.
+
+        Extended thinking beta headers are only supported on specific Claude 4+ models.
+        Some beta headers are universally unsupported on Bedrock Converse API.
+
+        Args:
+            model: The model name
+            beta_list: The list of beta headers to filter
+
+        Returns:
+            Filtered list of beta headers
+        """
+        filtered_betas = []
+
+        # 1. Filter out beta headers that are universally unsupported on Bedrock Converse
+        for beta in beta_list:
+            should_keep = True
+            for unsupported_pattern in UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS:
+                if unsupported_pattern in beta.lower():
+                    should_keep = False
+                    break
+
+            if should_keep:
+                filtered_betas.append(beta)
+
+        return filtered_betas
 
     def _separate_computer_use_tools(
         self, tools: List[OpenAIChatCompletionToolParam], model: str
@@ -724,6 +805,15 @@ class AmazonConverseConfig(BaseConfig):
                 if bedrock_tier in ("default", "flex", "priority"):
                     optional_params["serviceTier"] = {"type": bedrock_tier}
 
+            if param == "web_search_options" and isinstance(value, dict):
+                # Note: we use `isinstance(value, dict)` instead of `value and isinstance(value, dict)`
+                # because empty dict {} is falsy but is a valid way to enable Nova grounding
+                grounding_tool = self._map_web_search_options(value, model)
+                if grounding_tool is not None:
+                    optional_params = self._add_tools_to_optional_params(
+                        optional_params=optional_params, tools=[grounding_tool]
+                    )
+
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
         # Nova Lite 2 handles token budgeting differently through reasoningConfig
         if "gpt-oss" not in model and not self._is_nova_lite_2_model(model):
@@ -773,7 +863,7 @@ class AmazonConverseConfig(BaseConfig):
             return optional_params
 
         """
-        Follow similar approach to anthropic - translate to a single tool call. 
+        Follow similar approach to anthropic - translate to a single tool call.
 
         When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
         - You usually want to provide a single tool
@@ -836,6 +926,7 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionAssistantMessage,
         ],
         block_type: Literal["system"],
+        model: Optional[str] = None,
     ) -> Optional[SystemContentBlock]:
         pass
 
@@ -849,6 +940,7 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionAssistantMessage,
         ],
         block_type: Literal["content_block"],
+        model: Optional[str] = None,
     ) -> Optional[ContentBlock]:
         pass
 
@@ -861,16 +953,26 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionAssistantMessage,
         ],
         block_type: Literal["system", "content_block"],
+        model: Optional[str] = None,
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
-        if message_block.get("cache_control", None) is None:
+        cache_control = message_block.get("cache_control", None)
+        if cache_control is None:
             return None
+
+        cache_point = CachePointBlock(type="default")
+        if isinstance(cache_control, dict) and "ttl" in cache_control:
+            ttl = cache_control["ttl"]
+            if ttl in ["5m", "1h"] and model is not None:
+                if is_claude_4_5_on_bedrock(model):
+                    cache_point["ttl"] = ttl
+
         if block_type == "system":
-            return SystemContentBlock(cachePoint=CachePointBlock(type="default"))
+            return SystemContentBlock(cachePoint=cache_point)
         else:
-            return ContentBlock(cachePoint=CachePointBlock(type="default"))
+            return ContentBlock(cachePoint=cache_point)
 
     def _transform_system_message(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: Optional[str] = None
     ) -> Tuple[List[AllMessageValues], List[SystemContentBlock]]:
         system_prompt_indices = []
         system_content_blocks: List[SystemContentBlock] = []
@@ -882,7 +984,7 @@ class AmazonConverseConfig(BaseConfig):
                         SystemContentBlock(text=message["content"])
                     )
                     cache_block = self._get_cache_point_block(
-                        message, block_type="system"
+                        message, block_type="system", model=model
                     )
                     if cache_block:
                         system_content_blocks.append(cache_block)
@@ -893,7 +995,7 @@ class AmazonConverseConfig(BaseConfig):
                                 SystemContentBlock(text=m["text"])
                             )
                             cache_block = self._get_cache_point_block(
-                                m, block_type="system"
+                                m, block_type="system", model=model
                             )
                             if cache_block:
                                 system_content_blocks.append(cache_block)
@@ -991,10 +1093,16 @@ class AmazonConverseConfig(BaseConfig):
             user_betas = get_anthropic_beta_from_headers(headers)
             anthropic_beta_list.extend(user_betas)
 
-        # Filter out tool search tools - Bedrock Converse API doesn't support them
+        # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
+        # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools = []
+        pre_formatted_tools: List[ToolBlock] = []
         if original_tools:
             for tool in original_tools:
+                # Already-formatted Bedrock tools (e.g. systemTool for Nova grounding)
+                if "systemTool" in tool:
+                    pre_formatted_tools.append(tool)
+                    continue
                 tool_type = tool.get("type", "")
                 if tool_type in (
                     "tool_search_tool_regex_20251119",
@@ -1026,6 +1134,9 @@ class AmazonConverseConfig(BaseConfig):
             # No computer use tools, process all tools as regular tools
             bedrock_tools = _bedrock_tools_pt(filtered_tools)
 
+        # Append pre-formatted tools (systemTool etc.) after transformation
+        bedrock_tools.extend(pre_formatted_tools)
+
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         # and will error with "unknown variant anthropic_beta" if included
@@ -1038,7 +1149,14 @@ class AmazonConverseConfig(BaseConfig):
                 if beta not in seen:
                     unique_betas.append(beta)
                     seen.add(beta)
-            additional_request_params["anthropic_beta"] = unique_betas
+
+            # Filter out unsupported beta headers for Bedrock Converse API
+            filtered_betas = self._filter_unsupported_beta_headers_for_bedrock(
+                model=model,
+                beta_list=unique_betas,
+            )
+
+            additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 
@@ -1070,10 +1188,31 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
+        # Drop thinking param if thinking is enabled but thinking_blocks are missing
+        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        #
+        # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
+        # If any message has thinking_blocks, we must keep thinking enabled, otherwise
+        # Related issues: https://github.com/BerriAI/litellm/issues/14194
+        if (
+            optional_params.get("thinking") is not None
+            and messages is not None
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+            and not any_assistant_message_has_thinking_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params.pop("thinking", None)
+                litellm.verbose_logger.warning(
+                    "Dropping 'thinking' param because the last assistant message with tool_calls "
+                    "has no thinking_blocks. The model won't use extended thinking for this turn."
+                )
+
         # Prepare and separate parameters
-        inference_params, additional_request_params, request_metadata = (
-            self._prepare_request_params(optional_params, model)
-        )
+        (
+            inference_params,
+            additional_request_params,
+            request_metadata,
+        ) = self._prepare_request_params(optional_params, model)
 
         original_tools = inference_params.pop("tools", [])
 
@@ -1125,7 +1264,9 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: Optional[dict] = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages)
+        messages, system_content_blocks = self._transform_system_message(
+            messages, model=model
+        )
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -1181,7 +1322,9 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: Optional[dict] = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages)
+        messages, system_content_blocks = self._transform_system_message(
+            messages, model=model
+        )
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -1359,24 +1502,29 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock]
+    ) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
+        Optional[List[CitationsContentBlock]],
     ]:
         """
-        Translate the message content to a string and a list of tool calls and reasoning content blocks
+        Translate the message content to a string and a list of tool calls, reasoning content blocks, and citations.
 
         Returns:
             content_str: str
             tools: List[ChatCompletionToolCallChunk]
             reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]]
+            citationsContentBlocks: Optional[List[CitationsContentBlock]] - Citations from Nova grounding
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
+        citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -1421,10 +1569,15 @@ class AmazonConverseConfig(BaseConfig):
                 if reasoningContentBlocks is None:
                     reasoningContentBlocks = []
                 reasoningContentBlocks.append(content["reasoningContent"])
+            # Handle Nova grounding citations content
+            if "citationsContent" in content:
+                if citationsContentBlocks is None:
+                    citationsContentBlocks = []
+                citationsContentBlocks.append(content["citationsContent"])
 
-        return content_str, tools, reasoningContentBlocks
+        return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
-    def _transform_response(
+    def _transform_response(  # noqa: PLR0915
         self,
         model: str,
         response: httpx.Response,
@@ -1459,11 +1612,11 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         """
-        Bedrock Response Object has optional message block 
+        Bedrock Response Object has optional message block
 
         completion_response["output"].get("message", None)
 
-        A message block looks like this (Example 1): 
+        A message block looks like this (Example 1):
         "output": {
             "message": {
                 "role": "assistant",
@@ -1497,27 +1650,38 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
+        citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
 
         if message is not None:
             (
                 content_str,
                 tools,
                 reasoningContentBlocks,
+                citationsContentBlocks,
             ) = self._translate_message_content(message["content"])
 
+        # Initialize provider_specific_fields if we have any special content blocks
+        provider_specific_fields: dict = {}
         if reasoningContentBlocks is not None:
-            chat_completion_message["provider_specific_fields"] = {
-                "reasoningContentBlocks": reasoningContentBlocks,
-            }
-            chat_completion_message["reasoning_content"] = (
-                self._transform_reasoning_content(reasoningContentBlocks)
-            )
-            chat_completion_message["thinking_blocks"] = (
-                self._transform_thinking_blocks(reasoningContentBlocks)
-            )
+            provider_specific_fields["reasoningContentBlocks"] = reasoningContentBlocks
+        if citationsContentBlocks is not None:
+            provider_specific_fields["citationsContent"] = citationsContentBlocks
+
+        if provider_specific_fields:
+            chat_completion_message[
+                "provider_specific_fields"
+            ] = provider_specific_fields
+
+        if reasoningContentBlocks is not None:
+            chat_completion_message[
+                "reasoning_content"
+            ] = self._transform_reasoning_content(reasoningContentBlocks)
+            chat_completion_message[
+                "thinking_blocks"
+            ] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         if (
             json_mode is True

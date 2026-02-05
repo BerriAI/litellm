@@ -1025,7 +1025,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                 setSelectedModelId(null);
                 setEditModel(false);
               }}
-              modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
@@ -1270,9 +1269,9 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                               <span className="text-sm text-gray-700">
                                 {filteredData.length > 0
                                   ? `Showing ${pagination.pageIndex * pagination.pageSize + 1} - ${Math.min(
-                                      (pagination.pageIndex + 1) * pagination.pageSize,
-                                      filteredData.length,
-                                    )} of ${filteredData.length} results`
+                                    (pagination.pageIndex + 1) * pagination.pageSize,
+                                    filteredData.length,
+                                  )} of ${filteredData.length} results`
                                   : "Showing 0 results"}
                               </span>
 
@@ -1284,11 +1283,10 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                                       setPagination((prev) => ({ ...prev, pageIndex: prev.pageIndex - 1 }))
                                     }
                                     disabled={pagination.pageIndex === 0}
-                                    className={`px-3 py-1 text-sm border rounded-md ${
-                                      pagination.pageIndex === 0
-                                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                        : "hover:bg-gray-50"
-                                    }`}
+                                    className={`px-3 py-1 text-sm border rounded-md ${pagination.pageIndex === 0
+                                      ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                      : "hover:bg-gray-50"
+                                      }`}
                                   >
                                     Previous
                                   </button>
@@ -1300,11 +1298,10 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                                     disabled={
                                       pagination.pageIndex >= Math.ceil(filteredData.length / pagination.pageSize) - 1
                                     }
-                                    className={`px-3 py-1 text-sm border rounded-md ${
-                                      pagination.pageIndex >= Math.ceil(filteredData.length / pagination.pageSize) - 1
-                                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                        : "hover:bg-gray-50"
-                                    }`}
+                                    className={`px-3 py-1 text-sm border rounded-md ${pagination.pageIndex >= Math.ceil(filteredData.length / pagination.pageSize) - 1
+                                      ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                      : "hover:bg-gray-50"
+                                      }`}
                                   >
                                     Next
                                   </button>
@@ -1371,6 +1368,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                     all_models_on_proxy={all_models_on_proxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
+                    teams={teams}
                   />
                 </TabPanel>
                 <TabPanel>

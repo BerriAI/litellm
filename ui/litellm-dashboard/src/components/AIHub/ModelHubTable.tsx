@@ -5,6 +5,7 @@ import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
 import { modelHubColumns } from "@/components/model_hub_table_columns";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
+import ClaudeCodeMarketplaceTab from "@/components/AIHub/ClaudeCodeMarketplaceTab";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import ModelFilters from "@/components/model_filters";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -372,12 +373,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
             </div>
           )}
 
-          {/* Tab System for Model Hub, Agent Hub, and MCP Hub */}
+          {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
           <TabGroup>
             <TabList className="mb-4">
               <Tab>Model Hub</Tab>
               <Tab>Agent Hub</Tab>
               <Tab>MCP Hub</Tab>
+              <Tab>Claude Code Plugin Marketplace</Tab>
             </TabList>
 
             <TabPanels>
@@ -462,6 +464,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   </Text>
                 </div>
               </TabPanel>
+
+              {/* Plugin Marketplace Tab */}
+              <TabPanel>
+                <ClaudeCodeMarketplaceTab publicPage={publicPage} />
+              </TabPanel>
             </TabPanels>
           </TabGroup>
         </div>
@@ -476,7 +483,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       <Modal
         title="Public Model Hub"
         width={600}
-        visible={isPublicPageModalVisible}
+        open={isPublicPageModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -498,7 +505,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       <Modal
         title={selectedModel?.model_group || "Model Details"}
         width={1000}
-        visible={isModalVisible}
+        open={isModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -649,7 +656,7 @@ print(response.choices[0].message.content)`}
       <Modal
         title={selectedAgent?.name || "Agent Details"}
         width={1000}
-        visible={isAgentModalVisible}
+        open={isAgentModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -788,7 +795,7 @@ print(response.choices[0].message.content)`}
       <Modal
         title={selectedMcpServer?.server_name || "MCP Server Details"}
         width={1000}
-        visible={isMcpModalVisible}
+        open={isMcpModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
