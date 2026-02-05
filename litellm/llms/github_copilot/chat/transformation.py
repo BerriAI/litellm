@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Tuple, cast
+from typing import List, Optional, Tuple
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -54,7 +54,7 @@ class GithubCopilotConfig(OpenAIConfig):
             # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
             # No conversion needed - just return messages as-is
             return messages
-        
+
         # Default behavior: convert system messages to assistant for compatibility
         transformed_messages = []
         for message in messages:
@@ -65,7 +65,7 @@ class GithubCopilotConfig(OpenAIConfig):
                 transformed_messages.append(transformed_message)
             else:
                 transformed_messages.append(message)
-        
+
         return transformed_messages
 
     def validate_environment(
