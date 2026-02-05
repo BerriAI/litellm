@@ -141,6 +141,64 @@ async def test_openai_moderation_guardrail_safe_content():
             assert result == data
 
 
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_apply_guardrail():
+    """Test OpenAI moderation guardrail apply_guardrail method (unified guardrail interface)"""
+    from litellm.types.utils import GenericGuardrailAPIInputs
+    
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+        )
+        
+        # Mock safe moderation response
+        mock_response = OpenAIModerationResponse(
+            id="modr-123",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={
+                        "sexual": False,
+                        "hate": False,
+                        "harassment": False,
+                        "self-harm": False,
+                        "violence": False,
+                    },
+                    category_scores={
+                        "sexual": 0.001,
+                        "hate": 0.001,
+                        "harassment": 0.001,
+                        "self-harm": 0.001,
+                        "violence": 0.001,
+                    },
+                    category_applied_input_types={
+                        "sexual": [],
+                        "hate": [],
+                        "harassment": [],
+                        "self-harm": [],
+                        "violence": [],
+                    }
+                )
+            ]
+        )
+        
+        with patch.object(guardrail, 'async_make_request', return_value=mock_response):
+            # Test apply_guardrail with texts (embeddings-style input)
+            inputs = GenericGuardrailAPIInputs(
+                texts=["Hello, how are you?", "What is the weather?"]
+            )
+            
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+            
+            # Should return inputs unchanged (moderation doesn't modify, only blocks)
+            assert result == inputs
+
+
 @pytest.mark.asyncio 
 async def test_openai_moderation_guardrail_harmful_content():
     """Test OpenAI moderation guardrail with harmful content"""
