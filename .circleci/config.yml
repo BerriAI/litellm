@@ -2064,32 +2064,32 @@ jobs:
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
-  #   steps:
-  #     - checkout
-  #     - setup_google_dns
-  #     - run:
-  #         name: Install Dependencies
-  #         command: |
-  #           python -m pip install --upgrade pip
-  #           pip install python-dotenv
-  #           pip install pytest
-  #           pip install tiktoken
-  #           pip install aiohttp
-  #           pip install openai
-  #           pip install click
-  #           pip install "boto3==1.36.0"
-  #           pip install jinja2
-  #           pip install "tokenizers==0.20.0"
-  #           pip install "uvloop==0.21.0"
-  #           pip install "fastuuid==0.12.0"
-  #           pip install jsonschema
-  #     - setup_litellm_enterprise_pip
-  #     - run:
-  #         name: Run tests
-  #         command: |
-  #           pwd
-  #           ls
-  #           python -m pytest -vv tests/local_testing/test_basic_python_version.py
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install python-dotenv
+            pip install pytest
+            pip install tiktoken
+            pip install aiohttp
+            pip install openai
+            pip install click
+            pip install "boto3==1.36.0"
+            pip install jinja2
+            pip install "tokenizers==0.20.0"
+            pip install "uvloop==0.21.0"
+            pip install "fastuuid==0.12.0"
+            pip install jsonschema
+      - setup_litellm_enterprise_pip
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
 
   # installing_litellm_on_python_3_13:
   #   docker:
