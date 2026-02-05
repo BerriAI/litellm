@@ -62,7 +62,7 @@ async def _handle_stream_message(
     if not A2A_SDK_AVAILABLE:
         # Return a streaming response that yields an error
         async def _error_stream():
-            yield "data: " + json.dumps(
+            yield json.dumps(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -71,9 +71,9 @@ async def _handle_stream_message(
                         "message": "Server error: 'a2a' package not installed",
                     },
                 }
-            ) + "\n\n"
+            ) + "\n"
 
-        return StreamingResponse(_error_stream(), media_type="text/event-stream")
+        return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
 
     from a2a.types import (
         MessageSendParams,
@@ -96,27 +96,22 @@ async def _handle_stream_message(
             ):
                 # Chunk may be dict or object depending on bridge vs standard path
                 if hasattr(chunk, "model_dump"):
-                    yield "data: " + json.dumps(
+                    yield json.dumps(
                         chunk.model_dump(mode="json", exclude_none=True)
-                    ) + "\n\n"
+                    ) + "\n"
                 else:
-                    yield "data: " + json.dumps(chunk) + "\n\n"
+                    yield json.dumps(chunk) + "\n"
         except Exception as e:
-            # Log full exception details server-side for debugging
-            verbose_proxy_logger.exception("Error streaming A2A response")
-            # Return a generic error message to the client without exposing internal details
-            yield "data: " + json.dumps(
+            verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
+            yield json.dumps(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "error": {
-                        "code": -32603,
-                        "message": "Streaming error",
-                    },
+                    "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
                 }
-            ) + "\n\n"
+            ) + "\n"
 
-    return StreamingResponse(stream_response(), media_type="text/event-stream")
+    return StreamingResponse(stream_response(), media_type="application/x-ndjson")
 
 
 @router.get(
