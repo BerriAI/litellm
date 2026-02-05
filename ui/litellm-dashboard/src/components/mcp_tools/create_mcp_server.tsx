@@ -305,7 +305,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.fromBackend("Error creating MCP Server: " + error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "object" && error !== null && "error" in error
+            ? String((error as { error: unknown }).error)
+            : String(error);
+      NotificationsManager.fromBackend("Error creating MCP Server: " + message);
     } finally {
       setIsLoading(false);
     }

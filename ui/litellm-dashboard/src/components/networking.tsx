@@ -8690,13 +8690,18 @@ export const perUserAnalyticsCall = async (
 };
 
 export const deriveErrorMessage = (errorData: any): string => {
-  return (
+  const raw =
     (errorData?.error && (errorData.error.message || errorData.error)) ||
     errorData?.message ||
     errorData?.detail ||
     errorData?.error ||
-    JSON.stringify(errorData)
-  );
+    JSON.stringify(errorData);
+  // Backend often returns { detail: { error: "..." } }; avoid showing [object Object]
+  if (typeof raw === "object" && raw !== null) {
+    const msg = raw.error ?? raw.message;
+    return typeof msg === "string" ? msg : JSON.stringify(raw);
+  }
+  return String(raw);
 };
 
 export interface LoginRequest {
