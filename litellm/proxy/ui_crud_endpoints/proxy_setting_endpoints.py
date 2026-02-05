@@ -846,12 +846,25 @@ async def update_mcp_semantic_filter_settings(
     Update MCP semantic filter settings in database.
     Settings will be picked up by all pods within approximately 10 seconds via background polling.
     """
-    return await _update_litellm_setting(
+    result = await _update_litellm_setting(
         settings=settings,
         settings_key="mcp_semantic_tool_filter",
         in_memory_var=None,
         success_message="MCP Semantic Filter settings updated successfully. Changes will be applied across all pods within 10 seconds.",
     )
+    try:
+        from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+        if prisma_client is not None:
+            await proxy_config._init_semantic_filter_settings_in_db(
+                prisma_client=prisma_client
+            )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to reinitialize MCP semantic filter settings immediately: {e}"
+        )
+
+    return result
 
 
 @router.get(
