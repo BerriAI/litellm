@@ -1,0 +1,26 @@
+####################################################################
+### Simplified LiteLLM Proxy Configuration
+####################################################################
+
+general_settings:
+  master_key: sk-1234
+  disable_prisma_schema_update: true
+  database_url: <redacted>
+
+#################################
+### LiteLLM Settings
+#################################
+litellm_settings:
+  callbacks: ["prometheus"]
+  service_callback: ["prometheus_system"]
+
+#################################
+### Models - One model only
+#################################
+model_list:
+  - model_name: "gpt-o1"
+    litellm_params:
+      model: openai/gpt-o1
+      api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
+    model_info:
+      context_length: 200000
