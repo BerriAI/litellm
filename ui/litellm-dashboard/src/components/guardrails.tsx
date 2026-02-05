@@ -314,6 +314,8 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               onClose={handleCloseModal}
               accessToken={accessToken}
               onSuccess={handleSuccess}
+              userRole={userRole}
+              userID={userID}
             />
 
             <CustomCodeModal

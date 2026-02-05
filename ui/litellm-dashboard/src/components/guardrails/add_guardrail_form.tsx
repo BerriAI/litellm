@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Form, Typography, Select, Modal, Tag, Steps } from "antd";
-import { Button, TextInput } from "@tremor/react";
+import { Form, Typography, Select, Modal, Tag, Steps, Tooltip } from "antd";
+import { Button, TextInput, Switch } from "@tremor/react";
 import {
   guardrail_provider_map,
   shouldRenderPIIConfigSettings,
@@ -10,7 +10,7 @@ import {
   populateGuardrailProviderMap,
   getGuardrailProviders,
 } from "./guardrail_info_helpers";
-import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from "../networking";
+import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams, teamListCall } from "../networking";
 import PiiConfiguration from "./pii_configuration";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
@@ -19,6 +19,8 @@ import ContentFilterConfiguration from "./content_filter/ContentFilterConfigurat
 import ToolPermissionRulesEditor, {
   ToolPermissionConfig,
 } from "./tool_permission/ToolPermissionRulesEditor";
+import TeamDropdown from "../common_components/team_dropdown";
+import type { Team } from "../key_team_helpers/key_list";
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -39,6 +41,8 @@ interface AddGuardrailFormProps {
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+  userRole?: string;
+  userID?: string | null;
 }
 
 interface GuardrailSettings {
@@ -91,7 +95,7 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
-const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, userRole, userID }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -100,6 +104,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [selectedActions, setSelectedActions] = useState<{ [key: string]: string }>({});
   const [currentStep, setCurrentStep] = useState(0);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
+
+  // Team-only guardrail state
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [isTeamOnly, setIsTeamOnly] = useState(false);
+
+  const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
 
   // Azure Text Moderation state
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -125,20 +135,22 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     return (providerValue || "").toLowerCase() === "tool_permission";
   }, [selectedProvider]);
 
-  // Fetch guardrail UI settings + provider params on mount / accessToken change
+  // Fetch guardrail UI settings + provider params + teams on mount / accessToken change
   useEffect(() => {
     if (!accessToken) return;
 
     const fetchData = async () => {
       try {
         // Parallel requests for speed
-        const [uiSettings, providerParamsResp] = await Promise.all([
+        const [uiSettings, providerParamsResp, teamsResponse] = await Promise.all([
           getGuardrailUISettings(accessToken),
           getGuardrailProviderSpecificParams(accessToken),
+          teamListCall(accessToken, null, isAdmin ? null : userID),
         ]);
 
         setGuardrailSettings(uiSettings);
         setProviderParams(providerParamsResp);
+        setTeams(teamsResponse || []);
 
         // Populate dynamic providers from API response
         populateGuardrailProviders(providerParamsResp);
@@ -150,7 +162,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     };
 
     fetchData();
-  }, [accessToken]);
+  }, [accessToken, isAdmin, userID]);
 
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
@@ -265,6 +277,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       on_disallowed_action: "block",
       violation_message_template: "",
     });
+    setIsTeamOnly(false);
     setCurrentStep(0);
   };
 
@@ -375,6 +388,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (toolPermissionConfig.violation_message_template) {
           guardrailData.litellm_params.violation_message_template = toolPermissionConfig.violation_message_template;
         }
+      }
+
+      // Add team_id for team-only guardrails
+      if (isTeamOnly && values.team_id) {
+        guardrailData.litellm_params.team_id = values.team_id;
       }
 
       /******************************
@@ -595,6 +613,46 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             <Select.Option value={false}>No</Select.Option>
           </Select>
         </Form.Item>
+
+        {/* Team-only Guardrail Switch */}
+        <Form.Item
+          label="Team-Only Guardrail"
+          tooltip="If enabled, this guardrail will only be available to the selected team and no one else."
+          className="mb-4"
+        >
+          <Tooltip
+            title="Restrict this guardrail to a specific team. Only that team will be able to use this guardrail."
+            placement="top"
+          >
+            <Switch
+              checked={isTeamOnly}
+              onChange={(checked) => {
+                setIsTeamOnly(checked);
+                if (!checked) {
+                  form.setFieldValue("team_id", undefined);
+                }
+              }}
+            />
+          </Tooltip>
+        </Form.Item>
+
+        {/* Conditional Team Selection */}
+        {isTeamOnly && (
+          <Form.Item
+            label="Select Team"
+            name="team_id"
+            className="mb-4"
+            tooltip="Only this team will be able to use this guardrail."
+            rules={[
+              {
+                required: isTeamOnly,
+                message: "Please select a team.",
+              },
+            ]}
+          >
+            <TeamDropdown teams={teams} />
+          </Form.Item>
+        )}
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
         {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && (
