@@ -23,6 +23,10 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.llms.bedrock.beta_headers_config import (
+    BedrockAPI,
+    get_bedrock_beta_filter,
+)
 from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
@@ -53,8 +57,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
 
-    # Beta header patterns that are not supported by Bedrock Invoke API
-    # These will be filtered out to prevent 400 "invalid beta flag" errors
+    # Beta header filtering is now handled by centralized beta_headers_config module
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -433,11 +436,15 @@ class AmazonAnthropicClaudeMessagesConfig(
             beta_set=beta_set,
         )
 
-        if "tool-search-tool-2025-10-19" in beta_set:
-            beta_set.add("tool-examples-2025-10-29")
-    
-        if beta_set:
-            anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        # Filter beta headers using centralized whitelist with model-specific support and translation
+        # This handles advanced-tool-use translation and version/family restrictions
+        beta_filter = get_bedrock_beta_filter(BedrockAPI.INVOKE_MESSAGES)
+        filtered_betas = beta_filter.filter_beta_headers(
+            list(beta_set), model, translate=True
+        )
+
+        if filtered_betas:
+            anthropic_messages_request["anthropic_beta"] = filtered_betas
 
         return anthropic_messages_request
 

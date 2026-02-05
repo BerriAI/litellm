@@ -7,6 +7,10 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.llms.bedrock.beta_headers_config import (
+    BedrockAPI,
+    get_bedrock_beta_filter,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -132,10 +136,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
-        # Filter out beta headers that Bedrock Invoke doesn't support
-        # Uses centralized configuration from anthropic_beta_headers_config.json
-        beta_list = list(beta_set)
-        _anthropic_request["anthropic_beta"] = beta_list
+        # Filter beta headers using centralized whitelist with model-specific support
+        # AWS Bedrock only supports a specific whitelist of beta flags
+        # Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+        beta_filter = get_bedrock_beta_filter(BedrockAPI.INVOKE_CHAT)
+        beta_list = beta_filter.filter_beta_headers(
+            list(beta_set), model, translate=False
+        )
+        beta_set = set(beta_list)
+
+        if beta_set:
+            _anthropic_request["anthropic_beta"] = list(beta_set)
 
         return _anthropic_request
 

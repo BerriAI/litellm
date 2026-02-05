@@ -33,6 +33,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.beta_headers_config import (
+    BedrockAPI,
+    get_bedrock_beta_filter,
+)
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -81,13 +85,7 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "text_editor_",
 ]
 
-# Beta header patterns that are not supported by Bedrock Converse API
-# These will be filtered out to prevent errors
-UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
-    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
-    "prompt-caching",  # Prompt caching not supported in Converse API
-    "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
-]
+# Beta header filtering is now handled by centralized beta_headers_config module
 
 # Models that support Bedrock's native structured outputs API (outputConfig.textFormat)
 # Uses substring matching against the Bedrock model ID
@@ -1328,11 +1326,16 @@ class AmazonConverseConfig(BaseConfig):
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
 
-        # Set anthropic_beta in additional_request_params if we have any beta features
-        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
+        # Filter beta headers using centralized whitelist with model-specific support
+        # This handles version/family restrictions and unsupported beta patterns
         base_model = BedrockModelInfo.get_base_model(model)
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            additional_request_params["anthropic_beta"] = anthropic_beta_list
+            beta_filter = get_bedrock_beta_filter(BedrockAPI.CONVERSE)
+            filtered_betas = beta_filter.filter_beta_headers(
+                anthropic_beta_list, model, translate=True
+            )
+            if filtered_betas:
+                additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 
