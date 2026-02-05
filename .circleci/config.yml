@@ -2056,13 +2056,13 @@ jobs:
   #         paths:
   #           - audio_coverage.xml
   #           - audio_coverage
-  # installing_litellm_on_python:
-  #   docker:
-  #     - image: cimg/python:3.11
-  #       auth:
-  #         username: ${DOCKERHUB_USERNAME}
-  #         password: ${DOCKERHUB_PASSWORD}
-  #   working_directory: ~/project
+  installing_litellm_on_python:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
 
   #   steps:
   #     - checkout
