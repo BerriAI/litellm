@@ -8,7 +8,10 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import fnmatch
 import os
-from typing import Any, List, Literal, Optional, Set, Tuple, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Set, Tuple, cast
+
+if TYPE_CHECKING:
+    from jwt.types import Options
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -618,7 +621,7 @@ class JWTHandler:
         ]
 
         audience = os.getenv("JWT_AUDIENCE")
-        decode_options: dict[str, bool] | None = None
+        decode_options: Options | None = None
         if audience is None:
             decode_options = {"verify_aud": False}
 
