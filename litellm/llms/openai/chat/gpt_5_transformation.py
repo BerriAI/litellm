@@ -24,6 +24,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return "gpt-5" in model and "gpt-5-chat" not in model
 
     @classmethod
+    def is_model_gpt_5_chat_model(cls, model: str) -> bool:
+        """Check if the model is a GPT-5 chat variant (intelligence model).
+
+        GPT-5 chat models (gpt-5-chat, gpt-5-chat-latest) are intelligence models
+        that support temperature, unlike reasoning models (gpt-5, gpt-5-mini, etc.).
+        """
+        model_name = model.split("/")[-1]
+        return "gpt-5-chat" in model_name
+
+    @classmethod
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:
         """Check if the model is specifically a GPT-5 Codex variant."""
         return "gpt-5-codex" in model
@@ -121,10 +131,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if "temperature" in non_default_params:
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
+                is_gpt_5_chat = self.is_model_gpt_5_chat_model(model)
                 is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
-                
+
+                # gpt-5-chat models are intelligence models that support any temperature
+                if is_gpt_5_chat:
+                    optional_params["temperature"] = temperature_value
                 # gpt-5.1 supports any temperature when reasoning_effort="none" (or not specified, as it defaults to "none")
-                if is_gpt_5_1 and (reasoning_effort == "none" or reasoning_effort is None):
+                elif is_gpt_5_1 and (reasoning_effort == "none" or reasoning_effort is None):
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value
@@ -133,9 +147,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "gpt-5 models (including gpt-5-codex) don't support temperature={}. "
+                            "gpt-5 reasoning models (gpt-5, gpt-5-mini, gpt-5-codex, etc.) don't support temperature={}. "
                             "Only temperature=1 is supported. "
-                            "For gpt-5.1, temperature is supported when reasoning_effort='none' (or not specified, as it defaults to 'none'). "
+                            "For gpt-5-chat models, any temperature is supported. "
+                            "For gpt-5.1, temperature is supported when reasoning_effort='none'. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ).format(temperature_value),
                         status_code=400,
