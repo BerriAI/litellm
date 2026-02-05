@@ -112,9 +112,9 @@ class SambanovaConfig(OpenAIGPTConfig):
         Adds X-Integration-Source header for analytics tracking.
         Priority: User parameter > Env var > Default value ("litellm")
         """
-        
+
         integration_source = (
-            optional_params.get('extra_body',{}).pop("integration_source", None) 
+            optional_params.get("extra_body", {}).pop("integration_source", None)
             or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE")
             or "litellm"
         )
@@ -156,6 +156,7 @@ class SambanovaConfig(OpenAIGPTConfig):
         SambaNova API doesn't support content as a list - only string content.
         This converts content lists like [{"type": "text", "text": "..."}] to strings.
         """
+
         async def _async_transform():
             return handle_messages_with_content_list_to_str_conversion(messages)
 

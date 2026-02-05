@@ -53,7 +53,7 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
         # Add X-Integration-Source header with priority handling
         # Priority: User parameter > Env var > Default value ("litellm")
         integration_source = (
-            optional_params.get('extra_body',{}).pop("integration_source", None)
+            optional_params.get("extra_body", {}).pop("integration_source", None)
             or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE")
             or "litellm"
         )
