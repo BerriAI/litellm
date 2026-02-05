@@ -1794,6 +1794,12 @@ class LiteLLMCompletionResponsesConfig:
             ):
                 output_details_dict["text_tokens"] = completion_details.text_tokens
 
+            if (
+                hasattr(completion_details, "image_tokens")
+                and completion_details.image_tokens is not None
+            ):
+                output_details_dict["image_tokens"] = completion_details.image_tokens
+
             if output_details_dict:
                 response_usage.output_tokens_details = OutputTokensDetails(
                     **output_details_dict
