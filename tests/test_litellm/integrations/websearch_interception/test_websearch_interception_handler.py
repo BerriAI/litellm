@@ -362,3 +362,127 @@ def test_internal_flags_filtered_from_followup_kwargs():
     # Verify regular kwargs are preserved
     assert kwargs_for_followup["temperature"] == 0.7
     assert kwargs_for_followup["max_tokens"] == 1024
+
+
+class TestExecuteSearchApiKeyExtraction:
+    """Tests for API key extraction from router's search_tools configuration.
+
+    Verifies that _execute_search() correctly loads search_provider, api_key,
+    and api_base from the router's search_tools config.
+    """
+
+    def test_extracts_credentials_from_named_search_tool(self):
+        """Should extract api_key, api_base, search_provider from a named search tool."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        logger = WebSearchInterceptionLogger(
+            enabled_providers=["bedrock"],
+            search_tool_name="my-perplexity",
+        )
+
+        mock_router = MagicMock()
+        mock_router.search_tools = [
+            {
+                "search_tool_name": "my-perplexity",
+                "litellm_params": {
+                    "search_provider": "perplexity",
+                    "api_key": "pplx-secret-key",
+                    "api_base": "https://custom.perplexity.ai",
+                },
+            }
+        ]
+
+        async def _test():
+            with patch(
+                "litellm.integrations.websearch_interception.handler.litellm.asearch",
+                new_callable=AsyncMock,
+            ) as mock_asearch:
+                mock_asearch.return_value = MagicMock(results=[])
+
+                mock_proxy = MagicMock()
+                mock_proxy.llm_router = mock_router
+                with patch.dict("sys.modules", {"litellm.proxy.proxy_server": mock_proxy}):
+                    await logger._execute_search("test query")
+
+                mock_asearch.assert_called_once_with(
+                    query="test query",
+                    search_provider="perplexity",
+                    api_key="pplx-secret-key",
+                    api_base="https://custom.perplexity.ai",
+                )
+
+        asyncio.run(_test())
+
+    def test_falls_back_to_first_search_tool(self):
+        """Should fall back to first available search tool when named tool not found."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        logger = WebSearchInterceptionLogger(
+            enabled_providers=["bedrock"],
+            search_tool_name="nonexistent-tool",
+        )
+
+        mock_router = MagicMock()
+        mock_router.search_tools = [
+            {
+                "search_tool_name": "default-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "tvly-fallback-key",
+                },
+            }
+        ]
+
+        async def _test():
+            with patch(
+                "litellm.integrations.websearch_interception.handler.litellm.asearch",
+                new_callable=AsyncMock,
+            ) as mock_asearch:
+                mock_asearch.return_value = MagicMock(results=[])
+
+                mock_proxy = MagicMock()
+                mock_proxy.llm_router = mock_router
+                with patch.dict("sys.modules", {"litellm.proxy.proxy_server": mock_proxy}):
+                    await logger._execute_search("test query")
+
+                mock_asearch.assert_called_once_with(
+                    query="test query",
+                    search_provider="tavily",
+                    api_key="tvly-fallback-key",
+                    api_base=None,
+                )
+
+        asyncio.run(_test())
+
+    def test_falls_back_to_perplexity_when_no_router(self):
+        """Should fall back to perplexity when router has no search_tools."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        mock_router = MagicMock()
+        mock_router.search_tools = []
+
+        async def _test():
+            with patch(
+                "litellm.integrations.websearch_interception.handler.litellm.asearch",
+                new_callable=AsyncMock,
+            ) as mock_asearch:
+                mock_asearch.return_value = MagicMock(results=[])
+
+                mock_proxy = MagicMock()
+                mock_proxy.llm_router = mock_router
+                with patch.dict("sys.modules", {"litellm.proxy.proxy_server": mock_proxy}):
+                    await logger._execute_search("test query")
+
+                mock_asearch.assert_called_once_with(
+                    query="test query",
+                    search_provider="perplexity",
+                    api_key=None,
+                    api_base=None,
+                )
+
+        asyncio.run(_test())
