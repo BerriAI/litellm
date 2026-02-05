@@ -103,9 +103,12 @@ class AzureADCredential:
                 self._initialized = True
             except ImportError:
                 raise ImportError(
-                    "azure-identity is required for AzureADCredential. "
-                    "Install it with: pip install azure-identity"
+                    "azure-identity is required for AzureADCredential. Install it with: pip install azure-identity"
                 )
+
+        if self._credential is None:
+            # Defensive guard for type checkers and unexpected runtime states.
+            raise RuntimeError("AzureADCredential is not initialized with a credential")
 
         result = self._credential.get_token(scope)
         return AccessToken(token=result.token, expires_on=result.expires_on)
