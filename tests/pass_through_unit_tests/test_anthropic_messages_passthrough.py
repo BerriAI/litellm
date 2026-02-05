@@ -876,4 +876,4 @@ def test_sync_openai_messages():
 
     assert response is not None
     assert isinstance(response, dict)
-    assert response["content"][0].text is not None
+    assert response["content"][0]["text"] is not None
