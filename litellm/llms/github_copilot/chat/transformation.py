@@ -1,4 +1,5 @@
-from typing import Any, List, Optional, Tuple, cast
+from typing import List, Optional, Tuple
+
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -29,9 +30,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = (
-            self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -54,7 +53,7 @@ class GithubCopilotConfig(OpenAIConfig):
             # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
             # No conversion needed - just return messages as-is
             return messages
-        
+
         # Default behavior: convert system messages to assistant for compatibility
         transformed_messages = []
         for message in messages:
@@ -65,7 +64,7 @@ class GithubCopilotConfig(OpenAIConfig):
                 transformed_messages.append(transformed_message)
             else:
                 transformed_messages.append(message)
-        
+
         return transformed_messages
 
     def validate_environment(
@@ -140,7 +139,7 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         Check if any message contains vision content (images).
         Returns True if any message has content with vision-related types, otherwise False.
-        
+
         Checks for:
         - image_url content type (OpenAI format)
         - Content items with type 'image_url'

@@ -1703,6 +1703,8 @@ const buildDailyActivityUrl = (
   params.append("end_date", formatDate(endTime));
   params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
   params.append("page", page.toString());
+  // Send timezone offset so backend can adjust date range for UTC storage
+  params.append("timezone", new Date().getTimezoneOffset().toString());
 
   if (extraQueryParams) {
     Object.entries(extraQueryParams).forEach(([key, value]) => {
@@ -3567,6 +3569,8 @@ export const userDailyActivityAggregatedCall = async (accessToken: string, start
     };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
+    // Send timezone offset so backend can adjust date range for UTC storage
+    queryParams.append("timezone", new Date().getTimezoneOffset().toString());
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -5394,6 +5398,137 @@ export const updateUISettings = async (accessToken: string, settings: any) => {
     return data;
   } catch (error) {
     console.error("Failed to update UI settings:", error);
+    throw error;
+  }
+};
+
+export const getMCPSemanticFilterSettings = async (accessToken: string) => {
+  /**
+   * Get MCP semantic filter configuration
+   */
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/get/mcp_semantic_filter_settings`
+      : `/get/mcp_semantic_filter_settings`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get MCP semantic filter settings:", error);
+    throw error;
+  }
+};
+
+export const updateMCPSemanticFilterSettings = async (
+  accessToken: string,
+  settings: Record<string, any>
+) => {
+  /**
+   * Update MCP semantic filter settings
+   * Settings will be applied across all pods within 10 seconds
+   */
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/update/mcp_semantic_filter_settings`
+      : `/update/mcp_semantic_filter_settings`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update MCP semantic filter settings:", error);
+    throw error;
+  }
+};
+
+export const testMCPSemanticFilter = async (
+  accessToken: string,
+  model: string,
+  query: string
+) => {
+  /**
+   * Test MCP semantic filter by making a responses API call
+   * Returns both the response data and headers containing filter information
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/responses` : `/v1/responses`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: model,
+        input: [
+          {
+            role: "user",
+            content: query,
+            type: "message",
+          },
+        ],
+        tools: [
+          {
+            type: "mcp",
+            server_url: "litellm_proxy",
+            require_approval: "never",
+          },
+        ],
+        tool_choice: "required",
+      }),
+    });
+
+    // Extract headers before checking response status
+    const filterHeader = response.headers.get("x-litellm-semantic-filter");
+    const toolsHeader = response.headers.get("x-litellm-semantic-filter-tools");
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    // Return both data and headers
+    return {
+      data,
+      headers: {
+        filter: filterHeader,
+        tools: toolsHeader,
+      },
+    };
+  } catch (error) {
+    console.error("Failed to test MCP semantic filter:", error);
     throw error;
   }
 };
