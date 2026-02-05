@@ -174,6 +174,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """Check if the model is Claude Opus 4.5."""
         return "opus-4-5" in model.lower() or "opus_4_5" in model.lower()
 
+    def _is_claude_opus_4_6(self, model: str) -> bool:
+        """Check if the model is Claude Opus 4.6."""
+        model_lower = model.lower()
+        return any(p in model_lower for p in ["opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6"])
+
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",
@@ -686,6 +691,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
+    @staticmethod
+    def _get_adaptive_thinking_param() -> AnthropicThinkingParam:
+        return AnthropicThinkingParam(type="adaptive")
+
+    @staticmethod
+    def _budget_tokens_to_effort(budget_tokens: int) -> str:
+        if budget_tokens <= DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET:
+            return "low"
+        elif budget_tokens <= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
+            return "medium"
+        else:
+            return "high"
+
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
     ) -> Optional[dict]:
@@ -826,6 +844,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "sonnet-4-5",
                         "opus-4.1",
                         "opus-4-1",
+                        "opus-4.6",
+                        "opus-4-6",
                     }
                 ):
                     _output_format = (
@@ -858,16 +878,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
-                optional_params["thinking"] = value
+                # For Opus 4.6, convert deprecated type="enabled" to adaptive
+                if self._is_claude_opus_4_6(model) and isinstance(value, dict):
+                    if value.get("type") == "enabled":
+                        optional_params["thinking"] = AnthropicConfig._get_adaptive_thinking_param()
+                        budget = value.get("budget_tokens")
+                        if budget is not None:
+                            optional_params["output_config"] = {
+                                "effort": AnthropicConfig._budget_tokens_to_effort(budget)
+                            }
+                    else:
+                        # type="adaptive" passed directly -- use as-is
+                        optional_params["thinking"] = value
+                else:
+                    optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                # For Claude Opus 4.5, map reasoning_effort to output_config
-                if self._is_claude_opus_4_5(model):
+                if self._is_claude_opus_4_6(model):
+                    optional_params["thinking"] = AnthropicConfig._get_adaptive_thinking_param()
+                    effort_value = value if value in ("low", "medium", "high") else "low"
+                    optional_params["output_config"] = {"effort": effort_value}
+                elif self._is_claude_opus_4_5(model):
                     optional_params["output_config"] = {"effort": value}
-
-                # For other models, map to thinking parameter
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    value
-                )
+                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                        value
+                    )
+                else:
+                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                        value
+                    )
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
