@@ -4,6 +4,7 @@
 ""
 
 import asyncio
+import random
 import time
 
 import httpx
@@ -23,7 +24,7 @@ BASE_URL = "http://localhost:4000"
 API_KEY = "sk-1234"
 MODEL = "gpt-o1"  # must match a model_name in your proxy config (e.g. test_config_123.yaml)
 NUM_REQUESTS = 5000
-NUM_CONCURRENT = 42  # Concurrent users; each has one connection, reuses it for their requests
+NUM_CONCURRENT = 50  # Concurrent users; each has one connection, reuses it for their requests
 MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
 TIMEOUT = 30000.0
 # -----------------------------------------------------------------------------
@@ -72,11 +73,12 @@ async def main() -> None:
 
     _results.clear()
     tasks = []
-    for user_id in range(1, NUM_CONCURRENT + 1):
-        count = base_per_user + (1 if user_id <= remainder else 0)
+    for user_idx in range(1, NUM_CONCURRENT + 1):
+        count = base_per_user + (1 if user_idx <= remainder else 0)
         if count > 0:
-            payload = {"model": MODEL, "messages": MESSAGES, "user": f"user_{user_id}"}
-            tasks.append(asyncio.create_task(run_user(user_id, count, base_url, path, payload, headers)))
+            user_id = str(random.randint(1000000000, 9999999999))
+            payload = {"model": MODEL, "messages": MESSAGES, "user": user_id}
+            tasks.append(asyncio.create_task(run_user(user_idx, count, base_url, path, payload, headers)))
     await asyncio.gather(*tasks)
 
     all_results = _results
