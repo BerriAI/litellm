@@ -3731,7 +3731,7 @@ class Router:
 
                     kwargs_copy["file"] = file
                 if "gcs_bucket_name" in data:  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
-                    kwargs_copy["litellm_metadata"]["gcs_bucket_name"] = data["gcs_bucket_name"]
+                    kwargs_copy.setdefault("litellm_metadata", {})["gcs_bucket_name"] = data["gcs_bucket_name"]
                 response = litellm.acreate_file(
                     **{
                         **data,
