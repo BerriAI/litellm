@@ -53,14 +53,14 @@ def test_opus_4_6_model_pricing_and_capabilities():
             assert info["cache_creation_input_token_cost_above_200k_tokens"] == 1.25e-05
             assert info["cache_read_input_token_cost_above_200k_tokens"] == 1e-06
 
-        assert info["supports_assistant_prefill"] is False
+        assert info["supports_assistant_prefill"] is True
         assert info["supports_function_calling"] is True
         assert info["supports_prompt_caching"] is True
         assert info["supports_reasoning"] is True
         assert info["supports_tool_choice"] is True
         assert info["supports_vision"] is True
         if "tool_use_system_prompt_tokens" in info:
-            assert info["tool_use_system_prompt_tokens"] == 346
+            assert info["tool_use_system_prompt_tokens"] == 159
 
 
 def test_opus_4_6_bedrock_converse_registration():
