@@ -166,22 +166,22 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 try:
-    from litellm_enterprise.enterprise_callbacks.callback_controls import (
+    from litellm_enterprise.enterprise_callbacks.callback_controls import (  # type: ignore[import-untyped]
         EnterpriseCallbackControls,
     )
-    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
+    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (  # type: ignore[import-untyped]
         PagerDutyAlerting,
     )
-    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (  # type: ignore[import-untyped]
         ResendEmailLogger,
     )
-    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (  # type: ignore[import-untyped]
         SendGridEmailLogger,
     )
-    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (  # type: ignore[import-untyped]
         SMTPEmailLogger,
     )
-    from litellm_enterprise.litellm_core_utils.litellm_logging import (
+    from litellm_enterprise.litellm_core_utils.litellm_logging import (  # type: ignore[import-untyped]
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
 
@@ -1330,7 +1330,11 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         # Store additional costs if provided (free-form dict for extensibility)
-        if additional_costs and isinstance(additional_costs, dict) and len(additional_costs) > 0:
+        if (
+            additional_costs
+            and isinstance(additional_costs, dict)
+            and len(additional_costs) > 0
+        ):
             self.cost_breakdown["additional_costs"] = additional_costs
 
         # Store discount information if provided
@@ -3406,14 +3410,14 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
         for callback in callback_list:
             if callback == "sentry":
                 try:
-                    import sentry_sdk
+                    import sentry_sdk  # type: ignore[import-not-found]
                 except ImportError:
                     print_verbose("Package 'sentry_sdk' is missing. Installing it...")
                     subprocess.check_call(
                         [sys.executable, "-m", "pip", "install", "sentry_sdk"]
                     )
-                    import sentry_sdk
-                from sentry_sdk.scrubber import EventScrubber
+                    import sentry_sdk  # type: ignore[import-not-found]
+                from sentry_sdk.scrubber import EventScrubber  # type: ignore[import-not-found]
 
                 sentry_sdk_instance = sentry_sdk
                 sentry_trace_rate = (
@@ -3442,13 +3446,13 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
             elif callback == "slack":
                 try:
-                    from slack_bolt import App
+                    from slack_bolt import App  # type: ignore[import-not-found]
                 except ImportError:
                     print_verbose("Package 'slack_bolt' is missing. Installing it...")
                     subprocess.check_call(
                         [sys.executable, "-m", "pip", "install", "slack_bolt"]
                     )
-                    from slack_bolt import App
+                    from slack_bolt import App  # type: ignore[import-not-found]
                 slack_app = App(
                     token=os.environ.get("SLACK_API_TOKEN"),
                     signing_secret=os.environ.get("SLACK_API_SECRET"),
@@ -4506,6 +4510,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_budget_reset_at=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
+            user_api_key_project_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             user_api_key_user_email=None,
@@ -5271,6 +5276,7 @@ def get_standard_logging_metadata(
         user_api_key_budget_reset_at=None,
         user_api_key_team_id=None,
         user_api_key_org_id=None,
+        user_api_key_project_id=None,
         user_api_key_user_id=None,
         user_api_key_user_email=None,
         user_api_key_team_alias=None,

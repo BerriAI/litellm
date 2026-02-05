@@ -24,6 +24,7 @@ model LiteLLM_BudgetTable {
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
+  projects LiteLLM_ProjectTable[] // multiple projects can have the same budget
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
@@ -132,6 +133,34 @@ model LiteLLM_TeamTable {
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    projects LiteLLM_ProjectTable[]
+}
+
+// Projects sit between teams and keys for use-case management
+model LiteLLM_ProjectTable {
+  project_id           String   @id @default(uuid())
+  project_alias        String?
+  description          String?
+  team_id              String?
+  budget_id            String?
+  metadata             Json     @default("{}")
+  models               String[]
+  spend                Float    @default(0.0)
+  model_spend          Json     @default("{}")
+  model_rpm_limit      Json     @default("{}")
+  model_tpm_limit      Json     @default("{}")
+  blocked              Boolean  @default(false)
+  object_permission_id String?
+  created_at           DateTime @default(now()) @map("created_at")
+  created_by           String
+  updated_at           DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by           String
+  
+  // Relations
+  litellm_team_table   LiteLLM_TeamTable?   @relation(fields: [team_id], references: [team_id])
+  litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
+  keys                 LiteLLM_VerificationToken[]
+  object_permission    LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
 // Audit table for deleted teams - preserves spend and team information for historical tracking
@@ -224,6 +253,7 @@ model LiteLLM_ObjectPermissionTable {
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
   teams                 LiteLLM_TeamTable[]
+  projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
   users                 LiteLLM_UserTable[]
@@ -276,6 +306,7 @@ model LiteLLM_VerificationToken {
     router_settings Json? @default("{}")
     user_id    String?
     team_id    String?
+    project_id String?
     permissions Json @default("{}")
     max_parallel_requests Int?
     metadata   Json  @default("{}")
@@ -304,6 +335,7 @@ model LiteLLM_VerificationToken {
     key_rotation_at  DateTime?  // When this key should next be rotated
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
@@ -413,7 +445,7 @@ model LiteLLM_SpendLogs {
   custom_llm_provider String?   @default("") // litellm used custom_llm_provider
   api_base            String?   @default("")
   user                String?   @default("")
-  metadata            Json?     @default("{}")
+  metadata            Json?     @default("{}") // project_id stored here
   cache_hit           String?   @default("")
   cache_key           String?   @default("")
   request_tags        Json?     @default("[]")

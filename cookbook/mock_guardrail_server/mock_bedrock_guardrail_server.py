@@ -515,7 +515,7 @@ if __name__ == "__main__":
     print("=" * 80)
     print(f"Server starting on: http://{host}:{port}")
     print(f"Bearer Token: {bearer_token}")
-    print(f"Endpoint: POST /guardrail/{{id}}/version/{{version}}/apply")
+    print("Endpoint: POST /guardrail/{id}/version/{version}/apply")
     print("=" * 80)
     print("\nExample curl command:")
     print(

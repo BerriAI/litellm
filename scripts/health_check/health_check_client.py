@@ -61,11 +61,17 @@ class LiteLLMHealthCheckClient:
         self.timeout = timeout
         self.completion_prompt = completion_prompt
         self.embedding_text = embedding_text
-        
+
         # Debug: Print prompt/text lengths
-        print(f"DEBUG: Completion prompt length: {len(self.completion_prompt)} characters", file=sys.stderr)
-        print(f"DEBUG: Embedding text length: {len(self.embedding_text)} characters", file=sys.stderr)
-        
+        print(
+            f"DEBUG: Completion prompt length: {len(self.completion_prompt)} characters",
+            file=sys.stderr,
+        )
+        print(
+            f"DEBUG: Embedding text length: {len(self.embedding_text)} characters",
+            file=sys.stderr,
+        )
+
         # Support custom auth header for proxies with custom authentication
         # Handle both None and empty string
         if custom_auth_header and custom_auth_header.strip():
@@ -116,7 +122,9 @@ class LiteLLMHealthCheckClient:
 
             return models
         except Exception as e:
-            print(f"Error loading models from YAML file {yaml_path}: {e}", file=sys.stderr)
+            print(
+                f"Error loading models from YAML file {yaml_path}: {e}", file=sys.stderr
+            )
             return []
 
     async def fetch_models(self, client: httpx.AsyncClient) -> List[Dict]:
@@ -202,18 +210,18 @@ class LiteLLMHealthCheckClient:
         try:
             # Determine if this is an embedding model
             # Check mode first (from config), then fall back to name-based detection
-            is_embedding = (
-                mode == "embedding"
-                or any(
-                    keyword in model_id.lower()
-                    for keyword in ["embedding", "embed", "text-embedding"]
-                )
+            is_embedding = mode == "embedding" or any(
+                keyword in model_id.lower()
+                for keyword in ["embedding", "embed", "text-embedding"]
             )
 
             if is_embedding:
                 # Test embedding endpoint (matching Go implementation)
                 embedding_text_length = len(self.embedding_text)
-                print(f"DEBUG: Sending embedding text of length {embedding_text_length} chars to model {model_id}", file=sys.stderr)
+                print(
+                    f"DEBUG: Sending embedding text of length {embedding_text_length} chars to model {model_id}",
+                    file=sys.stderr,
+                )
                 embedding_response = await client.post(
                     f"{self.base_url}/v1/embeddings",
                     headers=self.headers,
@@ -235,7 +243,10 @@ class LiteLLMHealthCheckClient:
             else:
                 # Test chat completion endpoint (matching Go implementation)
                 prompt_length = len(self.completion_prompt)
-                print(f"DEBUG: Sending prompt of length {prompt_length} chars to model {model_id}", file=sys.stderr)
+                print(
+                    f"DEBUG: Sending prompt of length {prompt_length} chars to model {model_id}",
+                    file=sys.stderr,
+                )
                 completion_response = await client.post(
                     f"{self.base_url}/v1/chat/completions",
                     headers=self.headers,
@@ -322,9 +333,7 @@ class LiteLLMHealthCheckClient:
             results = {}
             for result in results_list:
                 if isinstance(result, Exception):
-                    print(
-                        f"Exception in health check task: {result}", file=sys.stderr
-                    )
+                    print(f"Exception in health check task: {result}", file=sys.stderr)
                     continue
                 # Type narrowing: after checking it's not an Exception, it's a Tuple
                 if isinstance(result, tuple) and len(result) == 2:
@@ -350,7 +359,7 @@ class LiteLLMHealthCheckClient:
 
         # Print detailed results for each model (matching Go output format)
         print(f"\n{'='*60}", file=sys.stderr)
-        print(f"Starting health check queries\n", file=sys.stderr)
+        print("Starting health check queries\n", file=sys.stderr)
 
         for model_id, result in results.items():
             if result.get("healthy"):
@@ -373,7 +382,7 @@ class LiteLLMHealthCheckClient:
                 print(f"---- {model_id} ----\n❌ ERROR: {error}\n\n", file=sys.stderr)
 
         print(f"{'='*60}", file=sys.stderr)
-        print(f"Health Check Summary", file=sys.stderr)
+        print("Health Check Summary", file=sys.stderr)
         print(f"{'='*60}", file=sys.stderr)
         print(f"Total models: {len(results)}", file=sys.stderr)
         print(f"Healthy: {healthy_count}", file=sys.stderr)
@@ -392,8 +401,10 @@ async def main():
     base_url = os.environ.get("LITELLM_BASE_URL", "http://localhost:4000")
     api_key = os.environ.get("LITELLM_API_KEY", "sk-1234")
     yaml_path = os.environ.get("LITELLM_MODELS_YAML")
-    custom_auth_header = os.environ.get("LITELLM_CUSTOM_AUTH_HEADER")  # e.g., "x-ifood-requester-service"
-    
+    custom_auth_header = os.environ.get(
+        "LITELLM_CUSTOM_AUTH_HEADER"
+    )  # e.g., "x-ifood-requester-service"
+
     # Debug: Print custom auth header value if set
     if custom_auth_header:
         print(f"Custom auth header from env: '{custom_auth_header}'", file=sys.stderr)
@@ -410,9 +421,7 @@ async def main():
     completion_prompt = os.environ.get(
         "LITELLM_COMPLETION_PROMPT", _DEFAULT_COMPLETION_PROMPT
     )
-    embedding_text = os.environ.get(
-        "LITELLM_EMBEDDING_TEXT", _DEFAULT_EMBEDDING_TEXT
-    )
+    embedding_text = os.environ.get("LITELLM_EMBEDDING_TEXT", _DEFAULT_EMBEDDING_TEXT)
     json_output = os.environ.get("LITELLM_JSON_OUTPUT", "").lower() == "true"
     # Optional: only health-check these model IDs (comma-separated). E.g.:
     # LITELLM_MODELS_ONLY=claude-3.7-sonnet,claude-3.5-sonnet,claude-4.5-haiku

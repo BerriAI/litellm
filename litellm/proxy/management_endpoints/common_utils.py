@@ -7,6 +7,7 @@ from litellm.proxy._types import (
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
@@ -113,6 +114,7 @@ def _set_object_metadata_field(
         LiteLLM_TeamTable,
         KeyRequestBase,
         LiteLLM_OrganizationTable,
+        LiteLLM_ProjectTable,
     ],
     field_name: str,
     value: Any,
@@ -121,7 +123,7 @@ def _set_object_metadata_field(
     Helper function to set metadata fields that require premium user checks
 
     Args:
-        object_data: The team data object to modify
+        object_data: The team/key/organization/project data object to modify
         field_name: Name of the metadata field to set
         value: Value to set for the field
     """

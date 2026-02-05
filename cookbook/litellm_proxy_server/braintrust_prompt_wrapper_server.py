@@ -15,7 +15,7 @@ Usage:
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Query
@@ -264,7 +264,7 @@ def main():
     print(f"🚀 Starting Braintrust Prompt Wrapper Server on {host}:{port}")
     print(f"📚 API Documentation available at http://{host}:{port}/docs")
     print(
-        f"🔑 Make sure to set BRAINTRUST_API_KEY environment variable or pass token in Authorization header"
+        "🔑 Make sure to set BRAINTRUST_API_KEY environment variable or pass token in Authorization header"
     )
 
     uvicorn.run(app, host=host, port=port)

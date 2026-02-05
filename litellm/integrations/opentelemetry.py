@@ -1046,17 +1046,15 @@ class OpenTelemetry(CustomLogger):
         # See: https://github.com/open-telemetry/opentelemetry-python/pull/4676
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
-        from opentelemetry._logs import (
-            SeverityNumber,
-            get_logger,
-        )
+        from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
 
-        # MyPy evaluates both branches of try/except imports and can fail when
-        # newer OTEL stubs remove/relocate symbols. Gate the typing import so
-        # only the canonical location is type-checked.
-        if TYPE_CHECKING:
-            from opentelemetry.sdk._logs._internal import (
-                LogRecord as SdkLogRecord,
+        try:
+            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]
+                LogRecord as SdkLogRecord,  # OTEL < 1.39.0
+            )
+        except ImportError:
+            from opentelemetry.sdk._logs._internal import (  # type: ignore[attr-defined]
+                LogRecord as SdkLogRecord,  # OTEL >= 1.39.0
             )
         else:
             try:
