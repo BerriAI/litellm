@@ -15,6 +15,28 @@ T = TypeVar("T")
 DEFAULT_GUARDRAIL_NUM_RETRIES = 2
 DEFAULT_GUARDRAIL_RETRY_AFTER = 0.0
 
+# Cached router settings to avoid importing proxy_server in the request path on every guardrail call.
+_CACHED_ROUTER_SETTINGS: Optional[dict] = None
+
+
+def _get_router_settings() -> Optional[dict]:
+    """Resolve router settings once per process; used for guardrail retry defaults."""
+    global _CACHED_ROUTER_SETTINGS
+    if _CACHED_ROUTER_SETTINGS is not None:
+        return _CACHED_ROUTER_SETTINGS
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is not None:
+            s = llm_router.get_settings()
+            if s is not None:
+                _CACHED_ROUTER_SETTINGS = s
+                return _CACHED_ROUTER_SETTINGS
+    except Exception:
+        pass
+    _CACHED_ROUTER_SETTINGS = {}
+    return _CACHED_ROUTER_SETTINGS
+
 
 def should_retry_guardrail_error(error: Exception) -> bool:
     """
@@ -82,7 +104,6 @@ async def run_guardrail_with_retries(
         coro = coro_factory()
         return await coro
 
-    last_error: Optional[Exception] = None
     attempt = 0
     remaining = num_retries
 
@@ -91,7 +112,6 @@ async def run_guardrail_with_retries(
             coro = coro_factory()
             return await coro
         except Exception as e:
-            last_error = e
             if not should_retry_guardrail_error(e):
                 raise
             if remaining <= 0:
@@ -117,9 +137,6 @@ async def run_guardrail_with_retries(
             remaining -= 1
             attempt += 1
 
-    if last_error is not None:
-        raise last_error
-
 
 def get_guardrail_retry_config(guardrail_to_apply: Any) -> tuple[int, float]:
     """
@@ -144,18 +161,13 @@ def get_guardrail_retry_config(guardrail_to_apply: Any) -> tuple[int, float]:
         if not (isinstance(opts, dict) and "retry_after" in opts) and "retry_after" in guardrail_config and guardrail_config["retry_after"] is not None:
             retry_after = float(guardrail_config["retry_after"])
 
-    # Proxy-level defaults from router_settings (when guardrail does not set its own)
-    try:
-        from litellm.proxy.proxy_server import llm_router
-
-        if llm_router is not None:
-            s = llm_router.get_settings()
-            if s is not None:
-                if num_retries == DEFAULT_GUARDRAIL_NUM_RETRIES and s.get("guardrail_num_retries") is not None:
-                    num_retries = int(s["guardrail_num_retries"])
-                if retry_after == DEFAULT_GUARDRAIL_RETRY_AFTER and s.get("guardrail_retry_after") is not None:
-                    retry_after = float(s["guardrail_retry_after"])
-    except Exception:
-        pass
+    # Proxy-level defaults from router_settings (when guardrail does not set its own).
+    # Uses cached settings to avoid importing proxy_server on every guardrail invocation.
+    s = _get_router_settings()
+    if s:
+        if num_retries == DEFAULT_GUARDRAIL_NUM_RETRIES and s.get("guardrail_num_retries") is not None:
+            num_retries = int(s["guardrail_num_retries"])
+        if retry_after == DEFAULT_GUARDRAIL_RETRY_AFTER and s.get("guardrail_retry_after") is not None:
+            retry_after = float(s["guardrail_retry_after"])
 
     return num_retries, retry_after
