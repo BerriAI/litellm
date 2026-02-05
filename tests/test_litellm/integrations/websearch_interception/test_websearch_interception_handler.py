@@ -486,3 +486,114 @@ class TestExecuteSearchApiKeyExtraction:
                 )
 
         asyncio.run(_test())
+
+
+class TestMaxTokensThinkingBudgetAdjustment:
+    """Tests for max_tokens adjustment when thinking budget is configured.
+
+    Verifies that _execute_agentic_loop() adjusts max_tokens to satisfy
+    Anthropic's requirement: max_tokens > thinking.budget_tokens.
+    """
+
+    def test_adjusts_max_tokens_when_less_than_budget(self):
+        """Should adjust max_tokens when max_tokens <= budget_tokens."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.constants import DEFAULT_MAX_TOKENS
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        async def _test():
+            with patch(
+                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+                new_callable=AsyncMock,
+            ) as mock_acreate:
+                mock_acreate.return_value = MagicMock()
+
+                await logger._execute_agentic_loop(
+                    model="claude-opus-4-6",
+                    messages=[{"role": "user", "content": "search for X"}],
+                    tool_calls=[{"id": "t1", "name": "WebSearch", "input": {"query": "X"}}],
+                    thinking_blocks=[],
+                    anthropic_messages_optional_request_params={
+                        "max_tokens": 1024,
+                        "thinking": {"type": "enabled", "budget_tokens": 5000},
+                    },
+                    logging_obj=None,
+                    stream=False,
+                    kwargs={},
+                )
+
+                # max_tokens should be adjusted to budget_tokens + DEFAULT_MAX_TOKENS
+                call_kwargs = mock_acreate.call_args
+                assert call_kwargs.kwargs["max_tokens"] == 5000 + DEFAULT_MAX_TOKENS
+
+        asyncio.run(_test())
+
+    def test_preserves_max_tokens_when_greater_than_budget(self):
+        """Should NOT adjust max_tokens when max_tokens > budget_tokens."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        async def _test():
+            with patch(
+                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+                new_callable=AsyncMock,
+            ) as mock_acreate:
+                mock_acreate.return_value = MagicMock()
+
+                await logger._execute_agentic_loop(
+                    model="claude-opus-4-6",
+                    messages=[{"role": "user", "content": "search for X"}],
+                    tool_calls=[{"id": "t1", "name": "WebSearch", "input": {"query": "X"}}],
+                    thinking_blocks=[],
+                    anthropic_messages_optional_request_params={
+                        "max_tokens": 16000,
+                        "thinking": {"type": "enabled", "budget_tokens": 5000},
+                    },
+                    logging_obj=None,
+                    stream=False,
+                    kwargs={},
+                )
+
+                # max_tokens should remain unchanged
+                call_kwargs = mock_acreate.call_args
+                assert call_kwargs.kwargs["max_tokens"] == 16000
+
+        asyncio.run(_test())
+
+    def test_no_adjustment_without_thinking(self):
+        """Should NOT adjust max_tokens when thinking is not enabled."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        async def _test():
+            with patch(
+                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+                new_callable=AsyncMock,
+            ) as mock_acreate:
+                mock_acreate.return_value = MagicMock()
+
+                await logger._execute_agentic_loop(
+                    model="claude-opus-4-6",
+                    messages=[{"role": "user", "content": "search for X"}],
+                    tool_calls=[{"id": "t1", "name": "WebSearch", "input": {"query": "X"}}],
+                    thinking_blocks=[],
+                    anthropic_messages_optional_request_params={
+                        "max_tokens": 1024,
+                    },
+                    logging_obj=None,
+                    stream=False,
+                    kwargs={},
+                )
+
+                # max_tokens should remain at original value
+                call_kwargs = mock_acreate.call_args
+                assert call_kwargs.kwargs["max_tokens"] == 1024
+
+        asyncio.run(_test())
