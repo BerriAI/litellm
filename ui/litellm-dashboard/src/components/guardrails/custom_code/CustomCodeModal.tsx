@@ -289,7 +289,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
       open={visible}
       onCancel={onClose}
       footer={null}
-      width={1200}
+      width={1400}
       className="custom-code-modal"
       closable={true}
       destroyOnClose
@@ -343,21 +343,21 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
         </div>
 
         {/* Main Content */}
-        <div className="flex flex-1 overflow-hidden mt-4 gap-4">
+        <div className="flex flex-1 overflow-hidden mt-4 gap-6">
           {/* Code Editor */}
-          <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-[2] flex flex-col min-w-0">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Python Logic</span>
               <span className="text-xs text-gray-400">Restricted environment (no imports)</span>
             </div>
-            <div className="flex-1 relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e]">
+            <div className="flex-1 relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e]" style={{ minHeight: "350px" }}>
               {/* Line numbers */}
               <div 
-                className="absolute left-0 top-0 bottom-0 w-10 bg-[#1e1e1e] border-r border-gray-700 text-right pr-2 pt-3 select-none overflow-hidden"
-                style={{ fontFamily: "monospace", fontSize: "13px", lineHeight: "1.5" }}
+                className="absolute left-0 top-0 bottom-0 w-12 bg-[#1e1e1e] border-r border-gray-700 text-right pr-3 pt-3 select-none overflow-hidden"
+                style={{ fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace", fontSize: "14px", lineHeight: "1.6" }}
               >
                 {Array.from({ length: Math.max(lineCount, 20) }, (_, i) => (
-                  <div key={i + 1} className="text-gray-500 h-[19.5px]">{i + 1}</div>
+                  <div key={i + 1} className="text-gray-500 h-[22.4px]">{i + 1}</div>
                 ))}
               </div>
               {/* Code textarea */}
@@ -367,8 +367,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                 onChange={(e) => setCode(e.target.value)}
                 onKeyDown={handleKeyDown}
                 spellCheck={false}
-                className="w-full h-full pl-12 pr-4 pt-3 pb-3 font-mono text-sm resize-none focus:outline-none bg-transparent text-gray-200"
-                style={{ lineHeight: "1.5", tabSize: 4 }}
+                className="w-full h-full pl-14 pr-4 pt-3 pb-3 resize-none focus:outline-none bg-transparent text-gray-200"
+                style={{ fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace", fontSize: "14px", lineHeight: "1.6", tabSize: 4 }}
               />
             </div>
 
@@ -448,7 +448,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
           </div>
 
           {/* Primitives Panel */}
-          <div className="w-[280px] flex-shrink-0 overflow-auto">
+          <div className="w-[300px] flex-shrink-0 overflow-auto border-l border-gray-200 pl-6">
             <div className="flex items-center gap-2 mb-3">
               <CodeOutlined className="text-blue-500" />
               <span className="font-semibold text-gray-700">Available Primitives</span>
