@@ -194,12 +194,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
         """
         Check if effort parameter is being used.
-        
+
         Returns True if effort-related parameters are present.
         """
         if not optional_params:
             return False
-        
+
+        # Opus 4.6: effort is GA, no beta header needed
+        if model and any(p in model.lower() for p in ["opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6"]):
+            return False
+
         # Check if reasoning_effort is provided for Claude Opus 4.5
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
             reasoning_effort = optional_params.get("reasoning_effort")
