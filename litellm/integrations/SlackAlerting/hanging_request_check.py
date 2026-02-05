@@ -8,6 +8,7 @@ Notes:
 """
 
 import asyncio
+import inspect
 import math
 import time
 from typing import TYPE_CHECKING, Any, Optional
@@ -38,9 +39,54 @@ class AlertingHangingRequestCheck:
         slack_alerting_object: SlackAlerting,
     ):
         self.slack_alerting_object = slack_alerting_object
+        # Cache which OTEL span kwarg name is accepted by the internal usage cache.
+        # Keyed by cache class, since implementations differ across proxy versions.
+        self._async_get_cache_span_kw_by_type: dict[type, Optional[str]] = {}
         self.hanging_request_cache = InMemoryCache(
             default_ttl=self._hanging_request_cache_ttl_seconds(),
         )
+
+    def _get_async_get_cache_span_kwarg(
+        self, internal_usage_cache: Any
+    ) -> Optional[str]:
+        """Return the kwarg name for the parent span, if supported.
+
+        We prefer signature inspection over try/except TypeError because a TypeError
+        may also originate from inside the cache backend implementation.
+        """
+
+        cache_type = type(internal_usage_cache)
+        cached = self._async_get_cache_span_kw_by_type.get(cache_type)
+        if cached is not None or cache_type in self._async_get_cache_span_kw_by_type:
+            return cached
+
+        async_get_cache = getattr(internal_usage_cache, "async_get_cache", None)
+        if async_get_cache is None:
+            self._async_get_cache_span_kw_by_type[cache_type] = None
+            return None
+
+        try:
+            params = inspect.signature(async_get_cache).parameters
+        except (TypeError, ValueError):
+            # Fallback: unknown callable signature.
+            self._async_get_cache_span_kw_by_type[cache_type] = None
+            return None
+
+        chosen: Optional[str]
+
+        if "parent_otel_span" in params:
+            chosen = "parent_otel_span"
+        elif "litellm_parent_otel_span" in params:
+            chosen = "litellm_parent_otel_span"
+        else:
+            # If the callable accepts **kwargs, prefer the newer name.
+            has_var_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+            chosen = "parent_otel_span" if has_var_kwargs else None
+
+        self._async_get_cache_span_kw_by_type[cache_type] = chosen
+        return chosen
 
     def _hanging_request_cache_ttl_seconds(self) -> int:
         """TTL for entries tracked by the hanging request checker.
@@ -241,18 +287,26 @@ class AlertingHangingRequestCheck:
         """
 
         cache_key = "request_status:{}".format(request_id)
+        span_kwarg = self._get_async_get_cache_span_kwarg(
+            internal_usage_cache=internal_usage_cache
+        )
+
+        kwargs: dict[str, Any] = {
+            "key": cache_key,
+            "local_only": True,
+        }
+        if span_kwarg is not None:
+            kwargs[span_kwarg] = None
+
         try:
-            return await internal_usage_cache.async_get_cache(
-                key=cache_key,
-                parent_otel_span=None,
-                local_only=True,
-            )
-        except TypeError:
-            return await internal_usage_cache.async_get_cache(
-                key=cache_key,
-                litellm_parent_otel_span=None,
-                local_only=True,
-            )
+            return await internal_usage_cache.async_get_cache(**kwargs)
+        except TypeError as exc:
+            # Only retry for the specific case where our kwarg is not accepted.
+            if span_kwarg == "parent_otel_span" and "unexpected keyword" in str(exc):
+                kwargs.pop("parent_otel_span", None)
+                kwargs["litellm_parent_otel_span"] = None
+                return await internal_usage_cache.async_get_cache(**kwargs)
+            raise
 
     def _request_is_completed(self, request_status: Any) -> bool:
         """Return True if the cached request_status indicates completion.
