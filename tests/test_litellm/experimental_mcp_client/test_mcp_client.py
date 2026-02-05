@@ -52,19 +52,16 @@ class TestMCPClient:
         self, mock_session, mock_stdio_client
     ):
         """Test successful stdio connection"""
-        # Setup mocks - create proper async context manager
+        # Setup mocks
         mock_transport = (MagicMock(), MagicMock())
-        mock_stdio_ctx = AsyncMock()
-        mock_stdio_ctx.__aenter__.return_value = mock_transport
-        mock_stdio_ctx.__aexit__.return_value = None
-        mock_stdio_client.return_value = mock_stdio_ctx
+        mock_stdio_client.return_value.__aenter__ = AsyncMock(
+            return_value=mock_transport
+        )
 
-        mock_session_instance = AsyncMock()
+        mock_session_instance = MagicMock()
+        mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.initialize = AsyncMock()
-        mock_session_ctx = AsyncMock()
-        mock_session_ctx.__aenter__.return_value = mock_session_instance
-        mock_session_ctx.__aexit__.return_value = None
-        mock_session.return_value = mock_session_ctx
+        mock_session.return_value = mock_session_instance
 
         stdio_config = MCPStdioConfig(
             command="python", args=["-m", "my_mcp_server"], env={"DEBUG": "1"}
@@ -97,23 +94,22 @@ class TestMCPClient:
         self, mock_streamable_http_client
     ):
         """Test that MCP client uses SSL configuration from environment variables"""
-        # Setup mocks - create proper async context manager
+        # Setup mocks
         mock_transport = (MagicMock(), MagicMock())
-        mock_http_ctx = AsyncMock()
-        mock_http_ctx.__aenter__.return_value = mock_transport
-        mock_http_ctx.__aexit__.return_value = None
-        mock_streamable_http_client.return_value = mock_http_ctx
+        mock_streamable_http_client.return_value.__aenter__ = AsyncMock(
+            return_value=mock_transport
+        )
 
         # Mock the session
         with patch(
             "litellm.experimental_mcp_client.client.ClientSession"
         ) as mock_session:
-            mock_session_instance = AsyncMock()
+            mock_session_instance = MagicMock()
+            mock_session_instance.__aenter__ = AsyncMock(
+                return_value=mock_session_instance
+            )
             mock_session_instance.initialize = AsyncMock()
-            mock_session_ctx = AsyncMock()
-            mock_session_ctx.__aenter__.return_value = mock_session_instance
-            mock_session_ctx.__aexit__.return_value = None
-            mock_session.return_value = mock_session_ctx
+            mock_session.return_value = mock_session_instance
 
             client = MCPClient(
                 server_url="https://mcp-server.example.com",
@@ -145,23 +141,20 @@ class TestMCPClient:
     @patch.object(mcp_client_module, "sse_client")
     async def test_mcp_client_ssl_verify_parameter(self, mock_sse_client):
         """Test that MCP client uses ssl_verify parameter when provided"""
-        # Setup mocks - create proper async context manager
+        # Setup mocks
         mock_transport = (MagicMock(), MagicMock())
-        mock_sse_ctx = AsyncMock()
-        mock_sse_ctx.__aenter__.return_value = mock_transport
-        mock_sse_ctx.__aexit__.return_value = None
-        mock_sse_client.return_value = mock_sse_ctx
+        mock_sse_client.return_value.__aenter__ = AsyncMock(return_value=mock_transport)
 
         # Mock the session
         with patch(
             "litellm.experimental_mcp_client.client.ClientSession"
         ) as mock_session:
-            mock_session_instance = AsyncMock()
+            mock_session_instance = MagicMock()
+            mock_session_instance.__aenter__ = AsyncMock(
+                return_value=mock_session_instance
+            )
             mock_session_instance.initialize = AsyncMock()
-            mock_session_ctx = AsyncMock()
-            mock_session_ctx.__aenter__.return_value = mock_session_instance
-            mock_session_ctx.__aexit__.return_value = None
-            mock_session.return_value = mock_session_ctx
+            mock_session.return_value = mock_session_instance
 
             # Test with ssl_verify=False
             client = MCPClient(
@@ -199,23 +192,22 @@ class TestMCPClient:
     @patch.object(mcp_client_module, "streamable_http_client")
     async def test_mcp_client_ssl_verify_custom_path(self, mock_streamable_http_client):
         """Test that MCP client uses custom CA bundle path from ssl_verify parameter"""
-        # Setup mocks - create proper async context manager
+        # Setup mocks
         mock_transport = (MagicMock(), MagicMock())
-        mock_http_ctx = AsyncMock()
-        mock_http_ctx.__aenter__.return_value = mock_transport
-        mock_http_ctx.__aexit__.return_value = None
-        mock_streamable_http_client.return_value = mock_http_ctx
+        mock_streamable_http_client.return_value.__aenter__ = AsyncMock(
+            return_value=mock_transport
+        )
 
         # Mock the session
         with patch(
             "litellm.experimental_mcp_client.client.ClientSession"
         ) as mock_session:
-            mock_session_instance = AsyncMock()
+            mock_session_instance = MagicMock()
+            mock_session_instance.__aenter__ = AsyncMock(
+                return_value=mock_session_instance
+            )
             mock_session_instance.initialize = AsyncMock()
-            mock_session_ctx = AsyncMock()
-            mock_session_ctx.__aenter__.return_value = mock_session_instance
-            mock_session_ctx.__aexit__.return_value = None
-            mock_session.return_value = mock_session_ctx
+            mock_session.return_value = mock_session_instance
 
             # Test with custom CA bundle path
             custom_ca_path = "/custom/path/to/ca-bundle.pem"

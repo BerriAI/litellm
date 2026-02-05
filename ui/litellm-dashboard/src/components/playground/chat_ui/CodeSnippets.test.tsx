@@ -34,8 +34,7 @@ describe("CodeSnippets", () => {
     selectedTags: [],
     selectedVectorStores: [],
     selectedGuardrails: [],
-    selectedPolicies: [],
-    selectedMCPServers: [],
+    selectedMCPTools: [],
     selectedSdk: "openai" as const,
     selectedVoice: "alloy",
   };

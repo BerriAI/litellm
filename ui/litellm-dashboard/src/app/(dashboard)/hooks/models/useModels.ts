@@ -27,7 +27,7 @@ const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 
-export const useModelsInfo = (page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
+export const useModelsInfo = (page: number = 1, size: number = 50) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
     queryKey: modelKeys.list({
@@ -36,14 +36,9 @@ export const useModelsInfo = (page: number = 1, size: number = 50, search?: stri
         ...(userRole && { userRole }),
         page,
         size,
-        ...(search && { search }),
-        ...(modelId && { modelId }),
-        ...(teamId && { teamId }),
-        ...(sortBy && { sortBy }),
-        ...(sortOrder && { sortOrder }),
       },
     }),
-    queryFn: async () => await modelInfoCall(accessToken!, userId!, userRole!, page, size, search, modelId, teamId, sortBy, sortOrder),
+    queryFn: async () => await modelInfoCall(accessToken!, userId!, userRole!, page, size),
     enabled: Boolean(accessToken && userId && userRole),
   });
 };

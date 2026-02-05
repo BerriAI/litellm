@@ -26,9 +26,6 @@ class CacheControlSupportedModels(str, Enum):
     """Models that support cache_control in content blocks."""
     CLAUDE = "claude"
     GEMINI = "gemini"
-    MINIMAX = "minimax"
-    GLM = "glm"
-    ZAI = "z-ai"
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -42,7 +39,6 @@ class OpenrouterConfig(OpenAIGPTConfig):
                 model=model, custom_llm_provider="openrouter"
             ) or litellm.supports_reasoning(model=model):
                 supported_params.append("reasoning_effort")
-                supported_params.append("thinking")
         except Exception:
             pass
         return list(dict.fromkeys(supported_params))

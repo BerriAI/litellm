@@ -814,9 +814,7 @@ def _update_internal_user_params(
 ) -> dict:
     non_default_values = {}
     for k, v in data_json.items():
-        if k == "max_budget":
-            non_default_values[k] = v
-        elif (
+        if (
             v is not None
             and v
             not in (

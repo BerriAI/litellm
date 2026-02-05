@@ -290,19 +290,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         elif tool_choice == "none":
             _tool_choice = AnthropicMessagesToolChoice(type="none")
         elif isinstance(tool_choice, dict):
-            if "type" in tool_choice and "function" not in tool_choice:
-                tool_type = tool_choice.get("type")
-                if tool_type == "auto":
-                    _tool_choice = AnthropicMessagesToolChoice(type="auto")
-                elif tool_type == "required" or tool_type == "any":
-                    _tool_choice = AnthropicMessagesToolChoice(type="any")
-                elif tool_type == "none":
-                    _tool_choice = AnthropicMessagesToolChoice(type="none")
-            else:
-                _tool_name = tool_choice.get("function", {}).get("name")
-                if _tool_name is not None:
-                    _tool_choice = AnthropicMessagesToolChoice(type="tool")
-                    _tool_choice["name"] = _tool_name
+            _tool_name = tool_choice.get("function", {}).get("name")
+            _tool_choice = AnthropicMessagesToolChoice(type="tool")
+            if _tool_name is not None:
+                _tool_choice["name"] = _tool_name
 
         if parallel_tool_use is not None:
             # Anthropic uses 'disable_parallel_tool_use' flag to determine if parallel tool use is allowed
@@ -1378,7 +1369,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else 0
         )
         completion_token_details = CompletionTokensDetailsWrapper(
-            reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else 0,
+            reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else None,
             text_tokens=completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens,
         )
         total_tokens = prompt_tokens + completion_tokens

@@ -67,17 +67,17 @@ class TestAnthropicAPIToolSearch(BaseAnthropicMessagesToolSearchTest):
 #         return "vertex_ai/claude-sonnet-4@20250514"
 
 
-# class TestBedrockInvokeToolSearch(BaseAnthropicMessagesToolSearchTest):
-#     """
-#     E2E tests for tool search with Bedrock Invoke API.
+class TestBedrockInvokeToolSearch(BaseAnthropicMessagesToolSearchTest):
+    """
+    E2E tests for tool search with Bedrock Invoke API.
     
-#     Uses the bedrock/invoke/ prefix which routes through the native
-#     Anthropic Messages API format on Bedrock.
+    Uses the bedrock/invoke/ prefix which routes through the native
+    Anthropic Messages API format on Bedrock.
     
-#     Beta header: advanced-tool-use-2025-11-20 (passed via extra_headers)
+    Beta header: advanced-tool-use-2025-11-20 (passed via extra_headers)
     
-#     Note: Tool search on Bedrock is only supported on Claude Opus 4.5.
-#     """
+    Note: Tool search on Bedrock is only supported on Claude Opus 4.5.
+    """
 
-#     def get_model(self) -> str:
-#         return "bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0"
+    def get_model(self) -> str:
+        return "bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0"

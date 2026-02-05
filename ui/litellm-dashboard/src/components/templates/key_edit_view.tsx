@@ -1,5 +1,4 @@
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
-import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
@@ -405,28 +404,6 @@ export function KeyEditView({
         valuePropName="checked"
       >
         <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
-      </Form.Item>
-
-      <Form.Item
-        label={
-          <span>
-            Policies{" "}
-            <Tooltip title="Apply policies to this key to control guardrails and other settings">
-              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-            </Tooltip>
-          </span>
-        }
-        name="policies"
-      >
-        {accessToken && (
-          <PolicySelector
-            onChange={(v) => {
-              form.setFieldValue("policies", v);
-            }}
-            accessToken={accessToken}
-            disabled={!premiumUser}
-          />
-        )}
       </Form.Item>
 
       <Form.Item label="Tags" name="tags">

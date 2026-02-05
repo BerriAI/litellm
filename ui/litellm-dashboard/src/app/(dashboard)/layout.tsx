@@ -56,10 +56,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           userRole={userRole}
           premiumUser={premiumUser}
           proxySettings={undefined}
-          setProxySettings={() => { }}
+          setProxySettings={() => {}}
           accessToken={accessToken}
-          isDarkMode={false}
-          toggleDarkMode={() => { }}
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">

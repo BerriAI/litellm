@@ -101,12 +101,7 @@ describe("useModelsInfo", () => {
       "test-user-id",
       "Admin",
       1,
-      50,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined
+      50
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -125,12 +120,7 @@ describe("useModelsInfo", () => {
       "test-user-id",
       "Admin",
       2,
-      25,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined
+      25
     );
   });
 
