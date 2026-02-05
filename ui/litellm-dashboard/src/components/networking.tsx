@@ -8736,14 +8736,11 @@ export const loginCall = async (username: string, password: string): Promise<Log
   return data;
 };
 
-export const getUiSettings = async (accessToken: string) => {
+export const getUiSettings = async () => {
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
   const response = await fetch(url, {
     method: "GET",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-    },
   });
   if (!response.ok) {
     const errorData = await response.json();
