@@ -2036,6 +2036,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_interval: int = Field(
         300, description="background health check interval in seconds"
     )
+    health_check_concurrency: Optional[int] = Field(
+        None,
+        description=(
+            "limit concurrent health checks per cycle; when unset, "
+            "health checks run without a concurrency cap"
+        ),
+    )
     alerting: Optional[List] = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",

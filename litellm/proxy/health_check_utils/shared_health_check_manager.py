@@ -193,9 +193,10 @@ class SharedHealthCheckManager:
             )
 
     async def perform_shared_health_check(
-        self, 
-        model_list: List[Dict[str, Any]], 
-        details: bool = True
+        self,
+        model_list: List[Dict[str, Any]],
+        details: bool = True,
+        max_concurrency: Optional[int] = None,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Perform health check with shared state coordination.
@@ -210,6 +211,7 @@ class SharedHealthCheckManager:
         Args:
             model_list: List of models to check
             details: Whether to include detailed information
+            max_concurrency: Optional limit on concurrent health check requests
             
         Returns:
             Tuple of (healthy_endpoints, unhealthy_endpoints)
@@ -235,7 +237,9 @@ class SharedHealthCheckManager:
                 )
                 
                 healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=model_list, details=details
+                    model_list=model_list,
+                    details=details,
+                    max_concurrency=max_concurrency,
                 )
                 
                 # Cache the results
@@ -271,7 +275,11 @@ class SharedHealthCheckManager:
                 self.pod_id
             )
             
-            return await perform_health_check(model_list=model_list, details=details)
+            return await perform_health_check(
+                model_list=model_list,
+                details=details,
+                max_concurrency=max_concurrency,
+            )
 
     async def is_health_check_in_progress(self) -> bool:
         """

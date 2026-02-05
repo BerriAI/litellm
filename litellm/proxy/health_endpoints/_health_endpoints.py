@@ -729,10 +729,15 @@ async def _perform_health_check_and_save(
     start_time,
     user_id,
     model_id=None,
+    max_concurrency=None,
 ):
     """Helper function to perform health check and save results to database"""
     healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-        model_list=model_list, cli_model=cli_model, model=target_model, details=details
+        model_list=model_list,
+        cli_model=cli_model,
+        model=target_model,
+        details=details,
+        max_concurrency=max_concurrency,
     )
 
     # Optionally save health check result to database (non-blocking)
@@ -789,6 +794,7 @@ async def health_endpoint(
     import time
 
     from litellm.proxy.proxy_server import (
+        health_check_concurrency,
         health_check_details,
         health_check_results,
         llm_model_list,
@@ -841,6 +847,7 @@ async def health_endpoint(
                     start_time=start_time,
                     user_id=user_api_key_dict.user_id,
                     model_id=None,  # CLI model doesn't have model_id
+                    max_concurrency=health_check_concurrency,
                 )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -864,6 +871,7 @@ async def health_endpoint(
                 start_time=start_time,
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
+                max_concurrency=health_check_concurrency,
             )
     except Exception as e:
         verbose_proxy_logger.error(

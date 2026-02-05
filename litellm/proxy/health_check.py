@@ -80,13 +80,22 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded"}
 
 
-async def _perform_health_check(model_list: list, details: Optional[bool] = True):
+async def _perform_health_check(
+    model_list: list,
+    details: Optional[bool] = True,
+    max_concurrency: Optional[int] = None,
+):
     """
     Perform a health check for each model in the list.
+
+    max_concurrency: Optional limit on concurrent health check requests.
     """
 
-    tasks = []
-    for model in model_list:
+    semaphore: Optional[asyncio.Semaphore] = None
+    if isinstance(max_concurrency, int) and max_concurrency > 0:
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _run_model_health_check(model: dict):
         litellm_params = model["litellm_params"]
         model_info = model.get("model_info", {})
         mode = model_info.get("mode", None)
@@ -95,17 +104,24 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
         )
         timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
 
-        task = run_with_timeout(
-            litellm.ahealth_check(
-                model["litellm_params"],
-                mode=mode,
-                prompt=DEFAULT_HEALTH_CHECK_PROMPT,
-                input=["test from litellm"],
-            ),
-            timeout,
-        )
+        async def _run():
+            return await run_with_timeout(
+                litellm.ahealth_check(
+                    model["litellm_params"],
+                    mode=mode,
+                    prompt=DEFAULT_HEALTH_CHECK_PROMPT,
+                    input=["test from litellm"],
+                ),
+                timeout,
+            )
 
-        tasks.append(task)
+        if semaphore is None:
+            return await _run()
+
+        async with semaphore:
+            return await _run()
+
+    tasks = [asyncio.create_task(_run_model_health_check(model)) for model in model_list]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -190,6 +206,7 @@ async def perform_health_check(
     model: Optional[str] = None,
     cli_model: Optional[str] = None,
     details: Optional[bool] = True,
+    max_concurrency: Optional[int] = None,
 ):
     """
     Perform a health check on the system.
@@ -217,7 +234,7 @@ async def perform_health_check(
         model_list=model_list
     )  # filter duplicate deployments (e.g. when model alias'es are used)
     healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
-        model_list, details
+        model_list, details, max_concurrency=max_concurrency
     )
 
     return healthy_endpoints, unhealthy_endpoints
