@@ -332,7 +332,10 @@ async def route_request(
                     route_a2a_agent_request,
                 )
                 
-                return await route_a2a_agent_request(data, route_type)
+                result = route_a2a_agent_request(data, route_type)
+                if result is not None:
+                    return result
+                # Fall through to raise exception below if result is None
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
