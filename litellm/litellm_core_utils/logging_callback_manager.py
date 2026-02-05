@@ -114,6 +114,27 @@ class LoggingCallbackManager:
         for c in remove_list:
             callback_list.remove(c)
 
+    def remove_callbacks_by_type(self, callback_list, callback_type):
+        """
+        Remove all callbacks of a specific type from a callback list.
+        
+        Args:
+            callback_list: The list to remove callbacks from (e.g., litellm.callbacks)
+            callback_type: The class type to match (e.g., SemanticToolFilterHook)
+            
+        Example:
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                litellm.callbacks, SemanticToolFilterHook
+            )
+        """
+        if not isinstance(callback_list, list):
+            return
+
+        remove_list = [c for c in callback_list if isinstance(c, callback_type)]
+
+        for c in remove_list:
+            callback_list.remove(c)
+
     def _add_string_callback_to_list(
         self, callback: str, parent_list: List[Union[CustomLogger, Callable, str]]
     ):
