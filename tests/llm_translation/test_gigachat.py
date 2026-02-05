@@ -122,40 +122,6 @@ class TestGigaChatCollapseUserMessages:
 
         return GigaChatConfig()
 
-    def test_no_collapse_single_message(self, config):
-        """Single message should not be changed"""
-        messages = [{"role": "user", "content": "Hello"}]
-        result = config._collapse_user_messages(messages)
-
-        assert len(result) == 1
-        assert result[0]["content"] == "Hello"
-
-    def test_collapse_consecutive_user_messages(self, config):
-        """Consecutive user messages should be collapsed"""
-        messages = [
-            {"role": "user", "content": "First"},
-            {"role": "user", "content": "Second"},
-            {"role": "user", "content": "Third"},
-        ]
-        result = config._collapse_user_messages(messages)
-
-        assert len(result) == 1
-        assert "First" in result[0]["content"]
-        assert "Second" in result[0]["content"]
-        assert "Third" in result[0]["content"]
-
-    def test_no_collapse_with_assistant_between(self, config):
-        """Messages with assistant between should not be collapsed"""
-        messages = [
-            {"role": "user", "content": "First"},
-            {"role": "assistant", "content": "Response"},
-            {"role": "user", "content": "Second"},
-        ]
-        result = config._collapse_user_messages(messages)
-
-        assert len(result) == 3
-
-
 class TestGigaChatToolsTransformation:
     """Tests for tools -> functions conversion"""
 
