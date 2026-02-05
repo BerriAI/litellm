@@ -1,37 +1,39 @@
+import React, { useState, useEffect, useCallback } from "react";
 import {
-  getGuardrailInfo,
-  getGuardrailProviderSpecificParams,
-  getGuardrailUISettings,
-  updateGuardrailCall,
-} from "@/components/networking";
-import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
-import {
-  Badge,
   Card,
+  Title,
+  Text,
   Grid,
+  Badge,
+  Button as TremorButton,
   Tab,
   TabGroup,
   TabList,
   TabPanel,
   TabPanels,
-  Text,
-  Title,
+  TextInput,
 } from "@tremor/react";
-import { Button, Divider, Form, Input, Select, Tooltip } from "antd";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import React, { useCallback, useEffect, useState } from "react";
-import NotificationsManager from "../molecules/notifications_manager";
-import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
-import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
+import { Button, Form, Input, Select, Divider, Tooltip } from "antd";
+import { InfoCircleOutlined, EyeInvisibleOutlined, StopOutlined, CodeOutlined } from "@ant-design/icons";
+import {
+  getGuardrailInfo,
+  updateGuardrailCall,
+  getGuardrailUISettings,
+  getGuardrailProviderSpecificParams,
+} from "@/components/networking";
 import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
-import GuardrailOptionalParams from "./guardrail_optional_params";
-import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
+import GuardrailProviderFields from "./guardrail_provider_fields";
+import GuardrailOptionalParams from "./guardrail_optional_params";
+import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import ToolPermissionRulesEditor, {
   ToolPermissionConfig,
 } from "./tool_permission/ToolPermissionRulesEditor";
+import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import NotificationsManager from "../molecules/notifications_manager";
 
 export interface GuardrailInfoProps {
   guardrailId: string;
@@ -81,12 +83,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       }>;
       pattern_categories: string[];
       supported_actions: string[];
-      content_categories?: Array<{
-        name: string;
-        display_name: string;
-        description: string;
-        default_action: string;
-      }>;
     };
   } | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -102,19 +98,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   const [customCodeModalVisible, setCustomCodeModalVisible] = useState(false);
 
   // Content Filter data ref (managed by ContentFilterManager)
-  const contentFilterDataRef = React.useRef<{
-    patterns: any[];
-    blockedWords: any[];
-    categories: any[];
-  }>({
+  const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[] }>({
     patterns: [],
     blockedWords: [],
-    categories: [],
   });
 
   // Memoize onDataChange callback to prevent unnecessary re-renders
-  const handleContentFilterDataChange = useCallback((patterns: any[], blockedWords: any[], categories: any[]) => {
-    contentFilterDataRef.current = { patterns, blockedWords, categories: categories || [] };
+  const handleContentFilterDataChange = useCallback((patterns: any[], blockedWords: any[]) => {
+    contentFilterDataRef.current = { patterns, blockedWords };
   }, []);
 
   const fetchGuardrailInfo = async () => {
@@ -283,15 +274,16 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
       // Only add Content Filter patterns if there are changes
       if (guardrailData.litellm_params?.guardrail === "litellm_content_filter" && hasUnsavedContentFilterChanges) {
+        const originalPatterns = guardrailData.litellm_params?.patterns || [];
+        const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
+
         const formattedData = formatContentFilterDataForAPI(
           contentFilterDataRef.current.patterns || [],
           contentFilterDataRef.current.blockedWords || [],
-          contentFilterDataRef.current.categories || [],
         );
 
         updateData.litellm_params.patterns = formattedData.patterns;
         updateData.litellm_params.blocked_words = formattedData.blocked_words;
-        updateData.litellm_params.categories = formattedData.categories;
       }
 
       if (guardrailData.litellm_params?.guardrail === "tool_permission") {
@@ -362,7 +354,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
         console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
-          if (paramName === "patterns" || paramName === "blocked_words" || paramName === "categories") {
+          if (paramName === "patterns" || paramName === "blocked_words") {
             return;
           }
           // Check for both direct parameter name and nested optional_params object
@@ -446,9 +438,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   return (
     <div className="p-4">
       <div>
-        <Button type="text" icon={<ArrowLeftIcon className="w-4 h-4" />} onClick={onClose} className="mb-4">
+        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
           Back to Guardrails
-        </Button>
+        </TremorButton>
         <Title>{guardrailData.guardrail_name || "Unnamed Guardrail"}</Title>
         <div className="flex items-center cursor-pointer">
           <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
@@ -458,10 +450,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
             size="small"
             icon={copiedStates["guardrail-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
             onClick={() => copyToClipboard(guardrailData.guardrail_id, "guardrail-id")}
-            className={`left-2 z-10 transition-all duration-200 ${copiedStates["guardrail-id"]
-              ? "text-green-600 bg-green-50 border-green-200"
-              : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+            className={`left-2 z-10 transition-all duration-200 ${
+              copiedStates["guardrail-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+            }`}
           />
         </div>
       </div>
@@ -540,8 +533,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           <Text className="flex-1 font-medium text-gray-900">{key}</Text>
                           <Text className="flex-1">
                             <span
-                              className={`inline-flex items-center gap-1.5 ${value === "MASK" ? "text-blue-600" : "text-red-600"
-                                }`}
+                              className={`inline-flex items-center gap-1.5 ${
+                                value === "MASK" ? "text-blue-600" : "text-red-600"
+                              }`}
                             >
                               {value === "MASK" ? <EyeInvisibleOutlined /> : <StopOutlined />}
                               {String(value)}
@@ -569,13 +563,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     <Text className="font-medium text-lg">Custom Code</Text>
                   </div>
                   {isAdmin && !isConfigGuardrail && (
-                    <Button
-                      size="small"
-                      icon={<CodeOutlined />}
+                    <TremorButton 
+                      size="xs"
+                      variant="secondary"
+                      icon={CodeOutlined}
                       onClick={() => setCustomCodeModalVisible(true)}
                     >
                       Edit Code
-                    </Button>
+                    </TremorButton>
                   )}
                 </div>
                 <div className="relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e]">
@@ -608,14 +603,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   )}
                   {!isEditing && !isConfigGuardrail && (
                     guardrailData.litellm_params?.guardrail === "custom_code" ? (
-                      <Button
-                        icon={<CodeOutlined />}
+                      <TremorButton 
+                        icon={CodeOutlined}
                         onClick={() => setCustomCodeModalVisible(true)}
                       >
                         Edit Code
-                      </Button>
+                      </TremorButton>
                     ) : (
-                      <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
+                      <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
                     )
                   )}
                 </div>
@@ -642,7 +637,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       name="guardrail_name"
                       rules={[{ required: true, message: "Please input a guardrail name" }]}
                     >
-                      <Input placeholder="Enter guardrail name" />
+                      <TextInput />
                     </Form.Item>
 
                     <Form.Item label="Default On" name="default_on">
@@ -680,7 +675,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       onUnsavedChanges={setHasUnsavedContentFilterChanges}
                     />
 
-                    {(guardrailData.litellm_params?.guardrail === "tool_permission" || guardrailProviderSpecificParams) && <Divider orientation="left">Provider Settings</Divider>}
+                    <Divider orientation="left">Provider Settings</Divider>
 
                     {guardrailData.litellm_params?.guardrail === "tool_permission" ? (
                       <ToolPermissionRulesEditor
@@ -740,7 +735,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       >
                         Cancel
                       </Button>
-                      <Button type="primary" htmlType="submit">Save Changes</Button>
+                      <TremorButton>Save Changes</TremorButton>
                     </div>
                   </Form>
                 ) : (
