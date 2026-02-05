@@ -228,7 +228,7 @@ const Createuser: React.FC<CreateuserProps> = ({
       <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
       <Modal
         title="Invite User"
-        visible={isModalVisible}
+        open={isModalVisible}
         width={800}
         footer={null}
         onOk={handleOk}

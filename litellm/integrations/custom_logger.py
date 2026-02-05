@@ -371,6 +371,28 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         pass
 
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Called after an LLM API call (success or failure) to allow injecting custom HTTP response headers.
+
+        Args:
+            - data: dict - The request data.
+            - user_api_key_dict: UserAPIKeyAuth - The user API key dictionary.
+            - response: Any - The response object (None for failure cases).
+            - request_headers: Optional[Dict[str, str]] - The original request headers.
+
+        Returns:
+            - Optional[Dict[str, str]]: A dictionary of headers to inject into the HTTP response.
+                                        Return None to not inject any headers.
+        """
+        return None
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,

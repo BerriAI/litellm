@@ -31,15 +31,19 @@ def _process_image_response(response: Response, url: str) -> str:
                 f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
             )
 
-    image_bytes = response.content
+    # Stream download with size checking to prevent downloading huge files
+    max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    image_bytes = bytearray()
+    bytes_downloaded = 0
     
-    # Check actual size after download if Content-Length was not available
-    if content_length is None:
-        size_mb = len(image_bytes) / (1024 * 1024)
-        if size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
+    for chunk in response.iter_bytes(chunk_size=8192):
+        bytes_downloaded += len(chunk)
+        if bytes_downloaded > max_bytes:
+            size_mb = bytes_downloaded / (1024 * 1024)
             raise litellm.ImageFetchError(
                 f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
             )
+        image_bytes.extend(chunk)
     
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 

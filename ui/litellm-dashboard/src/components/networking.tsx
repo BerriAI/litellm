@@ -2007,12 +2007,12 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId, sortBy, sortOrder);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
@@ -2026,6 +2026,12 @@ export const modelInfoCall = async (accessToken: string, userID: string, userRol
     }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());
+    }
+    if (sortBy && sortBy.trim()) {
+      params.append("sortBy", sortBy.trim());
+    }
+    if (sortOrder && sortOrder.trim()) {
+      params.append("sortOrder", sortOrder.trim());
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -2758,6 +2764,7 @@ export const uiSpendLogsCall = async (
   model?: string,
   keyAlias?: string,
   error_code?: string,
+  error_message?: string,
 ) => {
   try {
     // Construct base URL
@@ -2778,6 +2785,7 @@ export const uiSpendLogsCall = async (
     if (model) queryParams.append("model", model);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
     if (error_code) queryParams.append("error_code", error_code);
+    if (error_message) queryParams.append("error_message", error_message);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -5330,6 +5338,66 @@ export const getProxyUISettings = async (accessToken: string) => {
   }
 };
 
+export const getUISettings = async (accessToken: string) => {
+  /**
+   * Get UI-specific configuration flags from the database
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      console.error("Failed to get UI settings:", errorMessage);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get UI settings:", error);
+    return null;
+  }
+};
+
+export const updateUISettings = async (accessToken: string, settings: any) => {
+  /**
+   * Update UI-specific configuration flags in the database
+   * Only proxy admins can update these settings
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/update/ui_settings` : `/update/ui_settings`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update UI settings:", error);
+    throw error;
+  }
+};
+
 export const getGuardrailsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
@@ -6948,6 +7016,64 @@ export const vectorStoreUpdateCall = async (accessToken: string, formValues: Rec
   }
 };
 
+export const ragIngestCall = async (
+  accessToken: string,
+  file: File,
+  customLlmProvider: string,
+  vectorStoreId?: string,
+  vectorStoreName?: string,
+  vectorStoreDescription?: string,
+  providerSpecificParams?: Record<string, any>
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const ingestOptions: any = {
+      ingest_options: {
+        vector_store: {
+          custom_llm_provider: customLlmProvider,
+          ...(vectorStoreId && { vector_store_id: vectorStoreId }),
+          ...(providerSpecificParams && providerSpecificParams),
+        },
+      },
+    };
+
+    // Add litellm_vector_store_params if name or description provided
+    if (vectorStoreName || vectorStoreDescription) {
+      ingestOptions.ingest_options.litellm_vector_store_params = {};
+      if (vectorStoreName) {
+        ingestOptions.ingest_options.litellm_vector_store_params.vector_store_name = vectorStoreName;
+      }
+      if (vectorStoreDescription) {
+        ingestOptions.ingest_options.litellm_vector_store_params.vector_store_description = vectorStoreDescription;
+      }
+    }
+
+    formData.append("request", JSON.stringify(ingestOptions));
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || error.detail || "Failed to ingest document");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error ingesting document:", error);
+    throw error;
+  }
+};
+
 export const getEmailEventSettings = async (accessToken: string): Promise<EmailEventSettingsResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings` : `/email/event_settings`;
@@ -7477,6 +7603,89 @@ export const applyGuardrail = async (
     return data;
   } catch (error) {
     console.error("Failed to apply guardrail:", error);
+    throw error;
+  }
+};
+
+export interface TestCustomCodeGuardrailRequest {
+  custom_code: string;
+  test_input: {
+    texts: string[];
+    images?: string[];
+    tools?: Record<string, any>[];
+    tool_calls?: Record<string, any>[];
+    structured_messages?: Record<string, any>[];
+    model?: string;
+  };
+  input_type?: "request" | "response";
+  request_data?: {
+    model?: string;
+    user_id?: string;
+    team_id?: string;
+    end_user_id?: string;
+    metadata?: Record<string, any>;
+  };
+}
+
+export interface TestCustomCodeGuardrailResponse {
+  success: boolean;
+  result?: {
+    action: "allow" | "block" | "modify";
+    reason?: string;
+    texts?: string[];
+    images?: string[];
+    tool_calls?: Record<string, any>[];
+    detection_info?: Record<string, any>;
+    warning?: string;
+  };
+  error?: string;
+  error_type?: "compilation" | "execution";
+}
+
+export const testCustomCodeGuardrail = async (
+  accessToken: string,
+  request: TestCustomCodeGuardrailRequest
+): Promise<TestCustomCodeGuardrailResponse> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/test_custom_code`
+      : `/guardrails/test_custom_code`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      let errorMessage = "Failed to test custom code guardrail";
+
+      try {
+        const errorJson = JSON.parse(errorData);
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        } else if (errorJson.detail) {
+          errorMessage = errorJson.detail;
+        } else if (errorJson.message) {
+          errorMessage = errorJson.message;
+        }
+      } catch (e) {
+        errorMessage = errorData || errorMessage;
+      }
+
+      handleError(errorData);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Test custom code guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to test custom code guardrail:", error);
     throw error;
   }
 };

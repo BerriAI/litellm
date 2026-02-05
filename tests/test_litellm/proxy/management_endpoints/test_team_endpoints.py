@@ -36,6 +36,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _persist_deleted_team_records,
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
+    _validate_and_populate_member_user_info,
     delete_team,
     router,
     team_member_add_duplication_check,
@@ -5466,3 +5467,122 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
             ) and mock_db_client.db.litellm_verificationtoken.find_many.called:
                 # If it was called, that's unexpected for admin users
                 assert False, "API keys should not be fetched for team admin users"
+
+
+@pytest.mark.asyncio
+async def test_validate_and_populate_member_user_info_both_provided_match():
+    """
+    Test _validate_and_populate_member_user_info when both user_email and user_id
+    are provided and they match the same user in the database.
+    """
+    # Create member with both user_email and user_id
+    member = Member(user_email="test@example.com", user_id="user-123", role="user")
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    
+    # Mock user object that matches both email and user_id
+    mock_user = MagicMock()
+    mock_user.user_id = "user-123"
+    mock_user.user_email = "test@example.com"
+    
+    # Mock get_data to return single user matching email
+    mock_prisma_client.get_data = AsyncMock(return_value=[mock_user])
+    
+    # Call the function
+    result = await _validate_and_populate_member_user_info(
+        member=member,
+        prisma_client=mock_prisma_client,
+    )
+    
+    # Verify result matches input (both already provided and match)
+    assert result.user_email == "test@example.com"
+    assert result.user_id == "user-123"
+    
+    # Verify get_data was called with correct parameters
+    mock_prisma_client.get_data.assert_called_once_with(
+        key_val={"user_email": "test@example.com"},
+        table_name="user",
+        query_type="find_all",
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_and_populate_member_user_info_only_email_provided():
+    """
+    Test _validate_and_populate_member_user_info when only user_email is provided.
+    Should populate user_id from database.
+    """
+    # Create member with only user_email
+    member = Member(user_email="test@example.com", user_id=None, role="user")
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    
+    # Mock user object from find_first
+    mock_user_find_first = MagicMock()
+    mock_user_find_first.user_id = "user-456"
+    mock_user_find_first.user_email = "test@example.com"
+    
+    # Mock find_first to return the user
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=mock_user_find_first
+    )
+    
+    # Mock get_data to return single user (no duplicates)
+    mock_prisma_client.get_data = AsyncMock(return_value=[mock_user_find_first])
+    
+    # Call the function
+    result = await _validate_and_populate_member_user_info(
+        member=member,
+        prisma_client=mock_prisma_client,
+    )
+    
+    # Verify user_id was populated
+    assert result.user_email == "test@example.com"
+    assert result.user_id == "user-456"
+    
+    # Verify find_first was called with correct parameters
+    mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(
+        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}}
+    )
+    
+    # Verify get_data was called to check for duplicates
+    mock_prisma_client.get_data.assert_called_once_with(
+        key_val={"user_email": "test@example.com"},
+        table_name="user",
+        query_type="find_all",
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_and_populate_member_user_info_only_user_id_not_found():
+    """
+    Test _validate_and_populate_member_user_info when only user_id is provided
+    but the user doesn't exist in the database. Should allow it to pass with
+    user_email as None (will be upserted later).
+    """
+    # Create member with only user_id
+    member = Member(user_email=None, user_id="nonexistent-user", role="user")
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    
+    # Mock find_unique to return None (user not found)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    
+    # Call the function - should NOT raise an exception
+    result = await _validate_and_populate_member_user_info(
+        member=member,
+        prisma_client=mock_prisma_client,
+    )
+    
+    # Verify the result - should return member with user_id set and user_email as None
+    assert result.user_id == "nonexistent-user"
+    assert result.user_email is None
+    assert result.role == "user"
+    
+    # Verify find_unique was called with correct parameters
+    mock_prisma_client.db.litellm_usertable.find_unique.assert_called_once_with(
+        where={"user_id": "nonexistent-user"}
+    )

@@ -29,7 +29,10 @@ from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    extract_nested_form_metadata,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -153,8 +156,10 @@ async def route_create_file(
     
     # Handle custom storage backend
     if target_storage and target_storage != "default":
-        from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-        
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            extract_file_data,
+        )
+
         # Extract file data
         file_data = extract_file_data(cast(Any, _create_file_request.get("file")))
         
@@ -354,16 +359,21 @@ async def create_file(  # noqa: PLR0915
 
         data = {}
         
-        # Add litellm_metadata to data if provided (from form field)
-        if litellm_metadata is not None:
-            data["litellm_metadata"] = litellm_metadata
-
         # Parse expires_after if provided
-        expires_after = None
-        form_data = await request.form()
-        expires_after_anchor = form_data.get("expires_after[anchor]")
-        expires_after_seconds_str = form_data.get("expires_after[seconds]")
+        expires_after: Optional[FileExpiresAfter] = None
+        form_data_raw = await request.form()
+        form_data_dict: Dict[str, Any] = dict(form_data_raw)
+        extracted_litellm_metadata: Optional[Dict[str, Any]] = extract_nested_form_metadata(
+            form_data=form_data_dict,
+            prefix="litellm_metadata["
+        )
+        expires_after_anchor = form_data_raw.get("expires_after[anchor]")
+        expires_after_seconds_str = form_data_raw.get("expires_after[seconds]")
         
+        # Add litellm_metadata to data if provided (from form field)
+        if extracted_litellm_metadata is not None:
+            data["litellm_metadata"] = extracted_litellm_metadata
+
         if expires_after_anchor is not None or expires_after_seconds_str is not None:
             if expires_after_anchor is None or expires_after_seconds_str is None:
                 raise HTTPException(
@@ -622,13 +632,16 @@ async def get_file_content(  # noqa: PLR0915
                 )
             
             # Check if file is stored in a storage backend (check DB)
-            if hasattr(managed_files_obj, "prisma_client") and managed_files_obj.prisma_client:
-                db_file = await managed_files_obj.prisma_client.db.litellm_managedfiletable.find_first(
+            if hasattr(managed_files_obj, "prisma_client") and getattr(managed_files_obj, "prisma_client", None):
+                prisma_client = getattr(managed_files_obj, "prisma_client")
+                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
                     # File is stored in a storage backend, download it
-                    from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
+                    from litellm.llms.base_llm.files.storage_backend_factory import (
+                        get_storage_backend,
+                    )
                     
                     storage_backend_name = db_file.storage_backend
                     storage_url = db_file.storage_url
@@ -812,7 +825,7 @@ async def get_file(
         version,
     )
 
-    data: Dict = {}
+    data: Dict = {"file_id": file_id}
     try:
 
         custom_llm_provider = (
@@ -891,6 +904,9 @@ async def get_file(
                 llm_router=llm_router,
             )
         else:
+            # Remove file_id from data to avoid "multiple values for keyword argument" error
+            # data was initialized with {"file_id": file_id}
+            data.pop("file_id", None)
             response = await litellm.afile_retrieve(
                 custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
             )
@@ -992,7 +1008,7 @@ async def delete_file(
         version,
     )
 
-    data: Dict = {}
+    data: Dict = {"file_id": file_id}
     try:
         custom_llm_provider = (
             provider
@@ -1001,6 +1017,22 @@ async def delete_file(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
+        
+        # Call common_processing_pre_call_logic to trigger permission checks
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="afile_delete",
+        )
+        
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -1060,13 +1092,16 @@ async def delete_file(
                     code=500,
                 )
 
+            # Remove file_id from data to avoid duplicate keyword argument
+            data_without_file_id = {k: v for k, v in data.items() if k != "file_id"}
             response = await managed_files_obj.afile_delete(
                 file_id=file_id,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 llm_router=llm_router,
-                **data,
+                **data_without_file_id,
             )
         else:
+            data.pop("file_id", None)
             response = await litellm.afile_delete(
                 custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
             )

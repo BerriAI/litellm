@@ -309,3 +309,46 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.reasoning_tokens == 30
         assert result.completion_tokens_details.image_tokens == 100
         assert result.completion_tokens_details.text_tokens == 70
+
+
+class TestResponsesAPIProviderSpecificParams:
+    """
+    Tests for fix #19782: provider-specific params (aws_*, vertex_*) should work
+    without explicitly passing custom_llm_provider.
+    """
+
+    def test_provider_specific_params_no_crash_with_bedrock(self):
+        """Test that processing aws_* params with bedrock provider doesn't crash."""
+        params = {
+            "temperature": 0.7,
+            "custom_llm_provider": "bedrock",
+            "kwargs": {"aws_region_name": "eu-central-1"},
+        }
+
+        # Should not raise any exception
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        assert "temperature" in result
+
+    def test_provider_specific_params_no_crash_with_openai(self):
+        """Test that processing aws_* params with openai provider doesn't crash."""
+        params = {
+            "temperature": 0.7,
+            "custom_llm_provider": "openai",
+            "kwargs": {"aws_region_name": "eu-central-1"},
+        }
+
+        # Should not raise any exception
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        assert "temperature" in result
+
+    def test_provider_specific_params_no_crash_with_vertex_ai(self):
+        """Test that processing vertex_* params with vertex_ai provider doesn't crash."""
+        params = {
+            "temperature": 0.7,
+            "custom_llm_provider": "vertex_ai",
+            "kwargs": {"vertex_project": "my-project"},
+        }
+
+        # Should not raise any exception
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        assert "temperature" in result

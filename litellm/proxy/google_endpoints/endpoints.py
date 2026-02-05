@@ -264,7 +264,7 @@ async def create_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=data.get("model") or data.get("agent"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,

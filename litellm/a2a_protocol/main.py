@@ -6,10 +6,11 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 
 import asyncio
 import datetime
+import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
@@ -35,12 +36,17 @@ A2ACardResolver: Any = None
 _A2AClient: Any = None
 
 try:
-    from a2a.client import A2ACardResolver  # type: ignore[no-redef]
     from a2a.client import A2AClient as _A2AClient  # type: ignore[no-redef]
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
     pass
+
+# Import our custom card resolver that supports multiple well-known paths
+from litellm.a2a_protocol.card_resolver import LiteLLMA2ACardResolver
+
+# Use our custom resolver instead of the default A2A SDK resolver
+A2ACardResolver = LiteLLMA2ACardResolver
 
 
 def _set_usage_on_logging_obj(
@@ -225,7 +231,11 @@ async def asend_message(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        a2a_client = await create_a2a_client(base_url=api_base)
+        trace_id = str(uuid.uuid4())
+        extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
+        if agent_id:
+            extra_headers["X-LiteLLM-Agent-Id"] = agent_id
+        a2a_client = await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -489,6 +499,10 @@ async def create_a2a_client(
         params={"timeout": timeout},
     )
     httpx_client = http_handler.client
+
+    if extra_headers:
+        httpx_client.headers.update(extra_headers)
+        verbose_proxy_logger.debug(f"A2A client created with extra_headers={extra_headers}")
 
     # Resolve agent card
     resolver = A2ACardResolver(

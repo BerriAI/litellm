@@ -114,6 +114,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         self._main_thread_id = threading.get_ident()
 
+        # Loop-bound session cache for background threads
+        self._loop_sessions: Dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
+
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -189,9 +192,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Logic:
         1. If running in the main thread (where the object was initialized/destined to live normally),
            use the shared `self._http_session` (protected by a lock).
-        2. If running in a background thread (e.g. logging hook), yield a NEW ephemeral session
-           and ensure it is closed after use.
+        2. If running in a background thread (e.g. logging hook), use a cached session for that loop.
         """
+        current_loop = asyncio.get_running_loop()
 
         # Check if we are in the stored main thread
         if threading.get_ident() == self._main_thread_id:
@@ -201,21 +204,26 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     self._http_session = aiohttp.ClientSession()
                 yield self._http_session
         else:
-            # Background thread -> create ephemeral session
+            # Background thread/loop -> use loop-bound session cache
             # This avoids "attached to a different loop" or "no running event loop" errors
             # when accessing the shared session created in the main loop
-            session = aiohttp.ClientSession()
-            try:
-                yield session
-            finally:
-                if not session.closed:
-                    await session.close()
+            if (
+                current_loop not in self._loop_sessions
+                or self._loop_sessions[current_loop].closed
+            ):
+                self._loop_sessions[current_loop] = aiohttp.ClientSession()
+            yield self._loop_sessions[current_loop]
 
     async def _close_http_session(self) -> None:
-        """Close the shared HTTP session if it exists."""
+        """Close all cached HTTP sessions."""
         if self._http_session is not None and not self._http_session.closed:
             await self._http_session.close()
             self._http_session = None
+
+        for session in self._loop_sessions.values():
+            if not session.closed:
+                await session.close()
+        self._loop_sessions.clear()
 
     def __del__(self):
         """Cleanup: we try to close, but doing async cleanup in __del__ is risky."""
@@ -501,12 +509,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
 
                 # Then anonymize the text using the analysis results
-                return await self.anonymize_text(
+                anonymized_text = await self.anonymize_text(
                     text=text,
                     analyze_results=analyze_results,
                     output_parse_pii=output_parse_pii,
                     masked_entity_count=masked_entity_count,
                 )
+                return anonymized_text
             return redacted_text["text"]
         except Exception as e:
             status = "guardrail_failed_to_respond"

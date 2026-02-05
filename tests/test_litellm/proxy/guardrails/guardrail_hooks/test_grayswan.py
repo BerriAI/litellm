@@ -34,8 +34,9 @@ def test_prepare_payload_uses_dynamic_overrides(
         "policy_id": "dynamic-policy",
         "reasoning_mode": "thinking",
     }
+    request_data = {}
 
-    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body)
+    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, request_data)
 
     assert payload["messages"] == messages
     assert payload["categories"] == {"custom": "override"}
@@ -47,12 +48,25 @@ def test_prepare_payload_falls_back_to_guardrail_defaults(
     grayswan_guardrail: GraySwanGuardrail,
 ) -> None:
     messages = [{"role": "user", "content": "hello"}]
+    request_data = {}
 
-    payload = grayswan_guardrail._prepare_payload(messages, {})
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
 
     assert payload["categories"] == {"safety": "general policy"}
     assert payload["policy_id"] == "default-policy"
     assert payload["reasoning_mode"] == "hybrid"
+
+
+def test_prepare_payload_includes_dynamic_metadata(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    dynamic_body = {"metadata": {"trace_id": "trace-123", "tags": ["a", "b"]}}
+    request_data = {}
+
+    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, request_data)
+
+    assert payload["metadata"] == dynamic_body["metadata"]
 
 
 def test_process_response_does_not_block_under_threshold(
@@ -158,6 +172,119 @@ async def test_run_guardrail_raises_api_error(
 
     with pytest.raises(GraySwanGuardrailAPIError):
         await grayswan_guardrail.run_grayswan_guardrail(payload)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passthrough_not_swallowed_by_fail_open(
+    monkeypatch,
+) -> None:
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-passthrough",
+        api_key="test-key",
+        on_flagged_action="passthrough",
+        violation_threshold=0.2,
+        fail_open=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    async def _fake_call(_payload: dict):
+        return {"violation": 0.92, "violated_rule_descriptions": []}
+
+    monkeypatch.setattr(guardrail, "_call_grayswan_api", _fake_call)
+
+    with pytest.raises(ModifyResponseException):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["bad"]},
+            request_data={"model": "gpt-4"},
+            input_type="request",
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_block_not_swallowed_by_fail_open(
+    monkeypatch,
+) -> None:
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-block",
+        api_key="test-key",
+        on_flagged_action="block",
+        violation_threshold=0.2,
+        fail_open=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    async def _fake_call(_payload: dict):
+        return {"violation": 0.92, "violated_rule_descriptions": []}
+
+    monkeypatch.setattr(guardrail, "_call_grayswan_api", _fake_call)
+
+    with pytest.raises(HTTPException):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["bad"]},
+            request_data={"model": "gpt-4"},
+            input_type="request",
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_non_grayswan_http_exception_fail_open_true(
+    monkeypatch,
+) -> None:
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-error",
+        api_key="test-key",
+        on_flagged_action="monitor",
+        violation_threshold=0.2,
+        fail_open=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    async def _fake_call(_payload: dict):
+        return {"violation": 0.0, "violated_rule_descriptions": []}
+
+    def _fake_process(**_kwargs):
+        raise HTTPException(status_code=500, detail={"error": "upstream failed"})
+
+    monkeypatch.setattr(guardrail, "_call_grayswan_api", _fake_call)
+    monkeypatch.setattr(guardrail, "_process_response_internal", _fake_process)
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ok"]},
+        request_data={"model": "gpt-4"},
+        input_type="request",
+    )
+
+    assert result["texts"] == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_non_grayswan_http_exception_fail_open_false(
+    monkeypatch,
+) -> None:
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-error",
+        api_key="test-key",
+        on_flagged_action="monitor",
+        violation_threshold=0.2,
+        fail_open=False,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    async def _fake_call(_payload: dict):
+        return {"violation": 0.0, "violated_rule_descriptions": []}
+
+    def _fake_process(**_kwargs):
+        raise HTTPException(status_code=500, detail={"error": "upstream failed"})
+
+    monkeypatch.setattr(guardrail, "_call_grayswan_api", _fake_call)
+    monkeypatch.setattr(guardrail, "_process_response_internal", _fake_process)
+
+    with pytest.raises(GraySwanGuardrailAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ok"]},
+            request_data={"model": "gpt-4"},
+            input_type="request",
+        )
 
 
 def test_process_response_passthrough_raises_exception_in_pre_call() -> None:

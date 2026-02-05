@@ -758,11 +758,27 @@ def get_model_from_request(
         if match:
             model = match.group(1)
 
+    # If still not found, extract model from Google generateContent-style routes.
+    # These routes put the model in the path and allow "/" inside the model id.
+    # Examples:
+    # - /v1beta/models/gemini-2.0-flash:generateContent
+    # - /v1beta/models/bedrock/claude-sonnet-3.7:generateContent
+    # - /models/custom/ns/model:streamGenerateContent
+    if model is None and not route.lower().startswith("/vertex"):
+        google_match = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route)
+        if google_match:
+            model = google_match.group(1)
+
+    if model is None and not route.lower().startswith("/vertex"):
+        google_match = re.search(r"^/models/([^:]+):", route)
+        if google_match:
+            model = google_match.group(1)
+
     # If still not found, extract from Vertex AI passthrough route
     # Pattern: /vertex_ai/.../models/{model_id}:*
     # Example: /vertex_ai/v1/.../models/gemini-1.5-pro:generateContent
-    if model is None and "/vertex" in route.lower():
-        vertex_match = re.search(r"/models/([^/:]+)", route)
+    if model is None and route.lower().startswith("/vertex"):
+        vertex_match = re.search(r"/models/([^:]+)", route)
         if vertex_match:
             model = vertex_match.group(1)
 

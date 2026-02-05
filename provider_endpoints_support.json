@@ -32,6 +32,23 @@
     }
   },
   "providers": {
+    "a2a": {
+      "display_name": "A2A (Agent-to-Agent) (`a2a`)",
+      "url": "https://docs.litellm.ai/docs/providers/a2a",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "abliteration": {
       "display_name": "Abliteration (`abliteration`)",
       "url": "https://docs.litellm.ai/docs/providers/abliteration",
@@ -234,6 +251,26 @@
         "count_tokens": true,
         "rag_ingest": true,
         "rag_query": true
+      }
+    },
+    "s3_vectors": {
+      "display_name": "AWS S3 Vectors (`s3_vectors`)",
+      "url": "https://docs.litellm.ai/docs/providers/s3_vectors",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false,
+        "vector_stores_create": true,
+        "vector_stores_search": true
       }
     },
     "sagemaker": {
@@ -2146,7 +2183,8 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "realtime": true
       }
     },
     "xinference": {

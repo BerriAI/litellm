@@ -134,3 +134,25 @@ def test_transform_request_with_response_format():
     assert result["text"]["format"]["type"] == "json_schema"
     assert result["text"]["format"]["name"] == "person_schema"
     assert "schema" in result["text"]["format"]
+
+
+def test_transform_request_includes_extra_headers():
+    """Test that transform_request forwards headers as extra_headers for upstream call."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {}
+    litellm_params = {}
+
+    class MockLoggingObj:
+        pass
+
+    headers = {"cf-aig-authorization": "secret-token"}
+    result = handler.transform_request(
+        model="gpt-5-pro",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=MockLoggingObj(),
+    )
+    assert result.get("extra_headers") == headers

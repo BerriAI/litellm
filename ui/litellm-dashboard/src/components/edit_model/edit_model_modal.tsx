@@ -53,8 +53,8 @@ export const handleEditModelSubmit = async (
     model_info:
       model_info_model_id !== undefined
         ? {
-            id: model_info_model_id,
-          }
+          id: model_info_model_id,
+        }
         : undefined,
   };
 
@@ -119,7 +119,7 @@ const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, mode
   return (
     <Modal
       title={"Edit '" + model_name + "' LiteLLM Params"}
-      visible={visible}
+      open={visible}
       width={800}
       footer={null}
       onOk={handleOk}

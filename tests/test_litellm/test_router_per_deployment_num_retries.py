@@ -32,17 +32,17 @@ class TestPerDeploymentNumRetries:
         )
 
         deployment = router.model_list[0]
-        
+
         # Create a mock exception without num_retries
         class MockException(Exception):
             pass
-        
+
         exc = MockException("test error")
         assert not hasattr(exc, "num_retries") or exc.num_retries is None
-        
+
         # Call the helper
         router._set_deployment_num_retries_on_exception(exc, deployment)
-        
+
         # Verify num_retries was set from deployment
         assert exc.num_retries == 5
 
@@ -66,16 +66,16 @@ class TestPerDeploymentNumRetries:
         )
 
         deployment = router.model_list[0]
-        
+
         # Create an exception that already has num_retries
         class MockException(Exception):
             num_retries = 10  # Already set
-        
+
         exc = MockException("test error")
-        
+
         # Call the helper
         router._set_deployment_num_retries_on_exception(exc, deployment)
-        
+
         # Verify num_retries was NOT overridden
         assert exc.num_retries == 10
 
@@ -99,15 +99,15 @@ class TestPerDeploymentNumRetries:
         )
 
         deployment = router.model_list[0]
-        
+
         class MockException(Exception):
             pass
-        
+
         exc = MockException("test error")
-        
+
         # Call the helper
         router._set_deployment_num_retries_on_exception(exc, deployment)
-        
+
         # Verify num_retries was not set (deployment has no num_retries)
         assert not hasattr(exc, "num_retries") or exc.num_retries is None
 
@@ -155,3 +155,36 @@ class TestPerDeploymentNumRetries:
         kwargs = {}
         router._update_kwargs_before_fallbacks(model="test-model", kwargs=kwargs)
         assert kwargs["num_retries"] == 7  # Uses global
+
+    def test_set_deployment_num_retries_with_string_value(self):
+        """
+        Test that _set_deployment_num_retries_on_exception handles string values
+        from environment variables correctly.
+        GitHub Issue: #19481
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "test-key",
+                        "num_retries": "6",  # String value (as from env var)
+                    },
+                },
+            ],
+            num_retries=0,  # Global setting
+        )
+
+        deployment = router.model_list[0]
+
+        class MockException(Exception):
+            pass
+
+        exc = MockException("test error")
+
+        # Call the helper
+        router._set_deployment_num_retries_on_exception(exc, deployment)
+
+        # Verify num_retries was converted from string to int
+        assert exc.num_retries == 6

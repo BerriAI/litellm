@@ -1840,6 +1840,57 @@ content = response.get('choices', [{}])[0].get('message', {}).get('content')
 print(content)
 ```
 
+## gemini-robotics-er-1.5-preview Usage
+
+```python
+from litellm import api_base
+from openai import OpenAI
+import os
+import base64
+
+client = OpenAI(base_url="http://0.0.0.0:4000", api_key="sk-12345")
+base64_image = base64.b64encode(open("closeup-object-on-table-many-260nw-1216144471.webp", "rb").read()).decode()
+
+import json
+import re
+tools = [{"codeExecution": {}}] 
+response = client.chat.completions.create(
+    model="gemini/gemini-robotics-er-1.5-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Point to no more than 10 items in the image. The label returned should be an identifying name for the object detected. The answer should follow the json format: [{\"point\": [y, x], \"label\": <label1>}, ...]. The points are in [y, x] format normalized to 0-1000."
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                }
+            ]
+        }
+    ],
+    tools=tools
+)
+
+# Extract JSON from markdown code block if present
+content = response.choices[0].message.content
+# Look for triple-backtick JSON block
+match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+if match:
+    json_str = match.group(1)
+else:
+    json_str = content
+
+try:
+    data = json.loads(json_str)
+    print(json.dumps(data, indent=2))
+except Exception as e:
+    print("Error parsing response as JSON:", e)
+    print("Response content:", content)
+```
+
 ## Usage - PDF / Videos / etc. Files
 
 ### Inline Data (e.g. audio stream)

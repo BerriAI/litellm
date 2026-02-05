@@ -119,6 +119,11 @@ async def _handle_stream_message(
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.get(
+    "/a2a/{agent_id}/.well-known/agent.json",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def get_agent_card(
     agent_id: str,
     request: Request,
@@ -126,6 +131,10 @@ async def get_agent_card(
 ):
     """
     Get the agent card for an agent (A2A discovery endpoint).
+
+    Supports both standard paths:
+    - /.well-known/agent-card.json
+    - /.well-known/agent.json
 
     The URL in the agent card is rewritten to point to the LiteLLM proxy,
     so all subsequent A2A calls go through LiteLLM for logging and cost tracking.

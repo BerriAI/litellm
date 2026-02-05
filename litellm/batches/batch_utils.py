@@ -192,6 +192,9 @@ async def _get_batch_output_file_content_as_dictionary(
     Get the batch output file content as a list of dictionaries
     """
     from litellm.files.main import afile_content
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+    )
 
     if custom_llm_provider == "vertex_ai":
         raise ValueError("Vertex AI does not support file content retrieval")
@@ -199,8 +202,17 @@ async def _get_batch_output_file_content_as_dictionary(
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
 
+    file_id = batch.output_file_id
+    is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+    if is_base64_unified_file_id:
+        try:
+            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+            verbose_logger.debug(f"Extracted LLM output file ID from unified file ID: {file_id}")
+        except (IndexError, AttributeError) as e:
+            verbose_logger.error(f"Failed to extract LLM output file ID from unified file ID: {batch.output_file_id}, error: {e}")
+
     _file_content = await afile_content(
-        file_id=batch.output_file_id,
+        file_id=file_id,
         custom_llm_provider=custom_llm_provider,
     )
     return _get_file_content_as_dictionary(_file_content.content)

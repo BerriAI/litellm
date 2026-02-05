@@ -812,6 +812,36 @@ def test_get_vertex_model_id_from_url():
     assert model_id is None
 
 
+def test_get_vertex_model_id_from_url_with_slashes():
+    """Test get_vertex_model_id_from_url with model names containing slashes (e.g., gcp/google/gemini-2.5-flash)
+
+    Regression test for NVIDIA issue: custom model names with slashes in passthrough URLs
+    were being truncated (e.g., 'gcp/google/gemini-2.5-flash' -> 'gcp'), causing access_groups
+    checks to fail.
+    """
+    from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
+
+    # Test with model name containing slashes: gcp/google/gemini-2.5-flash
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
+
+    # Test with model name containing slashes: gcp/google/gemini-3-flash-preview
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:streamGenerateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-3-flash-preview"
+
+    # Test with custom model path: custom/model
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/custom/model:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "custom/model"
+
+    # Test passthrough URL format (without host)
+    url = "v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
+
+
 def test_construct_target_url_with_version_prefix():
     """Test construct_target_url with version prefixes"""
     from litellm.llms.vertex_ai.common_utils import construct_target_url
