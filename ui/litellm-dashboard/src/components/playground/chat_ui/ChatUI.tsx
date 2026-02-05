@@ -1069,6 +1069,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           updateTotalLatency,
           updateA2AMetadata,
           customProxyBaseUrl || undefined,
+          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
         );
       }
     } catch (error) {
