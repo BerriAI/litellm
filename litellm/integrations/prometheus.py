@@ -1189,7 +1189,7 @@ class PrometheusLogger(CustomLogger):
         _user_spend = _metadata.get("user_api_key_user_spend", None)
         _user_max_budget = _metadata.get("user_api_key_user_max_budget", None)
 
-        await asyncio.gather(
+        results = await asyncio.gather(
             self._set_api_key_budget_metrics_after_api_request(
                 user_api_key=user_api_key,
                 user_api_key_alias=user_api_key_alias,
@@ -1210,7 +1210,13 @@ class PrometheusLogger(CustomLogger):
                 user_max_budget=_user_max_budget,
                 response_cost=response_cost,
             ),
+            return_exceptions=True,
         )
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                verbose_logger.debug(
+                    f"[Non-Blocking] Prometheus: Budget metric lookup {['key', 'team', 'user'][i]} failed: {r}"
+                )
 
     def _increment_top_level_request_and_spend_metrics(
         self,
