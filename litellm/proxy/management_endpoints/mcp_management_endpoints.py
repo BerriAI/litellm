@@ -262,6 +262,67 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
 
+    def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        """Best-effort detection for route-restricted virtual keys.
+
+        We treat a requestor as a "restricted" virtual key if `allowed_routes`
+        is a non-empty list. This matches the auth gate that blocks routes with
+        the error: "Virtual key is not allowed to call this route...".
+        """
+
+        allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
+        return isinstance(allowed_routes, list) and len(allowed_routes) > 0
+
+    def _sanitize_mcp_server_for_virtual_key(
+        mcp_server: LiteLLM_MCPServerTable,
+    ) -> LiteLLM_MCPServerTable:
+        """Return a minimally sufficient MCP server view for virtual keys.
+
+        Security model:
+        - Virtual keys should be able to *discover* accessible servers.
+        - They should NOT receive sensitive configuration details like upstream
+          URLs, env vars, headers, commands/args, access-group names, or
+          credentials.
+        """
+
+        sanitized = _redact_mcp_credentials(mcp_server)
+
+        # Remove potentially sensitive config + identity fields.
+        sanitized.url = None
+        sanitized.static_headers = None
+        sanitized.env = {}
+        sanitized.command = None
+        sanitized.args = []
+        sanitized.extra_headers = []
+        sanitized.allowed_tools = []
+        sanitized.mcp_access_groups = []
+        sanitized.teams = []
+
+        sanitized.authorization_url = None
+        sanitized.token_url = None
+        sanitized.registration_url = None
+
+        sanitized.health_check_error = None
+        sanitized.last_health_check = None
+
+        sanitized.created_by = None
+        sanitized.updated_by = None
+        sanitized.created_at = None
+        sanitized.updated_at = None
+
+        # `mcp_info` is arbitrary metadata; keep only an explicit safe subset.
+        is_public = False
+        if isinstance(sanitized.mcp_info, dict):
+            is_public = bool(sanitized.mcp_info.get("is_public"))
+        sanitized.mcp_info = {"is_public": True} if is_public else None
+
+        return sanitized
+
+    def _sanitize_mcp_server_list_for_virtual_key(
+        mcp_servers: Iterable[LiteLLM_MCPServerTable],
+    ) -> List[LiteLLM_MCPServerTable]:
+        return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
@@ -504,8 +565,11 @@ if MCP_AVAILABLE:
         """
 
         user_mcp_management_mode = _get_user_mcp_management_mode()
+        is_restricted_virtual_key = _is_restricted_virtual_key_request(
+            user_api_key_dict
+        )
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
             servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
         else:
@@ -531,6 +595,11 @@ if MCP_AVAILABLE:
                     if server.mcp_info is None:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
+
+        # Virtual keys only get a sanitized discovery view.
+        if is_restricted_virtual_key:
+            return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
+
         return redacted_mcp_servers
 
     @router.get(
@@ -625,6 +694,34 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server with id {server_id} not found"},
             )
 
+        # Implement authz restriction from requested user
+        is_admin_view = _user_has_admin_view(user_api_key_dict)
+        is_restricted_virtual_key = _is_restricted_virtual_key_request(
+            user_api_key_dict
+        )
+
+        if not is_admin_view:
+            # Perform authz check BEFORE any health check (avoid side-effects for
+            # unauthorized callers).
+            mcp_server_records = await get_all_mcp_servers_for_user(
+                prisma_client, user_api_key_dict
+            )
+            exists = does_mcp_server_exist(mcp_server_records, server_id)
+
+            if not exists:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": (
+                            f"User does not have permission to view mcp server with id {server_id}. "
+                            "You can only view mcp servers that you have access to."
+                        )
+                    },
+                )
+
+        # At this point caller is authorized to view the server.
+        await global_mcp_server_manager.add_server(mcp_server)
+
         # Perform health check on the server using server manager
         try:
             health_result = await global_mcp_server_manager.health_check_server(
@@ -644,26 +741,10 @@ if MCP_AVAILABLE:
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)
 
-        # Implement authz restriction from requested user
-        if _user_has_admin_view(user_api_key_dict):
-            return _redact_mcp_credentials(mcp_server)
-
-        # Perform authz check to filter the mcp servers user has access to
-        mcp_server_records = await get_all_mcp_servers_for_user(
-            prisma_client, user_api_key_dict
-        )
-        exists = does_mcp_server_exist(mcp_server_records, server_id)
-
-        if exists:
-            await global_mcp_server_manager.add_server(mcp_server)
-            return _redact_mcp_credentials(mcp_server)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": f"User does not have permission to view mcp server with id {server_id}. You can only view mcp servers that you have access to."
-                },
-            )
+        redacted = _redact_mcp_credentials(mcp_server)
+        if is_restricted_virtual_key:
+            return _sanitize_mcp_server_for_virtual_key(redacted)
+        return redacted
 
     @router.post(
         "/server",
