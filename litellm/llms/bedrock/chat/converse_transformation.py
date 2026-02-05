@@ -429,10 +429,13 @@ class AmazonConverseConfig(BaseConfig):
             )
             optional_params.update(reasoning_config)
         else:
-            # Anthropic and other models: convert to thinking parameter
-            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort
-            )
+            # Check if Opus 4.6 -- use adaptive thinking
+            if any(p in model.lower() for p in ["opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6"]):
+                optional_params["thinking"] = AnthropicConfig._get_adaptive_thinking_param()
+            else:
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    reasoning_effort
+                )
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
