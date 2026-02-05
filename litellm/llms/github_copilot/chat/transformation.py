@@ -1,8 +1,5 @@
-<<<<<<< ttl-prompt-caching-bedrock
 from typing import List, Optional, Tuple
-=======
-from typing import Any, List, Optional, Tuple, cast
->>>>>>> main
+
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -51,22 +48,12 @@ class GithubCopilotConfig(OpenAIConfig):
     ):
         import litellm
 
-<<<<<<< ttl-prompt-caching-bedrock
-        disable_copilot_system_to_assistant = (
-            litellm.disable_copilot_system_to_assistant
-        )
-        if not disable_copilot_system_to_assistant:
-            for message in messages:
-                if "role" in message and message["role"] == "system":
-                    message["role"] = "assistant"
-        return messages
-=======
         # Check if system-to-assistant conversion is disabled
         if litellm.disable_copilot_system_to_assistant:
             # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
             # No conversion needed - just return messages as-is
             return messages
-        
+
         # Default behavior: convert system messages to assistant for compatibility
         transformed_messages = []
         for message in messages:
@@ -77,9 +64,8 @@ class GithubCopilotConfig(OpenAIConfig):
                 transformed_messages.append(transformed_message)
             else:
                 transformed_messages.append(message)
-        
+
         return transformed_messages
->>>>>>> main
 
     def validate_environment(
         self,

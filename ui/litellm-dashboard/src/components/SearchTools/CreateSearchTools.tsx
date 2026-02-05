@@ -1,14 +1,14 @@
-import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Typography } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput } from "@tremor/react";
-import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
-import { SearchTool, AvailableSearchProvider } from "./types";
 import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "../molecules/notifications_manager";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import SearchConnectionTest from "./search_connection_test";
+import { Button, TextInput } from "@tremor/react";
+import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import Image from "next/image";
+import React, { useState } from "react";
+import NotificationsManager from "../molecules/notifications_manager";
+import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
+import SearchConnectionTest from "./SearchConnectionTest";
+import { AvailableSearchProvider, SearchTool } from "./types";
 
 const { TextArea } = Input;
 
@@ -97,8 +97,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
         },
         search_tool_info: formValues.description
           ? {
-              description: formValues.description,
-            }
+            description: formValues.description,
+          }
           : undefined,
       };
 
@@ -130,7 +130,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     try {
       // Validate required fields for testing
       await form.validateFields(["search_provider", "api_key"]);
-      
+
       setIsTestingConnection(true);
       // Generate a new test ID (using timestamp for uniqueness)
       setConnectionTestId(`test-${Date.now()}`);
@@ -225,8 +225,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                 optionLabelProp="label"
               >
                 {availableProviders.map((provider) => (
-                  <Select.Option 
-                    key={provider.provider_name} 
+                  <Select.Option
+                    key={provider.provider_name}
                     value={provider.provider_name}
                     label={
                       <SearchProviderLabel
