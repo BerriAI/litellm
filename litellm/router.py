@@ -7635,11 +7635,23 @@ class Router:
             "guardrail_num_retries",
         ]
 
+        _float_settings = [
+            "guardrail_retry_after",
+        ]
+
         _existing_router_settings = self.get_settings()
         for var in kwargs:
             if var in _allowed_settings:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
+                    setattr(self, var, _casted_value)
+                elif var in _float_settings:
+                    _val = kwargs[var]
+                    _casted_value = (
+                        float(_val)
+                        if _val is not None and _val != ""
+                        else None
+                    )
                     setattr(self, var, _casted_value)
                 else:
                     # only run routing strategy init if it has changed

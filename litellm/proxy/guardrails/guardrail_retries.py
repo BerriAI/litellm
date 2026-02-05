@@ -75,7 +75,7 @@ def _time_to_sleep_before_guardrail_retry(
     Compute sleep before next guardrail retry using litellm._calculate_retry_after.
     retry_after (config) is used as min_timeout for backoff.
     """
-    min_timeout = int(max(0.0, retry_after))
+    min_timeout = max(0.0, retry_after)
     return litellm._calculate_retry_after(
         remaining_retries=remaining_retries,
         max_retries=num_retries,
@@ -114,7 +114,8 @@ async def run_guardrail_with_retries(
         except Exception as e:
             if not should_retry_guardrail_error(e):
                 raise
-            if remaining <= 0:
+            remaining -= 1
+            if remaining < 0:
                 raise
             response_headers = getattr(e, "response", None)
             if response_headers is not None and hasattr(response_headers, "headers"):
@@ -134,7 +135,6 @@ async def run_guardrail_with_retries(
                 remaining,
             )
             await asyncio.sleep(sleep_seconds)
-            remaining -= 1
             attempt += 1
 
 
