@@ -3671,7 +3671,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     ]
     team_id_jwt_field: Optional[str] = None
     team_id_upsert: bool = False
-    team_ids_jwt_field: Optional[str] = None
+    team_ids_jwt_field: Optional[Union[str, List[str]]] = None
     upsert_sso_user_to_team: bool = False
     team_allowed_routes: List[str] = ["openai_routes", "info_routes", "mcp_routes"]
     team_id_default: Optional[str] = Field(
@@ -3700,7 +3700,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     public_key_ttl: float = 600
     public_allowed_routes: List[str] = ["public_routes"]
     enforce_rbac: bool = False
-    roles_jwt_field: Optional[str] = None  # v2 on role mappings
+    roles_jwt_field: Optional[Union[str, List[str]]] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None
     object_id_jwt_field: Optional[
         str

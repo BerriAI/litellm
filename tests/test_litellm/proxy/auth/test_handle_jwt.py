@@ -579,6 +579,69 @@ async def test_nested_jwt_field_access():
 
 
 @pytest.mark.asyncio
+async def test_multi_jwt_fields_and_stringified_lists():
+    """
+    Test multiple JWT claim fields and flexible formats for roles/team IDs.
+    """
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler = JWTHandler()
+
+    token = {
+        "groups": ["team1", "team2"],
+        "alt_groups": "['team2','team4']",
+        "teams": "team3",
+        "realm_access": {"roles": ["admin"]},
+        "roles": "['user','admin']",
+        "roles_extra": ["viewer", "admin"],
+    }
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_ids_jwt_field="groups, alt_groups, teams"
+    )
+    assert jwt_handler.get_team_ids_from_jwt(token) == [
+        "team1",
+        "team2",
+        "team4",
+        "team3",
+    ]
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        roles_jwt_field=["realm_access.roles", "roles", "roles_extra"]
+    )
+    assert jwt_handler.get_jwt_role(token, []) == ["admin", "user", "viewer"]
+
+
+@pytest.mark.asyncio
+async def test_multi_jwt_fields_list_and_comma_roles():
+    """
+    Test roles fields provided as comma-separated string and team ids as list.
+    """
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler = JWTHandler()
+
+    token = {
+        "roles": ["user"],
+        "roles_extra": "['admin']",
+        "groups": "teamA",
+        "alt_groups": ["teamB", "teamA"],
+    }
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        roles_jwt_field="roles, roles_extra"
+    )
+    assert jwt_handler.get_jwt_role(token, []) == ["user", "admin"]
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_ids_jwt_field=["groups", "alt_groups"]
+    )
+    assert jwt_handler.get_team_ids_from_jwt(token) == ["teamA", "teamB"]
+
+
+@pytest.mark.asyncio
 async def test_nested_jwt_field_missing_paths():
     """
     Test handling of missing nested paths in JWT tokens
@@ -1483,6 +1546,4 @@ async def test_get_objects_resolves_org_by_name():
             parent_otel_span=None,
             proxy_logging_obj=proxy_logging_obj,
         )
-
-
 

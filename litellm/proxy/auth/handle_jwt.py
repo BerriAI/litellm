@@ -6,6 +6,7 @@ Currently only supports admin.
 JWT token must have 'litellm_proxy_admin' in scope.
 """
 
+import ast
 import fnmatch
 import os
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
@@ -166,15 +167,57 @@ class JWTHandler:
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
 
-        if self.litellm_jwtauth.team_ids_jwt_field is not None:
-            team_ids: Optional[List[str]] = get_nested_value(
-                data=token,
-                key_path=self.litellm_jwtauth.team_ids_jwt_field,
-                default=[],
-            )
-            return team_ids or []
+        field = self.litellm_jwtauth.team_ids_jwt_field
+        if field is None:
+            return []
 
-        return []
+        # Support single field, comma-separated string, or list/tuple of fields
+        if isinstance(field, str):
+            field_paths = [f.strip() for f in field.split(",") if f.strip()]
+        elif isinstance(field, (list, tuple)):
+            field_paths = [f for f in field if isinstance(f, str) and f.strip()]
+        else:
+            return []
+
+        collected: List[str] = []
+
+        def _append_values(raw_val: Any) -> None:
+            if raw_val is None:
+                return
+            if isinstance(raw_val, list):
+                for item in raw_val:
+                    if isinstance(item, str) and item.strip():
+                        collected.append(item.strip())
+            elif isinstance(raw_val, str):
+                stripped = raw_val.strip()
+                # Handle stringified list (e.g., "['litellm']" or '["a","b"]')
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    try:
+                        parsed = ast.literal_eval(stripped)
+                        _append_values(parsed)
+                        return
+                    except Exception:
+                        pass
+                if stripped:
+                    collected.append(stripped)
+
+        for key_path in field_paths:
+            raw_value = get_nested_value(
+                data=token,
+                key_path=key_path,
+                default=None,
+            )
+            _append_values(raw_value)
+
+        # Deduplicate preserving order
+        deduped: List[str] = []
+        seen = set()
+        for val in collected:
+            if val not in seen:
+                seen.add(val)
+                deduped.append(val)
+
+        return deduped
 
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
@@ -340,18 +383,59 @@ class JWTHandler:
 
         Set via 'roles_jwt_field' in the config.
         """
-        try:
-            if self.litellm_jwtauth.roles_jwt_field is not None:
-                user_roles = get_nested_value(
+        field = self.litellm_jwtauth.roles_jwt_field
+        if field is None:
+            return default_value
+
+        if isinstance(field, str):
+            field_paths = [f.strip() for f in field.split(",") if f.strip()]
+        elif isinstance(field, (list, tuple)):
+            field_paths = [f for f in field if isinstance(f, str) and f.strip()]
+        else:
+            return default_value
+
+        collected: List[str] = []
+
+        def _append_values(raw_val: Any) -> None:
+            if raw_val is None:
+                return
+            if isinstance(raw_val, list):
+                for item in raw_val:
+                    if isinstance(item, str) and item.strip():
+                        collected.append(item.strip())
+            elif isinstance(raw_val, str):
+                stripped = raw_val.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    try:
+                        parsed = ast.literal_eval(stripped)
+                        _append_values(parsed)
+                        return
+                    except Exception:
+                        pass
+                if stripped:
+                    collected.append(stripped)
+
+        for key_path in field_paths:
+            try:
+                raw_value = get_nested_value(
                     data=token,
-                    key_path=self.litellm_jwtauth.roles_jwt_field,
-                    default=default_value,
+                    key_path=key_path,
+                    default=None,
                 )
-            else:
-                user_roles = default_value
-        except KeyError:
-            user_roles = default_value
-        return user_roles
+            except KeyError:
+                raw_value = None
+            _append_values(raw_value)
+
+        deduped: List[str] = []
+        seen = set()
+        for val in collected:
+            if val not in seen:
+                seen.add(val)
+                deduped.append(val)
+
+        if not deduped:
+            return default_value
+        return deduped
 
     def is_allowed_user_role(self, user_roles: Optional[List[str]]) -> bool:
         """
