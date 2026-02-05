@@ -848,12 +848,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
 
-    data.update(
-        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-            headers=_headers,
-            data=data,
-            _metadata_variable_name=_metadata_variable_name,
-        )
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=_headers,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
     )
 
     # Add headers to metadata for guardrails to access (fixes #17477)
@@ -1108,17 +1106,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if disabled_callbacks and isinstance(disabled_callbacks, list):
             data["litellm_disabled_callbacks"] = disabled_callbacks
 
-    # Guardrails from key/team metadata
+    # Guardrails from key/team metadata and policy engine
     move_guardrails_to_metadata(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    # Guardrails from policy engine
-    add_guardrails_from_policy_engine(
-        data=data,
-        metadata_variable_name=_metadata_variable_name,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -1462,6 +1453,29 @@ def move_guardrails_to_metadata(
     - Adds guardrails from policies attached to key/team metadata
     - Adds guardrails from policy engine based on team/key/model context
     """
+    # Early-out: skip all guardrails processing when nothing is configured
+    key_metadata = user_api_key_dict.metadata
+    team_metadata = user_api_key_dict.team_metadata
+
+    has_key_config = key_metadata and (
+        "guardrails" in key_metadata or "policies" in key_metadata
+    )
+    has_team_config = team_metadata and (
+        "guardrails" in team_metadata or "policies" in team_metadata
+    )
+    has_request_config = (
+        "guardrails" in data or "guardrail_config" in data or "policies" in data
+    )
+
+    # Only check policy engine if no local config (avoid import + registry lookup)
+    if not (has_key_config or has_team_config or has_request_config):
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        if not get_policy_registry().is_initialized():
+            # Nothing configured anywhere - clean up request body fields and return
+            data.pop("policies", None)
+            return
+
     # Check key-level guardrails
     _add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
