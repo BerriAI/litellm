@@ -13,8 +13,7 @@ def fake_token_creator():
 def fake_deployment_url():
     return "https://api.ai.moke-sap.com/v2/inference/deployments/mokeid"
 
-@pytest.mark.asyncio
-async def test_basic_config_transform(fake_token_creator, fake_deployment_url):
+def test_basic_config_transform(fake_token_creator, fake_deployment_url):
     expected_dict = {
         'config': {
             'modules': {

@@ -1,9 +1,6 @@
-import pytest
-
 from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
-@pytest.mark.asyncio
-async def test_basic_config_transform():
+def test_basic_config_transform():
     config = GenAIHubOrchestrationConfig().transform_request(
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hello"}],
@@ -17,8 +14,7 @@ async def test_basic_config_transform():
     assert config["config"]["modules"]["prompt_templating"]["model"]["version"] == "latest"
     assert len(config["config"]["modules"]["prompt_templating"]["model"]["params"]) == 1
 
-@pytest.mark.asyncio
-async def test_config_transform_with_response_format_json_object():
+def test_config_transform_with_response_format_json_object():
     expected_dict = {'config':
                          {'modules':
                               {'prompt_templating':
@@ -42,8 +38,7 @@ async def test_config_transform_with_response_format_json_object():
     )
     assert config==expected_dict
 
-@pytest.mark.asyncio
-async def test_config_transform_with_response_format_json_schema():
+def test_config_transform_with_response_format_json_schema():
 
     expected_response_format = {
         'type': 'json_schema',
@@ -84,8 +79,7 @@ async def test_config_transform_with_response_format_json_schema():
     assert config["config"]["modules"]["prompt_templating"]["prompt"]["response_format"] == expected_response_format
     assert len(config["config"]["modules"]["prompt_templating"]["model"]["params"]) == 0
 
-@pytest.mark.asyncio
-async def test_config_transform_with_stream():
+def test_config_transform_with_stream():
     expected_dict = {
         'config': {
             'modules': {
