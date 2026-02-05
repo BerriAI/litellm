@@ -172,6 +172,10 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # Supported models on Bedrock for extended thinking
         supported_patterns = [
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",  # Opus 4.6
             "opus-4.5",
             "opus_4.5",
             "opus-4-5",
