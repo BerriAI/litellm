@@ -5465,6 +5465,70 @@ export const updateMCPSemanticFilterSettings = async (
   }
 };
 
+export const testMCPSemanticFilter = async (
+  accessToken: string,
+  model: string,
+  query: string
+) => {
+  /**
+   * Test MCP semantic filter by making a responses API call
+   * Returns both the response data and headers containing filter information
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/responses` : `/v1/responses`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: model,
+        input: [
+          {
+            role: "user",
+            content: query,
+            type: "message",
+          },
+        ],
+        tools: [
+          {
+            type: "mcp",
+            server_url: "litellm_proxy",
+            require_approval: "never",
+          },
+        ],
+        tool_choice: "required",
+      }),
+    });
+
+    // Extract headers before checking response status
+    const filterHeader = response.headers.get("x-litellm-semantic-filter");
+    const toolsHeader = response.headers.get("x-litellm-semantic-filter-tools");
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    // Return both data and headers
+    return {
+      data,
+      headers: {
+        filter: filterHeader,
+        tools: toolsHeader,
+      },
+    };
+  } catch (error) {
+    console.error("Failed to test MCP semantic filter:", error);
+    throw error;
+  }
+};
+
 export const getGuardrailsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;

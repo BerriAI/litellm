@@ -7,8 +7,10 @@ import {
   Alert,
   Button,
   Card,
+  Col,
   Form,
   InputNumber,
+  Row,
   Select,
   Skeleton,
   Slider,
@@ -20,6 +22,8 @@ import {
 import { QuestionCircleOutlined, CheckCircleOutlined, SaveOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { fetchAvailableModels, ModelGroup } from "@/components/playground/llm_calls/fetch_models";
+import MCPSemanticFilterTestPanel from "./MCPSemanticFilterTestPanel";
+import { getCurlCommand, runSemanticFilterTest, TestResult } from "./semanticFilterTestUtils";
 
 interface MCPSemanticFilterSettingsProps {
   accessToken: string | null;
@@ -37,6 +41,13 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   const [isDirty, setIsDirty] = useState(false);
   const [embeddingModels, setEmbeddingModels] = useState<ModelGroup[]>([]);
   const [loadingModels, setLoadingModels] = useState(true);
+  
+  // Test section state
+  const [testQuery, setTestQuery] = useState("");
+  const [testModel, setTestModel] = useState<string>("gpt-4o");
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [showCurl, setShowCurl] = useState(false);
 
   const schema = data?.field_schema;
   const values = data?.values ?? {};
@@ -92,6 +103,20 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
     }
   };
 
+  const handleTest = async () => {
+    if (!accessToken) {
+      return;
+    }
+
+    await runSemanticFilterTest({
+      accessToken,
+      testModel,
+      testQuery,
+      setIsTesting,
+      setTestResult,
+    });
+  };
+
   if (!accessToken) {
     return (
       <div className="p-6 text-center text-gray-500">
@@ -101,7 +126,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   }
 
   return (
-    <div style={{ maxWidth: 800 }}>
+    <div style={{ width: "100%" }}>
       {isLoading ? (
         <Skeleton active />
       ) : isError ? (
@@ -143,120 +168,143 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
             />
           )}
 
-          <Form
-            form={form}
-            layout="vertical"
-            disabled={isUpdating}
-            onValuesChange={() => {
-              setIsDirty(true);
-            }}
-          >
-            <Card style={{ marginBottom: 16 }}>
-              <Form.Item
-                name="enabled"
-                label={
-                  <Space>
-                    <Typography.Text strong>Enable Semantic Filtering</Typography.Text>
-                    <Tooltip title="When enabled, only the most relevant MCP tools will be included in requests based on semantic similarity">
-                      <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
-                    </Tooltip>
-                  </Space>
-                }
-                valuePropName="checked"
+          <Row gutter={24}>
+            {/* Left Column - Settings */}
+            <Col xs={24} lg={12}>
+              <Form
+                form={form}
+                layout="vertical"
+                disabled={isUpdating}
+                onValuesChange={() => {
+                  setIsDirty(true);
+                }}
               >
-                <Switch disabled={isUpdating} />
-              </Form.Item>
-              
-              <Typography.Text type="secondary" style={{ display: "block", marginTop: -16, marginBottom: 16 }}>
-                {schema?.properties?.enabled?.description}
-              </Typography.Text>
-            </Card>
+                <Card style={{ marginBottom: 16 }}>
+                  <Form.Item
+                    name="enabled"
+                    label={
+                      <Space>
+                        <Typography.Text strong>Enable Semantic Filtering</Typography.Text>
+                        <Tooltip title="When enabled, only the most relevant MCP tools will be included in requests based on semantic similarity">
+                          <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
+                        </Tooltip>
+                      </Space>
+                    }
+                    valuePropName="checked"
+                  >
+                    <Switch disabled={isUpdating} />
+                  </Form.Item>
+                  
+                  <Typography.Text type="secondary" style={{ display: "block", marginTop: -16, marginBottom: 16 }}>
+                    {schema?.properties?.enabled?.description}
+                  </Typography.Text>
+                </Card>
 
-            <Card title="Configuration" style={{ marginBottom: 16 }}>
-              <Form.Item
-                name="embedding_model"
-                label={
-                  <Space>
-                    <Typography.Text strong>Embedding Model</Typography.Text>
-                    <Tooltip title="The model used to generate embeddings for semantic matching">
-                      <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
-                    </Tooltip>
-                  </Space>
-                }
-              >
-                <Select
-                  options={embeddingModels.map((model) => ({
-                    label: model.model_group,
-                    value: model.model_group,
-                  }))}
-                  placeholder={loadingModels ? "Loading models..." : "Select embedding model"}
-                  showSearch
-                  disabled={isUpdating || loadingModels}
-                  loading={loadingModels}
-                  notFoundContent={
-                    loadingModels ? "Loading..." : "No embedding models available"
-                  }
-                />
-              </Form.Item>
+                <Card title="Configuration" style={{ marginBottom: 16 }}>
+                  <Form.Item
+                    name="embedding_model"
+                    label={
+                      <Space>
+                        <Typography.Text strong>Embedding Model</Typography.Text>
+                        <Tooltip title="The model used to generate embeddings for semantic matching">
+                          <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
+                        </Tooltip>
+                      </Space>
+                    }
+                  >
+                    <Select
+                      options={embeddingModels.map((model) => ({
+                        label: model.model_group,
+                        value: model.model_group,
+                      }))}
+                      placeholder={loadingModels ? "Loading models..." : "Select embedding model"}
+                      showSearch
+                      disabled={isUpdating || loadingModels}
+                      loading={loadingModels}
+                      notFoundContent={
+                        loadingModels ? "Loading..." : "No embedding models available"
+                      }
+                    />
+                  </Form.Item>
 
-              <Form.Item
-                name="top_k"
-                label={
-                  <Space>
-                    <Typography.Text strong>Top K Results</Typography.Text>
-                    <Tooltip title="Maximum number of tools to return after filtering">
-                      <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
-                    </Tooltip>
-                  </Space>
-                }
-              >
-                <InputNumber
-                  min={1}
-                  max={100}
-                  style={{ width: "100%" }}
-                  disabled={isUpdating}
-                />
-              </Form.Item>
+                  <Form.Item
+                    name="top_k"
+                    label={
+                      <Space>
+                        <Typography.Text strong>Top K Results</Typography.Text>
+                        <Tooltip title="Maximum number of tools to return after filtering">
+                          <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
+                        </Tooltip>
+                      </Space>
+                    }
+                  >
+                    <InputNumber
+                      min={1}
+                      max={100}
+                      style={{ width: "100%" }}
+                      disabled={isUpdating}
+                    />
+                  </Form.Item>
 
-              <Form.Item
-                name="similarity_threshold"
-                label={
-                  <Space>
-                    <Typography.Text strong>Similarity Threshold</Typography.Text>
-                    <Tooltip title="Minimum similarity score (0-1) for a tool to be included">
-                      <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
-                    </Tooltip>
-                  </Space>
-                }
-              >
-                <Slider
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  marks={{
-                    0: "0.0",
-                    0.3: "0.3",
-                    0.5: "0.5",
-                    0.7: "0.7",
-                    1: "1.0",
-                  }}
-                  disabled={isUpdating}
-                />
-              </Form.Item>
-            </Card>
+                  <Form.Item
+                    name="similarity_threshold"
+                    label={
+                      <Space>
+                        <Typography.Text strong>Similarity Threshold</Typography.Text>
+                        <Tooltip title="Minimum similarity score (0-1) for a tool to be included">
+                          <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
+                        </Tooltip>
+                      </Space>
+                    }
+                  >
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      marks={{
+                        0: "0.0",
+                        0.3: "0.3",
+                        0.5: "0.5",
+                        0.7: "0.7",
+                        1: "1.0",
+                      }}
+                      disabled={isUpdating}
+                    />
+                  </Form.Item>
+                </Card>
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <Button
-                type="primary"
-                icon={<SaveOutlined />}
-                onClick={handleSave}
-                loading={isUpdating}
-                disabled={!isDirty}
-              >
-                Save Settings
-              </Button>
-            </div>
-          </Form>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                  <Button
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    onClick={handleSave}
+                    loading={isUpdating}
+                    disabled={!isDirty}
+                  >
+                    Save Settings
+                  </Button>
+                </div>
+              </Form>
+            </Col>
+
+            {/* Right Column - Test Configuration */}
+            <Col xs={24} lg={12}>
+              <MCPSemanticFilterTestPanel
+                accessToken={accessToken}
+                testQuery={testQuery}
+                setTestQuery={setTestQuery}
+                testModel={testModel}
+                setTestModel={setTestModel}
+                isTesting={isTesting}
+                onTest={handleTest}
+                filterEnabled={!!values.enabled}
+                testResult={testResult}
+                showCurl={showCurl}
+                setShowCurl={setShowCurl}
+                curlCommand={getCurlCommand(testModel, testQuery)}
+              />
+            </Col>
+          </Row>
         </>
       )}
     </div>
