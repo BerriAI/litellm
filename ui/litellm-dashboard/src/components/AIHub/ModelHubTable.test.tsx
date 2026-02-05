@@ -1,6 +1,6 @@
 import * as networking from "@/components/networking";
-import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
 
 vi.mock("@/components/networking", () => ({
@@ -11,6 +11,8 @@ vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
   getAgentsList: vi.fn(),
   fetchMCPServers: vi.fn(),
+  getUiSettings: vi.fn(),
+  getClaudeCodeMarketplace: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -39,8 +41,11 @@ describe("ModelHubTable", () => {
       agents: [],
     });
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.getUiSettings).mockResolvedValue({
+      values: {},
+    });
 
-    render(<ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole={null} />);
+    renderWithProviders(<ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole={null} />);
 
     await waitFor(() => {
       expect(screen.getByText("AI Hub")).toBeInTheDocument();
@@ -58,8 +63,11 @@ describe("ModelHubTable", () => {
       admin_ui_disabled: false,
     });
     modelHubPublicModelsCallMock.mockResolvedValue([]);
+    vi.mocked(networking.getUiSettings).mockResolvedValue({
+      values: {},
+    });
 
-    render(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
+    renderWithProviders(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
 
     await waitFor(() => {
       expect(getUiConfigMock).toHaveBeenCalled();

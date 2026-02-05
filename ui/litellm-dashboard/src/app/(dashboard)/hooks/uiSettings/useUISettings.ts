@@ -1,7 +1,6 @@
 import { getUiSettings } from "@/components/networking";
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import useAuthorized from "../useAuthorized";
 
 const uiSettingsKeys = createQueryKeys("uiSettings");
 
