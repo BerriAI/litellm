@@ -93,6 +93,26 @@ else:
 router = APIRouter()
 
 
+def normalize_email(email: Optional[str]) -> Optional[str]:
+    """
+    Normalize email address to lowercase for consistent storage and comparison.
+    
+    Email addresses should be treated as case-insensitive for SSO purposes,
+    even though RFC 5321 technically allows case-sensitive local parts.
+    This prevents issues where SSO providers return emails with different casing
+    than what's stored in the database.
+    
+    Args:
+        email: Email address to normalize, can be None
+        
+    Returns:
+        Lowercased email address, or None if input is None
+    """
+    if email is None:
+        return None
+    return email.lower() if isinstance(email, str) else email
+
+
 def determine_role_from_groups(
     user_groups: List[str],
     role_mappings: "RoleMappings",
@@ -306,6 +326,7 @@ def generic_response_convertor(
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
     role_mappings: Optional["RoleMappings"] = None,
+    team_mappings: Optional["TeamMappings"] = None,
 ) -> CustomOpenID:
     generic_user_id_attribute_name = os.getenv(
         "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
@@ -339,8 +360,20 @@ def generic_response_convertor(
         team_ids = sso_jwt_handler.get_team_ids_from_jwt(cast(dict, response))
         all_teams.extend(team_ids)
 
-    team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
-    all_teams.extend(team_ids)
+    if team_mappings is not None and team_mappings.team_ids_jwt_field is not None:
+        team_ids_from_db_mapping: Optional[List[str]] = get_nested_value(
+            data=cast(dict, response),
+            key_path=team_mappings.team_ids_jwt_field,
+            default=[],
+        )
+        if team_ids_from_db_mapping:
+            all_teams.extend(team_ids_from_db_mapping)
+            verbose_proxy_logger.debug(
+                f"Loaded team_ids from DB team_mappings.team_ids_jwt_field='{team_mappings.team_ids_jwt_field}': {team_ids_from_db_mapping}"
+            )
+    else:
+        team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        all_teams.extend(team_ids)
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
@@ -395,7 +428,7 @@ def generic_response_convertor(
         display_name=get_nested_value(
             response, generic_user_display_name_attribute_name
         ),
-        email=get_nested_value(response, generic_user_email_attribute_name),
+        email=normalize_email(get_nested_value(response, generic_user_email_attribute_name)),
         first_name=get_nested_value(response, generic_user_first_name_attribute_name),
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
@@ -464,6 +497,43 @@ def _setup_generic_sso_env_vars(
     )
 
 
+async def _setup_team_mappings() -> Optional["TeamMappings"]:
+    """Setup team mappings from SSO database settings."""
+    team_mappings: Optional["TeamMappings"] = None
+    try:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+
+        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+            where={"id": "sso_config"}
+        )
+
+        if sso_db_record and sso_db_record.sso_settings:
+            sso_settings_dict = dict(sso_db_record.sso_settings)
+            team_mappings_data = sso_settings_dict.get("team_mappings")
+
+            if team_mappings_data:
+                from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
+                if isinstance(team_mappings_data, dict):
+                    team_mappings = TeamMappings(**team_mappings_data)
+                elif isinstance(team_mappings_data, TeamMappings):
+                    team_mappings = team_mappings_data
+
+                if team_mappings and team_mappings.team_ids_jwt_field:
+                    verbose_proxy_logger.debug(
+                        f"Loaded team_mappings with team_ids_jwt_field: '{team_mappings.team_ids_jwt_field}'"
+                    )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Could not load team_mappings from database: {e}. Continuing with config-based team mapping."
+        )
+
+    return team_mappings
+
+
 async def _setup_role_mappings() -> Optional["RoleMappings"]:
     """Setup role mappings from SSO database settings."""
     role_mappings: Optional["RoleMappings"] = None
@@ -474,7 +544,6 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
             "Prisma client is None, connect a database to your proxy"
         )
 
-        # Get SSO config from dedicated table
         sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
             where={"id": "sso_config"}
         )
@@ -495,7 +564,6 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                         f"Loaded role_mappings for provider '{role_mappings.provider}'"
                     )
     except Exception as e:
-        # If we can't load role_mappings, continue with existing logic
         verbose_proxy_logger.debug(
             f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
         )
@@ -570,8 +638,8 @@ async def get_generic_sso_response(
         userinfo_endpoint=generic_userinfo_endpoint,
     )
 
-    # Get role_mappings from SSO settings if available
     role_mappings = await _setup_role_mappings()
+    team_mappings = await _setup_team_mappings()
 
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
@@ -581,6 +649,7 @@ async def get_generic_sso_response(
             jwt_handler=jwt_handler,
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
+            team_mappings=team_mappings,
         )
 
     SSOProvider = create_provider(
@@ -731,7 +800,7 @@ async def get_user_info_from_db(
             if _id is not None and isinstance(_id, str):
                 potential_user_ids.append(_id)
 
-        user_email = (
+        user_email = normalize_email(
             getattr(result, "email", None)
             if not isinstance(result, dict)
             else result.get("email", None)
@@ -806,8 +875,8 @@ def _build_sso_user_update_data(
 
     Returns:
         dict: Update data containing user_email and optionally user_role if valid
-    """
-    update_data: dict = {"user_email": user_email}
+        """
+    update_data: dict = {"user_email": normalize_email(user_email)}
 
     # Get SSO role from result and include if valid
     sso_role = getattr(result, "user_role", None)
@@ -1199,7 +1268,7 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
                 max_budget=litellm.max_ui_session_budget,
             )
 
-            # Generate CLI JWT on-demand (24hr expiration)
+            # Generate CLI JWT on-demand (expiration configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS)
             # Pass selected team_id to ensure JWT has correct team
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info, team_id=team_id
@@ -1316,7 +1385,7 @@ async def insert_sso_user(
 
     new_user_request = NewUserRequest(
         user_id=user_defined_values["user_id"],
-        user_email=user_defined_values["user_email"],
+        user_email=normalize_email(user_defined_values["user_email"]),
         user_role=user_defined_values["user_role"],  # type: ignore
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
@@ -1981,7 +2050,7 @@ class SSOAuthenticationHandler:
         """
         Gets the user email and id from the OpenID result after validating the email domain
         """
-        user_email: Optional[str] = getattr(result, "email", None)
+        user_email: Optional[str] = normalize_email(getattr(result, "email", None))
         user_id: Optional[str] = (
             getattr(result, "id", None) if result is not None else None
         )
@@ -2020,7 +2089,7 @@ class SSOAuthenticationHandler:
                 "GENERIC_USER_ROLE_ATTRIBUTE", "role"
             )
             user_id = getattr(result, "id", None)
-            user_email = getattr(result, "email", None)
+            user_email = normalize_email(getattr(result, "email", None))
             if user_role is None:
                 _role_from_attr = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
                 if _role_from_attr is not None:
@@ -2413,7 +2482,7 @@ class MicrosoftSSOHandler:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
         openid_response = CustomOpenID(
-            email=response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail"),
+            email=normalize_email(response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail")),
             display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
             provider="microsoft",
             id=response.get(MICROSOFT_USER_ID_ATTRIBUTE),

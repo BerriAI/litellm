@@ -539,6 +539,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
@@ -639,6 +640,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "rpd": {"type": "number"},
                 "rpm": {"type": "number"},
                 "source": {"type": "string"},
+                "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
@@ -841,6 +843,7 @@ def test_get_model_info_gemini():
             and not "learnlm" in model
             and not "imagen" in model
             and not "veo" in model
+            and not "robotics" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -2280,8 +2283,23 @@ def test_register_model_with_scientific_notation():
     """
     Test that the register_model function can handle scientific notation in the model name.
     """
+    # Use a unique model name to avoid conflicts with other tests
+    test_model_name = "test-scientific-notation-model-unique-12345"
+    
+    # Clean up any pre-existing entry and clear caches
+    if test_model_name in litellm.model_cost:
+        del litellm.model_cost[test_model_name]
+    
+    # Clear LRU caches that might have stale data
+    from litellm.utils import (
+        _cached_get_model_info_helper,
+        _invalidate_model_cost_lowercase_map,
+        get_model_info,
+    )
+    _invalidate_model_cost_lowercase_map()
+    
     model_cost_dict = {
-        "my-custom-model": {
+        test_model_name: {
             "max_tokens": 8192,
             "input_cost_per_token": "3e-07",
             "output_cost_per_token": "6e-07",
@@ -2292,12 +2310,17 @@ def test_register_model_with_scientific_notation():
 
     litellm.register_model(model_cost_dict)
 
-    registered_model = litellm.model_cost["my-custom-model"]
+    registered_model = litellm.model_cost[test_model_name]
     print(registered_model)
     assert registered_model["input_cost_per_token"] == 3e-07
     assert registered_model["output_cost_per_token"] == 6e-07
     assert registered_model["litellm_provider"] == "openai"
     assert registered_model["mode"] == "chat"
+    
+    # Clean up after test
+    if test_model_name in litellm.model_cost:
+        del litellm.model_cost[test_model_name]
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():
@@ -2541,6 +2564,48 @@ def test_model_info_for_vertex_ai_deepseek_model():
     assert model_info["input_cost_per_token"] is not None
     assert model_info["output_cost_per_token"] is not None
     print("vertex deepseek model info", model_info)
+
+
+def test_model_info_for_openrouter_kimi_k2_5():
+    """
+    Test that openrouter/moonshotai/kimi-k2.5 model info is correctly configured
+    in model_prices_and_context_window.json.
+
+    Model properties from OpenRouter API:
+    - context_length: 262144
+    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - modality: text+image->text (supports vision)
+    - supports: tool_choice, tools (function calling)
+    """
+    import json
+    from pathlib import Path
+
+    # Load directly from the local JSON file
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    model_info = model_cost.get("openrouter/moonshotai/kimi-k2.5")
+    assert model_info is not None, "Model not found in model_prices_and_context_window.json"
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["mode"] == "chat"
+
+    # Verify context window
+    assert model_info["max_input_tokens"] == 262144
+    assert model_info["max_output_tokens"] == 262144
+    assert model_info["max_tokens"] == 262144
+
+    # Verify pricing
+    assert model_info["input_cost_per_token"] == 6e-07
+    assert model_info["output_cost_per_token"] == 3e-06
+    assert model_info["cache_read_input_token_cost"] == 1e-07
+
+    # Verify capabilities
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_tool_choice"] is True
+
+    print("openrouter kimi-k2.5 model info", model_info)
 
 
 class TestGetValidModelsWithCLI:

@@ -410,6 +410,308 @@ async def set_scim_content_type(response: Response):
     response.headers["Content-Type"] = "application/scim+json"
 
 
+def _get_resource_types(base_url: str = "/scim/v2") -> list:
+    """Return the list of SCIM ResourceType definitions per RFC 7643 Section 6."""
+    return [
+        SCIMResourceType(
+            id="User",
+            name="User",
+            description="User Account",
+            endpoint="/Users",
+            schema_="urn:ietf:params:scim:schemas:core:2.0:User",
+            meta={
+                "location": f"{base_url}/ResourceTypes/User",
+                "resourceType": "ResourceType",
+            },
+        ),
+        SCIMResourceType(
+            id="Group",
+            name="Group",
+            description="Group",
+            endpoint="/Groups",
+            schema_="urn:ietf:params:scim:schemas:core:2.0:Group",
+            meta={
+                "location": f"{base_url}/ResourceTypes/Group",
+                "resourceType": "ResourceType",
+            },
+        ),
+    ]
+
+
+def _get_schemas() -> list:
+    """Return the list of SCIM Schema definitions per RFC 7643 Section 7."""
+    return [
+        SCIMSchema(
+            id="urn:ietf:params:scim:schemas:core:2.0:User",
+            name="User",
+            description="User Account",
+            attributes=[
+                SCIMSchemaAttribute(
+                    name="userName",
+                    type="string",
+                    multiValued=False,
+                    description="Unique identifier for the User.",
+                    required=True,
+                    mutability="readWrite",
+                    returned="default",
+                    uniqueness="server",
+                ),
+                SCIMSchemaAttribute(
+                    name="name",
+                    type="complex",
+                    multiValued=False,
+                    description="The components of the user's real name.",
+                    required=False,
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="givenName",
+                            type="string",
+                            description="The given name of the User.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="familyName",
+                            type="string",
+                            description="The family name of the User.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="formatted",
+                            type="string",
+                            description="The full name.",
+                        ),
+                    ],
+                ),
+                SCIMSchemaAttribute(
+                    name="displayName",
+                    type="string",
+                    multiValued=False,
+                    description="The name of the User, suitable for display.",
+                ),
+                SCIMSchemaAttribute(
+                    name="emails",
+                    type="complex",
+                    multiValued=True,
+                    description="Email addresses for the user.",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="Email address value.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="type",
+                            type="string",
+                            description="Type of email (work, home, etc.).",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="primary",
+                            type="boolean",
+                            description="Whether this is the primary email.",
+                        ),
+                    ],
+                ),
+                SCIMSchemaAttribute(
+                    name="active",
+                    type="boolean",
+                    multiValued=False,
+                    description="Whether the user account is active.",
+                ),
+                SCIMSchemaAttribute(
+                    name="groups",
+                    type="complex",
+                    multiValued=True,
+                    description="Groups to which the user belongs.",
+                    mutability="readOnly",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="Group identifier.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="display",
+                            type="string",
+                            description="Group display name.",
+                        ),
+                    ],
+                ),
+            ],
+            meta={
+                "location": "/scim/v2/Schemas/urn:ietf:params:scim:schemas:core:2.0:User",
+                "resourceType": "Schema",
+            },
+        ),
+        SCIMSchema(
+            id="urn:ietf:params:scim:schemas:core:2.0:Group",
+            name="Group",
+            description="Group",
+            attributes=[
+                SCIMSchemaAttribute(
+                    name="displayName",
+                    type="string",
+                    multiValued=False,
+                    description="A human-readable name for the Group.",
+                    required=True,
+                    mutability="readWrite",
+                    returned="default",
+                    uniqueness="none",
+                ),
+                SCIMSchemaAttribute(
+                    name="members",
+                    type="complex",
+                    multiValued=True,
+                    description="A list of members of the Group.",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="Member identifier.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="display",
+                            type="string",
+                            description="Member display name.",
+                        ),
+                    ],
+                ),
+            ],
+            meta={
+                "location": "/scim/v2/Schemas/urn:ietf:params:scim:schemas:core:2.0:Group",
+                "resourceType": "Schema",
+            },
+        ),
+    ]
+
+
+@scim_router.get(
+    "",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+@scim_router.get(
+    "/",
+    status_code=200,
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_scim_base(request: Request):
+    """
+    Base SCIM v2 endpoint for resource discovery per RFC 7644 Section 4.
+
+    Returns a ListResponse of ResourceTypes supported by this SCIM service provider.
+    Identity providers (Okta, Azure AD, etc.) use this endpoint for resource discovery.
+    """
+    verbose_proxy_logger.debug(
+        "SCIM base resource discovery request: method=%s url=%s",
+        request.method,
+        request.url,
+    )
+    base_url = str(request.base_url).rstrip("/") + "/scim/v2"
+    resource_types = _get_resource_types(base_url)
+    return {
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": len(resource_types),
+        "Resources": [rt.model_dump() for rt in resource_types],
+    }
+
+
+@scim_router.get(
+    "/ResourceTypes",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_resource_types(request: Request):
+    """
+    SCIM ResourceTypes endpoint per RFC 7644 Section 4.
+
+    Returns a ListResponse of all resource types supported by this service provider.
+    """
+    verbose_proxy_logger.debug(
+        "SCIM ResourceTypes request: method=%s url=%s",
+        request.method,
+        request.url,
+    )
+    base_url = str(request.base_url).rstrip("/") + "/scim/v2"
+    resource_types = _get_resource_types(base_url)
+    return {
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": len(resource_types),
+        "Resources": [rt.model_dump() for rt in resource_types],
+    }
+
+
+@scim_router.get(
+    "/ResourceTypes/{resource_type_id}",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_resource_type(
+    request: Request,
+    resource_type_id: str = Path(..., title="ResourceType ID"),
+):
+    """
+    Get a single ResourceType by ID per RFC 7644.
+    """
+    verbose_proxy_logger.debug(
+        "SCIM ResourceType request for id=%s", resource_type_id
+    )
+    base_url = str(request.base_url).rstrip("/") + "/scim/v2"
+    resource_types = _get_resource_types(base_url)
+    for rt in resource_types:
+        if rt.id == resource_type_id:
+            return rt.model_dump()
+    raise HTTPException(
+        status_code=404,
+        detail={"error": f"ResourceType not found: {resource_type_id}"},
+    )
+
+
+@scim_router.get(
+    "/Schemas",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_schemas(request: Request):
+    """
+    SCIM Schemas endpoint per RFC 7643 Section 7.
+
+    Returns a ListResponse of all schemas supported by this service provider.
+    """
+    verbose_proxy_logger.debug(
+        "SCIM Schemas request: method=%s url=%s",
+        request.method,
+        request.url,
+    )
+    schemas = _get_schemas()
+    return {
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": len(schemas),
+        "Resources": [s.model_dump() for s in schemas],
+    }
+
+
+@scim_router.get(
+    "/Schemas/{schema_id:path}",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_schema(
+    request: Request,
+    schema_id: str = Path(..., title="Schema URI"),
+):
+    """
+    Get a single Schema by its URI per RFC 7643 Section 7.
+    """
+    verbose_proxy_logger.debug("SCIM Schema request for id=%s", schema_id)
+    schemas = _get_schemas()
+    for s in schemas:
+        if s.id == schema_id:
+            return s.model_dump()
+    raise HTTPException(
+        status_code=404,
+        detail={"error": f"Schema not found: {schema_id}"},
+    )
+
+
 @scim_router.get(
     "/ServiceProviderConfig",
     response_model=SCIMServiceProviderConfig,

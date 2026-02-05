@@ -313,10 +313,12 @@ def test_string_cost_values():
     }
 
     # Test usage with various token types
+    # Note: prompt_tokens must equal sum of details to avoid double-counting adjustment
+    # text_tokens(700) + audio_tokens(100) + cached_tokens(200) + cache_creation_tokens(150) = 1150
     usage = Usage(
-        prompt_tokens=1000,
+        prompt_tokens=1150,
         completion_tokens=500,
-        total_tokens=1500,
+        total_tokens=1650,
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None, cache_creation_tokens=150
         ),

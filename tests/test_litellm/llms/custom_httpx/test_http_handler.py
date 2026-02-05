@@ -471,3 +471,87 @@ def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, m
                     assert isinstance(ssl_context, ssl.SSLContext)
         finally:
             litellm.ssl_ecdh_curve = original_value
+
+
+def test_default_user_agent_is_litellm_version(monkeypatch):
+    from litellm._version import version
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    assert get_default_headers()["User-Agent"] == f"litellm/{version}"
+
+
+def test_user_agent_can_be_overridden_via_env_var(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    assert get_default_headers()["User-Agent"] == "Claude Code"
+
+
+def test_user_agent_env_var_can_be_empty_string(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "")
+
+    assert get_default_headers()["User-Agent"] == ""
+
+
+def test_user_agent_override_is_not_appended_to_default(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request(
+            "GET",
+            "https://example.com",
+            headers={"user-agent": "Claude Code"},
+        )
+
+        assert req.headers.get_list("User-Agent") == ["Claude Code"]
+    finally:
+        handler.close()
+
+
+def test_sync_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = AsyncHTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_httpx_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()

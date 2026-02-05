@@ -3,8 +3,9 @@ import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "ant
 import { Button, TextInput, Textarea } from "@tremor/react";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
 import { Guardrail } from "../guardrails/types";
-import { createPolicyCall, updatePolicyCall, getResolvedGuardrails, modelAvailableCall } from "../networking";
+import { getResolvedGuardrails, modelAvailableCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -17,6 +18,8 @@ interface AddPolicyFormProps {
   editingPolicy?: Policy | null;
   existingPolicies: Policy[];
   availableGuardrails: Guardrail[];
+  createPolicy: (accessToken: string, policyData: any) => Promise<any>;
+  updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
 }
 
 const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
@@ -27,6 +30,8 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   editingPolicy,
   existingPolicies,
   availableGuardrails,
+  createPolicy,
+  updatePolicy,
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -34,6 +39,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   const [isLoadingResolved, setIsLoadingResolved] = useState(false);
   const [modelConditionType, setModelConditionType] = useState<"model" | "regex">("model");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const { userId, userRole } = useAuthorized();
 
   const isEditing = !!editingPolicy;
 
@@ -43,7 +49,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       // Detect if it's a regex pattern (contains *, ., [, ], etc.)
       const isRegex = modelCondition && /[.*+?^${}()|[\]\\]/.test(modelCondition);
       setModelConditionType(isRegex ? "regex" : "model");
-      
+
       form.setFieldsValue({
         policy_name: editingPolicy.policy_name,
         description: editingPolicy.description,
@@ -73,9 +79,9 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadAvailableModels = async () => {
     if (!accessToken) return;
-    
+
     try {
-      const response = await modelAvailableCall(accessToken, null, null, null);
+      const response = await modelAvailableCall(accessToken, userId, userRole);
       if (response?.data) {
         const models = response.data.map((m: any) => m.id || m.model_name).filter(Boolean);
         setAvailableModels(models);
@@ -87,7 +93,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadResolvedGuardrails = async (policyId: string) => {
     if (!accessToken) return;
-    
+
     setIsLoadingResolved(true);
     try {
       const data = await getResolvedGuardrails(accessToken, policyId);
@@ -128,7 +134,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const resolveParentGuardrails = (policy: Policy): string[] => {
     let resolved = new Set<string>();
-    
+
     // If parent inherits, resolve recursively
     if (policy.inherit) {
       const grandparent = existingPolicies.find(p => p.policy_name === policy.inherit);
@@ -188,10 +194,10 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       };
 
       if (isEditing && editingPolicy) {
-        await updatePolicyCall(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
+        await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
         NotificationsManager.success("Policy updated successfully");
       } else {
-        await createPolicyCall(accessToken, data as PolicyCreateRequest);
+        await createPolicy(accessToken, data as PolicyCreateRequest);
         NotificationsManager.success("Policy created successfully");
       }
 
@@ -338,6 +344,14 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
           <Text strong>Conditions (Optional)</Text>
         </Divider>
 
+        <Alert
+          message="Model Scope"
+          description="By default, this policy will run on all models. You can optionally restrict it to specific models below."
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+
         <Form.Item label="Model Condition Type">
           <Radio.Group
             value={modelConditionType}
@@ -353,18 +367,18 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
         <Form.Item
           name="model_condition"
-          label={modelConditionType === "model" ? "Model" : "Regex Pattern"}
+          label={modelConditionType === "model" ? "Model (Optional)" : "Regex Pattern (Optional)"}
           tooltip={
             modelConditionType === "model"
-              ? "Select a specific model to apply this policy to"
-              : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*)"
+              ? "Select a specific model to apply this policy to. Leave empty to apply to all models."
+              : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*). Leave empty to apply to all models."
           }
         >
           {modelConditionType === "model" ? (
             <Select
               showSearch
               allowClear
-              placeholder="Select a model"
+              placeholder="Leave empty to apply to all models"
               options={availableModels.map((model) => ({
                 label: model,
                 value: model,
@@ -375,7 +389,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
               style={{ width: "100%" }}
             />
           ) : (
-            <TextInput placeholder="e.g., gpt-4.* or bedrock/claude-.*" />
+            <TextInput placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)" />
           )}
         </Form.Item>
 
