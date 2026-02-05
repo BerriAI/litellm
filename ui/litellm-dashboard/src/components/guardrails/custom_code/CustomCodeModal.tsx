@@ -19,7 +19,7 @@ const { TextArea } = Input;
 const CODE_TEMPLATES = {
   empty: {
     name: "Empty Template",
-    code: `def apply_guardrail(inputs, request_data, input_type):
+    code: `async def apply_guardrail(inputs, request_data, input_type):
     # inputs: {texts, images, tools, tool_calls, structured_messages, model}
     # request_data: {model, user_id, team_id, end_user_id, metadata}
     # input_type: "request" or "response"
@@ -68,6 +68,27 @@ const CODE_TEMPLATES = {
             return block("Response missing required fields")
     return allow()`,
   },
+  externalAPI: {
+    name: "External API Check (async)",
+    code: `async def apply_guardrail(inputs, request_data, input_type):
+    # Call an external moderation API (async for non-blocking)
+    for text in inputs["texts"]:
+        response = await http_post(
+            "https://api.example.com/moderate",
+            body={"text": text, "user_id": request_data["user_id"]},
+            headers={"Authorization": "Bearer YOUR_API_KEY"},
+            timeout=10
+        )
+        
+        if not response["success"]:
+            # API call failed, allow by default or block
+            return allow()
+        
+        if response["body"].get("flagged"):
+            return block(response["body"].get("reason", "Content flagged"))
+    
+    return allow()`,
+  },
 };
 
 // Available primitives organized by category
@@ -76,6 +97,11 @@ const PRIMITIVES = {
     { name: "allow()", desc: "Let request/response through" },
     { name: "block(reason)", desc: "Reject with message" },
     { name: "modify(texts=[], images=[], tool_calls=[])", desc: "Transform content" },
+  ],
+  "HTTP Requests (async)": [
+    { name: "await http_request(url, method, headers, body)", desc: "Make async HTTP request" },
+    { name: "await http_get(url, headers)", desc: "Async GET request" },
+    { name: "await http_post(url, body, headers)", desc: "Async POST request" },
   ],
   "Regex Functions": [
     { name: "regex_match(text, pattern)", desc: "Returns True if pattern found" },

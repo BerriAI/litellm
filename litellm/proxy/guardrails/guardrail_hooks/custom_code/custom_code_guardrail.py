@@ -5,7 +5,7 @@ This module provides a guardrail that executes user-defined Python-like code
 to implement custom guardrail logic. The code runs in a sandboxed environment
 with access to LiteLLM-provided primitives for common guardrail operations.
 
-Example custom code:
+Example custom code (sync):
 
     def apply_guardrail(inputs, request_data, input_type):
         '''Block messages containing SSNs'''
@@ -13,8 +13,23 @@ Example custom code:
             if regex_match(text, r"\\d{3}-\\d{2}-\\d{4}"):
                 return block("Social Security Number detected")
         return allow()
+
+Example custom code (async with HTTP):
+
+    async def apply_guardrail(inputs, request_data, input_type):
+        '''Call external moderation API'''
+        for text in inputs["texts"]:
+            response = await http_post(
+                "https://api.example.com/moderate",
+                body={"text": text}
+            )
+            if response["success"] and response["body"].get("flagged"):
+                return block("Content flagged by moderation API")
+        return allow()
 """
 
+import asyncio
+import inspect
 import threading
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 
@@ -175,6 +190,13 @@ class CustomCodeGuardrail(CustomGuardrail):
         This method calls the user-defined apply_guardrail function and
         processes its result to determine the appropriate action.
 
+        The user-defined function can be either sync or async:
+        - Sync: def apply_guardrail(inputs, request_data, input_type): ...
+        - Async: async def apply_guardrail(inputs, request_data, input_type): ...
+
+        Async functions are recommended when using http_request, http_get, or
+        http_post primitives to avoid blocking the event loop.
+
         Args:
             inputs: Dictionary containing texts, images, tool_calls
             request_data: The original request data with metadata
@@ -201,8 +223,12 @@ class CustomCodeGuardrail(CustomGuardrail):
             # Prepare request_data with safe subset of information
             safe_request_data = self._prepare_safe_request_data(request_data)
 
-            # Execute the custom function
+            # Execute the custom function - handle both sync and async functions
             result = self._compiled_function(inputs, safe_request_data, input_type)
+
+            # If the function is async (returns a coroutine), await it
+            if asyncio.iscoroutine(result):
+                result = await result
 
             # Process the result
             return self._process_result(
