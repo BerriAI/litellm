@@ -39,7 +39,6 @@ interface SidebarProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
   collapsed?: boolean;
-  enabledPagesInternalUsers?: string[] | null;
 }
 
 // Menu item configuration
@@ -60,8 +59,28 @@ interface MenuGroup {
   roles?: string[];
 }
 
-// Menu groups organized by category - defined outside component for export
-const menuGroups: MenuGroup[] = [
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false }) => {
+  const { userId, accessToken, userRole } = useAuthorized();
+  const { data: organizations } = useOrganizations();
+
+  // Check if user is an org_admin
+  const isOrgAdmin = useMemo(() => {
+    if (!userId || !organizations) return false;
+    return organizations.some((org: Organization) =>
+      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
+    );
+  }, [userId, organizations]);
+
+  // Navigate to page helper
+  const navigateToPage = (page: string) => {
+    const newSearchParams = new URLSearchParams(window.location.search);
+    newSearchParams.set("page", page);
+    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+    setPage(page);
+  };
+
+  // Menu groups organized by category
+  const menuGroups: MenuGroup[] = [
     {
       groupLabel: "AI GATEWAY",
       items: [
@@ -88,7 +107,7 @@ const menuGroups: MenuGroup[] = [
         {
           key: "agents",
           page: "agents",
-          label: "Agents",
+          label: <span className="flex items-center gap-4">Agents</span>,
           icon: <RobotOutlined />,
           roles: rolesWithWriteAccess,
         },
@@ -108,11 +127,7 @@ const menuGroups: MenuGroup[] = [
         {
           key: "policies",
           page: "policies",
-          label: (
-            <span className="flex items-center gap-4">
-              Policies <NewBadge />
-            </span>
-          ),
+          label: "Policies",
           icon: <AuditOutlined />,
           roles: all_admin_roles,
         },
@@ -133,6 +148,7 @@ const menuGroups: MenuGroup[] = [
               page: "vector-stores",
               label: "Vector Stores",
               icon: <DatabaseOutlined />,
+              roles: all_admin_roles,
             },
           ],
         },
@@ -317,82 +333,20 @@ const menuGroups: MenuGroup[] = [
     },
   ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
-  const { data: organizations } = useOrganizations();
-
-  // Check if user is an org_admin
-  const isOrgAdmin = useMemo(() => {
-    if (!userId || !organizations) return false;
-    return organizations.some((org: Organization) =>
-      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
-    );
-  }, [userId, organizations]);
-
-  // Navigate to page helper
-  const navigateToPage = (page: string) => {
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
-    setPage(page);
-  };
-
-  // Filter items based on user role and enabled pages for internal users
+  // Filter items based on user role
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
-    const isAdmin = isAdminRole(userRole);
-
-    // Debug logging
-    if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-      console.log("[LeftNav] Filtering with enabled pages:", {
-        userRole,
-        isAdmin,
-        enabledPagesInternalUsers,
-      });
-    }
-
     return items
-      .map((item) => ({
-        ...item,
-        children: item.children ? filterItemsByRole(item.children) : undefined,
-      }))
       .filter((item) => {
         // Special handling for organizations menu item - allow org_admins
         if (item.key === "organizations") {
-          const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
-          if (!hasRoleAccess) return false;
-
-          // Check enabled pages for internal users (non-admins)
-          if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-            const isIncluded = enabledPagesInternalUsers.includes(item.page);
-            console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
-            return isIncluded;
-          }
-          return true;
+          return !item.roles || item.roles.includes(userRole) || isOrgAdmin;
         }
-
-        // Existing role check
-        if (item.roles && !item.roles.includes(userRole)) return false;
-
-        // Check enabled pages for internal users (non-admins)
-        if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-          // If item has children, check if any children are visible
-          if (item.children && item.children.length > 0) {
-            const hasVisibleChildren = item.children.some((child) => 
-              enabledPagesInternalUsers.includes(child.page)
-            );
-            if (hasVisibleChildren) {
-              console.log(`[LeftNav] Parent "${item.page}" (${item.key}): VISIBLE (has visible children)`);
-              return true;
-            }
-          }
-          
-          const isIncluded = enabledPagesInternalUsers.includes(item.page);
-          console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
-          return isIncluded;
-        }
-
-        return true;
-      });
+        return !item.roles || item.roles.includes(userRole);
+      })
+      .map((item) => ({
+        ...item,
+        children: item.children ? filterItemsByRole(item.children) : undefined,
+      }));
   };
 
   // Build menu items with groups
@@ -527,6 +481,3 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 };
 
 export default Sidebar;
-
-// Also export menuGroups for advanced use cases
-export { menuGroups };

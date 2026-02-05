@@ -281,7 +281,6 @@ migrationJob:
   #    cpu: 100m
   #    memory: 100Mi
   extraContainers: []
-  extraInitContainers: []
 
   # Hook configuration
   hooks:

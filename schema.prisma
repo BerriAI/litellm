@@ -760,11 +760,6 @@ model LiteLLM_ManagedVectorStoresTable {
   updated_at DateTime @updatedAt
   litellm_credential_name String?
   litellm_params Json?
-  team_id String?
-  user_id String?
-  
-  @@index([team_id])
-  @@index([user_id])
 }
 
 // Guardrails table for storing guardrail configurations

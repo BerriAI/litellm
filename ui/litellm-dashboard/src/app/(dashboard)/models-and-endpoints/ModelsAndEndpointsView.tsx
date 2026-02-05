@@ -318,6 +318,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               onClose={() => {
                 setSelectedModelId(null);
               }}
+              modelData={processedModelData.data.find((model: any) => model.model_info.id === selectedModelId)}
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}

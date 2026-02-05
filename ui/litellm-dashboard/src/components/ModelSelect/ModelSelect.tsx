@@ -62,8 +62,14 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
     return allProxyModels ?? [];
   },
 
-  organization: ({ allProxyModels }) => {
-    return allProxyModels;
+  organization: ({ allProxyModels, selectedOrganization, options }) => {
+    if (!selectedOrganization) return [];
+
+    if (selectedOrganization.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value)) {
+      return allProxyModels;
+    }
+
+    return allProxyModels.filter((model) => selectedOrganization.models.includes(model));
   },
 };
 
@@ -96,6 +102,8 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const hasSpecialOptionSelected = value.some(isSpecialOption);
   const isLoading = isLoadingAllProxyModels || isLoadingTeam || isLoadingOrganization || isCurrentUserLoading;
   const organizationHasAllProxyModels = organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || organization?.models.length === 0;
+  console.log("organization:", organization);
+  console.log("organizationHasAllProxyModels:", organizationHasAllProxyModels);
   const shouldShowAllProxyModels =
     showAllProxyModelsOverride ||
     (organizationHasAllProxyModels && includeSpecialOptions);

@@ -2,17 +2,16 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { AllModelsDataTable } from "@/components/model_dashboard/all_models_table";
+import { ModelDataTable } from "@/components/model_dashboard/table";
 import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { PaginationState, SortingState } from "@tanstack/react-table";
+import { PaginationState } from "@tanstack/react-table";
 import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
-import { Skeleton, Spin } from "antd";
-import debounce from "lodash/debounce";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
+import { Skeleton } from "antd";
 type ModelViewMode = "all" | "current_team";
 
 interface AllModelsTabProps {
@@ -34,10 +33,9 @@ const AllModelsTab = ({
 }: AllModelsTabProps) => {
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { userId, userRole, premiumUser } = useAuthorized();
-  const { data: teams, isLoading: isLoadingTeams } = useTeams();
+  const { data: teams } = useTeams();
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
-  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
   const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
   const [currentTeam, setCurrentTeam] = useState<Team | "personal">("personal");
   const [showFilters, setShowFilters] = useState<boolean>(false);
@@ -49,58 +47,8 @@ const AllModelsTab = ({
     pageIndex: 0,
     pageSize: 50,
   });
-  const [sorting, setSorting] = useState<SortingState>([]);
 
-  // Debounce search input
-  const debouncedUpdateSearch = useMemo(
-    () =>
-      debounce((value: string) => {
-        setDebouncedSearch(value);
-        // Reset to page 1 when search changes
-        setCurrentPage(1);
-        setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-      }, 200),
-    []
-  );
-
-  useEffect(() => {
-    debouncedUpdateSearch(modelNameSearch);
-    return () => {
-      debouncedUpdateSearch.cancel();
-    };
-  }, [modelNameSearch, debouncedUpdateSearch]);
-
-  // Determine teamId to pass to the query - only pass if not "personal"
-  const teamIdForQuery = currentTeam === "personal" ? undefined : currentTeam.team_id;
-
-  // Convert sorting state to sortBy and sortOrder for API
-  const sortBy = useMemo(() => {
-    if (sorting.length === 0) return undefined;
-    const sort = sorting[0];
-    const columnIdToServerField: Record<string, string> = {
-      input_cost: "costs", // Map input_cost column to "costs" for server-side sorting
-      model_info_db_model: "status", // Map model_info.db_model column to "status" for server-side sorting
-      model_info_created_by: "created_at", // Map model_info.created_by column to "created_at" for server-side sorting
-      model_info_updated_at: "updated_at", // Map model_info.updated_at column to "updated_at" for server-side sorting
-    };
-    return columnIdToServerField[sort.id] || sort.id;
-  }, [sorting]);
-
-  const sortOrder = useMemo(() => {
-    if (sorting.length === 0) return undefined;
-    const sort = sorting[0];
-    return sort.desc ? "desc" : "asc";
-  }, [sorting]);
-
-  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(
-    currentPage,
-    pageSize,
-    debouncedSearch || undefined,
-    undefined,
-    teamIdForQuery,
-    sortBy,
-    sortOrder
-  );
+  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(currentPage, pageSize);
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = (model: string) => {
@@ -140,8 +88,10 @@ const AllModelsTab = ({
       return [];
     }
 
-    // Server-side search is now handled by the API, so we only filter by other criteria
     return modelData.data.filter((model: any) => {
+      const searchMatch =
+        modelNameSearch === "" || model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase());
+
       const modelNameMatch =
         selectedModelGroup === "all" ||
         model.model_name === selectedModelGroup ||
@@ -153,28 +103,30 @@ const AllModelsTab = ({
         model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) ||
         !selectedModelAccessGroupFilter;
 
-      // Team filtering is now handled server-side via teamId query parameter
-      // Only apply client-side filtering for model groups and access groups
-      return modelNameMatch && accessGroupMatch;
+      let teamAccessMatch = true;
+      if (modelViewMode === "current_team") {
+        if (currentTeam === "personal") {
+          teamAccessMatch = model.model_info?.direct_access === true;
+        } else {
+          // Check if model is directly associated with the team via team_ids
+          const directTeamAccess = model.model_info?.access_via_team_ids?.includes(currentTeam.team_id) === true;
+
+          // Check if any of the team's models match the model's access groups
+          const accessGroupMatch =
+            currentTeam.models?.some((teamModel: string) => model.model_info?.access_groups?.includes(teamModel)) ===
+            true;
+
+          teamAccessMatch = directTeamAccess || accessGroupMatch;
+        }
+      }
+
+      return searchMatch && modelNameMatch && accessGroupMatch && teamAccessMatch;
     });
-  }, [modelData, selectedModelGroup, selectedModelAccessGroupFilter]);
+  }, [modelData, modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
 
   useEffect(() => {
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-    setCurrentPage(1);
-  }, [selectedModelGroup, selectedModelAccessGroupFilter]);
-
-  // Reset pagination when team changes
-  useEffect(() => {
-    setCurrentPage(1);
-    setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-  }, [teamIdForQuery]);
-
-  // Reset pagination when sorting changes
-  useEffect(() => {
-    setCurrentPage(1);
-    setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-  }, [sorting]);
+  }, [modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
 
   const resetFilters = () => {
     setModelNameSearch("");
@@ -184,7 +136,6 @@ const AllModelsTab = ({
     setModelViewMode("current_team");
     setCurrentPage(1);
     setPagination({ pageIndex: 0, pageSize: 50 });
-    setSorting([]);
   };
 
   return (
@@ -207,17 +158,9 @@ const AllModelsTab = ({
                       onValueChange={(value) => {
                         if (value === "personal") {
                           setCurrentTeam("personal");
-                          // Reset to page 1 when team changes
-                          setCurrentPage(1);
-                          setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         } else {
                           const team = teams?.find((t) => t.team_id === value);
-                          if (team) {
-                            setCurrentTeam(team);
-                            // Reset to page 1 when team changes
-                            setCurrentPage(1);
-                            setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-                          }
+                          if (team) setCurrentTeam(team);
                         }
                       }}
                     >
@@ -227,29 +170,20 @@ const AllModelsTab = ({
                           <span className="font-medium">Personal</span>
                         </div>
                       </SelectItem>
-                      {isLoadingTeams ? (
-                        <SelectItem value="loading">
-                          <div className="flex items-center gap-2">
-                            <Spin size="small" />
-                            <span className="font-medium text-gray-500">Loading teams...</span>
-                          </div>
-                        </SelectItem>
-                      ) : (
-                        teams
-                          ?.filter((team) => team.team_id)
-                          .map((team) => (
-                            <SelectItem key={team.team_id} value={team.team_id}>
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                <span className="font-medium">
-                                  {team.team_alias
-                                    ? `${team.team_alias.slice(0, 30)}...`
-                                    : `Team ${team.team_id.slice(0, 30)}...`}
-                                </span>
-                              </div>
-                            </SelectItem>
-                          ))
-                      )}
+                      {teams
+                        ?.filter((team) => team.team_id)
+                        .map((team) => (
+                          <SelectItem key={team.team_id} value={team.team_id}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                              <span className="font-medium">
+                                {team.team_alias
+                                  ? `${team.team_alias.slice(0, 30)}...`
+                                  : `Team ${team.team_id.slice(0, 30)}...`}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
                     </Select>
                   )}
                 </div>
@@ -420,8 +354,8 @@ const AllModelsTab = ({
                     <Skeleton.Input active style={{ width: 184, height: 20 }} />
                   ) : (
                     <span className="text-sm text-gray-700">
-                      {paginationMeta.total_count > 0
-                        ? `Showing ${((currentPage - 1) * pageSize) + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
+                      {filteredData.length > 0
+                        ? `Showing 1 - ${filteredData.length} of ${filteredData.length} results`
                         : "Showing 0 results"}
                     </span>
                   )}
@@ -469,7 +403,7 @@ const AllModelsTab = ({
               </div>
             </div>
 
-            <AllModelsDataTable
+            <ModelDataTable
               columns={columns(
                 userRole,
                 userId,
@@ -483,9 +417,7 @@ const AllModelsTab = ({
                 setExpandedRows,
               )}
               data={filteredData}
-              isLoading={isLoadingModelsInfo}
-              sorting={sorting}
-              onSortingChange={setSorting}
+              isLoading={false}
               pagination={pagination}
               onPaginationChange={setPagination}
               enablePagination={true}

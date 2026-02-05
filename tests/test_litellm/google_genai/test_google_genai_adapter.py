@@ -1090,8 +1090,8 @@ async def test_google_generate_content_with_openai():
         usage=mock_usage
     )
     
-    # Use AsyncMock for proper async function mocking - patch at the module level where it's imported
-    with unittest.mock.patch("litellm.google_genai.main.litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
+    # Use AsyncMock for proper async function mocking
+    with unittest.mock.patch("litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
         # Set the return value directly on the MagicMock
         mock_completion.return_value = mock_response
         

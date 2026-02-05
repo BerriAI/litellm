@@ -97,7 +97,6 @@ const mockKey: KeyResponse = {
   litellm_budget_table: {},
   organization_id: "org-1",
   created_at: "2024-11-01T10:00:00Z",
-  created_by: "user-1",
   updated_at: "2024-11-15T10:00:00Z",
   team_spend: 5.5,
   team_alias: "Test Team",
@@ -178,7 +177,6 @@ beforeEach(() => {
       total_pages: 1,
     } as KeysResponse,
     isPending: false,
-    isFetching: false,
     refetch: vi.fn(),
   } as any);
 
@@ -267,7 +265,6 @@ it("should show skeleton loaders when isLoading is true", () => {
   mockUseKeys.mockReturnValue({
     data: null,
     isPending: true,
-    isFetching: true,
     refetch: vi.fn(),
   } as any);
 
@@ -442,8 +439,8 @@ it("should open KeyInfoView when clicking on a key ID button", async () => {
   // Verify table is visible before clicking - check for table-specific text
   expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
 
-  // Find the key ID button (it shows the full token value, truncation is CSS-only)
-  const keyIdButton = screen.getByText("sk-1234567890abcdef");
+  // Find the key ID button (it should show the truncated token)
+  const keyIdButton = screen.getByText("sk-1234...");
   expect(keyIdButton).toBeInTheDocument();
 
   // Click on the key ID button
@@ -459,86 +456,4 @@ it("should open KeyInfoView when clicking on a key ID button", async () => {
   // Verify that table-specific elements are no longer visible
   // The "Showing X of Y results" text should not be visible when KeyInfoView is open
   expect(screen.queryByText(/Showing.*results/)).not.toBeInTheDocument();
-});
-
-it("should display 'Default Proxy Admin' for user_id when value is 'default_user_id'", async () => {
-  const keyWithDefaultUserId = {
-    ...mockKey,
-    user_id: "default_user_id",
-  };
-
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithDefaultUserId],
-    allKeyAliases: ["test-key-alias"],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  await waitFor(() => {
-    expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
-  });
-});
-
-it("should display 'Default Proxy Admin' for created_by when value is 'default_user_id'", async () => {
-  const keyWithDefaultCreatedBy = {
-    ...mockKey,
-    created_by: "default_user_id",
-  };
-
-  mockUseFilterLogic.mockReturnValue({
-    filters: {
-      "Team ID": "",
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    },
-    filteredKeys: [keyWithDefaultCreatedBy],
-    allKeyAliases: ["test-key-alias"],
-    allTeams: [mockTeam],
-    allOrganizations: [mockOrganization],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: vi.fn(),
-  });
-
-  const mockProps = {
-    teams: [mockTeam],
-    organizations: [mockOrganization],
-    onSortChange: vi.fn(),
-    currentSort: {
-      sortBy: "created_at",
-      sortOrder: "desc" as const,
-    },
-  };
-
-  renderWithProviders(<VirtualKeysTable {...mockProps} />);
-
-  await waitFor(() => {
-    // The created_by column should display "Default Proxy Admin"
-    const defaultProxyAdminElements = screen.getAllByText("Default Proxy Admin");
-    expect(defaultProxyAdminElements.length).toBeGreaterThan(0);
-  });
 });

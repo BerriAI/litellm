@@ -1105,26 +1105,9 @@ async def test_mcp_server_manager_config_integration_with_database():
 
     test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
 
-    # Mock health_check_server to avoid real network calls that timeout
-    async def mock_health_check(server_id: str, mcp_auth_header=None):
-        server = test_manager.get_mcp_server_by_id(server_id)
-        if not server:
-            return None
-        return LiteLLM_MCPServerTable(
-            server_id=server_id,
-            server_name=server.name,
-            url=server.url,
-            transport=server.transport,
-            description=server.mcp_info.get("description") if server.mcp_info else None,
-            mcp_access_groups=server.access_groups,
-            status="healthy",
-            last_health_check=datetime.datetime.now(),
-            mcp_info=server.mcp_info,
-        )
-
-    test_manager.health_check_server = mock_health_check
-
     # Test the method (this tests our second fix)
+    import asyncio
+
     servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
         user_api_key_auth=mock_user_auth
     )

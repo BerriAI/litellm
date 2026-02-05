@@ -742,7 +742,7 @@ def test_gemini_pro_grounding(value_in_dict):
 @pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=6, delay=2)
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_function_calling_httpx(model, sync_mode):
     try:
         load_vertex_ai_credentials()
@@ -785,7 +785,6 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             "messages": messages,
             "tools": tools,
             "tool_choice": "required",
-            "timeout": 60,  # Add explicit timeout
         }
         print(f"Model for call - {model}")
         if sync_mode:
@@ -800,18 +799,12 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
     except litellm.RateLimitError as e:
-        pytest.skip(f"Rate limit exceeded: {str(e)}")
-    except litellm.ServiceUnavailableError as e:
-        pytest.skip(f"Service unavailable: {str(e)}")
-    except litellm.Timeout as e:
-        pytest.skip(f"Request timeout: {str(e)}")
+        pass
     except Exception as e:
-        error_msg = str(e)
-        # Skip test for known transient API issues
-        if any(x in error_msg for x in ["429 Quota exceeded", "503", "Service unavailable", "timeout", "Timeout", "UNAVAILABLE"]):
-            pytest.skip(f"Transient API error: {error_msg}")
+        if "429 Quota exceeded" in str(e):
+            pass
         else:
-            pytest.fail(f"An unexpected exception occurred - {error_msg}")
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
 from test_completion import response_format_tests
@@ -820,7 +813,7 @@ from test_completion import response_format_tests
 @pytest.mark.parametrize(
     "model,region",
     [
-        ("vertex_ai/mistral-small-2503", "us-central1"),
+        ("vertex_ai/mistral-large-2411", "us-central1"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),
     ],
@@ -893,7 +886,7 @@ async def test_partner_models_httpx(model, region, sync_mode):
         ("vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas", "us-east5"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         (
-            "vertex_ai/mistral-small-2503",
+            "vertex_ai/mistral-large-2411",
             "us-central1",
         ),  # critical - we had this issue: https://github.com/BerriAI/litellm/issues/13888
         ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),

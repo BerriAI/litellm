@@ -200,7 +200,6 @@ Example `requirements.txt`
 
 ```shell
 litellm[proxy]==1.57.3 # Specify the litellm version you want to use
-litellm-enterprise
 prometheus_client
 langfuse
 prisma

@@ -103,11 +103,7 @@ class TestProxyInitializationHelpers:
             args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
                 "localhost", 8000
             )
-            # When json_logs is True, log_config should be set to the JSON log config dict
-            assert args["log_config"] is not None
-            assert isinstance(args["log_config"], dict)
-            assert "version" in args["log_config"]
-            assert "formatters" in args["log_config"]
+            assert args["log_config"] is None
 
         # Test with keepalive_timeout
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
@@ -222,7 +218,6 @@ class TestProxyInitializationHelpers:
     @patch("atexit.register")  # 🔥 critical
     def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):
         from click.testing import CliRunner
-
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()

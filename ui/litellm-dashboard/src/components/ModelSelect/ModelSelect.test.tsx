@@ -405,7 +405,7 @@ describe("ModelSelect", () => {
     });
   });
 
-  it("should show all models when organization context is used", async () => {
+  it("should filter models when organization has specific models", async () => {
     const mockOrganization: Organization = {
       organization_id: "org-1",
       organization_alias: "Test Org",
@@ -433,7 +433,7 @@ describe("ModelSelect", () => {
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
-      expect(screen.getByText("claude-3")).toBeInTheDocument();
+      expect(screen.queryByText("claude-3")).not.toBeInTheDocument();
     });
   });
 

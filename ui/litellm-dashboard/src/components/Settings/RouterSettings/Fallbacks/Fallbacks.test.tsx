@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import Fallbacks from "./Fallbacks";
+import Fallbacks from "./fallbacks";
 import * as networkingModule from "../../../networking";
 import * as fetchModelsModule from "../../../playground/llm_calls/fetch_models";
 
@@ -108,7 +108,7 @@ describe("Fallbacks", () => {
       return buttons[buttons.length - 1];
     }
     const clickableElements = lastCell.querySelectorAll("[class*='cursor-pointer'], button");
-    return Array.from(clickableElements).find((el) =>
+    return Array.from(clickableElements).find((el) => 
       el.className.includes("red") || el.className.includes("hover:text-red")
     ) || clickableElements[clickableElements.length - 1];
   };
@@ -202,7 +202,7 @@ describe("Fallbacks", () => {
 
     await waitFor(() => {
       expect(networkingModule.setCallbacksCall).toHaveBeenCalled();
-      const callArgs = (networkingModule.setCallbacksCall as any).mock.calls[0];
+      const callArgs = networkingModule.setCallbacksCall.mock.calls[0];
       expect(callArgs[0]).toBe(mockAccessToken);
       expect(callArgs[1].router_settings.fallbacks).toHaveLength(1);
     });

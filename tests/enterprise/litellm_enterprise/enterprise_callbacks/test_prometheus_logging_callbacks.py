@@ -411,15 +411,7 @@ def test_set_latency_metrics(prometheus_logger):
 
     # completion_start_time - api_call_start_time
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_called_once_with(
-        end_user=None,
-        user="test_user",
-        hashed_api_key="test_hash",
-        api_key_alias="test_alias",
-        team="test_team",
-        team_alias="test_team_alias",
-        requested_model="openai-gpt",
-        model="gpt-3.5-turbo",
-        model_id="model-123",
+        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
     )
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
         0.5
@@ -450,7 +442,6 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
-        model_id="model-123",
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
@@ -746,7 +737,6 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         exception_status="429",
         exception_class="Openai.RateLimitError",
         route=user_api_key_dict.request_route,
-        model_id=None,
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
@@ -762,7 +752,6 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         status_code="429",
         user_email=None,
         route=user_api_key_dict.request_route,
-        model_id=None,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -809,7 +798,6 @@ async def test_async_post_call_success_hook(prometheus_logger):
         status_code="200",
         user_email=None,
         route=user_api_key_dict.request_route,
-        model_id=None,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 

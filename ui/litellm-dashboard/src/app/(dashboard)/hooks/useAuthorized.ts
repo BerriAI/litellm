@@ -2,7 +2,6 @@
 
 import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { isJwtExpired } from "@/utils/jwtUtils";
 import { jwtDecode } from "jwt-decode";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
@@ -43,24 +42,15 @@ const useAuthorized = () => {
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
-  // Step 1: Check for missing token or expired JWT - kick out immediately (even if UI Config is loading)
-  useEffect(() => {
-    if (!token || (token && isJwtExpired(token))) {
-      if (token) {
-        clearTokenCookies();
-      }
-      router.replace(`${getProxyBaseUrl()}/ui/login`);
-    }
-  }, [token, router]);
-
+  // Redirect after mount if missing/invalid token
   useEffect(() => {
     if (isUIConfigLoading) {
       return;
     }
-    if (uiConfig?.admin_ui_disabled) {
+    if (!token || uiConfig?.admin_ui_disabled) {
       router.replace(`${getProxyBaseUrl()}/ui/login`);
     }
-  }, [router, isUIConfigLoading, uiConfig]);
+  }, [token, router, isUIConfigLoading, uiConfig]);
 
   // Decode safely
   const decoded = useMemo(() => {

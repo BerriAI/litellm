@@ -68,7 +68,7 @@ Follow [this guide, to add your pydantic ai agent to LiteLLM Agent Gateway](./pr
 
 ## Invoking your Agents
 
-Use the [A2A Python SDK](https://pypi.org/project/a2a-sdk) to invoke agents through LiteLLM.
+Use the [A2A Python SDK](https://pypi.org/project/a2a/) to invoke agents through LiteLLM.
 
 This example shows how to:
 1. **List available agents** - Query `/v1/agents` to see which agents your key can access
