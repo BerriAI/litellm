@@ -55,6 +55,7 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
 
     Detects:
     - LiteLLM standard: name == "litellm_web_search"
+    - OpenAI format: type == "function" with function.name == "litellm_web_search"
     - Anthropic native: type starts with "web_search_" (e.g., "web_search_20250305")
     - Claude Code: name == "web_search" with a type field
     - Custom: name == "WebSearch" (legacy format)
@@ -68,15 +69,25 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
     Example:
         >>> is_web_search_tool({"name": "litellm_web_search"})
         True
+        >>> is_web_search_tool({"type": "function", "function": {"name": "litellm_web_search"}})
+        True
         >>> is_web_search_tool({"type": "web_search_20250305", "name": "web_search"})
         True
         >>> is_web_search_tool({"name": "calculator"})
         False
     """
+    print(f"🔥tool: {tool}")
     tool_name = tool.get("name", "")
     tool_type = tool.get("type", "")
+    
+    # Check for OpenAI format: {"type": "function", "function": {"name": "..."}}
+    if tool_type == "function" and "function" in tool:
+        function_def = tool.get("function", {})
+        function_name = function_def.get("name", "")
+        if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+            return True
 
-    # Check for LiteLLM standard tool
+    # Check for LiteLLM standard tool (Anthropic format)
     if tool_name == LITELLM_WEB_SEARCH_TOOL_NAME:
         return True
 
