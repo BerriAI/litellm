@@ -32,6 +32,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_service,
     get_datadog_source,
     get_datadog_tags,
+    get_datadog_base_url_from_env,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
@@ -100,7 +101,9 @@ class DataDogLogger(
                 self._configure_dd_direct_api()
 
             # Optional override for testing
-            self._apply_dd_base_url_override()
+            dd_base_url = get_datadog_base_url_from_env()
+            if dd_base_url:
+                self.intake_url = f"{dd_base_url}/api/v2/logs"
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -158,18 +161,6 @@ class DataDogLogger(
 
         self.DD_API_KEY = os.getenv("DD_API_KEY")
         self.intake_url = f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
-
-    def _apply_dd_base_url_override(self) -> None:
-        """
-        Apply base URL override for testing purposes
-        """
-        dd_base_url: Optional[str] = (
-            os.getenv("_DATADOG_BASE_URL")
-            or os.getenv("DATADOG_BASE_URL")
-            or os.getenv("DD_BASE_URL")
-        )
-        if dd_base_url is not None:
-            self.intake_url = f"{dd_base_url}/api/v2/logs"
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """

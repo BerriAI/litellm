@@ -19,6 +19,7 @@ import ModelAliasManager from "../common_components/ModelAliasManager";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import TeamDropdown from "../common_components/team_dropdown";
 import Createuser from "../create_user_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -28,6 +29,7 @@ import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
   getGuardrailsList,
+  getPoliciesList,
   getPossibleUserRoles,
   getPromptsList,
   keyCreateCall,
@@ -149,6 +151,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
@@ -163,6 +166,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -172,6 +177,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleCancel = () => {
@@ -185,6 +192,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   useEffect(() => {
@@ -204,6 +213,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
@@ -214,6 +233,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     };
 
     fetchGuardrails();
+    fetchPolicies();
     fetchPrompts();
   }, [accessToken]);
 
@@ -301,9 +321,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         formValues.rotation_interval = rotationInterval;
       }
 
-      // Handle duration field for key expiry
-      if (formValues.duration) {
-        formValues.duration = formValues.duration;
+      // Handle duration field for key expiry - convert empty string to null
+      if (!formValues.duration || formValues.duration.trim() === "") {
+        formValues.duration = null;
       }
 
       // Update the formValues with the final metadata
@@ -381,6 +401,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       // Add model_aliases if any are defined
       if (Object.keys(modelAliases).length > 0) {
         formValues.aliases = JSON.stringify(modelAliases);
+      }
+
+      // Add router_settings if any are defined
+      if (routerSettings?.router_settings) {
+        // Only include router_settings if it has at least one non-null value
+        const hasValues = Object.values(routerSettings.router_settings).some(
+          (value) => value !== null && value !== undefined && value !== "",
+        );
+        if (hasValues) {
+          formValues.router_settings = routerSettings.router_settings;
+        }
       }
 
       let response;
@@ -900,6 +931,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   <Form.Item
                     label={
                       <span>
+                        Policies{" "}
+                        <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="policies"
+                    className="mt-4"
+                    help={
+                      premiumUser
+                        ? "Select existing policies or enter new ones"
+                        : "Premium feature - Upgrade to set policies by key"
+                    }
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      disabled={!premiumUser}
+                      placeholder={
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set policies by key"
+                          : "Select or enter policies"
+                      }
+                      options={policiesList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
                         Prompts{" "}
                         <Tooltip title="Allow this key to use specific prompt templates">
                           <a
@@ -1154,6 +1221,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     </Tooltip>
                   )}
 
+                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Router Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4 w-full">
+                        <RouterSettingsAccordion
+                          key={routerSettingsKey}
+                          accessToken={accessToken || ""}
+                          value={routerSettings || undefined}
+                          onChange={setRouterSettings}
+                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
                       <b>Model Aliases</b>
@@ -1186,6 +1270,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           onAutoRotationChange={setAutoRotationEnabled}
                           rotationInterval={rotationInterval}
                           onRotationIntervalChange={setRotationInterval}
+                          isCreateMode={true}
                         />
                       </div>
                     </AccordionBody>

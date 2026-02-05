@@ -3,25 +3,28 @@ import time
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
-from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.audio.transcription_create_params import (
+    FileTypes as FileTypes,  # type: ignore
+)
+from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
     PromptTokensDetails,
 )
+from openai.types.moderation import Categories as Categories
 from openai.types.moderation import (
-    Categories,
-    CategoryAppliedInputTypes,
-    CategoryScores,
+    CategoryAppliedInputTypes as CategoryAppliedInputTypes,
 )
-from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
+from openai.types.moderation import CategoryScores as CategoryScores
+from openai.types.moderation_create_response import Moderation as Moderation
+from openai.types.moderation_create_response import (
+    ModerationCreateResponse as ModerationCreateResponse,
+)
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
-from typing_extensions import Callable, Dict, Required, TypedDict, override
+from typing_extensions import Required, TypedDict
 
-import litellm
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
@@ -52,7 +55,7 @@ from .llms.openai import (
     ResponsesAPIResponse,
     WebSearchOptions,
 )
-from .rerank import RerankResponse
+from .rerank import RerankResponse as RerankResponse
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -1411,7 +1414,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
@@ -2501,6 +2504,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     requester_metadata: Optional[dict]
     requester_custom_headers: Optional[
         Dict[str, str]
@@ -2686,6 +2690,7 @@ class StandardLoggingPayload(TypedDict):
     request_tags: list
     end_user: Optional[str]
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
@@ -3072,6 +3077,7 @@ class LlmProviders(str, Enum):
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
+    S3_VECTORS = "s3_vectors"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"

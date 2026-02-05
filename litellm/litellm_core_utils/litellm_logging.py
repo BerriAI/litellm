@@ -205,6 +205,11 @@ _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
 
+# Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
+_CUSTOM_PRICING_KEYS: frozenset = frozenset(
+    CustomPricingLiteLLMParams.model_fields.keys()
+)
+
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -330,7 +335,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
-        self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
+        self.litellm_trace_id: str = (
+            litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
+        )
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[
@@ -539,10 +546,11 @@ class Logging(LiteLLMLoggingBaseClass):
         if "stream_options" in additional_params:
             self.stream_options = additional_params["stream_options"]
         ## check if custom pricing set ##
-        custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
-        for key in custom_pricing_keys:
-            if litellm_params.get(key) is not None:
-                self.custom_pricing = True
+        if any(
+            litellm_params.get(key) is not None
+            for key in _CUSTOM_PRICING_KEYS & litellm_params.keys()
+        ):
+            self.custom_pricing = True
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
@@ -1630,11 +1638,19 @@ class Logging(LiteLLMLoggingBaseClass):
                     "standard_logging_object"
                 )
             ) is not None:
-                standard_logging_payload["response"] = (
+                response_dict = (
                     result.model_dump()
                     if hasattr(result, "model_dump")
                     else dict(result)
                 )
+                # Ensure usage is properly included with transformed chat format
+                if transformed_usage is not None:
+                    response_dict["usage"] = (
+                        transformed_usage.model_dump()
+                        if hasattr(transformed_usage, "model_dump")
+                        else dict(transformed_usage)
+                    )
+                standard_logging_payload["response"] = response_dict
         elif isinstance(result, TranscriptionResponse):
             from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
                 TranscriptionUsageObjectTransformation,
@@ -3296,6 +3312,7 @@ def _get_masked_values(
         "token",
         "key",
         "secret",
+        "vertex_credentials",
     ]
     return {
         k: (
@@ -4248,15 +4265,21 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     if litellm_params is None:
         return False
 
+    # Check litellm_params using set intersection (only check keys that exist in both)
+    matching_keys = _CUSTOM_PRICING_KEYS & litellm_params.keys()
+    for key in matching_keys:
+        if litellm_params.get(key) is not None:
+            return True
+
+    # Check model_info
     metadata: dict = litellm_params.get("metadata", {}) or {}
     model_info: dict = metadata.get("model_info", {}) or {}
 
-    custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
-    for key in custom_pricing_keys:
-        if litellm_params.get(key, None) is not None:
-            return True
-        elif model_info.get(key, None) is not None:
-            return True
+    if model_info:
+        matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+        for key in matching_keys:
+            if model_info.get(key) is not None:
+                return True
 
     return False
 
@@ -4444,6 +4467,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_request_route=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
+            user_agent=None,
             requester_metadata=None,
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
@@ -4524,6 +4548,10 @@ class StandardLoggingPayloadSetup:
             )
         elif isinstance(usage, Usage):
             return usage
+        elif isinstance(usage, ResponseAPIUsage):
+            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                usage
+            )
         elif isinstance(usage, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(usage):
                 return (
@@ -4652,7 +4680,10 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def strip_trailing_slash(api_base: Optional[str]) -> Optional[str]:
         if api_base:
-            return api_base.rstrip("/")
+            if api_base.endswith("//"):
+                return api_base.rstrip("/")
+            if api_base[-1] == "/":
+                return api_base[:-1]
         return api_base
 
     @staticmethod
@@ -5126,6 +5157,7 @@ def get_standard_logging_object_payload(
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
+            user_agent=clean_metadata.get("user_agent", None),
             messages=StandardLoggingPayloadSetup.append_system_prompt_messages(
                 kwargs=kwargs, messages=kwargs.get("messages")
             ),
@@ -5191,6 +5223,7 @@ def get_standard_logging_metadata(
         user_api_key_team_alias=None,
         spend_logs_metadata=None,
         requester_ip_address=None,
+        user_agent=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
         prompt_management_metadata=None,

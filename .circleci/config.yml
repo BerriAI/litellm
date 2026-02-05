@@ -112,7 +112,7 @@ jobs:
             python -m mypy .
             cd ..
           no_output_timeout: 10m
-  local_testing:
+  local_testing_part1:
     docker:
       - image: cimg/python:3.12
         auth:
@@ -205,13 +205,15 @@ jobs:
 
       # Run pytest and generate JUnit XML report
       - run:
-          name: Run tests
+          name: Run tests (Part 1 - A-M)
           command: |
             mkdir test-results
-            # Discover test files
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+
+            # Discover test files (A-M)
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[a-mA-M]*.py")
+
             echo "$TEST_FILES" | circleci tests run \
-              --split-by=filesize \
+              --split-by=timings \
               --verbose \
               --command="xargs python -m pytest \
                 -vv \
@@ -227,8 +229,8 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_coverage.xml
-            mv .coverage local_testing_coverage
+            mv coverage.xml local_testing_part1_coverage.xml
+            mv .coverage local_testing_part1_coverage
 
       # Store test results
       - store_test_results:
@@ -236,8 +238,136 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - local_testing_coverage.xml
-            - local_testing_coverage
+            - local_testing_part1_coverage.xml
+            - local_testing_part1_coverage
+  local_testing_part2:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    parallelism: 4
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "mypy==1.18.2"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
+            pip install langchain
+            pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.59.7"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.100.1
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
+            pip install "httpx==0.24.1"
+            pip install "respx==0.22.0"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.10.2"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+            pip install "pytest-xdist==3.6.1"
+            pip install "pytest-timeout==2.2.0"
+            pip install "websockets==13.1.0"
+            pip install semantic_router --no-deps
+            pip install aurelio_sdk --no-deps
+            pip uninstall posthog -y
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      - run:
+          name: Black Formatting
+          command: |
+            cd litellm
+            python -m pip install black
+            python -m black .
+            cd ..
+
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests (Part 2 - N-Z)
+          command: |
+            mkdir test-results
+
+            # Discover test files (N-Z)
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[n-zN-Z]*.py")
+
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=timings \
+              --verbose \
+              --command="xargs python -m pytest \
+                -vv \
+                --cov=litellm \
+                --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=20 \
+                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
+                -n 4 \
+                --timeout=300 \
+                --timeout_method=thread"
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml local_testing_part2_coverage.xml
+            mv .coverage local_testing_part2_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - local_testing_part2_coverage.xml
+            - local_testing_part2_coverage
   langfuse_logging_unit_tests:
     docker:
       - image: cimg/python:3.11
@@ -509,7 +639,6 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    parallelism: 4
     steps:
       - checkout
       - setup_google_dns
@@ -531,21 +660,9 @@ jobs:
       - run:
           name: Run tests
           command: |
-            mkdir test-results
-            # Find test files only in local_testing
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=filesize \
-              --verbose \
-              --command="xargs python -m pytest -o junit_family=legacy \
-                -k 'router' \
-                --cov=litellm \
-                --cov-report=xml \
-                -n 4 \
-                --dist=loadscope \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -vv"
+            pwd
+            ls
+            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -598,8 +715,8 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_router_coverage.xml
-            mv .coverage litellm_router_coverage
+            mv coverage.xml litellm_router_unit_coverage.xml
+            mv .coverage litellm_router_unit_coverage
       # Store test results
       - store_test_results:
           path: test-results
@@ -607,8 +724,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_router_coverage.xml
-            - litellm_router_coverage
+            - litellm_router_unit_coverage.xml
+            - litellm_router_unit_coverage
   litellm_security_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -1816,6 +1933,7 @@ jobs:
             pip install "mlflow==2.17.2"
             pip install "anthropic==0.52.0"
             pip install "blockbuster==1.5.24"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -1823,7 +1941,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm -n 4 --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -3310,7 +3428,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3360,8 +3478,22 @@ jobs:
                 ls dist/
                 twine upload --verbose dist/*
             else
-                echo "Version ${VERSION} of package is already published on PyPI. Skipping PyPI publish."
-                circleci step halt
+                echo "Version ${VERSION} of package is already published on PyPI."
+                
+                # Check if corresponding Docker nightly image exists
+                NIGHTLY_TAG="v${VERSION}-nightly"
+                echo "Checking for Docker nightly image: litellm/litellm:${NIGHTLY_TAG}"
+                
+                # Check Docker Hub for the nightly image
+                if curl -s "https://hub.docker.com/v2/repositories/litellm/litellm/tags/${NIGHTLY_TAG}" | grep -q "name"; then
+                    echo "Docker nightly image ${NIGHTLY_TAG} exists. This release was already completed successfully."
+                    echo "Skipping PyPI publish and continuing to ensure Docker images are up to date."
+                    circleci step halt
+                else
+                    echo "ERROR: PyPI package ${VERSION} exists but Docker nightly image ${NIGHTLY_TAG} does not exist!"
+                    echo "This indicates an incomplete release. Please investigate."
+                    exit 1
+                fi
             fi
       - run:
           name: Trigger Github Action for new Docker Container + Trigger Load Testing
@@ -3370,11 +3502,21 @@ jobs:
             python3 -m pip install toml
             VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "LiteLLM Version ${VERSION}"
+
+            # Determine which branch to use for Docker build
+            if [[ "$CIRCLE_BRANCH" =~ ^litellm_release_day_.* ]]; then
+              BUILD_BRANCH="$CIRCLE_BRANCH"
+              echo "Using release branch: $BUILD_BRANCH"
+            else
+              BUILD_BRANCH="main"
+              echo "Using default branch: $BUILD_BRANCH"
+            fi
+
             curl -X POST \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
+              -d "{\"ref\":\"${BUILD_BRANCH}\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
             echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
@@ -3765,7 +3907,13 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - local_testing:
+      - local_testing_part1:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - local_testing_part2:
           filters:
             branches:
               only:
@@ -4070,7 +4218,8 @@ workflows:
             - litellm_proxy_unit_testing_part2
             - litellm_security_tests
             - langfuse_logging_unit_tests
-            - local_testing
+            - local_testing_part1
+            - local_testing_part2
             - litellm_assistants_api_testing
             - auth_ui_unit_tests
       - db_migration_disable_update_check:
@@ -4110,10 +4259,12 @@ workflows:
             branches:
               only:
                 - main
+                - /litellm_release_day_.*/
       - publish_to_pypi:
           requires:
             - mypy_linting
-            - local_testing
+            - local_testing_part1
+            - local_testing_part2
             - build_and_test
             - e2e_openai_endpoints
             - test_bad_database_url

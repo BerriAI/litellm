@@ -42,6 +42,7 @@ import AgentSelector from "./agent_management/AgentSelector";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./common_components/RouterSettingsAccordion";
 import {
   fetchAvailableModelsForTeamOrKey,
   getModelDisplayName,
@@ -227,6 +228,8 @@ const Teams: React.FC<TeamProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -317,6 +320,8 @@ const Teams: React.FC<TeamProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleMemberOk = () => {
@@ -330,6 +335,8 @@ const Teams: React.FC<TeamProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleMemberCancel = () => {
@@ -503,6 +510,17 @@ const Teams: React.FC<TeamProps> = ({
           formValues.model_aliases = modelAliases;
         }
 
+        // Add router_settings if any are defined
+        if (routerSettings?.router_settings) {
+          // Only include router_settings if it has at least one non-null value
+          const hasValues = Object.values(routerSettings.router_settings).some(
+            (value) => value !== null && value !== undefined && value !== "",
+          );
+          if (hasValues) {
+            formValues.router_settings = routerSettings.router_settings;
+          }
+        }
+
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -514,6 +532,8 @@ const Teams: React.FC<TeamProps> = ({
         form.resetFields();
         setLoggingSettings([]);
         setModelAliases({});
+        setRouterSettings(null);
+        setRouterSettingsKey((prev) => prev + 1);
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -1423,6 +1443,23 @@ const Teams: React.FC<TeamProps> = ({
                           value={loggingSettings}
                           onChange={setLoggingSettings}
                           premiumUser={premiumUser}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Router Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4 w-full">
+                        <RouterSettingsAccordion
+                          key={routerSettingsKey}
+                          accessToken={accessToken || ""}
+                          value={routerSettings || undefined}
+                          onChange={setRouterSettings}
+                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
                         />
                       </div>
                     </AccordionBody>
