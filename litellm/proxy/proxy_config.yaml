@@ -1,67 +1,52 @@
 model_list:
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+  - model_name: gemini/*
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-east-1
-      custom_llm_provider: bedrock
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+      model: gemini/*
+  - model_name: claude-sonnet-4-5-20250929
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-west-2
-      custom_llm_provider: bedrock
-  - model_name: bedrock/*
-    litellm_params:
-      model: bedrock/*
-      custom_llm_provider: bedrock
-      aws_region_name: us-west-2
-  - model_name: runwayml/*
-    litellm_params:
-      model: runwayml/*
+      model: bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    model_info:
+      cache_creation_input_token_cost: 3.75e-06
+      cache_read_input_token_cost: 3e-07
+      input_cost_per_token: 3e-06
+      input_cost_per_token_above_200k_tokens: 6e-06
+      output_cost_per_token_above_200k_tokens: 2.25e-05
+      cache_creation_input_token_cost_above_200k_tokens: 7.5e-06
+      cache_read_input_token_cost_above_200k_tokens: 6e-07
+      litellm_provider: bedrock_converse
+      max_input_tokens: 200000
+      max_output_tokens: 64000
+      max_tokens: 200000
+      mode: chat
+      output_cost_per_token: 1.5e-05
+      search_context_cost_per_query:
+        search_context_size_high: 0.01
+        search_context_size_low: 0.01
+        search_context_size_medium: 0.01
+      supports_assistant_prefill: true
+      supports_computer_use: true
+      supports_function_calling: true
+      supports_pdf_input: true
+      supports_prompt_caching: true
+      supports_reasoning: true
+      supports_response_schema: true
+      supports_tool_choice: true
+      supports_vision: true
+      tool_use_system_prompt_tokens: 346
 
-    
-
-# like MCPs/vector stores
-search_tools:
-  - search_tool_name: litellm-search
+  - model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
     litellm_params:
-      search_provider: perplexity
-      api_key: os.environ/PERPLEXITYAI_API_KEY
-  - search_tool_name: exa-search
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
+    model_info:
+      litellm_provider: bedrock_converse
+      mode: chat
+  - model_name: azure-claude-opus-4-5
     litellm_params:
-      search_provider: exa_ai
-      api_key: os.environ/EXA_API_KEY
-  
-
-litellm_settings:
-  max_end_user_budget_id: "2f6634cd-c631-4d3b-96c7-ad510ea06eaf"
-  # Comprehensive logging settings
-  store_audit_logs: true
-  verbose: true
-  log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
-  callbacks: ["s3_v2", "smtp_email"]
-  s3_callback_params:
-    s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
-    s3_aws_access_key_id: "minioadmin"
-    s3_aws_secret_access_key: "minioadmin"
-    s3_region_name: "minio"  # This can be any value for Minio
-    s3_bucket_name: "litellm-test"  # Replace with your bucket name
-    s3_use_ssl: False
-    s3_verify: False
-  cache: True
-  cache_params:
-    type: local
-  drop_params: True
+      model: azure_ai/claude-opus-4-5
+      api_base: https://krish-mh44t553-eastus2.services.ai.azure.com
+      api_key: os.environ/AZURE_ANTHROPIC_API_KEY
 
 
 general_settings:
-  store_prompts_in_spend_logs: True
-
-
-vector_store_registry:
-  - vector_store_name: "bedrock-litellm-website-knowledgebase"
-    litellm_params:
-      vector_store_id: "T37J8R4WTM"
-      custom_llm_provider: "bedrock"
-      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
-      vector_store_metadata:
-        source: "https://www.litellm.com/docs"
+  store_prompts_in_spend_logs: true
+  forward_client_headers_to_llm_api: true
