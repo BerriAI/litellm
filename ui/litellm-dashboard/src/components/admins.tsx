@@ -183,7 +183,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   useEffect(() => {
     checkSSOConfiguration();
-  }, [accessToken, premiumUser]);
+  }, [accessToken, premiumUser, checkSSOConfiguration]);
 
   const handleUIAccessControlOk = () => {
     setIsUIAccessControlModalVisible(false);
@@ -246,56 +246,56 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
             </div>
           </Card>
 
-            <div className="flex justify-start mb-4">
-              <SSOModals
-                isAddSSOModalVisible={isAddSSOModalVisible}
-                isInstructionsModalVisible={isInstructionsModalVisible}
-                handleAddSSOOk={handleAddSSOOk}
-                handleAddSSOCancel={handleAddSSOCancel}
-                handleShowInstructions={handleShowInstructions}
-                handleInstructionsOk={handleInstructionsOk}
-                handleInstructionsCancel={handleInstructionsCancel}
-                form={form}
-                accessToken={accessToken}
-                ssoConfigured={ssoConfigured}
-              />
-              <Modal
-                title="Manage Allowed IP Addresses"
-                width={800}
-                visible={isAllowedIPModalVisible}
-                onCancel={() => setIsAllowedIPModalVisible(false)}
-                footer={[
-                  <Button className="mx-1" key="add" onClick={() => setIsAddIPModalVisible(true)}>
-                    Add IP Address
-                  </Button>,
-                  <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
-                    Close
-                  </Button>,
-                ]}
-              >
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>IP Address</TableHeaderCell>
-                      <TableHeaderCell className="text-right">Action</TableHeaderCell>
+          <div className="flex justify-start mb-4">
+            <SSOModals
+              isAddSSOModalVisible={isAddSSOModalVisible}
+              isInstructionsModalVisible={isInstructionsModalVisible}
+              handleAddSSOOk={handleAddSSOOk}
+              handleAddSSOCancel={handleAddSSOCancel}
+              handleShowInstructions={handleShowInstructions}
+              handleInstructionsOk={handleInstructionsOk}
+              handleInstructionsCancel={handleInstructionsCancel}
+              form={form}
+              accessToken={accessToken}
+              ssoConfigured={ssoConfigured}
+            />
+            <Modal
+              title="Manage Allowed IP Addresses"
+              width={800}
+              open={isAllowedIPModalVisible}
+              onCancel={() => setIsAllowedIPModalVisible(false)}
+              footer={[
+                <Button className="mx-1" key="add" onClick={() => setIsAddIPModalVisible(true)}>
+                  Add IP Address
+                </Button>,
+                <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
+                  Close
+                </Button>,
+              ]}
+            >
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>IP Address</TableHeaderCell>
+                    <TableHeaderCell className="text-right">Action</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {allowedIPs.map((ip, index) => (
+                    <TableRow key={index}>
+                      <TableCell>{ip}</TableCell>
+                      <TableCell className="text-right">
+                        {ip !== all_ip_address_allowed && (
+                          <Button onClick={() => handleDeleteIP(ip)} color="red" size="xs">
+                            Delete
+                          </Button>
+                        )}
+                      </TableCell>
                     </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {allowedIPs.map((ip, index) => (
-                      <TableRow key={index}>
-                        <TableCell>{ip}</TableCell>
-                        <TableCell className="text-right">
-                          {ip !== all_ip_address_allowed && (
-                            <Button onClick={() => handleDeleteIP(ip)} color="red" size="xs">
-                              Delete
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Modal>
+                  ))}
+                </TableBody>
+              </Table>
+            </Modal>
 
               <Modal
                 title="Add Allowed IP Address"
