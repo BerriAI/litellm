@@ -293,6 +293,72 @@ class TestImpactAnalysis:
         
         # The error in the incident likely came from one of these code paths
 
+    def test_cost_calculation_with_empty_model_cost(self):
+        """
+        Test that cost calculation fails with empty model cost map.
+        
+        This is the most likely path for LLM call failures - if cost tracking
+        is enabled and required before/during the call.
+        """
+        import litellm
+        from litellm.cost_calculator import completion_cost
+        
+        # Save original model_cost
+        original_model_cost = litellm.model_cost.copy()
+        
+        try:
+            # Simulate empty model cost map
+            litellm.model_cost = {}
+            
+            # Try to calculate cost - this should fail
+            # Note: completion_cost uses model_cost to find pricing
+            with pytest.raises(Exception):
+                # This should fail because the model isn't in the cost map
+                completion_cost(
+                    model="gpt-4",
+                    prompt_tokens=100,
+                    completion_tokens=50,
+                )
+            print("✓ Cost calculation fails with empty model cost map")
+            
+        finally:
+            litellm.model_cost = original_model_cost
+
+    def test_where_get_model_info_is_called(self):
+        """
+        Document where get_model_info is called in the codebase.
+        
+        Understanding these paths helps trace how a bad model cost map 
+        can lead to failures.
+        """
+        print("\nCode paths where get_model_info() is called:")
+        print("=" * 50)
+        print("1. litellm/main.py - responses_api_bridge_check() - CAUGHT")
+        print("   - Called for checking model capabilities")
+        print("   - Exception is caught, doesn't fail the call")
+        print("")
+        print("2. litellm/router.py - get_router_model_info() - CAUGHT")
+        print("   - Called in deployment callbacks - exception caught")
+        print("   - Called in context window validation - exception caught")
+        print("")
+        print("3. litellm/proxy/proxy_server.py - multiple places - ALL CAUGHT")
+        print("   - All calls wrapped in try/except")
+        print("   - Returns {} on exception")
+        print("")
+        print("4. litellm/cost_calculator.py - for speech/tts - NOT CAUGHT")
+        print("   - Line 325: get_model_info for speech models")
+        print("   - Could cause cost calculation to fail")
+        print("")
+        print("5. litellm/litellm_core_utils/litellm_logging.py - CAUGHT")
+        print("   - Called for model cost information")
+        print("   - Exception caught, logs debug message")
+        print("")
+        print("CONCLUSION: Most paths are protected with try/except")
+        print("The error likely surfaces when:")
+        print("- Cost tracking is mandatory")
+        print("- Pre-call validation requires model info")
+        print("- Custom callbacks/hooks call get_model_info without try/except")
+
 
 if __name__ == "__main__":
     # Run the tests
