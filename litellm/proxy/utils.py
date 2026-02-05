@@ -2827,14 +2827,12 @@ class PrismaClient:
                 return new_spend_row
             elif table_name == "user_notification":
                 db_data = self.jsonify_object(data=data)
-                new_user_notification_row = (
-                    await self.db.litellm_usernotifications.upsert(  # type: ignore
-                        where={"request_id": data["request_id"]},
-                        data={
-                            "create": {**db_data},  # type: ignore
-                            "update": {},  # don't do anything if it already exists
-                        },
-                    )
+                new_user_notification_row = await self.db.litellm_usernotifications.upsert(  # type: ignore
+                    where={"request_id": data["request_id"]},
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {},  # don't do anything if it already exists
+                    },
                 )
                 verbose_proxy_logger.info("Data Inserted into Model Request Table")
                 return new_user_notification_row
@@ -3639,6 +3637,30 @@ def _hash_token_if_needed(token: str) -> str:
         return token
 
 
+def _sanitize_null_bytes(value: Any) -> Any:
+    """Recursively strip NULL bytes (\x00) from strings in a payload.
+
+    PostgreSQL rejects NULL bytes in UTF-8 text fields (22P05). Spend log
+    payloads can include raw request/response strings that may contain them.
+    """
+
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+
+    if isinstance(value, dict):
+        return {
+            _sanitize_null_bytes(k): _sanitize_null_bytes(v) for k, v in value.items()
+        }
+
+    if isinstance(value, list):
+        return [_sanitize_null_bytes(v) for v in value]
+
+    if isinstance(value, tuple):
+        return tuple(_sanitize_null_bytes(v) for v in value)
+
+    return value
+
+
 class ProxyUpdateSpend:
     @staticmethod
     async def update_end_user_spend(
@@ -3705,6 +3727,9 @@ class ProxyUpdateSpend:
             prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
                 len(logs_to_process) :
             ]
+
+        # Sanitize once before any JSON serialization / DB inserts (avoid rework on retries)
+        logs_to_process = cast(List[dict], _sanitize_null_bytes(logs_to_process))
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):

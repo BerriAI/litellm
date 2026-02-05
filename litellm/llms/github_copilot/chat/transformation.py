@@ -29,9 +29,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = (
-            self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -59,7 +57,6 @@ class GithubCopilotConfig(OpenAIConfig):
         transformed_messages = []
         for message in messages:
             if message.get("role") == "system":
-                # Convert system message to assistant message
                 transformed_message = message.copy()
                 transformed_message["role"] = "assistant"
                 transformed_messages.append(transformed_message)
@@ -140,7 +137,7 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         Check if any message contains vision content (images).
         Returns True if any message has content with vision-related types, otherwise False.
-        
+
         Checks for:
         - image_url content type (OpenAI format)
         - Content items with type 'image_url'
