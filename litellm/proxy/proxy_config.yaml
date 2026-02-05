@@ -5,4 +5,3 @@ model_list:
   - model_name: openai/*
     litellm_params:
       model: openai/*
-
