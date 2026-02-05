@@ -1864,6 +1864,7 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
+        self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
