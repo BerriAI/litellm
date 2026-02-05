@@ -357,15 +357,15 @@ class TestContainerIntegration:
 
     def test_error_handling_integration(self):
         """Test error handling in the integration flow."""
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            # Simulate an API error
-            mock_handler.container_create_handler.side_effect = litellm.APIError(
-                status_code=400,
-                message="API Error occurred", 
-                llm_provider="openai",
-                model=""
-            )
-            
+        # Simulate an API error
+        api_error = litellm.APIError(
+            status_code=400,
+            message="API Error occurred", 
+            llm_provider="openai",
+            model=""
+        )
+        
+        with patch.object(litellm.main.base_llm_http_handler, 'container_create_handler', side_effect=api_error):
             with pytest.raises(litellm.APIError):
                 create_container(
                     name="Error Test Container",
@@ -385,12 +385,12 @@ class TestContainerIntegration:
             name="Provider Test Container"
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_create_handler.return_value = mock_response
-            
+        with patch.object(litellm.main.base_llm_http_handler, 'container_create_handler', return_value=mock_response) as mock_handler:
             response = create_container(
                 name="Provider Test Container",
                 custom_llm_provider=provider
             )
             
             assert response.name == "Provider Test Container"
+            # Verify the mock was actually called (not making real API calls)
+            mock_handler.assert_called_once()

@@ -5,7 +5,7 @@ import base64
 import os
 import sys
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 # Add the project root to the path
 sys.path.insert(0, os.path.abspath("../../.."))
@@ -183,7 +183,7 @@ class TestMCPClientUnitTests:
         assert result == mock_result
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.call_tool.assert_called_once_with(
-            name="test_tool", arguments={"arg1": "value1"}
+            name="test_tool", arguments={"arg1": "value1"},progress_callback=ANY
         )
 
 

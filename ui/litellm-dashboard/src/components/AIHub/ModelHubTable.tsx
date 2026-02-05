@@ -483,7 +483,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       <Modal
         title="Public Model Hub"
         width={600}
-        visible={isPublicPageModalVisible}
+        open={isPublicPageModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -505,7 +505,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       <Modal
         title={selectedModel?.model_group || "Model Details"}
         width={1000}
-        visible={isModalVisible}
+        open={isModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -656,7 +656,7 @@ print(response.choices[0].message.content)`}
       <Modal
         title={selectedAgent?.name || "Agent Details"}
         width={1000}
-        visible={isAgentModalVisible}
+        open={isAgentModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -795,7 +795,7 @@ print(response.choices[0].message.content)`}
       <Modal
         title={selectedMcpServer?.server_name || "MCP Server Details"}
         width={1000}
-        visible={isMcpModalVisible}
+        open={isMcpModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
