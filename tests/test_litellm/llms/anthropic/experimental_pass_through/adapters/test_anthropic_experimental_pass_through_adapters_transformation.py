@@ -1702,7 +1702,7 @@ def test_translate_openai_response_restores_tool_names():
     )
 
     # Find the tool_use block in the response
-    tool_use_blocks = [c for c in result["content"] if getattr(c, "type", None) == "tool_use"]
+    tool_use_blocks = [c for c in result["content"] if c.get("type") == "tool_use"]
     assert len(tool_use_blocks) == 1
     # Name should be restored to original
-    assert getattr(tool_use_blocks[0], "name", None) == original_name
+    assert tool_use_blocks[0]["name"] == original_name
