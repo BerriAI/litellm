@@ -812,7 +812,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
-    _headers = clean_headers(
+    _raw_headers: Dict[str, str] = dict(request.headers)
+    _headers: Dict[str, str] = clean_headers(
         request.headers,
         litellm_key_header_name=(
             general_settings.get("litellm_key_header_name")
@@ -878,7 +879,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "user" not in data:
             data["user"] = user
 
-    data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
+    data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
     try:
@@ -1022,10 +1023,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ] = user_api_key_dict.user_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
-    _headers = dict(request.headers)
-    _headers.pop(
-        "authorization", None
-    )  # do not store the original `sk-..` api key in the db
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
 
@@ -1077,7 +1074,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Check if using tag based routing
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
         llm_router=llm_router,
-        headers=dict(request.headers),
+        headers=_headers,
         data=data,
     )
 
