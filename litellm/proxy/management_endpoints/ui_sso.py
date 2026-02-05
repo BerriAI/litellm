@@ -186,9 +186,32 @@ def process_sso_jwt_access_token(
     if access_token_str and sso_jwt_handler and result:
         import jwt
 
-        access_token_payload = jwt.decode(
-            access_token_str, options={"verify_signature": False}
-        )
+        try:
+            from litellm.proxy.proxy_server import master_key
+
+            header = jwt.get_unverified_header(access_token_str)
+            if header.get("alg") == "HS256":
+                # Internal LiteLLM tokens MUST be verified with master_key
+                access_token_payload = jwt.decode(
+                    access_token_str,
+                    key=master_key,
+                    algorithms=["HS256"],
+                )
+            else:
+                # Fallback to unverified decode for OIDC tokens
+                # (which are usually verified by the SSO provider's library)
+                access_token_payload = jwt.decode(
+                    access_token_str, options={"verify_signature": False}
+                )
+        except jwt.InvalidSignatureError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid JWT signature for internal token",
+            )
+        except Exception:
+            access_token_payload = jwt.decode(
+                access_token_str, options={"verify_signature": False}
+            )
 
         # Handle both dict and object result types
         if isinstance(result, dict):
@@ -2515,9 +2538,30 @@ class MicrosoftSSOHandler:
         try:
             import jwt
 
-            # Decode the JWT without signature verification
-            # (signature is already verified by fastapi_sso)
-            decoded_token = jwt.decode(id_token, options={"verify_signature": False})
+            # Decode the JWT
+            # For internal LiteLLM tokens, we verify the signature using master_key
+            # (signature for OIDC tokens is already verified by fastapi_sso)
+            try:
+                from litellm.proxy.proxy_server import master_key
+
+                header = jwt.get_unverified_header(id_token)
+                if header.get("alg") == "HS256":
+                    decoded_token = jwt.decode(
+                        id_token,
+                        key=master_key,
+                        algorithms=["HS256"],
+                    )
+                else:
+                    decoded_token = jwt.decode(
+                        id_token, options={"verify_signature": False}
+                    )
+            except jwt.InvalidSignatureError:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid JWT signature for internal token",
+                )
+            except Exception:
+                decoded_token = jwt.decode(id_token, options={"verify_signature": False})
 
             # Extract app_roles claim from the token
             ## check for both 'roles' and 'app_roles' claims
