@@ -3000,6 +3000,12 @@ class ProxyException(Exception):
             error_dict["provider_specific_fields"] = self.provider_specific_fields
         return error_dict
 
+class ProxyAuthenticationException(ProxyException):
+    """
+    Expected auth error (401) for invalid or missing proxy token.
+    Logged as unauthenticated, not as an internal crash.
+    """
+    pass
 
 class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = (

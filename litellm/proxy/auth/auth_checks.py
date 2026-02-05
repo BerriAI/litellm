@@ -48,6 +48,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     NewTeamRequest,
     ProxyErrorTypes,
+    ProxyAuthenticationException,
     ProxyException,
     RoleBasedPermissions,
     SpecialModelNames,
