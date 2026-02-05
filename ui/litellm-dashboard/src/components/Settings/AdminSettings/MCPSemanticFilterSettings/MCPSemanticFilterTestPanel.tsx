@@ -13,8 +13,6 @@ interface MCPSemanticFilterTestPanelProps {
   onTest: () => void;
   filterEnabled: boolean;
   testResult: TestResult | null;
-  showCurl: boolean;
-  setShowCurl: (value: boolean) => void;
   curlCommand: string;
 }
 
@@ -28,8 +26,6 @@ export default function MCPSemanticFilterTestPanel({
   onTest,
   filterEnabled,
   testResult,
-  showCurl,
-  setShowCurl,
   curlCommand,
 }: MCPSemanticFilterTestPanelProps) {
   return (
@@ -125,26 +121,39 @@ export default function MCPSemanticFilterTestPanel({
                 <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
                   Use this curl command to test the semantic filter with your current configuration.
                 </Typography.Text>
-                <Button
-                  type="link"
-                  onClick={() => setShowCurl(!showCurl)}
-                  style={{ padding: 0, marginBottom: 12 }}
-                >
-                  {showCurl ? "Hide" : "Show"} curl command
-                </Button>
-                {showCurl && (
-                  <pre
-                    style={{
-                      background: "#f5f5f5",
-                      padding: 12,
-                      borderRadius: 4,
-                      overflow: "auto",
-                      fontSize: 12,
-                    }}
-                  >
-                    {curlCommand}
-                  </pre>
-                )}
+            <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
+              Response headers to check:
+            </Typography.Text>
+            <ul style={{ paddingLeft: 20, margin: "0 0 12px 0" }}>
+              <li>
+                <Typography.Text>
+                  x-litellm-semantic-filter: shows total tools → selected tools
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ display: "block" }}>
+                  Example: 10→3
+                </Typography.Text>
+              </li>
+              <li>
+                <Typography.Text>
+                  x-litellm-semantic-filter-tools: CSV of selected tool names
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ display: "block" }}>
+                  Example: wikipedia-fetch,github-search,slack-post
+                </Typography.Text>
+              </li>
+            </ul>
+            <pre
+              style={{
+                background: "#f5f5f5",
+                padding: 12,
+                borderRadius: 4,
+                overflow: "auto",
+                fontSize: 12,
+                margin: 0,
+              }}
+            >
+              {curlCommand}
+            </pre>
               </div>
             ),
           },
