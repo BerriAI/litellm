@@ -170,9 +170,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_call["caller"] = cast(Dict[str, Any], anthropic_tool_content["caller"])  # type: ignore[typeddict-item]
         return tool_call
 
-    def _is_claude_opus_4_5(self, model: str) -> bool:
+    def _is_claude_opus_4_6(self, model: str) -> bool:
         """Check if the model is Claude Opus 4.5."""
-        return "opus-4-5" in model.lower() or "opus_4_5" in model.lower()
+        return "opus-4-6" in model.lower() or "opus_4_6" in model.lower()
 
     def get_supported_openai_params(self, model: str):
         params = [
@@ -851,14 +851,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                # For Claude Opus 4.5, map reasoning_effort to output_config
-                if self._is_claude_opus_4_5(model):
-                    optional_params["output_config"] = {"effort": value}
-
-                # For other models, map to thinking parameter
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    value
-                )
+                # For Claude Opus 4.6, map reasoning_effort to new adaptive thinking type
+                if self._is_claude_opus_4_6(model):
+                    optional_params["thinking"] = {"type": "adaptive"}
+                else:
+                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                        value
+                    )
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
