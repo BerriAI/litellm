@@ -172,7 +172,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _is_claude_opus_4_6(model: str) -> bool:
-        """Check if the model is Claude Opus 4.6."""
+        """Check if the model is Claude Opus 4.5."""
         return "opus-4-6" in model.lower() or "opus_4_6" in model.lower()
 
     def get_supported_openai_params(self, model: str):
@@ -647,9 +647,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_v.append(v)
             if len(new_v) > 0:
                 new_stop = new_v
+        return new_stop
+
+    @staticmethod
+    def _map_reasoning_effort(
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]], 
+        model: str,
+    ) -> Optional[AnthropicThinkingParam]:
         if AnthropicConfig._is_claude_opus_4_6(model):
-            if reasoning_effort is None:
-                return None
             return AnthropicThinkingParam(
                 type="adaptive",
             )
