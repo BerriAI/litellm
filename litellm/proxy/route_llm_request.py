@@ -97,10 +97,18 @@ def add_shared_session_to_data(data: dict) -> None:
         data: Dictionary to add the shared session to
     """
     try:
+        from litellm._logging import verbose_proxy_logger
         from litellm.proxy.proxy_server import shared_aiohttp_session
 
         if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
             data["shared_session"] = shared_aiohttp_session
+            verbose_proxy_logger.info(
+                f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(shared_aiohttp_session)})"
+            )
+        else:
+            verbose_proxy_logger.info(
+                "SESSION REUSE: No shared session available for this request"
+            )
     except Exception:
         # Silently continue without session reuse if import fails or session unavailable
         pass
