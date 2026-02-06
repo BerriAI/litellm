@@ -874,6 +874,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             elif param == "extra_headers":
                 optional_params["extra_headers"] = value
+            elif param == "context_management" and isinstance(value, dict):
+                # Pass through Anthropic-specific context_management parameter
+                optional_params["context_management"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
