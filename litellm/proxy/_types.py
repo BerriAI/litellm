@@ -2096,6 +2096,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
+    tokenizer_threadpool_max_threads: Optional[int] = Field(
+        None,
+        description="Max threads for tokenizer threadpool. When reached, tokenizer runs in-line and blocks the event loop. If not set, tokenizer always runs in-line.",
+    )
+    tokenizer_threadpool_min_input_size_bytes: Optional[int] = Field(
+        None,
+        description="Min input size in bytes to use threadpool. If input is smaller, tokenizer runs in-line. E.g. 512000 for 500KB.",
+    )
+    tokenizer_threadpool_timeout: Optional[float] = Field(
+        0,
+        description="Timeout in seconds for tokenizer in threadpool. If exceeded, logs error and returns 0. 0 means no timeout.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

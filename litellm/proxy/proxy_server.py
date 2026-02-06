@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import warnings
@@ -7580,6 +7581,93 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+_tokenizer_semaphore: Optional[threading.Semaphore] = None
+_tokenizer_semaphore_max_threads: Optional[int] = None
+_tokenizer_semaphore_lock = threading.Lock()
+
+
+def _get_tokenizer_input_size_bytes(
+    prompt: Optional[str],
+    messages: Optional[List[dict]],
+    contents: Optional[List[dict]],
+) -> int:
+    sizes = []
+    if prompt is not None:
+        sizes.append(len(prompt.encode("utf-8")))
+    if messages is not None:
+        sizes.append(len(json.dumps(messages, default=str).encode("utf-8")))
+    if contents is not None:
+        sizes.append(len(json.dumps(contents, default=str).encode("utf-8")))
+    return max(sizes) if sizes else 0
+
+
+async def _run_local_token_counter(
+    model_to_use: str,
+    prompt: Optional[str],
+    messages: Optional[List[Any]],
+    contents: Optional[List[Any]],
+    custom_tokenizer: Any,
+    general_settings: dict,
+) -> int:
+    from litellm import token_counter as litellm_token_counter
+
+    max_threads = general_settings.get("tokenizer_threadpool_max_threads")
+    min_input_size = general_settings.get("tokenizer_threadpool_min_input_size_bytes")
+    timeout_sec = general_settings.get("tokenizer_threadpool_timeout") or 0
+
+    input_size = _get_tokenizer_input_size_bytes(prompt, messages, contents)
+
+    use_threadpool = (
+        max_threads is not None
+        and max_threads > 0
+        and (min_input_size is None or input_size >= min_input_size)
+    )
+
+    def _count() -> int:
+        return litellm_token_counter(
+            model=model_to_use,
+            text=prompt,
+            messages=messages,
+            custom_tokenizer=custom_tokenizer,
+        )
+
+    if not use_threadpool:
+        return _count()
+
+    global _tokenizer_semaphore, _tokenizer_semaphore_max_threads
+    with _tokenizer_semaphore_lock:
+        if (
+            _tokenizer_semaphore is None
+            or _tokenizer_semaphore_max_threads != max_threads
+        ):
+            _tokenizer_semaphore = threading.Semaphore(max_threads)
+            _tokenizer_semaphore_max_threads = max_threads
+        sem = _tokenizer_semaphore
+
+    acquired = sem.acquire(blocking=False)
+    if not acquired:
+        return _count()
+
+    try:
+        loop = asyncio.get_event_loop()
+        if timeout_sec > 0:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, _count),
+                timeout=timeout_sec,
+            )
+        else:
+            result = await loop.run_in_executor(None, _count)
+        return result
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "Tokenizer run in threadpool timed out after %s seconds, returning 0",
+            timeout_sec,
+        )
+        return 0
+    finally:
+        sem.release()
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -7595,9 +7683,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
-    from litellm import token_counter
-
-    global llm_router
+    global llm_router, general_settings
 
     prompt = request.prompt
     messages = request.messages
@@ -7705,11 +7791,13 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     )
 
     tokenizer_used = str(_tokenizer_used["type"])
-    total_tokens = token_counter(
-        model=model_to_use,
-        text=prompt,
+    total_tokens = await _run_local_token_counter(
+        model_to_use=model_to_use,
+        prompt=prompt,
         messages=messages,
+        contents=contents,
         custom_tokenizer=_tokenizer_used,  # type: ignore
+        general_settings=general_settings,
     )
     return TokenCountResponse(
         total_tokens=total_tokens,
