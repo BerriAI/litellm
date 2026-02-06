@@ -24,14 +24,13 @@ if TYPE_CHECKING:
 
 
 # Runtime import
-_A2AClient: Any = None
 A2A_SDK_AVAILABLE = False
 try:
-    from a2a.client import A2AClient as _A2AClient
+    from a2a.client import A2AClient as _A2AClient  # type: ignore[no-redef]
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
-    pass
+    _A2AClient = None  # type: ignore[misc]
 
 
 class A2AExceptionCheckers:
