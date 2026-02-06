@@ -6,6 +6,9 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../../../../..")
 )  # Adds the parent directory to the system path
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
@@ -329,3 +332,32 @@ def test_vertex_ai_anthropic_other_models_still_use_tools():
     assert "tools" in result_params, "Claude 3 Sonnet should also use tool-based structured output"
     assert "tool_choice" in result_params, "Tool choice should be present"
     assert "json_mode" in result_params, "JSON mode should be enabled"
+
+def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
+    """
+    Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05 
+    from the anthropic-beta headers.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+        VertexAIPartnerModelsAnthropicMessagesConfig,
+    )
+
+    # This beta header should be removed
+    PROMPT_CACHING_BETA_HEADER = "prompt-caching-scope-2026-01-05"
+    headers = {
+        "anthropic-beta": f"other-feature,{PROMPT_CACHING_BETA_HEADER},web-search-2025-03-05"
+    }
+
+    headers = update_headers_with_filtered_beta(headers, "vertex_ai")
+
+    beta_header = headers.get("anthropic-beta")
+    assert PROMPT_CACHING_BETA_HEADER not in (beta_header or ""), \
+        f"{PROMPT_CACHING_BETA_HEADER} should be filtered out"
+    assert "other-feature" in (beta_header or ""), \
+        "Other non-excluded beta headers should remain"
+    assert "web-search-2025-03-05" in (beta_header or ""), \
+        "Other non-excluded beta headers should remain"
+    # If prompt-caching was the only value, header should be removed completely
+    headers2 = {"anthropic-beta": PROMPT_CACHING_BETA_HEADER}
+    headers2 = update_headers_with_filtered_beta(headers2, "vertex_ai")
+    assert "anthropic-beta" not in headers2, "Header should be removed if no supported values remain"
