@@ -82,6 +82,7 @@ BEDROCK_COMPUTER_USE_TOOLS = [
 UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
     "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
     "prompt-caching",  # Prompt caching not supported in Converse API
+    "compact-2026-01-12", # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
 
