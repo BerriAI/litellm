@@ -79,8 +79,13 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     """
     Log a warning when budget lookup fails; cache will not be populated.
 
-    Adds a schema migration hint when the error appears schema-related.
+    Skips logging for expected "user not found" cases (bare Exception from
+    get_user_object when user_id_upsert=False). Adds a schema migration hint
+    when the error appears schema-related.
     """
+    # Skip logging for expected "user not found" - not caching is correct
+    if str(error) == "" and type(error).__name__ == "Exception":
+        return
     err_str = str(error).lower()
     hint = ""
     if any(
