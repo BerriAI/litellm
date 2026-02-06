@@ -109,6 +109,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         _anthropic_request.pop("stream", None)
         # Bedrock Invoke doesn't support output_format parameter
         _anthropic_request.pop("output_format", None)
+        # Bedrock doesn't support context_management as a body param;
+        # the feature is enabled via the anthropic-beta header instead
+        _anthropic_request.pop("context_management", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 

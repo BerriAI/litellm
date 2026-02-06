@@ -448,6 +448,14 @@ class WebSearchInterceptionLogger(CustomLogger):
             # These flags are used internally and should not be passed to the LLM provider
             kwargs_for_followup = filter_internal_params(kwargs)
 
+            # Remove keys already present in optional_params or passed explicitly to avoid
+            # "got multiple values for keyword argument" errors (e.g. context_management)
+            explicit_keys = {"max_tokens", "messages", "model"}
+            kwargs_for_followup = {
+                k: v for k, v in kwargs_for_followup.items()
+                if k not in optional_params_without_max_tokens and k not in explicit_keys
+            }
+
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
             full_model_name = model

@@ -803,3 +803,68 @@ class TestBedrockBetaHeaderFiltering:
         # Bedrock-specific headers should NOT be added for unsupported models
         assert "tool-search-tool-2025-10-19" not in beta_headers
         assert "tool-examples-2025-10-29" not in beta_headers
+
+
+class TestContextManagementBodyParamStripping:
+    """Test that context_management is stripped from request body for Bedrock APIs.
+
+    Bedrock doesn't support context_management as a request body parameter.
+    The feature is enabled via the anthropic-beta header instead. If left in the body,
+    Bedrock returns: 'context_management: Extra inputs are not permitted'.
+    """
+
+    def test_messages_api_strips_context_management(self):
+        """Test that Messages API removes context_management from request body."""
+        config = AmazonAnthropicClaudeMessagesConfig()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model="anthropic.claude-sonnet-4-5-20250514-v1:0",
+            messages=[{"role": "user", "content": "Test"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 100,
+                "context_management": {"type": "automatic", "max_context_tokens": 50000},
+            },
+            litellm_params={},
+            headers=headers,
+        )
+
+        # context_management must NOT be in the request body
+        assert "context_management" not in result
+
+    def test_invoke_chat_api_strips_context_management(self):
+        """Test that Invoke Chat API removes context_management from request body."""
+        config = AmazonAnthropicClaudeConfig()
+        headers = {}
+
+        result = config.transform_request(
+            model="anthropic.claude-sonnet-4-5-20250514-v1:0",
+            messages=[{"role": "user", "content": "Test"}],
+            optional_params={
+                "context_management": {"type": "automatic", "max_context_tokens": 50000},
+            },
+            litellm_params={},
+            headers=headers,
+        )
+
+        # context_management must NOT be in the request body
+        assert "context_management" not in result
+
+    def test_converse_api_strips_context_management(self):
+        """Test that Converse API doesn't pass context_management in additionalModelRequestFields."""
+        config = AmazonConverseConfig()
+        headers = {}
+
+        result = config._transform_request_helper(
+            model="anthropic.claude-sonnet-4-5-20250514-v1:0",
+            system_content_blocks=[],
+            optional_params={
+                "context_management": {"type": "automatic", "max_context_tokens": 50000},
+            },
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers,
+        )
+
+        additional_fields = result.get("additionalModelRequestFields", {})
+        # context_management must NOT leak into additionalModelRequestFields
+        assert "context_management" not in additional_fields
