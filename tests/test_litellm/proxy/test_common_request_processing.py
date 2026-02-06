@@ -78,7 +78,6 @@ class TestProxyBaseLLMRequestProcessing:
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
     @pytest.mark.asyncio
-<<<<<<< HEAD
     async def test_should_apply_hierarchical_router_settings_as_override(
         self, monkeypatch
     ):
@@ -148,6 +147,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_proxy_config._get_hierarchical_router_settings.assert_called_once_with(
             user_api_key_dict=mock_user_api_key_dict,
             prisma_client=mock_prisma_client,
+            proxy_logging_obj=mock_proxy_logging_obj,
         )
         # get_model_list should NOT be called - we no longer copy model list for per-request routers
         mock_llm_router.get_model_list.assert_not_called()
@@ -165,8 +165,6 @@ class TestProxyBaseLLMRequestProcessing:
         assert "model_list" not in router_settings_override
 
     @pytest.mark.asyncio
-=======
->>>>>>> origin
     async def test_stream_timeout_header_processing(self):
         """
         Test that x-litellm-stream-timeout header gets processed and added to request data as stream_timeout.
