@@ -625,7 +625,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             ],
         ),  # Final chunk with tool_calls
     ]
-    
+
     follow_up_chunks = [
         create_chunk("Hello"),
         create_chunk(" world", finish_reason="stop"),
