@@ -2481,6 +2481,9 @@ class MCPServerManager:
             except asyncio.TimeoutError:
                 health_check_error = "Health check timed out after 10 seconds"
                 status = "unhealthy"
+            except asyncio.CancelledError:
+                health_check_error = "Health check was cancelled"
+                status = "unknown"
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
