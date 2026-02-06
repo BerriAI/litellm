@@ -41,6 +41,34 @@ def _sanitize_prometheus_label_name(label: str) -> str:
     return sanitized
 
 
+def _sanitize_prometheus_label_value(value: Optional[str]) -> Optional[str]:
+    """
+    Sanitize a label value for Prometheus text format compatibility.
+
+    Removes or replaces characters that break the Prometheus exposition format:
+    - U+2028 (Line Separator) and U+2029 (Paragraph Separator) are removed
+    - Carriage returns are removed
+    - Newlines are replaced with spaces
+    - Backslashes and double quotes are escaped per Prometheus spec
+    """
+    if value is None:
+        return None
+
+    # Remove Unicode line/paragraph separators that break text format
+    value = value.replace("\u2028", "").replace("\u2029", "")
+
+    # Remove carriage returns
+    value = value.replace("\r", "")
+
+    # Replace newlines with spaces
+    value = value.replace("\n", " ")
+
+    # Escape backslashes and double quotes per Prometheus exposition format
+    value = value.replace("\\", "\\\\").replace('"', '\\"')
+
+    return value
+
+
 @dataclass
 class MetricValidationError:
     """Error for invalid metric name"""
