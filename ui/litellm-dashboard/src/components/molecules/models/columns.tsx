@@ -16,6 +16,7 @@ export const columns = (
   handleRefreshClick: () => void,
   expandedRows: Set<string>,
   setExpandedRows: (expandedRows: Set<string>) => void,
+  onDeleteClick?: (modelId: string) => void,
 ): ColumnDef<ModelData>[] => [
     {
       header: () => <span className="text-sm font-semibold">Model ID</span>,
@@ -27,7 +28,10 @@ export const columns = (
           <Tooltip title={model.model_info.id}>
             <div
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-              onClick={() => setSelectedModelId(model.model_info.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedModelId(model.model_info.id);
+              }}
             >
               {model.model_info.id}
             </div>
@@ -195,7 +199,10 @@ export const columns = (
                 size="xs"
                 variant="light"
                 className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                onClick={() => setSelectedTeamId(model.model_info.team_id)}
+                onClick={(e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  setSelectedTeamId(model.model_info.team_id);
+                }}
               >
                 {model.model_info.team_id.slice(0, 7)}...
               </Button>
@@ -300,9 +307,10 @@ export const columns = (
                 <Icon
                   icon={TrashIcon}
                   size="sm"
-                  onClick={() => {
-                    if (canEditModel) {
-                      setSelectedModelId(model.model_info.id);
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (canEditModel && onDeleteClick) {
+                      onDeleteClick(model.model_info.id);
                     }
                   }}
                   className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:text-red-600"}
