@@ -51,14 +51,16 @@ def setup_and_teardown():
     import asyncio
     import importlib
     import sys
+    global litellm
 
     # Reload litellm to ensure clean state
     # During parallel test execution, another worker might have removed litellm from sys.modules
     # so we need to ensure it's imported before reloading
     if "litellm" not in sys.modules:
-        import litellm as _litellm
+        import litellm as fresh_litellm
+        litellm = fresh_litellm  # Update module-level reference
     else:
-        importlib.reload(litellm)
+        litellm = importlib.reload(litellm)  # Update module-level reference with reloaded module
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()
