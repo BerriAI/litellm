@@ -358,7 +358,7 @@ export const ErrorStatsTable: React.FC<ErrorStatsTableProps> = ({ data, timeBuck
         },
         zoom: {
           enabled: true, 
-          type: 'x',
+          type: 'x' as const,
           autoScaleYaxis: true,
           allowMouseWheelZoom: false,
         },
