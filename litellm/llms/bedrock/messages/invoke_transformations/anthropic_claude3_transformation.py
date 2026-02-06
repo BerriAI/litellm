@@ -405,6 +405,10 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
+        # 5b. Remove `context_management` from request body (Bedrock doesn't support it as a body param;
+        # the feature is enabled via the anthropic-beta header instead)
+        anthropic_messages_request.pop("context_management", None)
+
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")

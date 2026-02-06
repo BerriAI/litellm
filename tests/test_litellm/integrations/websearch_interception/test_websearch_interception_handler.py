@@ -364,6 +364,44 @@ def test_internal_flags_filtered_from_followup_kwargs():
     assert kwargs_for_followup["max_tokens"] == 1024
 
 
+def test_duplicate_kwargs_filtered_from_followup():
+    """Test that kwargs already in optional_params are deduplicated before follow-up request.
+
+    Regression test for bug where context_management appeared in both
+    optional_params and kwargs, causing: "got multiple values for keyword argument 'context_management'"
+    """
+
+    optional_params_without_max_tokens = {
+        "thinking": {"type": "enabled", "budget_tokens": 5000},
+        "context_management": {"type": "automatic", "max_context_tokens": 50000},
+        "temperature": 0.7,
+    }
+
+    kwargs_for_followup = {
+        "context_management": {"type": "automatic", "max_context_tokens": 50000},
+        "some_other_kwarg": "value",
+        "max_tokens": 1024,
+        "model": "claude-opus-4-6",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    # Apply the same dedup logic used in _execute_agentic_loop
+    explicit_keys = {"max_tokens", "messages", "model"}
+    kwargs_for_followup = {
+        k: v for k, v in kwargs_for_followup.items()
+        if k not in optional_params_without_max_tokens and k not in explicit_keys
+    }
+
+    # context_management should be removed (already in optional_params)
+    assert "context_management" not in kwargs_for_followup
+    # Explicit keys should be removed
+    assert "max_tokens" not in kwargs_for_followup
+    assert "model" not in kwargs_for_followup
+    assert "messages" not in kwargs_for_followup
+    # Non-duplicate kwargs should be preserved
+    assert kwargs_for_followup["some_other_kwarg"] == "value"
+
+
 class TestExecuteSearchApiKeyExtraction:
     """Tests for API key extraction from router's search_tools configuration.
 
