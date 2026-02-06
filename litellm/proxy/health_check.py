@@ -121,7 +121,9 @@ async def _perform_health_check(
         async with semaphore:
             return await _run()
 
-    tasks = [asyncio.create_task(_run_model_health_check(model)) for model in model_list]
+    tasks = [
+        asyncio.create_task(_run_model_health_check(model)) for model in model_list
+    ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

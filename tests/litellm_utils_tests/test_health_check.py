@@ -92,7 +92,7 @@ async def test_azure_img_gen_health_check():
     litellm._turn_on_debug()
     max_retries = 3
     retry_delay = 1  # Start with 1 second delay
-    
+
     for attempt in range(max_retries):
         response = await litellm.ahealth_check(
             model_params={
@@ -103,11 +103,11 @@ async def test_azure_img_gen_health_check():
             mode="image_generation",
             prompt="cute baby sea otter",
         )
-        
+
         # Check if response is successful (no error)
         if isinstance(response, dict) and "error" not in response:
             return response
-        
+
         # Check if error is a transient Azure internal server error
         error_str = str(response.get("error", "")).lower()
         is_transient_error = (
@@ -116,16 +116,18 @@ async def test_azure_img_gen_health_check():
             or "internalfailure" in error_str
             or "internal failure" in error_str
         )
-        
+
         # If it's the last attempt or not a transient error, fail the test
         if attempt == max_retries - 1 or not is_transient_error:
-            assert isinstance(response, dict) and "error" not in response, f"Health check failed: {response.get('error', 'Unknown error')}"
+            assert (
+                isinstance(response, dict) and "error" not in response
+            ), f"Health check failed: {response.get('error', 'Unknown error')}"
             return response
-        
+
         # Wait before retrying with exponential backoff
         await asyncio.sleep(retry_delay)
         retry_delay *= 2  # Exponential backoff
-    
+
     # Should not reach here, but just in case
     assert False, "Health check failed after all retries"
 
@@ -669,20 +671,20 @@ async def test_image_generation_health_check_prompt(monkeypatch):
 async def test_health_check_with_custom_llm_provider():
     """
     Test that ahealth_check correctly uses custom_llm_provider from model_params.
-    
+
     This test verifies the fix for the issue where the UI's "Test connect" button
     failed with "LLM Provider NOT provided" error for OpenAI-compatible self-hosted
     providers, even when a provider was selected in the dropdown.
-    
+
     The fix ensures that when custom_llm_provider is passed in model_params,
     it's properly forwarded to get_llm_provider() to identify the correct provider.
     """
     from unittest.mock import MagicMock
-    
+
     # Mock the completion call to avoid making real API calls
     mock_response = MagicMock()
     mock_response._hidden_params = {"headers": {"x-ratelimit-remaining-tokens": "1000"}}
-    
+
     with patch("litellm.acompletion", return_value=mock_response):
         # Test with a custom model name that wouldn't be recognized without custom_llm_provider
         response = await litellm.ahealth_check(
@@ -694,7 +696,7 @@ async def test_health_check_with_custom_llm_provider():
             },
             mode="chat",
         )
-        
+
         # Should succeed without "LLM Provider NOT provided" error
         assert "error" not in response
         assert isinstance(response, dict)
