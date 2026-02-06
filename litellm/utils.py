@@ -7512,6 +7512,33 @@ def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     return False
 
 
+def _message_has_thinking_blocks(message: AllMessageValues) -> bool:
+    """
+    Check if a single assistant message has thinking blocks.
+
+    Checks both the 'thinking_blocks' field (LiteLLM/OpenAI format) and
+    the 'content' array for thinking/redacted_thinking blocks (Anthropic format).
+    """
+    # Check thinking_blocks field (LiteLLM/OpenAI format)
+    thinking_blocks = message.get("thinking_blocks")
+    if thinking_blocks is not None and (
+        not hasattr(thinking_blocks, "__len__") or len(thinking_blocks) > 0
+    ):
+        return True
+
+    # Check content array for thinking blocks (Anthropic format)
+    content = message.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in (
+                "thinking",
+                "redacted_thinking",
+            ):
+                return True
+
+    return False
+
+
 def any_assistant_message_has_thinking_blocks(
     messages: List[AllMessageValues],
 ) -> bool:
@@ -7527,10 +7554,7 @@ def any_assistant_message_has_thinking_blocks(
     """
     for message in messages:
         if message.get("role") == "assistant":
-            thinking_blocks = message.get("thinking_blocks")
-            if thinking_blocks is not None and (
-                not hasattr(thinking_blocks, "__len__") or len(thinking_blocks) > 0
-            ):
+            if _message_has_thinking_blocks(message):
                 return True
     return False
 
@@ -7562,11 +7586,40 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
     if last_assistant_with_tools is None:
         return False
 
-    # Check if it has thinking_blocks
-    thinking_blocks = last_assistant_with_tools.get("thinking_blocks")
-    return thinking_blocks is None or (
-        hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0
-    )
+    return not _message_has_thinking_blocks(last_assistant_with_tools)
+
+
+def last_assistant_message_has_no_thinking_blocks(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Returns true if the last assistant message has content but no thinking_blocks.
+
+    This is used to detect when thinking param should be dropped to avoid
+    Anthropic error: "Expected thinking or redacted_thinking, but found text"
+
+    When thinking is enabled, ALL assistant messages must start with thinking_blocks.
+    If the client didn't preserve thinking_blocks, we need to drop the thinking param.
+
+    IMPORTANT: This should only be used in conjunction with
+    any_assistant_message_has_thinking_blocks() to ensure we don't drop thinking
+    when other messages in the conversation contain thinking blocks.
+    """
+    # Find the last assistant message
+    last_assistant = None
+    for message in messages:
+        if message.get("role") == "assistant":
+            last_assistant = message
+
+    if last_assistant is None:
+        return False
+
+    # Only flag if message has content (empty messages aren't an issue)
+    content = last_assistant.get("content")
+    if not content:
+        return False
+
+    return not _message_has_thinking_blocks(last_assistant)
 
 
 def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
