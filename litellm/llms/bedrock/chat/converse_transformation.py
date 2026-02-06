@@ -63,6 +63,7 @@ from litellm.utils import (
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     has_tool_call_blocks,
+    last_assistant_message_has_no_thinking_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
 )
@@ -1170,7 +1171,9 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
-        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        # This prevents Anthropic errors:
+        # - "Expected thinking or redacted_thinking, but found tool_use" (assistant with tool_calls)
+        # - "Expected thinking or redacted_thinking, but found text" (assistant with text content)
         #
         # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
@@ -1178,7 +1181,10 @@ class AmazonConverseConfig(BaseConfig):
         if (
             optional_params.get("thinking") is not None
             and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+            and (
+                last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+                or last_assistant_message_has_no_thinking_blocks(messages)
+            )
             and not any_assistant_message_has_thinking_blocks(messages)
         ):
             if litellm.modify_params:
