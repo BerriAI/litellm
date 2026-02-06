@@ -76,7 +76,6 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
         >>> is_web_search_tool({"name": "calculator"})
         False
     """
-    print(f"🔥tool: {tool}")
     tool_name = tool.get("name", "")
     tool_type = tool.get("type", "")
     
