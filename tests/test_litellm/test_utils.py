@@ -2870,6 +2870,111 @@ class TestProxyLoggingBudgetAlerts:
             type=alert_type, user_info=user_info
         )
 
+    async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_alerting_none(self):
+        """
+        Test that soft_budget alerts with alert_emails bypass the alerting=None check
+        and send emails even when alerting is None.
+        
+        This tests the new logic that allows team-specific soft budget email alerts
+        via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None  # Global alerting is disabled
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo with alert_emails set (simulating team metadata extraction)
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=["team1@example.com", "team2@example.com"],
+        )
+
+        # Should send email even though alerting is None (because of alert_emails)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify slack was NOT called (alerting is None)
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+
+        # Verify email WAS called (bypasses alerting=None check)
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="soft_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_soft_budget_without_alert_emails_respects_alerting_none(self):
+        """
+        Test that soft_budget alerts WITHOUT alert_emails still respect alerting=None
+        and do not send emails when alerting is None.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo WITHOUT alert_emails
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=None,  # No alert emails
+        )
+
+        # Should NOT send email (alerting is None and no alert_emails)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+    async def test_budget_alerts_soft_budget_with_empty_alert_emails_respects_alerting_none(self):
+        """
+        Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo with empty alert_emails list
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=[],  # Empty list
+        )
+
+        # Should NOT send email (alert_emails is empty)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
 
 def test_azure_ai_claude_provider_config():
     """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
