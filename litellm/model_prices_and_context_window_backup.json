@@ -872,7 +872,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
-    "anthropic.claude-opus-4-6-v1:0": {
+    "anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.25e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -932,7 +932,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "global.anthropic.claude-opus-4-6-v1:0": {
+    "global.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.25e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1052,7 +1052,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "eu.anthropic.claude-opus-4-6-v1:0": {
+    "eu.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1112,7 +1112,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "apac.anthropic.claude-opus-4-6-v1:0": {
+    "apac.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
