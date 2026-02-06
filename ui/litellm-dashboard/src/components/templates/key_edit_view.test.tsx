@@ -437,12 +437,11 @@ describe("KeyEditView", () => {
 
 
   it("should disable cancel button during submission", async () => {
-    const onSubmitMock = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        }),
-    );
+    let resolveSubmit: (() => void) | undefined;
+    const submitPromise = new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const onSubmitMock = vi.fn(() => submitPromise);
 
     renderWithProviders(
       <KeyEditView
@@ -463,9 +462,20 @@ describe("KeyEditView", () => {
     const submitButton = screen.getByRole("button", { name: /save changes/i });
     await userEvent.click(submitButton);
 
+    // Wait for onSubmit to be called, which means handleSubmit has started and isKeySaving should be true
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+
+    // Wait for the cancel button to actually be disabled (state update may take a moment)
     await waitFor(() => {
       const cancelButton = screen.getByRole("button", { name: /cancel/i });
       expect(cancelButton).toBeDisabled();
-    });
+    }, { timeout: 3000 });
+
+    // Clean up: resolve the promise to allow the form to complete
+    if (resolveSubmit) {
+      resolveSubmit();
+    }
   });
 });
