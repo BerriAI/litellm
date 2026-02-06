@@ -30,8 +30,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
-
-from ..common_utils import is_claude_4_5_on_bedrock
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -68,6 +66,7 @@ from ..common_utils import (
     BedrockModelInfo,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
+    is_claude_4_5_on_bedrock,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -431,7 +430,7 @@ class AmazonConverseConfig(BaseConfig):
         else:
             # Anthropic and other models: convert to thinking parameter
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort
+                reasoning_effort=reasoning_effort, model=model
             )
 
     def get_supported_openai_params(self, model: str) -> List[str]:
