@@ -107,7 +107,7 @@ async def _perform_health_check(
         async def _run():
             return await run_with_timeout(
                 litellm.ahealth_check(
-                    model["litellm_params"],
+                    litellm_params,
                     mode=mode,
                     prompt=DEFAULT_HEALTH_CHECK_PROMPT,
                     input=["test from litellm"],
