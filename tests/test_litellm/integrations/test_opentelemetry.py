@@ -2103,3 +2103,110 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
 
         mock_span.set_attribute.assert_any_call("gen_ai.operation.name", "chat")
+
+
+class TestOpenTelemetryNonRecordingSpan(unittest.TestCase):
+    """
+    Test suite for NonRecordingSpan handling in OpenTelemetry integration.
+
+    When OpenTelemetry sampling is configured to sample out traces (e.g.,
+    OTEL_TRACES_SAMPLER=parentbased_always_off), spans become NonRecordingSpan
+    objects which do NOT have a `.name` attribute. Accessing `.name` on these
+    spans causes an AttributeError.
+
+    See: https://github.com/BerriAI/litellm/issues/20350
+    """
+
+    HERE = os.path.dirname(__file__)
+
+    def _create_test_kwargs_and_response(self):
+        """Load test data from JSON files"""
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
+            kwargs = json.load(f)
+
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
+            response_obj = json.load(f)
+
+        return kwargs, response_obj
+
+    def _make_non_recording_span(self):
+        """Create a real NonRecordingSpan via the OpenTelemetry API."""
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+        span_context = SpanContext(
+            trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
+            span_id=0x00F067AA0BA902B7,
+            is_remote=True,
+            trace_flags=TraceFlags(0x00),  # not sampled
+        )
+        return NonRecordingSpan(span_context)
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}, clear=False)
+    def test_handle_success_with_non_recording_parent_span(self):
+        """
+        _handle_success should not raise AttributeError when the parent span
+        is a NonRecordingSpan (which lacks a .name attribute).
+        """
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+        non_recording_span = self._make_non_recording_span()
+
+        # Inject the NonRecordingSpan as the parent span via metadata
+        kwargs.setdefault("litellm_params", {}).setdefault("metadata", {})[
+            "litellm_parent_otel_span"
+        ] = non_recording_span
+
+        start_time = datetime.utcnow()
+        end_time = start_time + timedelta(seconds=1)
+
+        # This should NOT raise:
+        # AttributeError: 'NonRecordingSpan' object has no attribute 'name'
+        otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}, clear=False)
+    def test_handle_failure_with_non_recording_parent_span(self):
+        """
+        _handle_failure should not raise AttributeError when the parent span
+        is a NonRecordingSpan (which lacks a .name attribute).
+        """
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+        non_recording_span = self._make_non_recording_span()
+
+        # Inject the NonRecordingSpan as the parent span via metadata
+        kwargs.setdefault("litellm_params", {}).setdefault("metadata", {})[
+            "litellm_parent_otel_span"
+        ] = non_recording_span
+
+        start_time = datetime.utcnow()
+        end_time = start_time + timedelta(seconds=1)
+
+        # This should NOT raise:
+        # AttributeError: 'NonRecordingSpan' object has no attribute 'name'
+        otel._handle_failure(kwargs, response_obj, start_time, end_time)
+
+    def test_non_recording_span_lacks_name_attribute(self):
+        """
+        Verify our test premise: NonRecordingSpan truly does not have a .name
+        attribute. If this ever changes in a future opentelemetry-api release,
+        the guards we added become harmless no-ops rather than necessary fixes.
+        """
+        non_recording_span = self._make_non_recording_span()
+        self.assertFalse(
+            hasattr(non_recording_span, "name"),
+            "NonRecordingSpan should not have a .name attribute "
+            "(if this fails, OpenTelemetry API changed and the getattr guards "
+            "are no longer strictly necessary but remain safe)",
+        )
