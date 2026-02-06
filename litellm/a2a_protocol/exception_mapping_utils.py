@@ -25,8 +25,11 @@ if TYPE_CHECKING:
 
 # Runtime import
 _A2AClient: Any = None
+A2A_SDK_AVAILABLE = False
 try:
     from a2a.client import A2AClient as _A2AClient
+
+    A2A_SDK_AVAILABLE = True
 except ImportError:
     pass
 
@@ -174,7 +177,16 @@ def handle_a2a_localhost_retry(
 
     Returns:
         A new A2A client with the fixed URL
+
+    Raises:
+        ImportError: If the A2A SDK is not installed
     """
+    if not A2A_SDK_AVAILABLE or _A2AClient is None:
+        raise ImportError(
+            "A2A SDK is required for localhost retry handling. "
+            "Install it with: pip install a2a"
+        )
+
     request_type = "streaming " if is_streaming else ""
     verbose_logger.warning(
         f"A2A {request_type}request to '{error.localhost_url}' failed: {error.original_error}. "
