@@ -5,7 +5,7 @@ Extends the A2A SDK's card resolver to support multiple well-known paths
 and fixes agent card URL issues where the card contains internal/localhost URLs.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 
@@ -26,35 +26,46 @@ try:
 except ImportError:
     pass
 
+# Patterns that indicate a localhost/internal URL that should be replaced
+# with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
 
-def _is_localhost_or_internal_url(url: str) -> bool:
+
+def is_localhost_or_internal_url(url: Optional[str]) -> bool:
     """
     Check if a URL is a localhost or internal URL that should be replaced.
-    
+
+    This detects common development URLs that are accidentally left in
+    agent cards when deploying to production.
+
     Args:
         url: The URL to check
-        
+
     Returns:
         True if the URL is localhost/internal and should be replaced
+
+    Examples:
+        >>> is_localhost_or_internal_url("http://localhost:8000/")
+        True
+        >>> is_localhost_or_internal_url("http://0.0.0.0:8001/")
+        True
+        >>> is_localhost_or_internal_url("https://my-agent.example.com/")
+        False
+        >>> is_localhost_or_internal_url(None)
+        False
     """
     if not url:
         return False
-    
+
     url_lower = url.lower()
-    
-    # Check for localhost variants
-    localhost_patterns = [
-        "localhost",
-        "127.0.0.1",
-        "0.0.0.0",
-        "[::1]",  # IPv6 localhost
-    ]
-    
-    for pattern in localhost_patterns:
-        if pattern in url_lower:
-            return True
-    
-    return False
+
+    return any(pattern in url_lower for pattern in LOCALHOST_URL_PATTERNS)
 
 
 class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
@@ -85,7 +96,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
         """
         card_url = getattr(agent_card, "url", None)
         
-        if card_url and _is_localhost_or_internal_url(card_url):
+        if card_url and is_localhost_or_internal_url(card_url):
             # Normalize base_url to ensure it ends with /
             fixed_url = self.base_url.rstrip("/") + "/"
             
