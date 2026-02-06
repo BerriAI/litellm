@@ -1,6 +1,6 @@
 "use client";
 
-import AdminPanel from "@/components/Admins";
+import AdminPanel from "@/components/AdminPanel";
 
 const AdminSettings = () => {
 
