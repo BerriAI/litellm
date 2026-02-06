@@ -2190,6 +2190,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
+    team_soft_budget: Optional[float] = None
     team_models: List = []
     team_blocked: bool = False
     soft_budget: Optional[float] = None
@@ -2648,6 +2649,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
     event_group: Litellm_EntityType
+    alert_emails: Optional[List[str]] = Field(
+        default=None,
+        description="Additional email addresses to send alerts to (e.g., from team metadata)",
+    )
 
 
 class WebhookEvent(CallInfo):
