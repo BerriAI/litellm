@@ -34,8 +34,8 @@ def _is_azure_claude_model(model: str) -> bool:
 
 
 def handle_cohere_chat_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: Optional[str], custom_llm_provider: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     if user sets model = "cohere/command-r" -> use custom_llm_provider = "cohere_chat"
 
@@ -48,7 +48,7 @@ def handle_cohere_chat_model_custom_llm_provider(
     """
 
     if custom_llm_provider:
-        if custom_llm_provider == "cohere" and model in litellm.cohere_chat_models:
+        if custom_llm_provider == "cohere" and model and model in litellm.cohere_chat_models:
             return model, "cohere_chat"
 
     if model and "/" in model:
@@ -64,8 +64,8 @@ def handle_cohere_chat_model_custom_llm_provider(
 
 
 def handle_anthropic_text_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: Optional[str], custom_llm_provider: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     if user sets model = "anthropic/claude-2" -> use custom_llm_provider = "anthropic_text"
 
@@ -80,6 +80,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     if custom_llm_provider:
         if (
             custom_llm_provider == "anthropic"
+            and model
             and litellm.AnthropicTextConfig._is_anthropic_text_model(model)
         ):
             return model, "anthropic_text"
