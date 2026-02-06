@@ -80,6 +80,7 @@ async def anthropic_response(  # noqa: PLR0915
 
         # Create Anthropic-formatted response with violation message
         import uuid
+
         from litellm.types.utils import AnthropicMessagesResponse
 
         _anthropic_response = AnthropicMessagesResponse(
@@ -240,3 +241,19 @@ async def count_tokens(
         raise HTTPException(
             status_code=500, detail={"error": f"Internal server error: {str(e)}"}
         )
+
+
+@router.post(
+    "/api/event_logging/batch",
+    tags=["[beta] Anthropic Event Logging"],
+)
+async def event_logging_batch(
+    request: Request,
+):
+    """
+    Stubbed endpoint for Anthropic event logging batch requests.
+    
+    This endpoint accepts event logging requests but does nothing with them.
+    It exists to prevent 404 errors from Claude Code clients that send telemetry.
+    """
+    return {"status": "ok"}
