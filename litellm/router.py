@@ -5914,17 +5914,35 @@ class Router:
                 )
 
             ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
-            _model_name = deployment.litellm_params.model
-            if deployment.litellm_params.custom_llm_provider is not None:
-                _model_name = (
-                    deployment.litellm_params.custom_llm_provider + "/" + _model_name
-                )
-
-            litellm.register_model(
-                model_cost={
-                    _model_name: _model_info,
-                }
+            ## Only register by backend model name when this deployment does NOT
+            ## have custom pricing in model_info. Otherwise we would overwrite
+            ## built-in pricing for the backend model and break cost for other
+            ## deployments sharing the same backend (e.g. two router models
+            ## both using vertex_ai/gemini-3-pro-preview).
+            _cost_override_keys = (
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "input_cost_per_second",
+                "output_cost_per_second",
+                "cost_per_query",
             )
+            _has_custom_pricing = any(
+                _model_info.get(k) is not None for k in _cost_override_keys
+            )
+            if not _has_custom_pricing:
+                _model_name = deployment.litellm_params.model
+                if deployment.litellm_params.custom_llm_provider is not None:
+                    _model_name = (
+                        deployment.litellm_params.custom_llm_provider
+                        + "/"
+                        + _model_name
+                    )
+
+                litellm.register_model(
+                    model_cost={
+                        _model_name: _model_info,
+                    }
+                )
 
             ## Check if LLM Deployment is allowed for this deployment
             if (
@@ -5952,6 +5970,43 @@ class Router:
                 return None
             else:
                 raise e
+
+    def _register_backend_model_cost_when_single_custom_pricing(self) -> None:
+        """
+        When exactly one deployment uses a backend and has custom pricing in model_info,
+        register that backend key in litellm.model_cost so get_model_info(backend_name)
+        returns the custom pricing. Restores backward compat for single-deployment
+        custom pricing without overwriting built-in cost when multiple deployments
+        share the same backend.
+        """
+        _cost_override_keys = (
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "input_cost_per_second",
+            "output_cost_per_second",
+            "cost_per_query",
+        )
+        backend_to_deployments: dict = {}
+        for m in self.model_list:
+            lp = m.get("litellm_params") or {}
+            backend_model = lp.get("model")
+            if not backend_model:
+                continue
+            custom_llm_provider = lp.get("custom_llm_provider")
+            if custom_llm_provider is not None:
+                backend_key = f"{custom_llm_provider}/{backend_model}"
+            else:
+                backend_key = backend_model
+            if backend_key not in backend_to_deployments:
+                backend_to_deployments[backend_key] = []
+            backend_to_deployments[backend_key].append(m)
+        for backend_key, deployments in backend_to_deployments.items():
+            if len(deployments) != 1:
+                continue
+            model_info = (deployments[0].get("model_info") or {}).copy()
+            if not any(model_info.get(k) is not None for k in _cost_override_keys):
+                continue
+            litellm.register_model(model_cost={backend_key: model_info})
 
     def _is_auto_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
@@ -6091,6 +6146,11 @@ class Router:
                     _litellm_params=_litellm_params,
                     _model_info=_model_info,
                 )
+
+        ## Backward compat: when exactly one deployment uses a backend and has custom
+        ## pricing, register that backend key so get_model_info(backend_name) returns
+        ## the custom pricing (e.g. single deployment with 0 or custom rates).
+        self._register_backend_model_cost_when_single_custom_pricing()
 
         verbose_router_logger.debug(
             f"\nInitialized Model List {self.get_model_names()}"

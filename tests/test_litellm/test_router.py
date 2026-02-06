@@ -1548,6 +1548,82 @@ def test_get_deployment_model_info_base_model_merge_priority():
     print("✓ Base model merge priority test passed!")
 
 
+def test_two_models_same_backend_custom_pricing_does_not_overwrite_builtin_cost():
+    """
+    When two router models share the same backend (e.g. vertex_ai/gemini-3-pro-preview),
+    the first with explicit 0 cost in model_info must not overwrite built-in pricing
+    for the backend. The second model (no cost in model_info) should still get correct cost.
+    """
+    backend_key = "openai/gpt-4"
+    builtin_cost = {
+        "key": "gpt-4",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    # Start with built-in pricing for the shared backend
+    model_cost_copy = {backend_key: builtin_cost.copy()}
+
+    with patch.object(litellm, "model_cost", model_cost_copy):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "zero-cost-gpt4",
+                    "litellm_params": {"model": "gpt-4"},
+                    "model_info": {
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "normal-gpt4",
+                    "litellm_params": {"model": "gpt-4"},
+                    "model_info": {"access_groups": ["default"]},
+                },
+            ],
+        )
+        # First deployment has custom pricing -> must NOT have registered by backend key
+        # So built-in cost for backend must be unchanged (or merged for second only)
+        assert backend_key in litellm.model_cost
+        assert litellm.model_cost[backend_key].get("input_cost_per_token") != 0.0, (
+            "Backend model cost was overwritten by first deployment's 0 cost; "
+            "second model would see 0 cost incorrectly."
+        )
+
+
+def test_single_model_custom_pricing_registers_backend_name():
+    """
+    Backward compat: when exactly one deployment uses a backend and has custom
+    pricing, get_model_info(backend_name) should return that custom pricing.
+    """
+    backend_key = "openai/gpt-4"
+    custom_input = 0.001
+    custom_output = 0.002
+    model_cost_copy = {}
+
+    with patch.object(litellm, "model_cost", model_cost_copy):
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-gpt4",
+                    "litellm_params": {
+                        "model": "gpt-4",
+                        "custom_llm_provider": "openai",
+                    },
+                    "model_info": {
+                        "input_cost_per_token": custom_input,
+                        "output_cost_per_token": custom_output,
+                    },
+                },
+            ],
+        )
+        # Single deployment with custom pricing -> backend key should be registered
+        assert backend_key in litellm.model_cost
+        assert litellm.model_cost[backend_key].get("input_cost_per_token") == custom_input
+        assert litellm.model_cost[backend_key].get("output_cost_per_token") == custom_output
+
+
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     """
     Test that _add_deployment_model_to_endpoint_for_llm_passthrough_route correctly strips bedrock provider prefix
