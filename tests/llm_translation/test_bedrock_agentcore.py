@@ -16,6 +16,15 @@ import litellm
 from unittest.mock import MagicMock, Mock, patch
 import pytest
 
+
+# Skip marker for integration tests that require live AWS credentials with AgentCore permissions
+requires_agentcore_credentials = pytest.mark.skipif(
+    os.getenv("AGENTCORE_INTEGRATION_TEST") != "true",
+    reason="AgentCore integration tests require AGENTCORE_INTEGRATION_TEST=true and valid AWS credentials with bedrock-agentcore:InvokeAgentRuntime permission"
+)
+
+
+@requires_agentcore_credentials
 @pytest.mark.parametrize(
     "model", [
         "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD", # non-streaming invocation
@@ -37,6 +46,7 @@ def test_bedrock_agentcore_basic(model):
     assert len(response.choices[0].message.content) > 0
 
 
+@requires_agentcore_credentials
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model", [
@@ -956,3 +966,172 @@ def test_agentcore_json_response_with_reasoning():
     assert len(parsed["reasoning_content_blocks"]) == 1
     # The reasoningContent object is added directly
     assert "reasoningText" in parsed["reasoning_content_blocks"][0]
+
+
+def test_agentcore_extract_reasoning_from_agentcore_nested_format():
+    """
+    Unit test for extracting reasoning from AgentCore nested format.
+
+    Our Strands agent emits reasoning via:
+    {"event": {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "..."}}}}}
+
+    This is distinct from both:
+    - Strands top-level: {"reasoning": true, "reasoningText": "..."}
+    - Bedrock Converse flat: {"event": {"contentBlockDelta": {"delta": {"reasoningText": "..."}}}}
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    # Test AgentCore nested reasoningContent format
+    agentcore_event = {
+        "event": {
+            "contentBlockDelta": {
+                "delta": {
+                    "reasoningContent": {
+                        "text": "Let me analyze this step by step..."
+                    }
+                },
+                "contentBlockIndex": 0,
+            }
+        }
+    }
+
+    reasoning_block = config._extract_reasoning_from_event(agentcore_event)
+
+    assert reasoning_block is not None
+    assert "reasoningText" in reasoning_block
+    assert reasoning_block["reasoningText"]["text"] == "Let me analyze this step by step..."
+
+
+def test_agentcore_extract_reasoning_agentcore_format_with_signature():
+    """
+    Unit test for AgentCore nested format with signature field.
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    agentcore_event = {
+        "event": {
+            "contentBlockDelta": {
+                "delta": {
+                    "reasoningContent": {
+                        "text": "Considering the options...",
+                        "signature": "nested_sig_abc"
+                    }
+                }
+            }
+        }
+    }
+
+    reasoning_block = config._extract_reasoning_from_event(agentcore_event)
+
+    assert reasoning_block is not None
+    assert reasoning_block["reasoningText"]["text"] == "Considering the options..."
+    assert reasoning_block["reasoningText"]["signature"] == "nested_sig_abc"
+
+
+def test_agentcore_sse_iterator_streams_reasoning_content():
+    """
+    Unit test for SSE iterator streaming reasoning content.
+
+    Verifies that the SSE iterator emits ModelResponse chunks with
+    reasoning_content in the Delta when processing reasoningContent events.
+    """
+    from litellm.llms.bedrock.chat.agentcore.sse_iterator import AgentCoreSSEStreamIterator
+
+    # Create mock response with reasoning + text SSE lines
+    lines = [
+        'data: {"event":{"contentBlockDelta":{"delta":{"reasoningContent":{"text":"Thinking..."}},"contentBlockIndex":0}}}',
+        'data: {"event":{"contentBlockDelta":{"delta":{"reasoningContent":{"text":" more thoughts"}},"contentBlockIndex":0}}}',
+        'data: {"event":{"contentBlockDelta":{"delta":{"text":"Final answer."}},"contentBlockIndex":0}}',
+        'data: {"event":{"metadata":{"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15}}}}',
+    ]
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.iter_lines.return_value = iter(lines)
+
+    iterator = AgentCoreSSEStreamIterator(response=mock_response, model="test-model")
+    iter(iterator)  # Initialize sync iteration
+
+    chunks = list(iterator)
+
+    # Should have 4 chunks: 2 reasoning, 1 text, 1 finish
+    assert len(chunks) == 4
+
+    # First two chunks should have reasoning_content
+    assert hasattr(chunks[0].choices[0].delta, "reasoning_content")
+    assert chunks[0].choices[0].delta.reasoning_content == "Thinking..."
+
+    assert hasattr(chunks[1].choices[0].delta, "reasoning_content")
+    assert chunks[1].choices[0].delta.reasoning_content == " more thoughts"
+
+    # Third chunk should have regular text content
+    assert chunks[2].choices[0].delta.content == "Final answer."
+
+    # Fourth chunk should signal finish
+    assert chunks[3].choices[0].finish_reason == "stop"
+
+
+def test_agentcore_sse_iterator_streams_reasoning_text_flat():
+    """
+    Unit test for SSE iterator with flat reasoningText format.
+    """
+    from litellm.llms.bedrock.chat.agentcore.sse_iterator import AgentCoreSSEStreamIterator
+
+    lines = [
+        'data: {"event":{"contentBlockDelta":{"delta":{"reasoningText":"Flat thinking..."}}}}',
+        'data: {"event":{"contentBlockDelta":{"delta":{"text":"Done."}}}}',
+        'data: {"event":{"metadata":{"usage":{"inputTokens":5,"outputTokens":3,"totalTokens":8}}}}',
+    ]
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.iter_lines.return_value = iter(lines)
+
+    iterator = AgentCoreSSEStreamIterator(response=mock_response, model="test-model")
+    iter(iterator)
+
+    chunks = list(iterator)
+
+    assert len(chunks) == 3
+    assert hasattr(chunks[0].choices[0].delta, "reasoning_content")
+    assert chunks[0].choices[0].delta.reasoning_content == "Flat thinking..."
+    assert chunks[1].choices[0].delta.content == "Done."
+    assert chunks[2].choices[0].finish_reason == "stop"
+
+
+def test_agentcore_parse_sse_response_with_agentcore_reasoning_format():
+    """
+    Unit test for non-streaming SSE parsing with AgentCore nested reasoningContent format.
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    # SSE data with reasoningContent nested format (what our agent emits)
+    sse_data = """data: {"event":{"contentBlockDelta":{"delta":{"reasoningContent":{"text":"Step 1: analyze..."}},"contentBlockIndex":0}}}
+
+data: {"event":{"contentBlockDelta":{"delta":{"reasoningContent":{"text":"Step 2: decide..."}},"contentBlockIndex":0}}}
+
+data: {"event":{"contentBlockDelta":{"delta":{"text":"Here is the answer."}},"contentBlockIndex":0}}
+
+data: {"event":{"metadata":{"usage":{"inputTokens":30,"outputTokens":20,"totalTokens":50}}}}
+
+data: {"message":{"role":"assistant","content":[{"text":"Here is the answer."}]}}
+"""
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "text/event-stream"}
+    mock_response.text = sse_data
+
+    parsed = config._get_parsed_response(mock_response)
+
+    assert parsed["content"] == "Here is the answer."
+    assert parsed["usage"]["inputTokens"] == 30
+
+    # Reasoning blocks should be captured from the nested format
+    assert parsed["reasoning_content_blocks"] is not None
+    assert len(parsed["reasoning_content_blocks"]) == 2
+    assert parsed["reasoning_content_blocks"][0]["reasoningText"]["text"] == "Step 1: analyze..."
+    assert parsed["reasoning_content_blocks"][1]["reasoningText"]["text"] == "Step 2: decide..."

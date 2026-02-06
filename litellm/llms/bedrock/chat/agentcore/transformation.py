@@ -322,9 +322,18 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             if content_block_delta:
                 delta = content_block_delta.get("delta", {})
                 # Check for reasoning content in delta
+                # Format 1: {"reasoningText": "..."} (Strands SDK flat)
                 reasoning_text = delta.get("reasoningText")
                 redacted_content = delta.get("redactedContent")
                 signature = delta.get("signature")
+
+                # Format 2: {"reasoningContent": {"text": "...", "signature": "..."}} (AgentCore nested)
+                reasoning_content_block = delta.get("reasoningContent")
+                if isinstance(reasoning_content_block, dict):
+                    if not reasoning_text:
+                        reasoning_text = reasoning_content_block.get("text")
+                    if not signature:
+                        signature = reasoning_content_block.get("signature")
 
                 if reasoning_text:
                     reasoning_block = {"reasoningText": {"text": reasoning_text}}

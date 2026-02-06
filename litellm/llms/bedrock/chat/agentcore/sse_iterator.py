@@ -85,6 +85,37 @@ class AgentCoreSSEStreamIterator:
                     delta = content_block_delta.get("delta", {})
                     text = delta.get("text", "")
 
+                    # Check for reasoning content (extended thinking)
+                    # Format 1: {"reasoningContent": {"text": "..."}} (AgentCore)
+                    reasoning_text = None
+                    reasoning_content = delta.get("reasoningContent")
+                    if isinstance(reasoning_content, dict):
+                        reasoning_text = reasoning_content.get("text")
+                    # Format 2: {"reasoningText": "..."} (Strands SDK flat)
+                    if not reasoning_text:
+                        reasoning_text = delta.get("reasoningText")
+
+                    if reasoning_text:
+                        chunk = ModelResponse(
+                            id=f"chatcmpl-{uuid.uuid4()}",
+                            created=0,
+                            model=self.model,
+                            object="chat.completion.chunk",
+                        )
+
+                        chunk.choices = [
+                            StreamingChoices(
+                                finish_reason=None,
+                                index=0,
+                                delta=Delta(
+                                    reasoning_content=reasoning_text,
+                                    role="assistant",
+                                ),
+                            )
+                        ]
+
+                        return chunk
+
                     if text:
                         # Return chunk with text
                         chunk = ModelResponse(
