@@ -1,8 +1,12 @@
 name: LiteLLM Mock Tests (folder - tests/test_litellm)
 
+# DEPRECATED: This workflow is replaced by test-litellm-matrix.yml which runs
+# the same tests in parallel across 10 jobs for faster CI times.
+# Kept for manual debugging only.
 on:
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:  # Manual trigger only
+  # pull_request:
+  #   branches: [ main ]
 
 jobs:
   test:

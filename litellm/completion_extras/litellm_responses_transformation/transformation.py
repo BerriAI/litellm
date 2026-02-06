@@ -271,8 +271,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     responses_api_request["text"] = text_format  # type: ignore
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
-            elif key == "metadata":
-                responses_api_request["metadata"] = value
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
@@ -304,11 +302,32 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
 
+        responses_optional_param_keys = set(
+            ResponsesAPIOptionalRequestParams.__annotations__.keys()
+        )
+        sanitized_litellm_params: Dict[str, Any] = {
+            key: value
+            for key, value in litellm_params.items()
+            if key not in responses_optional_param_keys
+        }
+
+        legacy_metadata = litellm_params.get("metadata")
+        existing_litellm_metadata = litellm_params.get("litellm_metadata")
+        merged_litellm_metadata: Dict[str, Any] = {}
+        if isinstance(legacy_metadata, dict):
+            merged_litellm_metadata.update(legacy_metadata)
+        if isinstance(existing_litellm_metadata, dict):
+            merged_litellm_metadata.update(existing_litellm_metadata)
+        if merged_litellm_metadata:
+            sanitized_litellm_params["litellm_metadata"] = merged_litellm_metadata
+        else:
+            sanitized_litellm_params.pop("litellm_metadata", None)
+
         request_data = {
             "model": api_model,
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
-            **litellm_params,
+            **sanitized_litellm_params,
             "client": client,
         }
 

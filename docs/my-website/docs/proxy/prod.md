@@ -250,11 +250,133 @@ The migrate deploy command:
 
 ### Read-only File System
 
-If you see a `Permission denied` error, it means the LiteLLM pod is running with a read-only file system.
+Running LiteLLM with `readOnlyRootFilesystem: true` is a Kubernetes security best practice that prevents container processes from writing to the root filesystem. LiteLLM fully supports this configuration.
 
-To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in your environment.
+#### Quick Fix for Permission Errors
 
-LiteLLM will use this directory to write migration files.
+If you see a `Permission denied` error, it means the LiteLLM pod is running with a read-only file system. LiteLLM needs writable directories for:
+- **Database migrations**: Set `LITELLM_MIGRATION_DIR="/path/to/writable/directory"`
+- **Admin UI**: Set `LITELLM_UI_PATH="/path/to/writable/directory"`
+- **UI assets/logos**: Set `LITELLM_ASSETS_PATH="/path/to/writable/directory"`
+
+#### Complete Read-Only Filesystem Setup (Kubernetes)
+
+For production deployments with enhanced security, use this configuration:
+
+**Option 1: Using EmptyDir Volumes with InitContainer (Recommended)**
+
+This approach copies the pre-built UI from the Docker image to writable emptyDir volumes at pod startup.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-proxy
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: setup-ui
+          image: ghcr.io/berriai/litellm:main-stable
+          command:
+            - sh
+            - -c
+            - |
+              cp -r /var/lib/litellm/ui/* /app/var/litellm/ui/ && \
+              cp -r /var/lib/litellm/assets/* /app/var/litellm/assets/
+          volumeMounts:
+            - name: ui-volume
+              mountPath: /app/var/litellm/ui
+            - name: assets-volume
+              mountPath: /app/var/litellm/assets
+
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:main-stable
+          env:
+            - name: LITELLM_NON_ROOT
+              value: "true"
+            - name: LITELLM_UI_PATH
+              value: "/app/var/litellm/ui"
+            - name: LITELLM_ASSETS_PATH
+              value: "/app/var/litellm/assets"
+            - name: LITELLM_MIGRATION_DIR
+              value: "/app/migrations"
+            - name: PRISMA_BINARY_CACHE_DIR
+              value: "/app/cache/prisma-python/binaries"
+            - name: XDG_CACHE_HOME
+              value: "/app/cache"
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 101
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: ui-volume
+              mountPath: /app/var/litellm/ui
+            - name: assets-volume
+              mountPath: /app/var/litellm/assets
+            - name: cache
+              mountPath: /app/cache
+            - name: migrations
+              mountPath: /app/migrations
+
+      volumes:
+        - name: config
+          configMap:
+            name: litellm-config
+        - name: ui-volume
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: assets-volume
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: cache
+          emptyDir:
+            sizeLimit: 500Mi
+        - name: migrations
+          emptyDir:
+            sizeLimit: 64Mi
+```
+
+**Option 2: Without UI (API-only deployment)**
+
+If you don't need the admin UI, you can run with minimal configuration:
+
+```yaml
+env:
+  - name: LITELLM_NON_ROOT
+    value: "true"
+  - name: LITELLM_MIGRATION_DIR
+    value: "/app/migrations"
+securityContext:
+  readOnlyRootFilesystem: true
+```
+
+The proxy will log a warning about the UI but API endpoints will work normally.
+
+#### Environment Variables for Read-Only Filesystems
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `LITELLM_UI_PATH` | Admin UI directory | `/var/lib/litellm/ui` (Docker) |
+| `LITELLM_ASSETS_PATH` | UI assets/logos | `/var/lib/litellm/assets` (Docker) |
+| `LITELLM_MIGRATION_DIR` | Database migrations | Package directory |
+| `PRISMA_BINARY_CACHE_DIR` | Prisma binary cache | System default |
+| `XDG_CACHE_HOME` | General cache directory | System default |
+
+#### Important Notes
+
+1. **Migrations**: Always set `LITELLM_MIGRATION_DIR` to a writable emptyDir path
+2. **Prisma Cache**: Set `PRISMA_BINARY_CACHE_DIR` and `XDG_CACHE_HOME` to writable paths
+3. **Server Root Path**: If using a custom `server_root_path`, you must pre-process UI files in your Dockerfile as the proxy cannot modify files at runtime with read-only filesystem
+4. **Automatic Detection**: The UI is automatically detected as pre-restructured if it contains a `.litellm_ui_ready` marker file (created by the official Docker images)
 
 ## 10. Use a Separate Health Check App
 :::info

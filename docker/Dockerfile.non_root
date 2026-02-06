@@ -59,7 +59,8 @@ RUN mkdir -p /var/lib/litellm/ui && \
           mkdir -p "$folder_name" && \
           mv "$html_file" "$folder_name/index.html"; \
         fi; \
-      done ) && \
+      done && \
+      touch .litellm_ui_ready ) && \
     cd /app/ui/litellm-dashboard && rm -rf ./out
 
 # Build litellm wheel and place it in wheels dir (replace any PyPI wheels)
