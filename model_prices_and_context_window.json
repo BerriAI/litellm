@@ -16556,7 +16556,7 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true
-    }
+    },
     "chatgpt/gpt-5.2-codex": {
         "litellm_provider": "chatgpt",
         "max_input_tokens": 128000,
