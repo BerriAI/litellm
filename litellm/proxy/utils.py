@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -2663,6 +2663,34 @@ class PrismaClient:
                     response = await self._query_first_with_cached_plan_fallback(
                         sql_query
                     )
+
+                    # If not found in main table, check deprecated keys (grace period)
+                    if response is None:
+                        try:
+                            deprecated_row = await self.db.litellm_deprecatedverificationtoken.find_first(
+                                where={
+                                    "token": hashed_token,
+                                    "revoke_at": {"gt": datetime.now(timezone.utc)},
+                                },
+                                select={"active_token_id": True},
+                            )
+                            if deprecated_row and deprecated_row.active_token_id:
+                                response = await self.get_data(
+                                    token=deprecated_row.active_token_id,
+                                    table_name="combined_view",
+                                    query_type="find_unique",
+                                    parent_otel_span=parent_otel_span,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                )
+                                if response is not None:
+                                    verbose_proxy_logger.debug(
+                                        "Deprecated key used during grace period"
+                                    )
+                        except Exception as deprecated_lookup_error:
+                            verbose_proxy_logger.debug(
+                                "Deprecated key lookup skipped: %s",
+                                deprecated_lookup_error,
+                            )
 
                     if response is not None:
                         if response["team_models"] is None:
