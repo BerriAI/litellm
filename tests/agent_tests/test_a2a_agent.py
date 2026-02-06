@@ -18,7 +18,10 @@ import pytest
 from uuid import uuid4
 
 
-A2A_AGENT_URL = os.environ.get("A2A_AGENT_URL")
+def get_a2a_agent_url():
+    """Get A2A agent URL from environment, skip test if not set."""
+    url = os.environ.get("A2A_AGENT_URL")
+    return url
 
 
 @pytest.mark.asyncio
@@ -26,6 +29,8 @@ async def test_a2a_non_streaming():
     """Test non-streaming A2A request."""
     from a2a.types import MessageSendParams, SendMessageRequest
     from litellm.a2a_protocol import asend_message
+
+    api_base = get_a2a_agent_url()
 
     request = SendMessageRequest(
         id=str(uuid4()),
@@ -40,7 +45,7 @@ async def test_a2a_non_streaming():
 
     response = await asend_message(
         request=request,
-        api_base=A2A_AGENT_URL,
+        api_base=api_base,
     )
 
     assert response is not None
@@ -52,6 +57,8 @@ async def test_a2a_streaming():
     """Test streaming A2A request."""
     from a2a.types import MessageSendParams, SendStreamingMessageRequest
     from litellm.a2a_protocol import asend_message_streaming
+
+    api_base = get_a2a_agent_url()
 
     request = SendStreamingMessageRequest(
         id=str(uuid4()),
@@ -67,7 +74,7 @@ async def test_a2a_streaming():
     chunks = []
     async for chunk in asend_message_streaming(
         request=request,
-        api_base=A2A_AGENT_URL,
+        api_base=api_base,
     ):
         chunks.append(chunk)
         print(f"\nStreaming chunk: {chunk}")
