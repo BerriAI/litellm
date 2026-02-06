@@ -2635,6 +2635,8 @@ class PrometheusLogger(CustomLogger):
             max_budget=max_budget,
         )
         try:
+            # Note: Setting check_db_only=True bypasses cache and hits DB on every request,
+            # causing huge latency increase and CPU spikes. Keep check_db_only=False.
             user_info = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
