@@ -4953,22 +4953,30 @@ class Router:
             """
             Retry Logic
             """
-            # For guardrail calls, use guardrail_list so should_retry_this_error allows retries
-            _model = kwargs.get("model") or ""
-            _guardrail_deployments = [
-                g for g in self.guardrail_list if g.get("guardrail_name") == _model
-            ]
-            if kwargs.get("selected_guardrail") is not None or _guardrail_deployments:
-                _healthy_deployments = _guardrail_deployments
+            # For guardrail calls, use guardrail_list so should_retry_this_error allows retries.
+            # When selected_guardrail is in kwargs (normal path), avoid scanning guardrail_list.
+            _selected_guardrail = kwargs.get("selected_guardrail")
+            if _selected_guardrail is not None:
+                _healthy_deployments = [_selected_guardrail]
                 _all_deployments = _healthy_deployments
             else:
-                (
-                    _healthy_deployments,
-                    _all_deployments,
-                ) = await self._async_get_healthy_deployments(
-                    model=kwargs.get("model") or "",
-                    parent_otel_span=parent_otel_span,
-                )
+                _model = kwargs.get("model") or ""
+                _guardrail_deployments = [
+                    g
+                    for g in self.guardrail_list
+                    if g.get("guardrail_name") == _model
+                ]
+                if _guardrail_deployments:
+                    _healthy_deployments = _guardrail_deployments
+                    _all_deployments = _healthy_deployments
+                else:
+                    (
+                        _healthy_deployments,
+                        _all_deployments,
+                    ) = await self._async_get_healthy_deployments(
+                        model=_model,
+                        parent_otel_span=parent_otel_span,
+                    )
 
             # Check retry policy FIRST, before should_retry_this_error
             # This allows retry policies to override the healthy deployments check
@@ -5043,30 +5051,21 @@ class Router:
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt - 1
                     _model = kwargs.get("model")  # type: ignore
-                    _is_guardrail = (
-                        kwargs.get("selected_guardrail") is not None
-                        or any(
-                            g.get("guardrail_name") == _model
-                            for g in self.guardrail_list
-                        )
-                    )
-                    if _is_guardrail and _model:
-                        _healthy_deployments = [
-                            g
-                            for g in self.guardrail_list
-                            if g.get("guardrail_name") == _model
-                        ]
+                    _sel = kwargs.get("selected_guardrail")
+                    if _sel is not None:
+                        _healthy_deployments = [_sel]
                         _all_deployments = _healthy_deployments
                     elif _model is not None:
                         (
                             _healthy_deployments,
-                            _,
+                            _all_deployments,
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
                         )
                     else:
                         _healthy_deployments = []
+                        _all_deployments = []
                     _timeout = self._time_to_sleep_before_retry(
                         e=original_exception,
                         remaining_retries=remaining_retries,
