@@ -1360,6 +1360,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         web_search_requests: Optional[int] = None
         tool_search_requests: Optional[int] = None
+        inference_geo: Optional[str] = None
+        if "inference_geo" in _usage and _usage["inference_geo"] is not None:
+            inference_geo = _usage["inference_geo"]
+
         if (
             "cache_creation_input_tokens" in _usage
             and _usage["cache_creation_input_tokens"] is not None
@@ -1443,6 +1447,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if (web_search_requests is not None or tool_search_requests is not None)
                 else None
             ),
+            inference_geo=inference_geo,
         )
         return usage
 
