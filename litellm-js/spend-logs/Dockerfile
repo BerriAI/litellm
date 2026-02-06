@@ -3,8 +3,8 @@ FROM node:20.18.1-alpine3.20
 
 # Add AWS RDS CA bundle to system trust store
 RUN apk add --no-cache ca-certificates
-ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /usr/local/share/ca-certificates/aws-rds-global-bundle.crt
-RUN update-ca-certificates
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/aws-rds-global-bundle.pem
+RUN cat /etc/ssl/certs/aws-rds-global-bundle.pem >> /etc/ssl/certs/ca-certificates.crt
 
 # Set the working directory inside the container
 WORKDIR /app

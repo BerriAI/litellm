@@ -13,8 +13,8 @@ RUN apt-get update
 RUN apt-get install -y python3 python3-pip ca-certificates
 
 # Add AWS RDS CA bundle to system trust store
-ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /usr/local/share/ca-certificates/aws-rds-global-bundle.crt
-RUN update-ca-certificates
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/aws-rds-global-bundle.pem
+RUN cat /etc/ssl/certs/aws-rds-global-bundle.pem >> /etc/ssl/certs/ca-certificates.crt
 
 # Set the working directory in the container
 WORKDIR /app
