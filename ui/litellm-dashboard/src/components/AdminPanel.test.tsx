@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import AdminPanel from "./Admins";
+import AdminPanel from "./AdminPanel";
 
 const mockGetSSOSettings = vi.fn();
 const mockGetAllowedIPs = vi.fn();
