@@ -170,7 +170,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_call["caller"] = cast(Dict[str, Any], anthropic_tool_content["caller"])  # type: ignore[typeddict-item]
         return tool_call
 
-    def _is_claude_opus_4_6(self, model: str) -> bool:
+    @staticmethod
+    def _is_claude_opus_4_6(model: str) -> bool:
         """Check if the model is Claude Opus 4.5."""
         return "opus-4-6" in model.lower() or "opus_4_6" in model.lower()
 
@@ -659,32 +660,38 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort(
-        reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]], 
+        model: str,
     ) -> Optional[AnthropicThinkingParam]:
-        if reasoning_effort is None:
-            return None
-        elif reasoning_effort == "low":
+        if AnthropicConfig._is_claude_opus_4_6(model):
             return AnthropicThinkingParam(
-                type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-            )
-        elif reasoning_effort == "medium":
-            return AnthropicThinkingParam(
-                type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            )
-        elif reasoning_effort == "high":
-            return AnthropicThinkingParam(
-                type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-            )
-        elif reasoning_effort == "minimal":
-            return AnthropicThinkingParam(
-                type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                type="adaptive",
             )
         else:
-            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            if reasoning_effort is None:
+                return None
+            elif reasoning_effort == "low":
+                return AnthropicThinkingParam(
+                    type="enabled",
+                    budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+                )
+            elif reasoning_effort == "medium":
+                return AnthropicThinkingParam(
+                    type="enabled",
+                    budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+                )
+            elif reasoning_effort == "high":
+                return AnthropicThinkingParam(
+                    type="enabled",
+                    budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+                )
+            elif reasoning_effort == "minimal":
+                return AnthropicThinkingParam(
+                    type="enabled",
+                    budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                )
+            else:
+                raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -860,13 +867,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                # For Claude Opus 4.6, map reasoning_effort to new adaptive thinking type
-                if self._is_claude_opus_4_6(model):
-                    optional_params["thinking"] = {"type": "adaptive"}
-                else:
-                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                        value
-                    )
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    reasoning_effort=value, model=model
+                )
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
