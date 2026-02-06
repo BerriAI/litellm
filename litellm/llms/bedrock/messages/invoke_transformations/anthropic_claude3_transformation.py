@@ -12,6 +12,9 @@ from typing import (
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import (
+    filter_and_transform_beta_headers,
+)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -55,10 +58,6 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     # Beta header patterns that are not supported by Bedrock Invoke API
     # These will be filtered out to prevent 400 "invalid beta flag" errors
-    UNSUPPORTED_BEDROCK_INVOKE_BETA_PATTERNS = [
-        "advanced-tool-use",  # Bedrock Invoke doesn't support advanced-tool-use beta headers
-        "prompt-caching-scope",
-    ]
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -276,39 +275,48 @@ class AmazonAnthropicClaudeMessagesConfig(
             model: The model name
             beta_set: The set of beta headers to filter in-place
         """
-        beta_headers_to_remove = set()
-        has_advanced_tool_use = False
-
-        # 1. Filter out beta headers that are universally unsupported on Bedrock Invoke and track if advanced-tool-use header is present
-        for beta in beta_set:
-            for unsupported_pattern in self.UNSUPPORTED_BEDROCK_INVOKE_BETA_PATTERNS:
-                if unsupported_pattern in beta.lower():
-                    beta_headers_to_remove.add(beta)
-                    has_advanced_tool_use = True
-                    break
-
-        # 2. Filter out extended thinking headers for models that don't support them
+        # 1. Handle header transformations BEFORE filtering
+        # (advanced-tool-use -> tool-search-tool)
+        # This must happen before filtering because advanced-tool-use is in the unsupported list
+        has_advanced_tool_use = "advanced-tool-use-2025-11-20" in beta_set
+        if has_advanced_tool_use and self._supports_tool_search_on_bedrock(model):
+            beta_set.discard("advanced-tool-use-2025-11-20")
+            beta_set.add("tool-search-tool-2025-10-19")
+            beta_set.add("tool-examples-2025-10-29")
+        
+        # 2. Apply provider-level filtering using centralized JSON config
+        beta_list = list(beta_set)
+        filtered_list = filter_and_transform_beta_headers(
+            beta_headers=beta_list,
+            provider="bedrock",
+        )
+        
+        # Update the set with filtered headers
+        beta_set.clear()
+        beta_set.update(filtered_list)
+        
+        # 2.1. Handle model-specific exceptions: structured-outputs is only supported on Opus 4.6
+        # Re-add structured-outputs if it was in the original set and model is Opus 4.6
+        model_lower = model.lower()
+        is_opus_4_6 = any(pattern in model_lower for pattern in ["opus-4.6", "opus_4.6", "opus-4-6", "opus_4_6"])
+        if is_opus_4_6 and "structured-outputs-2025-11-13" in beta_list:
+            beta_set.add("structured-outputs-2025-11-13")
+        
+        # 3. Filter out extended thinking headers for models that don't support them
         extended_thinking_patterns = [
             "extended-thinking",
             "interleaved-thinking",
         ]
         if not self._supports_extended_thinking_on_bedrock(model):
+            beta_headers_to_remove = set()
             for beta in beta_set:
                 for pattern in extended_thinking_patterns:
                     if pattern in beta.lower():
                         beta_headers_to_remove.add(beta)
                         break
-
-        # Remove all filtered headers
-        for beta in beta_headers_to_remove:
-            beta_set.discard(beta)
-
-        # 3. Translate advanced-tool-use to Bedrock-specific headers for models that support tool search
-        # Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
-        # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
-        if has_advanced_tool_use and self._supports_tool_search_on_bedrock(model):
-            beta_set.add("tool-search-tool-2025-10-19")
-            beta_set.add("tool-examples-2025-10-29")
+            
+            for beta in beta_headers_to_remove:
+                beta_set.discard(beta)
 
     def _get_tool_search_beta_header_for_bedrock(
         self,
