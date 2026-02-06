@@ -102,9 +102,13 @@ RUN for i in 1 2 3; do \
     apk upgrade --no-cache && break || sleep 5; \
     done \
   && for i in 1 2 3; do \
-    apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
+    apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor ca-certificates && break || sleep 5; \
     done \
   && npm install -g npm@latest tar@latest
+
+# Add AWS RDS CA bundle to system trust store
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /usr/local/share/ca-certificates/aws-rds-global-bundle.crt
+RUN update-ca-certificates
 
 # Copy artifacts from builder
 COPY --from=builder /app/requirements.txt /app/requirements.txt

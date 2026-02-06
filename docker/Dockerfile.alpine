@@ -35,7 +35,11 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 # Update dependencies and clean up, install libsndfile for audio processing
-RUN apk upgrade --no-cache && apk add --no-cache libsndfile
+RUN apk upgrade --no-cache && apk add --no-cache libsndfile ca-certificates
+
+# Add AWS RDS CA bundle to system trust store
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /usr/local/share/ca-certificates/aws-rds-global-bundle.crt
+RUN update-ca-certificates
 
 WORKDIR /app
 

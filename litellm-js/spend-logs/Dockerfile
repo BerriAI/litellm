@@ -1,6 +1,11 @@
 # Use the specific Node.js v20.11.0 image
 FROM node:20.18.1-alpine3.20
 
+# Add AWS RDS CA bundle to system trust store
+RUN apk add --no-cache ca-certificates
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /usr/local/share/ca-certificates/aws-rds-global-bundle.crt
+RUN update-ca-certificates
+
 # Set the working directory inside the container
 WORKDIR /app
 

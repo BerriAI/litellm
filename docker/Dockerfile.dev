@@ -61,8 +61,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatomic1 \
     nodejs \
     npm \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g npm@latest tar@latest
+
+# Add AWS RDS CA bundle to system trust store
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /usr/local/share/ca-certificates/aws-rds-global-bundle.crt
+RUN update-ca-certificates
 
 WORKDIR /app
 
