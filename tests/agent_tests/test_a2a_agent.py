@@ -1,6 +1,11 @@
 """
 Simple A2A agent tests - non-streaming and streaming.
 
+These tests validate the localhost URL retry logic: if an A2A agent's card
+contains a localhost/internal URL (e.g., http://0.0.0.0:8001/), the request
+will fail with a connection error. LiteLLM detects this and automatically
+retries using the original api_base URL instead.
+
 Requires A2A_AGENT_URL environment variable to be set.
 
 Run with:
