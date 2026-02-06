@@ -460,12 +460,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
-          guardrails: values.guardrails || [],
-          logging: values.logging_settings || [],
+          ...(values.guardrails?.length > 0 ? { guardrails: values.guardrails } : {}),
+          ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
           disable_global_guardrails: values.disable_global_guardrails || false,
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
-        policies: values.policies || [],
+        ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
         organization_id: values.organization_id,
       };
 
