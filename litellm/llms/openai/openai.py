@@ -525,9 +525,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         callbacks = litellm.callbacks + (
             logging_obj.dynamic_success_callbacks or []
         )
-        print(f"🔥callbacks: {callbacks}")
+        # Avoid logging full callback objects to prevent leaking sensitive data
+        verbose_logger.debug(
+            "LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks)
+        )
         tools = optional_params.get("tools", [])
-        print(f"🔥tools: {tools}")
+        # Avoid logging full tools payloads; they may contain sensitive parameters
+        verbose_logger.debug(
+            "LiteLLM.AgenticHooks: tools_count=%s", len(tools) if isinstance(tools, list) else 1 if tools else 0
+        )
         # Get custom_llm_provider from litellm_params
         custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
 
