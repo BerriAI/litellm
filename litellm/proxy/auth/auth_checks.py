@@ -218,6 +218,13 @@ async def common_checks(
             valid_token=valid_token,
         )
 
+        # 3.0.5. If team is over soft budget (alert only, doesn't block)
+        await _team_soft_budget_check(
+            team_object=team_object,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=valid_token,
+        )
+
         # 3.1. If organization is in budget
         await _organization_max_budget_check(
             valid_token=valid_token,
@@ -2419,6 +2426,66 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
             message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
+
+
+async def _team_soft_budget_check(
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Triggers a budget alert if the team is over it's soft budget.
+    """
+    if (
+        team_object is not None
+        and team_object.soft_budget is not None
+        and team_object.spend is not None
+        and team_object.spend >= team_object.soft_budget
+    ):
+        verbose_proxy_logger.debug(
+            "Crossed Soft Budget for team %s, spend %s, soft_budget %s",
+            team_object.team_id,
+            team_object.spend,
+            team_object.soft_budget,
+        )
+        if valid_token:
+            # Extract alert emails from team metadata
+            alert_emails: Optional[List[str]] = None
+            if team_object.metadata is not None and isinstance(team_object.metadata, dict):
+                soft_budget_alert_emails = team_object.metadata.get("soft_budget_alerting_emails")
+                if soft_budget_alert_emails is not None:
+                    if isinstance(soft_budget_alert_emails, list):
+                        alert_emails = [email for email in soft_budget_alert_emails if isinstance(email, str) and email.strip()]
+                    elif isinstance(soft_budget_alert_emails, str):
+                        # Handle comma-separated string
+                        alert_emails = [email.strip() for email in soft_budget_alert_emails.split(",") if email.strip()]
+                    # Filter out empty strings
+                    if alert_emails:
+                        alert_emails = [email for email in alert_emails if email]
+                    else:
+                        alert_emails = None
+
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=team_object.spend,
+                max_budget=team_object.max_budget,
+                soft_budget=team_object.soft_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                user_email=None,  # Team-level alert, no specific user email
+                key_alias=valid_token.key_alias,
+                event_group=Litellm_EntityType.TEAM,
+                alert_emails=alert_emails,
+            )
+
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="soft_budget",
+                    user_info=call_info,
+                )
+            )
 
 
 async def _organization_max_budget_check(
