@@ -1064,3 +1064,91 @@ data: {"message":{"role":"assistant","content":[{"text":"Here is the answer."}]}
     assert parsed["reasoning_content_blocks"][0]["reasoningText"]["text"] == "Step 1: analyze..."
     assert parsed["reasoning_content_blocks"][1]["reasoningText"]["text"] == "Step 2: decide..."
 
+
+def test_agentcore_streaming_no_duplicate_reasoning_for_nested_events():
+    """
+    Regression test: ensure nested AgentCore reasoning events are NOT yielded
+    twice in the sync streaming method.
+
+    Previously, events like {"event": {"contentBlockDelta": {"delta": {"reasoningContent": ...}}}}
+    were processed both inline (in the "event" block) AND by _extract_reasoning_from_event,
+    causing duplicate reasoning chunks in the stream output.
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    # SSE data with nested AgentCore reasoning format
+    sse_data = (
+        'data:{"event":{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"Step 1: thinking..."}}}}}\n'
+        'data:{"event":{"contentBlockDelta":{"contentBlockIndex":1,"delta":{"text":"The answer is 42."}}}}\n'
+        'data:{"event":{"contentBlockDelta":{"contentBlockIndex":2,"delta":{"reasoningContent":{"text":"Step 2: verifying..."}}}}}\n'
+        'data:{"event":{"metadata":{"usage":{"inputTokens":10,"outputTokens":20,"totalTokens":30}}}}\n'
+    )
+
+    # Mock httpx.Response with iter_text() for sync streaming
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.iter_text.return_value = [sse_data]
+
+    chunks = list(config._stream_agentcore_response_sync(mock_response, "test-model"))
+
+    # Count reasoning chunks vs content chunks
+    reasoning_chunks = [
+        c for c in chunks
+        if c.choices and getattr(c.choices[0].delta, "reasoning_content", None)
+    ]
+    content_chunks = [
+        c for c in chunks
+        if c.choices and getattr(c.choices[0].delta, "content", None)
+    ]
+
+    # Should have exactly 2 reasoning chunks (one per reasoningContent event), NOT 4
+    assert len(reasoning_chunks) == 2, (
+        f"Expected 2 reasoning chunks but got {len(reasoning_chunks)}. "
+        f"Duplicate reasoning may be occurring."
+    )
+    assert reasoning_chunks[0].choices[0].delta.reasoning_content == "Step 1: thinking..."
+    assert reasoning_chunks[1].choices[0].delta.reasoning_content == "Step 2: verifying..."
+
+    # Should have exactly 1 content chunk
+    assert len(content_chunks) == 1
+    assert content_chunks[0].choices[0].delta.content == "The answer is 42."
+
+
+def test_agentcore_streaming_top_level_reasoning_still_works():
+    """
+    Ensure top-level Strands-format reasoning events (no "event" wrapper)
+    are still correctly processed after the nested-event deduplication fix.
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    # SSE data with top-level Strands reasoning format (no "event" wrapper)
+    sse_data = (
+        'data:{"reasoning":true,"reasoningText":"Let me think about this..."}\n'
+        'data:{"event":{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"text":"The answer."}}}}\n'
+    )
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.iter_text.return_value = [sse_data]
+
+    chunks = list(config._stream_agentcore_response_sync(mock_response, "test-model"))
+
+    reasoning_chunks = [
+        c for c in chunks
+        if c.choices and getattr(c.choices[0].delta, "reasoning_content", None)
+    ]
+    content_chunks = [
+        c for c in chunks
+        if c.choices and getattr(c.choices[0].delta, "content", None)
+    ]
+
+    # Top-level reasoning should still be captured (exactly once)
+    assert len(reasoning_chunks) == 1
+    assert reasoning_chunks[0].choices[0].delta.reasoning_content == "Let me think about this..."
+
+    # Content should work as before
+    assert len(content_chunks) == 1
+    assert content_chunks[0].choices[0].delta.content == "The answer."
+

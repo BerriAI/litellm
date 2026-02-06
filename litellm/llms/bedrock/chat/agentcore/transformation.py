@@ -677,26 +677,28 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             yield chunk
 
                     # Check for top-level reasoning events (Strands format)
-                    if reasoning_block := self._extract_reasoning_from_event(data_obj):
-                        reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
-                        if reasoning_text:
-                            chunk = ModelResponse(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason=None,
-                                    index=0,
-                                    delta=Delta(
-                                        reasoning_content=reasoning_text,
-                                        role="assistant",
-                                    ),
+                    # Skip if event has nested structure (already handled inline above)
+                    if "event" not in data_obj or not isinstance(data_obj.get("event"), dict):
+                        if reasoning_block := self._extract_reasoning_from_event(data_obj):
+                            reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
+                            if reasoning_text:
+                                chunk = ModelResponse(
+                                    id=f"chatcmpl-{uuid.uuid4()}",
+                                    created=0,
+                                    model=model,
+                                    object="chat.completion.chunk",
                                 )
-                            ]
-                            yield chunk
+                                chunk.choices = [
+                                    StreamingChoices(
+                                        finish_reason=None,
+                                        index=0,
+                                        delta=Delta(
+                                            reasoning_content=reasoning_text,
+                                            role="assistant",
+                                        ),
+                                    )
+                                ]
+                                yield chunk
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
@@ -881,26 +883,28 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                             yield chunk
 
                     # Check for top-level reasoning events (Strands format)
-                    if reasoning_block := self._extract_reasoning_from_event(data_obj):
-                        reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
-                        if reasoning_text:
-                            chunk = ModelResponse(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason=None,
-                                    index=0,
-                                    delta=Delta(
-                                        reasoning_content=reasoning_text,
-                                        role="assistant",
-                                    ),
+                    # Skip if event has nested structure (already handled inline above)
+                    if "event" not in data_obj or not isinstance(data_obj.get("event"), dict):
+                        if reasoning_block := self._extract_reasoning_from_event(data_obj):
+                            reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
+                            if reasoning_text:
+                                chunk = ModelResponse(
+                                    id=f"chatcmpl-{uuid.uuid4()}",
+                                    created=0,
+                                    model=model,
+                                    object="chat.completion.chunk",
                                 )
-                            ]
-                            yield chunk
+                                chunk.choices = [
+                                    StreamingChoices(
+                                        finish_reason=None,
+                                        index=0,
+                                        delta=Delta(
+                                            reasoning_content=reasoning_text,
+                                            role="assistant",
+                                        ),
+                                    )
+                                ]
+                                yield chunk
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
