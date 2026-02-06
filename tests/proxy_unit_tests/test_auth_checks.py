@@ -483,8 +483,8 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 @pytest.mark.parametrize(
     "spend, soft_budget, expect_alert, metadata, expected_alert_emails",
     [
-        (100, 50, True, None, None),  # Over soft budget, no metadata
-        (50, 50, True, None, None),  # At soft budget, no metadata
+        (100, 50, False, None, None),  # Over soft budget, no metadata - no alert_emails configured, so no alert
+        (50, 50, False, None, None),  # At soft budget, no metadata - no alert_emails configured, so no alert
         (25, 50, False, None, None),  # Under soft budget
         (100, None, False, None, None),  # No soft budget set
         (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with list of emails
@@ -496,8 +496,8 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata, expected_alert_emails):
     """
     Test cases for _team_soft_budget_check:
-    1. Spend over soft budget - should trigger alert
-    2. Spend at soft budget - should trigger alert
+    1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
+    2. Spend at soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
     3. Spend under soft budget - should not trigger alert
     4. No soft budget set - should not trigger alert
     5. Team with alert emails in metadata (list) - should include alert_emails in CallInfo
