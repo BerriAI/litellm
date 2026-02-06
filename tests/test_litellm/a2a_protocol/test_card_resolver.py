@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.a2a_protocol.card_resolver import is_localhost_or_internal_url
+
 
 @pytest.mark.asyncio
 async def test_card_resolver_fallback_from_new_to_old_path():
@@ -67,3 +69,33 @@ async def test_card_resolver_fallback_from_new_to_old_path():
         # Verify the result
         assert result == mock_agent_card
         assert result.name == "Test Agent"
+
+
+def test_is_localhost_or_internal_url():
+    """Test that localhost/internal URLs are correctly detected."""
+    # Should return True for localhost variants
+    assert is_localhost_or_internal_url("http://localhost:8000/") is True
+    assert is_localhost_or_internal_url("http://0.0.0.0:8001/") is True
+
+    # Should return False for public URLs
+    assert is_localhost_or_internal_url("https://my-agent.example.com/") is False
+    assert is_localhost_or_internal_url(None) is False
+
+
+def test_fix_agent_card_url_replaces_localhost():
+    """Test that _fix_agent_card_url replaces localhost URLs with base_url."""
+    from litellm.a2a_protocol.card_resolver import LiteLLMA2ACardResolver
+
+    # Create mock agent card with localhost URL
+    mock_card = MagicMock()
+    mock_card.url = "http://0.0.0.0:8001/"
+
+    # Create resolver instance without calling __init__
+    resolver = LiteLLMA2ACardResolver.__new__(LiteLLMA2ACardResolver)
+    resolver.base_url = "https://my-public-agent.example.com"
+
+    # Fix the URL
+    result = resolver._fix_agent_card_url(mock_card)
+
+    # Verify localhost URL was replaced with base_url
+    assert result.url == "https://my-public-agent.example.com/"
