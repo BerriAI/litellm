@@ -1,101 +1,62 @@
 model_list:
-  - model_name: "*"
+  - model_name: gpt-4o
     litellm_params:
-      model: "*"
-  - model_name: "gpt-4"
-    litellm_params:
-      model: "gpt-4"
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: "gpt-3.5-turbo"
-    litellm_params:
-      model: "gpt-3.5-turbo"
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: bedrock-claude-sonnet-3.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-opus-4.5
+    litellm_params:
+      model: "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/us.amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"
+
+# MCP Server Configuration
+mcp_servers:
+  # Wikipedia MCP - reliable and works without external deps
+  wikipedia:
+    transport: "stdio"
+    command: "uvx"
+    args: ["mcp-server-fetch"]
+    description: "Fetch web pages and Wikipedia content"
+  deepwiki:
+    transport: "http"
+    url: "https://mcp.deepwiki.com/mcp"
+
+# General Settings
 general_settings:
   master_key: sk-1234
+  store_model_in_db: false
 
-# ───────────────────────────────────────────────
-# POLICIES - Define WHAT guardrails to apply
-# ───────────────────────────────────────────────
-#
-# Policies define guardrails with:
-# - inherit: Inherit guardrails from another policy
-# - description: Human-readable description
-# - guardrails.add: Add guardrails (on top of inherited)
-# - guardrails.remove: Remove guardrails (from inherited)
-# - condition.model: Model pattern (exact or regex) for when guardrails apply
-#
-policies:
-  # Global baseline policy
-  global-baseline:
-    description: "Base guardrails for all requests"
-    guardrails:
-      add:
-        - pii_blocker
-
-  # Healthcare policy - inherits from global-baseline
-  healthcare-compliance:
-    inherit: global-baseline
-    description: "HIPAA compliance for healthcare teams"
-    guardrails:
-      add:
-        - hipaa_audit
-
-  # Dev policy - inherits but removes PII blocker for testing
-  internal-dev:
-    inherit: global-baseline
-    description: "Relaxed policy for internal development"
-    guardrails:
-      add:
-        - toxicity_filter
-      remove:
-        - pii_blocker
-
-  # Policy with model condition (regex pattern)
-  gpt4-safety:
-    description: "Extra safety for GPT-4 models"
-    guardrails:
-      add:
-        - toxicity_filter
-    condition:
-      model: "gpt-4.*"  # regex: matches gpt-4, gpt-4-turbo, gpt-4o, etc.
-
-  # Policy with model condition (exact match list)
-  bedrock-compliance:
-    description: "Compliance for Bedrock models"
-    guardrails:
-      add:
-        - strict_pii_blocker
-    condition:
-      model: ["bedrock/claude-3", "bedrock/claude-2"]  # exact matches
-
-# ───────────────────────────────────────────────
-# POLICY ATTACHMENTS - Define WHERE policies apply
-# ───────────────────────────────────────────────
-#
-# Attachments are REQUIRED to make policies active.
-# A policy without an attachment will not be applied.
-#
-policy_attachments:
-  # Global attachment - applies to all requests
-  - policy: global-baseline
-    scope: "*"
-
-  # Team-specific attachment
-  - policy: healthcare-compliance
-    teams:
-      - healthcare-team
-      - medical-research
-
-  # Key pattern attachment
-  - policy: internal-dev
-    keys:
-      - "dev-key-*"
-      - "test-key-*"
-
-  # Model-specific policies (attached globally, condition filters by model)
-  - policy: gpt4-safety
-    scope: "*"
-
-  - policy: bedrock-compliance
-    scope: "*"
+# LiteLLM Settings
+litellm_settings:
+  # Enable MCP Semantic Tool Filter
+  mcp_semantic_tool_filter:
+    enabled: true
+    embedding_model: "text-embedding-3-small"
+    top_k: 5
+    similarity_threshold: 0.3
+  

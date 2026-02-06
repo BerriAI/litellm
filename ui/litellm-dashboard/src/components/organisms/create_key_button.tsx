@@ -162,7 +162,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
-  const [keyType, setKeyType] = useState<string>("default");
+  const [keyType, setKeyType] = useState<string>("llm_api");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
@@ -173,7 +173,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
@@ -188,7 +188,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
@@ -321,9 +321,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         formValues.rotation_interval = rotationInterval;
       }
 
-      // Handle duration field for key expiry
-      if (formValues.duration) {
-        formValues.duration = formValues.duration;
+      // Handle duration field for key expiry - convert empty string to null
+      if (!formValues.duration || formValues.duration.trim() === "") {
+        formValues.duration = null;
       }
 
       // Update the formValues with the final metadata
@@ -707,11 +707,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   </span>
                 }
                 name="key_type"
-                initialValue="default"
+                initialValue="llm_api"
                 className="mt-4"
               >
                 <Select
-                  defaultValue="default"
+                  defaultValue="llm_api"
                   placeholder="Select key type"
                   style={{ width: "100%" }}
                   optionLabelProp="label"
@@ -1270,6 +1270,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           onAutoRotationChange={setAutoRotationEnabled}
                           rotationInterval={rotationInterval}
                           onRotationIntervalChange={setRotationInterval}
+                          isCreateMode={true}
                         />
                       </div>
                     </AccordionBody>
@@ -1341,7 +1342,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       {isCreateUserModalVisible && (
         <Modal
           title="Create New User"
-          visible={isCreateUserModalVisible}
+          open={isCreateUserModalVisible}
           onCancel={() => setIsCreateUserModalVisible(false)}
           footer={null}
           width={800}
@@ -1358,7 +1359,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       )}
 
       {apiKey && (
-        <Modal visible={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
+        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>

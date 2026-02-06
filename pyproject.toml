@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.81.3"
+version = "1.81.8"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -45,7 +45,7 @@ orjson = {version = "^3.9.7", optional = true}
 apscheduler = {version = "^3.10.4", optional = true}
 fastapi-sso = { version = "^0.16.0", optional = true }
 PyJWT = { version = "^2.10.1", optional = true, python = ">=3.9" }
-python-multipart = { version = "^0.0.18", optional = true}
+python-multipart = { version = "^0.0.22", optional = true, python = ">=3.10"}
 cryptography = {version = "*", optional = true}
 prisma = {version = "0.11.0", optional = true}
 azure-identity = {version = "^1.15.0", optional = true, python = ">=3.9"}
@@ -61,9 +61,9 @@ boto3 = { version = "1.40.76", optional = true }
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = ">=1.25.0,<2.0.0", optional = true, python = ">=3.10"}
 a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.27", optional = true}
+litellm-proxy-extras = {version = "0.4.31", optional = true}
 rich = {version = "13.7.1", optional = true}
-litellm-enterprise = {version = "0.1.27", optional = true}
+litellm-enterprise = {version = "0.1.31", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = ">=0.1.12", optional = true, python = ">=3.9,<3.14"}
@@ -139,16 +139,18 @@ litellm = 'litellm:run_server'
 litellm-proxy = 'litellm.proxy.client.cli:cli'
 
 [tool.poetry.group.dev.dependencies]
+diff-cover = "^9.0"
 flake8 = "^6.1.0"
 black = "^23.12.0"
 mypy = "^1.0"
 pytest = "^7.4.3"
 pytest-mock = "^3.12.0"
 pytest-asyncio = "^0.21.1"
+pytest-retry = "^1.6.3"
 requests-mock = "^1.12.1"
 responses = "^0.25.7"
 respx = "^0.22.0"
-ruff = "^0.1.0"
+ruff = "^0.2.1"
 types-requests = "*"
 types-setuptools = "*"
 types-redis = "*"
@@ -173,7 +175,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.81.3"
+version = "1.81.8"
 version_files = [
     "pyproject.toml:^version"
 ]
@@ -183,6 +185,8 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+retries = 20
+retry_delay = 5
 markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",

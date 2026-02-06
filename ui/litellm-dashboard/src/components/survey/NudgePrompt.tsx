@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { X, LucideIcon } from "lucide-react";
+import { X, LucideIcon, Check } from "lucide-react";
 import { Button } from "antd";
+import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
+import { setLocalStorageItem, emitLocalStorageChange } from "@/utils/localStorageUtils";
 
 interface NudgePromptProps {
   onOpen: () => void;
@@ -15,6 +17,7 @@ interface NudgePromptProps {
 }
 
 const DISMISS_DURATION = 15000; // 15 seconds
+const CONFIRMATION_DURATION = 5000; // 5 seconds
 
 export function NudgePrompt({
   onOpen,
@@ -27,11 +30,14 @@ export function NudgePrompt({
   accentColor,
   buttonStyle,
 }: NudgePromptProps) {
+  const disableShowPrompts = useDisableShowPrompts();
   const [progress, setProgress] = useState(100);
+  const [showConfirmation, setShowConfirmation] = useState(false);
 
   useEffect(() => {
     if (!isVisible) {
       setProgress(100);
+      setShowConfirmation(false);
       return;
     }
 
@@ -49,13 +55,53 @@ export function NudgePrompt({
     return () => clearInterval(interval);
   }, [isVisible]);
 
-  if (!isVisible) return null;
+  useEffect(() => {
+    if (showConfirmation) {
+      const timer = setTimeout(() => {
+        setShowConfirmation(false);
+        onDismiss();
+      }, CONFIRMATION_DURATION);
+
+      return () => clearTimeout(timer);
+    }
+  }, [showConfirmation, onDismiss]);
+
+  const handleDontAskAgain = () => {
+    setLocalStorageItem("disableShowPrompts", "true");
+    emitLocalStorageChange("disableShowPrompts");
+    setShowConfirmation(true);
+  };
+
+  // Show confirmation even if disableShowPrompts is true (since we just set it)
+  if (showConfirmation) {
+    return (
+      <div
+        className={`fixed bottom-6 right-6 z-40 w-80 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden transform transition-all duration-300 ease-out ${isVisible ? "translate-y-0 opacity-100 scale-100" : "translate-y-4 opacity-0 scale-95"
+          }`}
+      >
+        <div className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
+              <Check className="h-5 w-5 text-green-600" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm text-gray-700 font-medium">
+                Got it, we will not ask again. Reactivate this at any time in the User Menu.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't show the prompt if disabled (unless we're showing confirmation)
+  if (!isVisible || disableShowPrompts) return null;
 
   return (
     <div
-      className={`fixed bottom-6 right-6 z-40 w-80 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden transform transition-all duration-300 ease-out ${
-        isVisible ? "translate-y-0 opacity-100 scale-100" : "translate-y-4 opacity-0 scale-95"
-      }`}
+      className={`fixed bottom-6 right-6 z-40 w-80 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden transform transition-all duration-300 ease-out ${isVisible ? "translate-y-0 opacity-100 scale-100" : "translate-y-4 opacity-0 scale-95"
+        }`}
     >
       {/* Progress bar at top showing time remaining */}
       <div className="h-1 bg-gray-100 w-full">
@@ -81,9 +127,20 @@ export function NudgePrompt({
 
         <p className="text-sm text-gray-600 mb-3">{description}</p>
 
-        <Button type="primary" block onClick={onOpen} style={buttonStyle}>
-          {buttonText}
-        </Button>
+        <div className="space-y-2">
+          <Button type="primary" block onClick={onOpen} style={buttonStyle}>
+            {buttonText}
+          </Button>
+          <Button
+            variant="outlined"
+            danger
+            block
+            onClick={handleDontAskAgain}
+            className="text-xs"
+          >
+            Don&apos;t ask me again
+          </Button>
+        </div>
       </div>
     </div>
   );

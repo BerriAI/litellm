@@ -22,6 +22,7 @@ from litellm.containers.main import (
     list_containers,
     retrieve_container,
 )
+from litellm.main import base_llm_http_handler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.router import Router
@@ -30,6 +31,21 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_client_cache():
+    """
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    # Clear again after test to avoid polluting other tests
+    if cache is not None:
+        cache.flush_cache()
 
 
 class TestContainerAPI:
@@ -48,9 +64,7 @@ class TestContainerAPI:
             name="Test Container"
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_create_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = create_container(
                 name="Test Container",
                 custom_llm_provider="openai"
@@ -74,9 +88,7 @@ class TestContainerAPI:
             name="Expiring Container"
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_create_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = create_container(
                 name="Expiring Container",
                 expires_after={"anchor": "last_active_at", "minutes": 30},
@@ -98,9 +110,7 @@ class TestContainerAPI:
             name="Container with Files"
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_create_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = create_container(
                 name="Container with Files",
                 file_ids=["file_123", "file_456"],
@@ -122,9 +132,7 @@ class TestContainerAPI:
             name="Async Test Container"
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_create_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = await acreate_container(
                 name="Async Test Container",
                 custom_llm_provider="openai"
@@ -156,9 +164,7 @@ class TestContainerAPI:
             has_more=False
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_list_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_list_handler', return_value=mock_response):
             response = await alist_containers(
                 custom_llm_provider="openai"
             )
@@ -193,9 +199,7 @@ class TestContainerAPI:
             name=container_name
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_retrieve_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_retrieve_handler', return_value=mock_response) as mock_method:
             # Act: Call retrieve_container
             response = retrieve_container(
                 container_id=container_id,
@@ -203,8 +207,8 @@ class TestContainerAPI:
             )
             
             # Assert: Verify the handler was called correctly
-            mock_handler.container_retrieve_handler.assert_called_once()
-            call_kwargs = mock_handler.container_retrieve_handler.call_args.kwargs
+            mock_method.assert_called_once()
+            call_kwargs = mock_method.call_args.kwargs
             assert call_kwargs["container_id"] == container_id
             
             # Assert: Verify response structure and content
@@ -230,9 +234,7 @@ class TestContainerAPI:
             name="Async Retrieved Container"
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_retrieve_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_retrieve_handler', return_value=mock_response):
             response = await aretrieve_container(
                 container_id=container_id,
                 custom_llm_provider="openai"
@@ -250,9 +252,7 @@ class TestContainerAPI:
             deleted=True
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_delete_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_delete_handler', return_value=mock_response):
             response = delete_container(
                 container_id=container_id,
                 custom_llm_provider="openai"
@@ -273,9 +273,7 @@ class TestContainerAPI:
             deleted=True
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_delete_handler.return_value = mock_response
-            
+        with patch.object(base_llm_http_handler, 'container_delete_handler', return_value=mock_response):
             response = await adelete_container(
                 container_id=container_id,
                 custom_llm_provider="openai"
@@ -287,9 +285,7 @@ class TestContainerAPI:
 
     def test_create_container_error_handling(self):
         """Test error handling in container creation."""
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_create_handler.side_effect = Exception("API Error")
-            
+        with patch.object(base_llm_http_handler, 'container_create_handler', side_effect=Exception("API Error")):
             with pytest.raises(Exception):
                 create_container(
                     name="Error Test Container",
@@ -298,21 +294,20 @@ class TestContainerAPI:
 
     def test_container_provider_config_retrieval(self):
         """Test that provider config is retrieved correctly."""
+        mock_response = ContainerObject(
+            id="cntr_config_test",
+            object="container",
+            created_at=1747857508,
+            status="running",
+            expires_after={"anchor": "last_active_at", "minutes": 20},
+            last_active_at=1747857508,
+            name="Config Test"
+        )
+        
         with patch('litellm.containers.main.ProviderConfigManager') as mock_config_manager:
             mock_config_manager.get_provider_container_config.return_value = OpenAIContainerConfig()
             
-            with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-                mock_response = ContainerObject(
-                    id="cntr_config_test",
-                    object="container",
-                    created_at=1747857508,
-                    status="running",
-                    expires_after={"anchor": "last_active_at", "minutes": 20},
-                    last_active_at=1747857508,
-                    name="Config Test"
-                )
-                mock_handler.container_create_handler.return_value = mock_response
-                
+            with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
                 response = create_container(
                     name="Config Test",
                     custom_llm_provider="openai"
@@ -340,9 +335,7 @@ class TestContainerAPI:
             name="Test Container"
         )
 
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_create_handler.return_value = mock_response
-
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             result = await router.acreate_container(
                 name="Test Container",
                 custom_llm_provider="openai"
