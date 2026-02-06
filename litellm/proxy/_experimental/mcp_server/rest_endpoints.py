@@ -78,6 +78,26 @@ if MCP_AVAILABLE:
             for tool in tools
         ]
 
+    def _extract_mcp_headers_from_request(
+        request: Request,
+        mcp_request_handler_cls,
+    ) -> tuple:
+        """
+        Extract MCP auth headers from HTTP request.
+
+        Returns:
+            Tuple of (mcp_auth_header, mcp_server_auth_headers, raw_headers)
+        """
+        headers = request.headers
+        raw_headers = dict(headers)
+        mcp_auth_header = mcp_request_handler_cls._get_mcp_auth_header_from_headers(
+            headers
+        )
+        mcp_server_auth_headers = (
+            mcp_request_handler_cls._get_mcp_server_auth_headers_from_headers(headers)
+        )
+        return mcp_auth_header, mcp_server_auth_headers, raw_headers
+
     async def _get_tools_for_single_server(
         server,
         server_auth_header,
@@ -304,21 +324,10 @@ if MCP_AVAILABLE:
                 proxy_config=proxy_config,
             )
 
-            # FIX: Extract MCP auth headers from request
-            # The UI sends bearer token in x-mcp-auth header and server-specific headers,
-            # but they weren't being extracted and passed to call_mcp_tool.
-            # This fix ensures auth headers are properly extracted from the HTTP request
-            # and passed through to the MCP server for authentication.
-            headers = request.headers
-            raw_headers_from_request = dict(headers)
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
-                headers
+            # Extract MCP auth headers from request and add to data dict
+            mcp_auth_header, mcp_server_auth_headers, raw_headers_from_request = (
+                _extract_mcp_headers_from_request(request, MCPRequestHandler)
             )
-            mcp_server_auth_headers = (
-                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-            )
-
-            # Add extracted headers to data dict to pass to call_mcp_tool
             if mcp_auth_header:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
