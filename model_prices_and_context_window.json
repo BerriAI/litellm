@@ -963,7 +963,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
-    "anthropic.claude-opus-4-6-v1:0": {
+    "anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.25e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1023,7 +1023,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "global.anthropic.claude-opus-4-6-v1:0": {
+    "global.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.25e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1143,7 +1143,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "eu.anthropic.claude-opus-4-6-v1:0": {
+    "eu.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1203,7 +1203,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "apac.anthropic.claude-opus-4-6-v1:0": {
+    "apac.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -7813,6 +7813,37 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
+    "us/claude-opus-4-6": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_above_1hr": 1.1e-05,
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 1.1e-06,
+        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_above_200k_tokens": 1.1e-05,
+        "litellm_provider": "anthropic",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "output_cost_per_token_above_200k_tokens": 4.125e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 346
+    },
     "claude-opus-4-6-20260205": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.25e-05,
@@ -7828,6 +7859,37 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
         "output_cost_per_token_above_200k_tokens": 3.75e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 346
+    },
+    "us/claude-opus-4-6-20260205": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_above_1hr": 1.1e-05,
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 1.1e-06,
+        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_above_200k_tokens": 1.1e-05,
+        "litellm_provider": "anthropic",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "output_cost_per_token_above_200k_tokens": 4.125e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,

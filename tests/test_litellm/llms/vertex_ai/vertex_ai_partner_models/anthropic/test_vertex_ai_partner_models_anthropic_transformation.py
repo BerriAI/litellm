@@ -6,6 +6,9 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../../../../..")
 )  # Adds the parent directory to the system path
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
@@ -73,6 +76,76 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
     # because Anthropic doesn't require it
     assert "anthropic-beta" not in headers_non_vertex or "web-search" not in headers_non_vertex.get("anthropic-beta", ""), \
         "anthropic-beta with web-search should not be present for non-Vertex requests"
+
+
+def test_vertex_ai_anthropic_context_management_compact_beta_header():
+    """Test that context_management with compact adds the correct beta header for Vertex AI"""
+    config = VertexAIAnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "context_management": {
+            "edits": [
+                {
+                    "type": "compact_20260112"
+                }
+            ]
+        },
+        "max_tokens": 100,
+        "is_vertex_request": True
+    }
+    
+    result = config.transform_request(
+        model="claude-opus-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify context_management is included
+    assert "context_management" in result
+    assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
+    
+    # Verify compact beta header is in anthropic_beta field
+    assert "anthropic_beta" in result
+    assert "compact-2026-01-12" in result["anthropic_beta"]
+
+
+def test_vertex_ai_anthropic_context_management_mixed_edits():
+    """Test that context_management with both compact and other edits adds both beta headers"""
+    config = VertexAIAnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "context_management": {
+            "edits": [
+                {
+                    "type": "compact_20260112"
+                },
+                {
+                    "type": "replace",
+                    "message_id": "msg_123",
+                    "content": "new content"
+                }
+            ]
+        },
+        "max_tokens": 100,
+        "is_vertex_request": True
+    }
+    
+    result = config.transform_request(
+        model="claude-opus-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify both beta headers are present
+    assert "anthropic_beta" in result
+    assert "compact-2026-01-12" in result["anthropic_beta"]
+    assert "context-management-2025-06-27" in result["anthropic_beta"]
 
 
 def test_vertex_ai_anthropic_structured_output_header_not_added():
@@ -276,8 +349,7 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
         "anthropic-beta": f"other-feature,{PROMPT_CACHING_BETA_HEADER},web-search-2025-03-05"
     }
 
-    config = VertexAIPartnerModelsAnthropicMessagesConfig()
-    config.remove_unsupported_beta(headers)
+    headers = update_headers_with_filtered_beta(headers, "vertex_ai")
 
     beta_header = headers.get("anthropic-beta")
     assert PROMPT_CACHING_BETA_HEADER not in (beta_header or ""), \
@@ -288,5 +360,5 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
         "Other non-excluded beta headers should remain"
     # If prompt-caching was the only value, header should be removed completely
     headers2 = {"anthropic-beta": PROMPT_CACHING_BETA_HEADER}
-    config.remove_unsupported_beta(headers2)
+    headers2 = update_headers_with_filtered_beta(headers2, "vertex_ai")
     assert "anthropic-beta" not in headers2, "Header should be removed if no supported values remain"

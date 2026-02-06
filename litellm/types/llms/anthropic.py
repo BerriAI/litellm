@@ -613,7 +613,7 @@ ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedr
 
 
 class AnthropicThinkingParam(TypedDict, total=False):
-    type: Literal["enabled"]
+    type: Literal["enabled", "adaptive"]
     budget_tokens: int
 
 
@@ -633,6 +633,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
     WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
+    COMPACT_2026_01_12 = "compact-2026-01-12"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
 
