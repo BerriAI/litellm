@@ -480,7 +480,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
             # Handle OpenAI-style web_search and web_search_preview tools
             # Transform them to Gemini's googleSearch tool
-            elif "type" in tool and tool["type"] in ("web_search", "web_search_preview"):
+            elif "type" in tool and tool["type"] in (
+                "web_search",
+                "web_search_preview",
+            ):
                 verbose_logger.info(
                     f"Gemini: Transforming OpenAI-style '{tool['type']}' tool to googleSearch"
                 )
@@ -1630,7 +1633,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 completion_image_tokens = response_tokens_details.image_tokens or 0
                 completion_audio_tokens = response_tokens_details.audio_tokens or 0
                 calculated_text_tokens = (
-                    candidates_token_count - completion_image_tokens - completion_audio_tokens
+                    candidates_token_count
+                    - completion_image_tokens
+                    - completion_audio_tokens
                 )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
@@ -2247,6 +2252,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
+
+            ## ADD USAGE METADATA ##
+            usage_metadata = completion_response.get("usageMetadata")
+            if usage_metadata:
+                model_response._hidden_params["vertex_ai_usage_metadata"] = (
+                    usage_metadata
+                )
 
         except Exception as e:
             raise VertexAIError(
@@ -2905,6 +2917,10 @@ class ModelResponseIterator:
                     cast(
                         PromptTokensDetailsWrapper, usage.prompt_tokens_details
                     ).web_search_requests = web_search_requests
+
+                model_response._hidden_params["vertex_ai_usage_metadata"] = (
+                    processed_chunk["usageMetadata"]
+                )
 
             setattr(model_response, "usage", usage)  # type: ignore
 
