@@ -7,6 +7,10 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.llms.bedrock.beta_headers_config import (
+    BedrockAPI,
+    get_bedrock_beta_filter,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -105,6 +109,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         _anthropic_request.pop("stream", None)
         # Bedrock Invoke doesn't support output_format parameter
         _anthropic_request.pop("output_format", None)
+        # Bedrock doesn't support context_management as a body param;
+        # the feature is enabled via the anthropic-beta header instead
+        _anthropic_request.pop("context_management", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 
@@ -132,25 +139,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
-        # Filter out beta headers that Bedrock Invoke doesn't support
+        # Filter beta headers using centralized whitelist with model-specific support
         # AWS Bedrock only supports a specific whitelist of beta flags
         # Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
-        BEDROCK_SUPPORTED_BETAS = {
-            "computer-use-2024-10-22",  # Legacy computer use
-            "computer-use-2025-01-24",  # Current computer use (Claude 3.7 Sonnet)
-            "token-efficient-tools-2025-02-19",  # Tool use (Claude 3.7+ and Claude 4+)
-            "interleaved-thinking-2025-05-14",  # Interleaved thinking (Claude 4+)
-            "output-128k-2025-02-19",  # 128K output tokens (Claude 3.7 Sonnet)
-            "dev-full-thinking-2025-05-14",  # Developer mode for raw thinking (Claude 4+)
-            "context-1m-2025-08-07",  # 1 million tokens (Claude Sonnet 4)
-            "context-management-2025-06-27",  # Context management (Claude Sonnet/Haiku 4.5)
-            "effort-2025-11-24",  # Effort parameter (Claude Opus 4.5)
-            "tool-search-tool-2025-10-19",  # Tool search (Claude Opus 4.5)
-            "tool-examples-2025-10-29",  # Tool use examples (Claude Opus 4.5)
-        }
-        
-        # Only keep beta headers that Bedrock supports
-        beta_set = {beta for beta in beta_set if beta in BEDROCK_SUPPORTED_BETAS}
+        beta_filter = get_bedrock_beta_filter(BedrockAPI.INVOKE_CHAT)
+        beta_list = beta_filter.filter_beta_headers(
+            list(beta_set), model, translate=False
+        )
+        beta_set = set(beta_list)
 
         if beta_set:
             _anthropic_request["anthropic_beta"] = list(beta_set)
