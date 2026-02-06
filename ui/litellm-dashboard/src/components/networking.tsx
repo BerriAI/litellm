@@ -83,7 +83,7 @@ const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
-  console.log = function () { };
+  console.log = function () {};
 }
 
 const getWindowLocation = () => {
@@ -2007,12 +2007,35 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
+export const modelInfoCall = async (
+  accessToken: string,
+  userID: string,
+  userRole: string,
+  page: number = 1,
+  size: number = 50,
+  search?: string,
+  modelId?: string,
+  teamId?: string,
+  sortBy?: string,
+  sortOrder?: string,
+) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId, sortBy, sortOrder);
+    console.log(
+      "modelInfoCall:",
+      accessToken,
+      userID,
+      userRole,
+      page,
+      size,
+      search,
+      modelId,
+      teamId,
+      sortBy,
+      sortOrder,
+    );
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
@@ -2116,6 +2139,10 @@ export const modelHubPublicModelsCall = async () => {
       "Content-Type": "application/json",
     },
   });
+  if (!response.ok) {
+    console.error(`modelHubPublicModelsCall failed with status ${response.status}`);
+    return [];
+  }
   return response.json();
 };
 
@@ -2127,6 +2154,10 @@ export const agentHubPublicModelsCall = async () => {
       "Content-Type": "application/json",
     },
   });
+  if (!response.ok) {
+    console.error(`agentHubPublicModelsCall failed with status ${response.status}`);
+    return [];
+  }
   return response.json();
 };
 
@@ -2138,6 +2169,10 @@ export const mcpHubPublicServersCall = async () => {
       "Content-Type": "application/json",
     },
   });
+  if (!response.ok) {
+    console.error(`mcpHubPublicServersCall failed with status ${response.status}`);
+    return [];
+  }
   return response.json();
 };
 
@@ -2472,7 +2507,7 @@ export const modelAvailableCall = async (
   teamID: string | null = null,
   include_model_access_groups: boolean = false,
   only_model_access_groups: boolean = false,
-  scope?: string
+  scope?: string,
 ) => {
   /**
    * Get all the models user has access to
@@ -5403,9 +5438,7 @@ export const getMCPSemanticFilterSettings = async (accessToken: string) => {
    * Get MCP semantic filter configuration
    */
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/get/mcp_semantic_filter_settings`
-      : `/get/mcp_semantic_filter_settings`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/mcp_semantic_filter_settings` : `/get/mcp_semantic_filter_settings`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -5429,10 +5462,7 @@ export const getMCPSemanticFilterSettings = async (accessToken: string) => {
   }
 };
 
-export const updateMCPSemanticFilterSettings = async (
-  accessToken: string,
-  settings: Record<string, any>
-) => {
+export const updateMCPSemanticFilterSettings = async (accessToken: string, settings: Record<string, any>) => {
   /**
    * Update MCP semantic filter settings
    * Settings will be applied across all pods within 10 seconds
@@ -5465,11 +5495,7 @@ export const updateMCPSemanticFilterSettings = async (
   }
 };
 
-export const testMCPSemanticFilter = async (
-  accessToken: string,
-  model: string,
-  query: string
-) => {
+export const testMCPSemanticFilter = async (accessToken: string, model: string, query: string) => {
   /**
    * Test MCP semantic filter by making a responses API call
    * Returns both the response data and headers containing filter information
@@ -5514,7 +5540,7 @@ export const testMCPSemanticFilter = async (
     }
 
     const data = await response.json();
-    
+
     // Return both data and headers
     return {
       data,
@@ -5774,7 +5800,9 @@ export const createPolicyAttachmentCall = async (accessToken: string, attachment
 
 export const deletePolicyAttachmentCall = async (accessToken: string, attachmentId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments/${attachmentId}` : `/policies/attachments/${attachmentId}`;
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/attachments/${attachmentId}`
+      : `/policies/attachments/${attachmentId}`;
     const response = await fetch(url, {
       method: "DELETE",
       headers: {
@@ -5800,7 +5828,9 @@ export const deletePolicyAttachmentCall = async (accessToken: string, attachment
 
 export const getResolvedGuardrails = async (accessToken: string, policyId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}/resolved-guardrails` : `/policies/${policyId}/resolved-guardrails`;
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/${policyId}/resolved-guardrails`
+      : `/policies/${policyId}/resolved-guardrails`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -7154,7 +7184,7 @@ export const ragIngestCall = async (
   vectorStoreId?: string,
   vectorStoreName?: string,
   vectorStoreDescription?: string,
-  providerSpecificParams?: Record<string, any>
+  providerSpecificParams?: Record<string, any>,
 ): Promise<any> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
@@ -7775,12 +7805,10 @@ export interface TestCustomCodeGuardrailResponse {
 
 export const testCustomCodeGuardrail = async (
   accessToken: string,
-  request: TestCustomCodeGuardrailRequest
+  request: TestCustomCodeGuardrailRequest,
 ): Promise<TestCustomCodeGuardrailResponse> => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/guardrails/test_custom_code`
-      : `/guardrails/test_custom_code`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/test_custom_code` : `/guardrails/test_custom_code`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -8916,9 +8944,7 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
 export const getClaudeCodeMarketplace = async () => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/claude-code/marketplace.json`
-      : `/claude-code/marketplace.json`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/marketplace.json` : `/claude-code/marketplace.json`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -8947,10 +8973,7 @@ export const getClaudeCodeMarketplace = async () => {
  * @param accessToken - Admin access token
  * @param enabledOnly - If true, only return enabled plugins (default: false)
  */
-export const getClaudeCodePluginsList = async (
-  accessToken: string,
-  enabledOnly: boolean = false
-) => {
+export const getClaudeCodePluginsList = async (accessToken: string, enabledOnly: boolean = false) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl
@@ -8985,10 +9008,7 @@ export const getClaudeCodePluginsList = async (
  * @param accessToken - Admin access token
  * @param pluginName - Name of the plugin
  */
-export const getClaudeCodePluginDetails = async (
-  accessToken: string,
-  pluginName: string
-) => {
+export const getClaudeCodePluginDetails = async (accessToken: string, pluginName: string) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl
@@ -9034,13 +9054,11 @@ export const registerClaudeCodePlugin = async (
     homepage?: string;
     keywords?: string[];
     category?: string;
-  }
+  },
 ) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/claude-code/plugins`
-      : `/claude-code/plugins`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/plugins` : `/claude-code/plugins`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -9071,10 +9089,7 @@ export const registerClaudeCodePlugin = async (
  * @param accessToken - Admin access token
  * @param pluginName - Name of the plugin to enable
  */
-export const enableClaudeCodePlugin = async (
-  accessToken: string,
-  pluginName: string
-) => {
+export const enableClaudeCodePlugin = async (accessToken: string, pluginName: string) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl
@@ -9109,10 +9124,7 @@ export const enableClaudeCodePlugin = async (
  * @param accessToken - Admin access token
  * @param pluginName - Name of the plugin to disable
  */
-export const disableClaudeCodePlugin = async (
-  accessToken: string,
-  pluginName: string
-) => {
+export const disableClaudeCodePlugin = async (accessToken: string, pluginName: string) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl
@@ -9147,10 +9159,7 @@ export const disableClaudeCodePlugin = async (
  * @param accessToken - Admin access token
  * @param pluginName - Name of the plugin to delete
  */
-export const deleteClaudeCodePlugin = async (
-  accessToken: string,
-  pluginName: string
-) => {
+export const deleteClaudeCodePlugin = async (accessToken: string, pluginName: string) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl
