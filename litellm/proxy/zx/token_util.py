@@ -92,7 +92,9 @@ async def create_or_get_user_key(
         include_team_keys=True,
         include_created_by_keys=True,
         sort_by=None,
-        sort_order="desc"
+        sort_order="desc",
+        expand=None,
+        status=None,
     )
     key_total_count = keys.get('total_count', 0) or 0
     if key_total_count > 1:
