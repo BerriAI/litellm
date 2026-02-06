@@ -352,6 +352,48 @@ def send_message(
         )
 
 
+def _build_streaming_logging_obj(
+    request: "SendStreamingMessageRequest",
+    agent_name: str,
+    agent_id: Optional[str],
+    litellm_params: Optional[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]],
+    proxy_server_request: Optional[Dict[str, Any]],
+) -> Logging:
+    """Build logging object for streaming A2A requests."""
+    start_time = datetime.datetime.now()
+    model = f"a2a_agent/{agent_name}"
+
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "streaming-request"}],
+        stream=False,
+        call_type="asend_message_streaming",
+        start_time=start_time,
+        litellm_call_id=str(request.id),
+        function_id=str(request.id),
+    )
+    logging_obj.model = model
+    logging_obj.custom_llm_provider = "a2a_agent"
+    logging_obj.model_call_details["model"] = model
+    logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
+    if agent_id:
+        logging_obj.model_call_details["agent_id"] = agent_id
+
+    _litellm_params = litellm_params.copy() if litellm_params else {}
+    if metadata:
+        _litellm_params["metadata"] = metadata
+    if proxy_server_request:
+        _litellm_params["proxy_server_request"] = proxy_server_request
+
+    logging_obj.litellm_params = _litellm_params
+    logging_obj.optional_params = _litellm_params
+    logging_obj.model_call_details["litellm_params"] = _litellm_params
+    logging_obj.model_call_details["metadata"] = metadata or {}
+
+    return logging_obj
+
+
 async def asend_message_streaming(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
@@ -455,38 +497,14 @@ async def asend_message_streaming(
     card_url = getattr(agent_card, "url", None) if agent_card else None
     agent_name = getattr(agent_card, "name", "unknown") if agent_card else "unknown"
 
-    # Track for logging
-    start_time = datetime.datetime.now()
-    model = f"a2a_agent/{agent_name}"
-
-    logging_obj = Logging(
-        model=model,
-        messages=[{"role": "user", "content": "streaming-request"}],
-        stream=False,  # complete response logging after stream ends
-        call_type="asend_message_streaming",
-        start_time=start_time,
-        litellm_call_id=str(request.id),
-        function_id=str(request.id),
+    logging_obj = _build_streaming_logging_obj(
+        request=request,
+        agent_name=agent_name,
+        agent_id=agent_id,
+        litellm_params=litellm_params,
+        metadata=metadata,
+        proxy_server_request=proxy_server_request,
     )
-    logging_obj.model = model
-    logging_obj.custom_llm_provider = "a2a_agent"
-    logging_obj.model_call_details["model"] = model
-    logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
-    if agent_id:
-        logging_obj.model_call_details["agent_id"] = agent_id
-
-    # Propagate litellm_params for spend logging (includes cost_per_query, etc.)
-    _litellm_params = litellm_params.copy() if litellm_params else {}
-    # Merge metadata into litellm_params.metadata (required for proxy cost tracking)
-    if metadata:
-        _litellm_params["metadata"] = metadata
-    if proxy_server_request:
-        _litellm_params["proxy_server_request"] = proxy_server_request
-
-    logging_obj.litellm_params = _litellm_params
-    logging_obj.optional_params = _litellm_params  # used by cost calc
-    logging_obj.model_call_details["litellm_params"] = _litellm_params
-    logging_obj.model_call_details["metadata"] = metadata or {}
 
     # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
     # Connection errors in streaming typically occur on first chunk iteration
