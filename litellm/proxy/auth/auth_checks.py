@@ -75,6 +75,23 @@ db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
+def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
+    """
+    Log a warning when budget lookup fails; cache will not be populated.
+
+    Adds a schema migration hint when the error appears schema-related.
+    """
+    err_str = str(error).lower()
+    hint = ""
+    if any(
+        x in err_str
+        for x in ("column", "schema", "does not exist", "prisma", "migrate")
+    ):
+        hint = " Run `prisma db push` or `prisma migrate deploy` to fix schema mismatches."
+    verbose_proxy_logger.error(
+        f"Budget lookup failed for {entity}; cache will not be populated. "
+        f"Each request will hit the database. Error: {error}.{hint}"
+    )
 
 def _is_model_cost_zero(
     model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
@@ -1208,6 +1225,7 @@ async def get_user_object(
 
         return _response
     except Exception as e:  # if user not in db
+        _log_budget_lookup_failure("user", e)
         raise ValueError(
             f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
         )
