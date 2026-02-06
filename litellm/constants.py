@@ -315,6 +315,13 @@ LOCALHOST_URL_PATTERNS: List[str] = [
     "0.0.0.0",
     "[::1]",  # IPv6 localhost
 ]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
