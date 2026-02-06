@@ -8,12 +8,13 @@ import useAuthorized from "./useAuthorized";
 // Unmock useAuthorized to test the actual implementation
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
-const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock, isJwtExpiredMock } = vi.hoisted(() => ({
+const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock, decodeTokenMock, checkTokenValidityMock } = vi.hoisted(() => ({
   replaceMock: vi.fn(),
   clearTokenCookiesMock: vi.fn(),
   getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
   getUiConfigMock: vi.fn(),
-  isJwtExpiredMock: vi.fn(),
+  decodeTokenMock: vi.fn(),
+  checkTokenValidityMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -43,7 +44,8 @@ vi.mock("@/utils/jwtUtils", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/jwtUtils")>();
   return {
     ...actual,
-    isJwtExpired: isJwtExpiredMock,
+    decodeToken: decodeTokenMock,
+    checkTokenValidity: checkTokenValidityMock,
   };
 });
 
@@ -77,7 +79,8 @@ describe("useAuthorized", () => {
     clearTokenCookiesMock.mockReset();
     getProxyBaseUrlMock.mockClear();
     getUiConfigMock.mockReset();
-    isJwtExpiredMock.mockReset();
+    decodeTokenMock.mockReset();
+    checkTokenValidityMock.mockReset();
     clearCookie();
   });
 
@@ -88,9 +91,8 @@ describe("useAuthorized", () => {
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
     });
-    isJwtExpiredMock.mockReturnValue(false);
-
-    const token = createJwt({
+    
+    const decodedPayload = {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
@@ -98,7 +100,12 @@ describe("useAuthorized", () => {
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
-    });
+    };
+    
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(true);
+
+    const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -126,6 +133,9 @@ describe("useAuthorized", () => {
       admin_ui_disabled: false,
     });
 
+    decodeTokenMock.mockReturnValue(null);
+    checkTokenValidityMock.mockReturnValue(false);
+
     document.cookie = "token=invalid-token; path=/;";
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -146,9 +156,8 @@ describe("useAuthorized", () => {
       auto_redirect_to_sso: false,
       admin_ui_disabled: true,
     });
-    isJwtExpiredMock.mockReturnValue(false);
 
-    const token = createJwt({
+    const decodedPayload = {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
@@ -156,7 +165,12 @@ describe("useAuthorized", () => {
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
-    });
+    };
+
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(true);
+
+    const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -178,6 +192,9 @@ describe("useAuthorized", () => {
       admin_ui_disabled: false,
     });
 
+    decodeTokenMock.mockReturnValue(null);
+    checkTokenValidityMock.mockReturnValue(false);
+
     // No token cookie set
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
@@ -196,14 +213,18 @@ describe("useAuthorized", () => {
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
     });
-    isJwtExpiredMock.mockReturnValue(true);
 
-    const token = createJwt({
+    const decodedPayload = {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
       user_role: "app_admin",
-    });
+    };
+
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(false);
+
+    const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -213,6 +234,6 @@ describe("useAuthorized", () => {
     });
 
     expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
-    expect(isJwtExpiredMock).toHaveBeenCalledWith(token);
+    expect(checkTokenValidityMock).toHaveBeenCalledWith(token);
   });
 });
