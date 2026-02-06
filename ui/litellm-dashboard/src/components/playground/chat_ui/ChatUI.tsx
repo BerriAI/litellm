@@ -1129,6 +1129,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServerId,
             selectedMCPDirectTool,
             mcpToolArguments,
+            selectedGuardrails.length > 0 ? { guardrails: selectedGuardrails } : undefined,
           );
           const resultText =
             result?.content?.length > 0

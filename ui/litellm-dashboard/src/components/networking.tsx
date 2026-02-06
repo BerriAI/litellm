@@ -6651,11 +6651,16 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
+export interface CallMCPToolOptions {
+  guardrails?: string[];
+}
+
 export const callMCPTool = async (
   accessToken: string,
   serverId: string,
   toolName: string,
   toolArguments: Record<string, any>,
+  options?: CallMCPToolOptions,
 ) => {
   try {
     // Construct base URL
@@ -6668,14 +6673,19 @@ export const callMCPTool = async (
       "Content-Type": "application/json",
     };
 
+    const body: Record<string, any> = {
+      server_id: serverId,
+      name: toolName,
+      arguments: toolArguments,
+    };
+    if (options?.guardrails && options.guardrails.length > 0) {
+      body.litellm_metadata = { guardrails: options.guardrails };
+    }
+
     const response = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        server_id: serverId,
-        name: toolName,
-        arguments: toolArguments,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
