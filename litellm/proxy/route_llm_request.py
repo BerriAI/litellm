@@ -210,18 +210,33 @@ async def route_request(
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
 
-    elif "user_config" in data:
-        router_config = data.pop("user_config")
+    elif "router_settings_override" in data:
+        # Apply per-request router settings overrides from key/team config
+        # Instead of creating a new Router (expensive), merge settings into kwargs
+        # The Router already supports per-request overrides for these settings
+        override_settings = data.pop("router_settings_override")
 
-        # Filter router_config to only include valid Router.__init__ arguments
-        # This prevents TypeError when invalid parameters are stored in the database
-        valid_args = litellm.Router.get_valid_args()
-        filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+        # Settings that the Router accepts as per-request kwargs
+        # These override the global router settings for this specific request
+        per_request_settings = [
+            "fallbacks",
+            "context_window_fallbacks",
+            "content_policy_fallbacks",
+            "num_retries",
+            "timeout",
+            "model_group_retry_policy",
+        ]
 
-        user_router = litellm.Router(**filtered_config)
-        ret_val = getattr(user_router, f"{route_type}")(**data)
-        user_router.discard()
-        return ret_val
+        # Merge override settings into data (only if not already set in request)
+        for key in per_request_settings:
+            if key in override_settings and key not in data:
+                data[key] = override_settings[key]
+
+        # Use main router with overridden kwargs
+        if llm_router is not None:
+            return getattr(llm_router, f"{route_type}")(**data)
+        else:
+            return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
         # Skip model-based routing for container operations
         if route_type in [

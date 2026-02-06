@@ -3249,17 +3249,18 @@ class ProxyConfig:
                 _model_list: list = self.decrypt_model_list_from_db(
                     new_models=models_list
                 )
-                if len(_model_list) > 0:
-                    verbose_proxy_logger.debug(f"_model_list: {_model_list}")
-                    llm_router = litellm.Router(
-                        model_list=_model_list,
-                        router_general_settings=RouterGeneralSettings(
-                            async_only_mode=True  # only init async clients
-                        ),
-                        search_tools=search_tools,
-                        ignore_invalid_deployments=True,
-                    )
-                    verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
+                # Create router even with empty model list to support search_tools
+                # Router can function with model_list=[] and only search_tools
+                verbose_proxy_logger.debug(f"_model_list: {_model_list}")
+                llm_router = litellm.Router(
+                    model_list=_model_list,
+                    router_general_settings=RouterGeneralSettings(
+                        async_only_mode=True  # only init async clients
+                    ),
+                    search_tools=search_tools,
+                    ignore_invalid_deployments=True,
+                )
+                verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
                 if search_tools is not None and llm_router is not None:
@@ -3401,6 +3402,86 @@ class ProxyConfig:
             )
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
+
+    @staticmethod
+    def _parse_router_settings_value(value: Any) -> Optional[dict]:
+        """
+        Parse a router_settings value that may be a dict or a JSON/YAML string.
+
+        Returns a non-empty dict if valid, otherwise None.
+        """
+        if value is None:
+            return None
+
+        parsed: Optional[dict] = None
+        if isinstance(value, dict):
+            parsed = value
+        elif isinstance(value, str):
+            import json
+
+            import yaml
+
+            try:
+                parsed = yaml.safe_load(value)
+            except (yaml.YAMLError, json.JSONDecodeError):
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+        return None
+
+    async def _get_hierarchical_router_settings(
+        self,
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+        prisma_client: Optional[PrismaClient],
+        proxy_logging_obj: Optional["ProxyLogging"] = None,
+    ) -> Optional[dict]:
+        """
+        Get router_settings in priority order: Key > Team
+
+        Uses the already-cached key object and the cached team lookup
+        (get_team_object) to avoid direct DB queries on the hot path.
+
+        Global router_settings are NOT looked up here — they are already
+        applied to the Router object at config-load / DB-sync time.
+
+        Returns:
+            dict: router_settings, or None if no settings found
+        """
+        # 1. Try key-level router_settings
+        # user_api_key_dict is already the cached/authenticated key object —
+        # no DB call needed.
+        if user_api_key_dict is not None:
+            key_settings = self._parse_router_settings_value(
+                getattr(user_api_key_dict, "router_settings", None)
+            )
+            if key_settings is not None:
+                return key_settings
+
+        # 2. Try team-level router_settings using cached team lookup
+        # get_team_object checks in-memory cache / Redis first, only falls
+        # back to DB on a cache miss.
+        if user_api_key_dict is not None and user_api_key_dict.team_id is not None:
+            try:
+                team_obj = await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                team_settings = self._parse_router_settings_value(
+                    getattr(team_obj, "router_settings", None)
+                )
+                if team_settings is not None:
+                    return team_settings
+            except Exception:
+                # If team lookup fails, no team-level settings available
+                pass
+
+        return None
 
     async def _add_router_settings_from_db_config(
         self,
