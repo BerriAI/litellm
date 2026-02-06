@@ -444,6 +444,7 @@ class OllamaChatConfig(BaseConfig):
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
+    seen_tool_calls: bool = False  # Track if tool_calls were seen in any chunk
 
     def _is_function_call_complete(self, function_args: Union[str, dict]) -> bool:
         if isinstance(function_args, dict):
@@ -489,6 +490,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             # process tool calls - if complete function arg - add id to tool call
             tool_calls = chunk["message"].get("tool_calls")
             if tool_calls is not None:
+                self.seen_tool_calls = True  # Remember we saw tool_calls
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
@@ -535,9 +537,9 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason", "stop")
-                # Override finish_reason when tool_calls are present
+                # Override finish_reason when tool_calls are present (in this or previous chunks)
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None:
+                if tool_calls is not None or self.seen_tool_calls:
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
