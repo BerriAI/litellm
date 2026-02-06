@@ -1264,7 +1264,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_calls: List[ChatCompletionToolCallChunk] = []
         web_search_results: Optional[List[Any]] = None
         tool_results: Optional[List[Any]] = None
-        context_management: Optional[List[Any]] = None
         compaction_blocks: Optional[List[Any]] = None
         for idx, content in enumerate(completion_response["content"]):
             if content["type"] == "text":
