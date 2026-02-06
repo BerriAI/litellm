@@ -1934,6 +1934,75 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
     assert usage.completion_tokens == 500
 
 
+# ============ Reasoning Effort Tests ============
+
+
+def test_reasoning_effort_maps_to_adaptive_thinking_for_opus_4_6():
+    """
+    Test that reasoning_effort maps to adaptive thinking type for Claude Opus 4.6.
+    
+    For Claude Opus 4.6, reasoning_effort should map to {"type": "adaptive"} 
+    regardless of the effort level specified.
+    """
+    config = AnthropicConfig()
+    
+    # Test with different reasoning_effort values - all should map to adaptive
+    for effort in ["low", "medium", "high", "minimal"]:
+        non_default_params = {"reasoning_effort": effort}
+        optional_params = {}
+        
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="claude-opus-4-6-20250514",
+            drop_params=False
+        )
+        
+        # Should map to adaptive thinking type
+        assert "thinking" in result
+        assert result["thinking"]["type"] == "adaptive"
+        # Should not have budget_tokens for adaptive type
+        assert "budget_tokens" not in result["thinking"]
+        # reasoning_effort should not be in the result (it's transformed to thinking)
+        assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
+    """
+    Test that reasoning_effort maps to budget-based thinking config for non-Opus 4.6 models.
+    
+    For models other than Claude Opus 4.6, reasoning_effort should map to 
+    thinking config with budget_tokens based on the effort level.
+    """
+    config = AnthropicConfig()
+    
+    # Test with Claude Sonnet 4.5 (non-Opus 4.6 model)
+    test_cases = [
+        ("low", 1024),      # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+        ("medium", 2048),   # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+        ("high", 4096),     # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+        ("minimal", 128),   # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+    ]
+    
+    for effort, expected_budget in test_cases:
+        non_default_params = {"reasoning_effort": effort}
+        optional_params = {}
+        
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="claude-sonnet-4-5-20250929",
+            drop_params=False
+        )
+        
+        # Should map to enabled thinking type with budget_tokens
+        assert "thinking" in result
+        assert result["thinking"]["type"] == "enabled"
+        assert result["thinking"]["budget_tokens"] == expected_budget
+        # reasoning_effort should not be in the result (it's transformed to thinking)
+        assert "reasoning_effort" not in result
+
+
 def test_code_execution_tool_results_extraction():
     """
     Test that code execution tool results (bash_code_execution_tool_result, 
