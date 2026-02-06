@@ -182,7 +182,7 @@ if MCP_AVAILABLE:
 
             # If server_id is specified, only query that specific server
             if server_id:
-                if server_id not in allowed_server_ids_set:
+                if server_id not in allowed_server_ids:
                     raise HTTPException(
                         status_code=403,
                         detail={
