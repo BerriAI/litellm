@@ -29,7 +29,6 @@ Example custom code (async with HTTP):
 """
 
 import asyncio
-import inspect
 import threading
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 
@@ -116,6 +115,9 @@ class CustomCodeGuardrail(CustomGuardrail):
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.logging_only,
         ]
 
         super().__init__(

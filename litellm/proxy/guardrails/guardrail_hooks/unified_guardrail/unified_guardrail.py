@@ -87,7 +87,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
                 return data
         except ValueError:
-
             return data  # handle unmapped call types
 
         endpoint_translation = endpoint_guardrail_translation_mappings[

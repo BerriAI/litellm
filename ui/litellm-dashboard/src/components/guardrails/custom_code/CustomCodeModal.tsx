@@ -137,6 +137,9 @@ const MODE_OPTIONS = [
   { value: "post_call", label: "post_call (Response)" },
   { value: "during_call", label: "during_call (Parallel)" },
   { value: "logging_only", label: "logging_only" },
+  { value: "pre_mcp_call", label: "pre_mcp_call (Before MCP Tool Call)" },
+  { value: "post_mcp_call", label: "post_mcp_call (After MCP Tool Call)" },
+  { value: "during_mcp_call", label: "during_mcp_call (During MCP Tool Call)" },
 ];
 
 // Data for editing an existing guardrail
@@ -144,7 +147,7 @@ export interface EditGuardrailData {
   guardrail_id: string;
   guardrail_name: string;
   litellm_params: {
-    mode?: string;
+    mode?: string | string[];
     default_on?: boolean;
     custom_code?: string;
     [key: string]: any;
@@ -169,7 +172,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
 }) => {
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
-  const [mode, setMode] = useState<string>("pre_call");
+  const [mode, setMode] = useState<string[]>(["pre_call"]);
   const [defaultOn, setDefaultOn] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
   const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
@@ -241,20 +244,27 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
     setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
+  // Normalize mode from API (string or string[]) to string[]
+  const normalizeMode = (m: string | string[] | undefined): string[] => {
+    if (m === undefined || m === null) return ["pre_call"];
+    if (Array.isArray(m)) return m.length ? m : ["pre_call"];
+    return [m];
+  };
+
   // Reset form when modal opens or editData changes
   useEffect(() => {
     if (visible) {
       if (editData) {
         // Edit mode: populate with existing data
         setGuardrailName(editData.guardrail_name || "");
-        setMode(editData.litellm_params?.mode || "pre_call");
+        setMode(normalizeMode(editData.litellm_params?.mode));
         setDefaultOn(editData.litellm_params?.default_on || false);
         setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
         setSelectedTemplate(""); // No template selected in edit mode
       } else {
         // Create mode: reset to defaults
         setGuardrailName("");
-        setMode("pre_call");
+        setMode(["pre_call"]);
         setDefaultOn(false);
         setSelectedTemplate("empty");
         setCode(CODE_TEMPLATES.empty.code);
@@ -319,7 +329,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
         if (guardrailName !== editData.guardrail_name) {
           updateData.guardrail_name = guardrailName;
         }
-        if (mode !== editData.litellm_params?.mode) {
+        const existingMode = normalizeMode(editData.litellm_params?.mode);
+        const modeChanged =
+          mode.length !== existingMode.length ||
+          mode.some((m, i) => m !== existingMode[i]);
+        if (modeChanged) {
           updateData.litellm_params.mode = mode;
         }
         if (defaultOn !== editData.litellm_params?.default_on) {
@@ -382,10 +396,20 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
         parsedInput.texts = [];
       }
 
+      // Use first request-like or response-like mode for test input_type
+      const requestModes = ["pre_call", "pre_mcp_call"];
+      const responseModes = ["post_call", "post_mcp_call"];
+      const testInputType: "request" | "response" =
+        mode.some((m) => requestModes.includes(m))
+          ? "request"
+          : mode.some((m) => responseModes.includes(m))
+            ? "response"
+            : "request";
+
       const response = await testCustomCodeGuardrail(accessToken, {
         custom_code: code,
         test_input: parsedInput,
-        input_type: mode as "request" | "response",
+        input_type: testInputType,
         request_data: {
           model: "test-model",
           metadata: {},
@@ -443,14 +467,16 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
               placeholder="e.g., block-pii-custom"
             />
           </div>
-          <div className="w-[180px]">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Mode</label>
+          <div className="w-[280px]">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Mode (can select multiple)</label>
             <Select
+              mode="multiple"
               value={mode}
               onChange={setMode}
               options={MODE_OPTIONS}
               className="w-full"
               size="middle"
+              placeholder="Select modes"
             />
           </div>
           <div className="w-[180px]">
