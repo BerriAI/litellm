@@ -241,4 +241,4 @@ We now have a concrete reproduction. To maximize the chance of fixing Zurich's p
 
 The issue was caused by hitting the database on every request when Prometheus was used as a callback. Commit `30534d7e82` fixes this by setting `check_db_only` to `False`.
 
-### Baseline latency spikes
+> It was hard to diagnose because Prometheus was catching database errors and only logging them at debug level. Fixed by commit `d37796662` (adds `_log_budget_lookup_failure` to surface errors). This error is very important—it stops the cache from working properly.
