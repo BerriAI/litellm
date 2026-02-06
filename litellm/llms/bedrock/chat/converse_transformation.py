@@ -11,6 +11,9 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import (
+    filter_and_transform_beta_headers,
+)
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
@@ -30,8 +33,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
-
-from ..common_utils import is_claude_4_5_on_bedrock
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -68,6 +69,7 @@ from ..common_utils import (
     BedrockModelInfo,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
+    is_claude_4_5_on_bedrock,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -83,6 +85,7 @@ BEDROCK_COMPUTER_USE_TOOLS = [
 UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
     "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
     "prompt-caching",  # Prompt caching not supported in Converse API
+    "compact-2026-01-12", # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
 
@@ -431,7 +434,7 @@ class AmazonConverseConfig(BaseConfig):
         else:
             # Anthropic and other models: convert to thinking parameter
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort
+                reasoning_effort=reasoning_effort, model=model
             )
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -616,37 +619,6 @@ class AmazonConverseConfig(BaseConfig):
             transformed_tools.append(transformed_tool)
 
         return transformed_tools
-
-    def _filter_unsupported_beta_headers_for_bedrock(
-        self, model: str, beta_list: list
-    ) -> list:
-        """
-        Remove beta headers that are not supported on Bedrock Converse API for the given model.
-
-        Extended thinking beta headers are only supported on specific Claude 4+ models.
-        Some beta headers are universally unsupported on Bedrock Converse API.
-
-        Args:
-            model: The model name
-            beta_list: The list of beta headers to filter
-
-        Returns:
-            Filtered list of beta headers
-        """
-        filtered_betas = []
-
-        # 1. Filter out beta headers that are universally unsupported on Bedrock Converse
-        for beta in beta_list:
-            should_keep = True
-            for unsupported_pattern in UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS:
-                if unsupported_pattern in beta.lower():
-                    should_keep = False
-                    break
-
-            if should_keep:
-                filtered_betas.append(beta)
-
-        return filtered_betas
 
     def _separate_computer_use_tools(
         self, tools: List[OpenAIChatCompletionToolParam], model: str
@@ -1124,7 +1096,28 @@ class AmazonConverseConfig(BaseConfig):
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
-                anthropic_beta_list.append("computer-use-2024-10-22")
+                # Determine the correct computer-use beta header based on model
+                # "computer-use-2025-11-24" for Claude Opus 4.6, Claude Opus 4.5
+                # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
+                # "computer-use-2024-10-22" for older models
+                model_lower = model.lower()
+                if "opus-4.6" in model_lower or "opus_4.6" in model_lower or "opus-4-6" in model_lower or "opus_4_6" in model_lower:
+                    computer_use_header = "computer-use-2025-11-24"
+                elif "opus-4.5" in model_lower or "opus_4.5" in model_lower or "opus-4-5" in model_lower or "opus_4_5" in model_lower:
+                    computer_use_header = "computer-use-2025-11-24"
+                elif any(pattern in model_lower for pattern in [
+                    "sonnet-4.5", "sonnet_4.5", "sonnet-4-5", "sonnet_4_5",
+                    "haiku-4.5", "haiku_4.5", "haiku-4-5", "haiku_4_5",
+                    "opus-4.1", "opus_4.1", "opus-4-1", "opus_4_1",
+                    "sonnet-4", "sonnet_4",
+                    "opus-4", "opus_4",
+                    "sonnet-3.7", "sonnet_3.7", "sonnet-3-7", "sonnet_3_7"
+                ]):
+                    computer_use_header = "computer-use-2025-01-24"
+                else:
+                    computer_use_header = "computer-use-2024-10-22"
+                
+                anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools = self._transform_computer_use_tools(
                     computer_use_tools
@@ -1150,13 +1143,13 @@ class AmazonConverseConfig(BaseConfig):
                     unique_betas.append(beta)
                     seen.add(beta)
 
-            # Filter out unsupported beta headers for Bedrock Converse API
-            filtered_betas = self._filter_unsupported_beta_headers_for_bedrock(
-                model=model,
-                beta_list=unique_betas,
+            filtered_betas = filter_and_transform_beta_headers(
+                beta_headers=unique_betas,
+                provider="bedrock_converse",
             )
-
-            additional_request_params["anthropic_beta"] = filtered_betas
+            
+            if filtered_betas:
+                additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 

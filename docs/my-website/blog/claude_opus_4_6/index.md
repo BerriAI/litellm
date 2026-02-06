@@ -3,6 +3,10 @@ slug: claude_opus_4_6
 title: "Day 0 Support: Claude Opus 4.6"
 date: 2026-02-05T10:00:00
 authors:
+  - name: Sameer Kankute
+    title: SWE @ LiteLLM (LLM Translation)
+    url: https://www.linkedin.com/in/sameer-kankute/
+    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
   - name: Ishaan Jaff
     title: "CTO, LiteLLM"
     url: https://www.linkedin.com/in/reffajnaahsi/
@@ -219,6 +223,156 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
-## More Features Coming Soon
+## Compaction
 
-We're actively working on supporting new features for Claude Opus 4.6. Stay tuned for updates!
+Litellm supports enabling compaction for the new claude-opus-4-6.
+
+### Enabling Compaction
+
+To enable compaction, add the `context_management` parameter with the `compact_20260112` edit type:
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather in San Francisco?"
+    }
+  ],
+  "context_management": {
+    "edits": [
+      {
+        "type": "compact_20260112"
+      }
+    ]
+  },
+  "max_tokens": 100
+}'
+```
+All the parameters supported for context_management by anthropic are supported and can be directly added. Litellm automatically adds the `compact-2026-01-12` beta header in the request.
+
+
+### Response with Compaction Block
+
+The response will include the compaction summary in `provider_specific_fields.compaction_blocks`:
+
+```json
+{
+  "id": "chatcmpl-a6c105a3-4b25-419e-9551-c800633b6cb2",
+  "created": 1770357619,
+  "model": "claude-opus-4-6",
+  "object": "chat.completion",
+  "choices": [
+    {
+      "finish_reason": "length",
+      "index": 0,
+      "message": {
+        "content": "I don't have access to real-time data, so I can't provide the current weather in San Francisco. To get up-to-date weather information, I'd recommend checking:\n\n- **Weather websites** like weather.com, accuweather.com, or wunderground.com\n- **Search engines** – just Google \"San Francisco weather\"\n- **Weather apps** on your phone (e.g., Apple Weather, Google Weather)\n- **National",
+        "role": "assistant",
+        "provider_specific_fields": {
+          "compaction_blocks": [
+            {
+              "type": "compaction",
+              "content": "Summary of the conversation: The user requested help building a web scraper..."
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "usage": {
+    "completion_tokens": 100,
+    "prompt_tokens": 86,
+    "total_tokens": 186
+  }
+}
+```
+
+### Using Compaction Blocks in Follow-up Requests
+
+To continue the conversation with compaction, include the compaction block in the assistant message's `provider_specific_fields`:
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "How can I build a web scraper?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Certainly! To build a basic web scraper, you'll typically use a programming language like Python along with libraries such as `requests` (for fetching web pages) and `BeautifulSoup` (for parsing HTML). Here's a basic example:\n\n```python\nimport requests\nfrom bs4 import BeautifulSoup\n\nurl = 'https://example.com'\nresponse = requests.get(url)\nsoup = BeautifulSoup(response.text, 'html.parser')\n\n# Extract and print all text\ntext = soup.get_text()\nprint(text)\n```\n\nLet me know what you're interested in scraping or if you need help with a specific website!"
+        }
+      ],
+      "provider_specific_fields": {
+        "compaction_blocks": [
+          {
+            "type": "compaction",
+            "content": "Summary of the conversation: The user asked how to build a web scraper, and the assistant gave an overview using Python with requests and BeautifulSoup."
+          }
+        ]
+      }
+    },
+    {
+      "role": "user",
+      "content": "How do I use it to scrape product prices?"
+    }
+  ],
+  "context_management": {
+    "edits": [
+      {
+        "type": "compact_20260112"
+      }
+    ]
+  },
+  "max_tokens": 100
+}'
+```
+
+### Streaming Support
+
+Compaction blocks are also supported in streaming mode. You'll receive:
+- `compaction_start` event when a compaction block begins
+- `compaction_delta` events with the compaction content
+- The accumulated `compaction_blocks` in `provider_specific_fields`
+
+
+## Effort Levels
+
+Four effort levels available: `low`, `medium`, `high` (default), and `max`. Pass directly via the `effort` parameter:
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain quantum computing"
+    }
+  ],
+  "effort": "max"
+}'
+```
+
+## 1M Token Context (Beta)
+
+Opus 4.6 supports 1M token context. Premium pricing applies for prompts exceeding 200k tokens ($10/$37.50 per million input/output tokens). LiteLLM supports cost calculations for 1M token contexts.
+
+## US-Only Inference
+
+Available at 1.1× token pricing. LiteLLM supports this pricing model.
+
