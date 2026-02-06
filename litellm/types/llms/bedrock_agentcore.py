@@ -4,9 +4,9 @@ Type definitions for AWS Bedrock AgentCore API.
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgentRuntime.html
 """
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from typing_extensions import Literal, TypedDict
+from typing_extensions import Literal, Required, TypedDict
 
 
 # Request Types
@@ -14,6 +14,21 @@ class AgentCoreRequestPayload(TypedDict):
     """Payload for AgentCore request."""
 
     prompt: str
+
+
+# Reasoning/Thinking Types (from Strands SDK streaming events)
+class AgentCoreReasoningTextBlock(TypedDict, total=False):
+    """Reasoning text block with optional signature."""
+
+    text: Required[str]
+    signature: str
+
+
+class AgentCoreReasoningContentBlock(TypedDict, total=False):
+    """Reasoning content block - can contain either reasoning text or redacted content."""
+
+    reasoningText: AgentCoreReasoningTextBlock
+    redactedContent: str
 
 
 class AgentCoreRequest(TypedDict, total=False):
@@ -132,4 +147,5 @@ class AgentCoreParsedResponse(TypedDict):
     content: str
     usage: Optional[AgentCoreUsage]
     final_message: Optional[AgentCoreMessage]
+    reasoning_content_blocks: Optional[List[AgentCoreReasoningContentBlock]]
 

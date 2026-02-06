@@ -519,3 +519,4 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         assert "gemini-3-pro" in target_url, \
             f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
 
+
