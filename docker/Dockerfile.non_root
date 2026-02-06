@@ -47,7 +47,6 @@ RUN mkdir -p /var/lib/litellm/ui && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
     fi && \
-    rm -f package-lock.json && \
     npm install --legacy-peer-deps && \
     npm run build && \
     cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \

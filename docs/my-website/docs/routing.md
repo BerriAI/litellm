@@ -1588,11 +1588,13 @@ Get a slack webhook url from https://api.slack.com/messaging/webhooks
 Initialize an `AlertingConfig` and pass it to `litellm.Router`. The following code will trigger an alert because `api_key=bad-key` which is invalid
 
 ```python
-from litellm.router import AlertingConfig
 import litellm
+from litellm.router import Router
+from litellm.types.router import AlertingConfig
 import os
+import asyncio
 
-router = litellm.Router(
+router = Router(
 	model_list=[
 		{
 			"model_name": "gpt-3.5-turbo",
@@ -1603,17 +1605,28 @@ router = litellm.Router(
 		}
 	],
 	alerting_config= AlertingConfig(
-		alerting_threshold=10,                        # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
-		webhook_url= os.getenv("SLACK_WEBHOOK_URL")   # webhook you want to send alerts to
+		alerting_threshold=10,
+		webhook_url= "https:/..."
 	),
 )
-try:
-	await router.acompletion(
-		model="gpt-3.5-turbo",
-		messages=[{"role": "user", "content": "Hey, how's it going?"}],
-	)
-except:
-	pass
+
+async def main():
+	print(f"\n=== Configuration ===")
+	print(f"Slack logger exists: {router.slack_alerting_logger is not None}")
+	
+	try:
+		await router.acompletion(
+			model="gpt-3.5-turbo",
+			messages=[{"role": "user", "content": "Hey, how's it going?"}],
+		)
+	except Exception as e:
+		print(f"\n=== Exception caught ===")
+		print(f"Waiting 10 seconds for alerts to be sent via periodic flush...")
+		await asyncio.sleep(10)
+		print(f"\n=== After waiting ===")
+		print(f"Alert should have been sent to Slack!")
+
+asyncio.run(main())
 ```
 
 ## Track cost for Azure Deployments

@@ -1018,7 +1018,7 @@ const Teams: React.FC<TeamProps> = ({
           {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Modal
               title="Create Team"
-              visible={isTeamModalVisible}
+              open={isTeamModalVisible}
               width={1000}
               footer={null}
               onOk={handleOk}

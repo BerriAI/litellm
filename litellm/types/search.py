@@ -60,6 +60,7 @@ class SearchToolInfoResponse(TypedDict, total=False):
     search_tool_info: Optional[dict]
     created_at: Optional[str]
     updated_at: Optional[str]
+    is_from_config: Optional[bool]  # True if this tool is defined in config file, False if from DB
 
 
 class ListSearchToolsResponse(TypedDict):

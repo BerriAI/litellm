@@ -976,6 +976,9 @@ class JWTAuthManager:
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                         )
+                        verbose_proxy_logger.debug(
+                            f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
+                        )
                         if is_allowed:
                             return team_id, team_object
             except Exception:

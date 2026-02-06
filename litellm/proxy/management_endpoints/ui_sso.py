@@ -326,6 +326,7 @@ def generic_response_convertor(
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
     role_mappings: Optional["RoleMappings"] = None,
+    team_mappings: Optional["TeamMappings"] = None,
 ) -> CustomOpenID:
     generic_user_id_attribute_name = os.getenv(
         "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
@@ -359,8 +360,20 @@ def generic_response_convertor(
         team_ids = sso_jwt_handler.get_team_ids_from_jwt(cast(dict, response))
         all_teams.extend(team_ids)
 
-    team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
-    all_teams.extend(team_ids)
+    if team_mappings is not None and team_mappings.team_ids_jwt_field is not None:
+        team_ids_from_db_mapping: Optional[List[str]] = get_nested_value(
+            data=cast(dict, response),
+            key_path=team_mappings.team_ids_jwt_field,
+            default=[],
+        )
+        if team_ids_from_db_mapping:
+            all_teams.extend(team_ids_from_db_mapping)
+            verbose_proxy_logger.debug(
+                f"Loaded team_ids from DB team_mappings.team_ids_jwt_field='{team_mappings.team_ids_jwt_field}': {team_ids_from_db_mapping}"
+            )
+    else:
+        team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        all_teams.extend(team_ids)
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
@@ -484,6 +497,43 @@ def _setup_generic_sso_env_vars(
     )
 
 
+async def _setup_team_mappings() -> Optional["TeamMappings"]:
+    """Setup team mappings from SSO database settings."""
+    team_mappings: Optional["TeamMappings"] = None
+    try:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+
+        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+            where={"id": "sso_config"}
+        )
+
+        if sso_db_record and sso_db_record.sso_settings:
+            sso_settings_dict = dict(sso_db_record.sso_settings)
+            team_mappings_data = sso_settings_dict.get("team_mappings")
+
+            if team_mappings_data:
+                from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
+                if isinstance(team_mappings_data, dict):
+                    team_mappings = TeamMappings(**team_mappings_data)
+                elif isinstance(team_mappings_data, TeamMappings):
+                    team_mappings = team_mappings_data
+
+                if team_mappings and team_mappings.team_ids_jwt_field:
+                    verbose_proxy_logger.debug(
+                        f"Loaded team_mappings with team_ids_jwt_field: '{team_mappings.team_ids_jwt_field}'"
+                    )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Could not load team_mappings from database: {e}. Continuing with config-based team mapping."
+        )
+
+    return team_mappings
+
+
 async def _setup_role_mappings() -> Optional["RoleMappings"]:
     """Setup role mappings from SSO database settings."""
     role_mappings: Optional["RoleMappings"] = None
@@ -494,7 +544,6 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
             "Prisma client is None, connect a database to your proxy"
         )
 
-        # Get SSO config from dedicated table
         sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
             where={"id": "sso_config"}
         )
@@ -515,7 +564,6 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                         f"Loaded role_mappings for provider '{role_mappings.provider}'"
                     )
     except Exception as e:
-        # If we can't load role_mappings, continue with existing logic
         verbose_proxy_logger.debug(
             f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
         )
@@ -590,8 +638,8 @@ async def get_generic_sso_response(
         userinfo_endpoint=generic_userinfo_endpoint,
     )
 
-    # Get role_mappings from SSO settings if available
     role_mappings = await _setup_role_mappings()
+    team_mappings = await _setup_team_mappings()
 
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
@@ -601,6 +649,7 @@ async def get_generic_sso_response(
             jwt_handler=jwt_handler,
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
+            team_mappings=team_mappings,
         )
 
     SSOProvider = create_provider(

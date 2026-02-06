@@ -228,6 +228,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
     KEY_BULK_UPDATE = "/key/bulk_update"
+    KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -987,6 +988,10 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     new_master_key: Optional[str] = None
 
 
+class ResetSpendRequest(LiteLLMPydanticObjectBase):
+    reset_to: float
+
+
 class KeyRequest(LiteLLMPydanticObjectBase):
     keys: Optional[List[str]] = None
     key_aliases: Optional[List[str]] = None
@@ -1483,6 +1488,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
     # Budget fields
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     budget_duration: Optional[str] = None
 
     models: list = []
@@ -1554,6 +1560,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
@@ -2155,10 +2162,6 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
-    router_settings: Optional[
-        Dict
-    ] = None  # Router settings for this key (Key > Team > Global precedence)
-
     model_config = ConfigDict(protected_namespaces=())
 
 
@@ -2187,6 +2190,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
+    team_soft_budget: Optional[float] = None
     team_models: List = []
     team_blocked: bool = False
     soft_budget: Optional[float] = None
@@ -2645,6 +2649,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
     event_group: Litellm_EntityType
+    alert_emails: Optional[List[str]] = Field(
+        default=None,
+        description="Additional email addresses to send alerts to (e.g., from team metadata)",
+    )
 
 
 class WebhookEvent(CallInfo):
@@ -3672,7 +3680,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[str] = ["openai_routes", "info_routes"]
+    team_allowed_routes: List[str] = ["openai_routes", "info_routes", "mcp_routes"]
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",

@@ -298,7 +298,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         if "reasoning_effort" in non_default_params and "claude" in model:
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                non_default_params.get("reasoning_effort")
+                reasoning_effort=non_default_params.get("reasoning_effort"),
+                model=model
             )
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens

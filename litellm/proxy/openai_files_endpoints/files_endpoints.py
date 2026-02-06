@@ -1101,6 +1101,7 @@ async def delete_file(
                 **data_without_file_id,
             )
         else:
+            data.pop("file_id", None)
             response = await litellm.afile_delete(
                 custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
             )

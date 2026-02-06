@@ -12,6 +12,11 @@ else:
     LitellmRouter = Any
 
 
+def _is_a2a_agent_model(model_name: Any) -> bool:
+    """Check if the model name is for an A2A agent (a2a/ prefix)."""
+    return isinstance(model_name, str) and model_name.startswith("a2a/")
+
+
 ROUTE_ENDPOINT_MAPPING = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -92,10 +97,18 @@ def add_shared_session_to_data(data: dict) -> None:
         data: Dictionary to add the shared session to
     """
     try:
+        from litellm._logging import verbose_proxy_logger
         from litellm.proxy.proxy_server import shared_aiohttp_session
 
         if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
             data["shared_session"] = shared_aiohttp_session
+            verbose_proxy_logger.info(
+                f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(shared_aiohttp_session)})"
+            )
+        else:
+            verbose_proxy_logger.info(
+                "SESSION REUSE: No shared session available for this request"
+            )
     except Exception:
         # Silently continue without session reuse if import fails or session unavailable
         pass
@@ -337,6 +350,15 @@ async def route_request(
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**data)
+            elif _is_a2a_agent_model(data.get("model", "")):
+                from litellm.proxy.agent_endpoints.a2a_routing import (
+                    route_a2a_agent_request,
+                )
+                
+                result = route_a2a_agent_request(data, route_type)
+                if result is not None:
+                    return result
+                # Fall through to raise exception below if result is None
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)

@@ -79,6 +79,7 @@ const sidebars = {
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
+          "proxy/guardrails/custom_code_guardrail",
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
           "proxy/guardrails/zscaler_ai_guard",
@@ -128,6 +129,7 @@ const sidebars = {
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
             "tutorials/claude_code_plugin_marketplace",
+            "tutorials/claude_code_beta_headers",
           ]
         },
         "tutorials/opencode_integration",
@@ -150,7 +152,9 @@ const sidebars = {
       },
       items: [
         "tutorials/claude_agent_sdk",
+        "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
+        "tutorials/livekit_xai_realtime",
       ]
     },
 
@@ -442,6 +446,7 @@ const sidebars = {
           label: "Spend Tracking",
           items: [
             "proxy/cost_tracking",
+            "proxy/request_tags",
             "proxy/custom_pricing",
             "proxy/pricing_calculator",
             "proxy/provider_margins",
@@ -468,6 +473,7 @@ const sidebars = {
           label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
+            "a2a_invoking_agents",
             "a2a_cost_tracking",
             "a2a_agent_permissions"
           ],
@@ -537,6 +543,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",
             "mcp_guardrail",
@@ -715,6 +722,7 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
+            "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
         "providers/bedrock_vector_store",
       ]
@@ -847,7 +855,14 @@ const sidebars = {
             "providers/watsonx/audio_transcription",
           ]
         },
-        "providers/xai",
+        {
+          type: "category",
+          label: "xAI",
+          items: [
+            "providers/xai",
+            "providers/xai_realtime",
+          ]
+        },
         "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
@@ -1041,6 +1056,7 @@ const sidebars = {
       type: "category",
       label: "Issue Reporting",
       items: [
+        "troubleshoot/prisma_migrations",
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
         "troubleshoot/spend_queue_warnings",
