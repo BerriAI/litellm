@@ -16543,7 +16543,6 @@
         "max_tokens": 8191,
         "mode": "embedding"
     },
-    
     "chatgpt/gpt-5.2-codex": {
         "litellm_provider": "chatgpt",
         "max_input_tokens": 128000,
