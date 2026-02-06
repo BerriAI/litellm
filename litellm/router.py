@@ -5305,7 +5305,7 @@ class Router:
                     return
                 else:
                     deployment_model_info = self.get_router_model_info(
-                        deployment=deployment_info.model_dump(),
+                        deployment=deployment_info,
                         received_model_name=model_group,
                     )
                     # get tpm/rpm from deployment info
@@ -6557,7 +6557,7 @@ class Router:
 
     @overload
     def get_router_model_info(
-        self, deployment: dict, received_model_name: str, id: None = None
+        self, deployment: Union[dict, "Deployment"], received_model_name: str, id: None = None
     ) -> ModelMapInfo:
         pass
 
@@ -6569,7 +6569,7 @@ class Router:
 
     def get_router_model_info(
         self,
-        deployment: Optional[dict],
+        deployment: Optional[Union[dict, "Deployment"]],
         received_model_name: str,
         id: Optional[str] = None,
     ) -> ModelMapInfo:
@@ -6589,7 +6589,7 @@ class Router:
         if id is not None:
             _deployment = self.get_deployment(model_id=id)
             if _deployment is not None:
-                deployment = _deployment.model_dump(exclude_none=True)
+                deployment = _deployment
 
         if deployment is None:
             raise ValueError("Deployment not found")
@@ -6601,10 +6601,22 @@ class Router:
 
         model = base_model
 
-        ## GET PROVIDER
+        ## GET PROVIDER - reuse LiteLLM_Params if already constructed
+        litellm_params_data = deployment.get("litellm_params")
+        litellm_params: LiteLLM_Params
+        if isinstance(litellm_params_data, LiteLLM_Params):
+            litellm_params = litellm_params_data
+        elif isinstance(litellm_params_data, dict) and "model" in litellm_params_data:
+            litellm_params = LiteLLM_Params(**litellm_params_data)
+        else:
+            raise ValueError(
+                f"Deployment missing valid litellm_params. "
+                f"Got: {type(litellm_params_data).__name__}, "
+                f"deployment_id: {deployment.get('model_info', {}).get('id', 'unknown')}"
+            )
         _model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=deployment.get("litellm_params", {}).get("model", ""),
-            litellm_params=LiteLLM_Params(**deployment.get("litellm_params", {})),
+            model=litellm_params.model,
+            litellm_params=litellm_params,
         )
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
