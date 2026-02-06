@@ -1,29 +1,24 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { App } from "antd";
+import { notification } from "antd";
 import { setNotificationInstance } from "@/components/molecules/notifications_manager";
 
-// Inner component to use the hook
-const AntdAppInit = () => {
-  const { notification } = App.useApp();
+export default function AntdGlobalProvider({ children }: { children: React.ReactNode }) {
+  const [api, contextHolder] = notification.useNotification();
   const initialized = useRef(false);
 
   useEffect(() => {
     if (!initialized.current) {
-      setNotificationInstance(notification);
+      setNotificationInstance(api);
       initialized.current = true;
     }
-  }, [notification]);
+  }, [api]);
 
-  return null;
-};
-
-export default function AntdGlobalProvider({ children }: { children: React.ReactNode }) {
   return (
-    <App>
-      <AntdAppInit />
+    <>
+      {contextHolder}
       {children}
-    </App>
+    </>
   );
 }
