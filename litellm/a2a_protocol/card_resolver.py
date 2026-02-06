@@ -1,7 +1,8 @@
 """
 Custom A2A Card Resolver for LiteLLM.
 
-Extends the A2A SDK's card resolver to support multiple well-known paths.
+Extends the A2A SDK's card resolver to support multiple well-known paths
+and fixes agent card URL issues where the card contains internal/localhost URLs.
 """
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -26,14 +27,79 @@ except ImportError:
     pass
 
 
+def _is_localhost_or_internal_url(url: str) -> bool:
+    """
+    Check if a URL is a localhost or internal URL that should be replaced.
+    
+    Args:
+        url: The URL to check
+        
+    Returns:
+        True if the URL is localhost/internal and should be replaced
+    """
+    if not url:
+        return False
+    
+    url_lower = url.lower()
+    
+    # Check for localhost variants
+    localhost_patterns = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "[::1]",  # IPv6 localhost
+    ]
+    
+    for pattern in localhost_patterns:
+        if pattern in url_lower:
+            return True
+    
+    return False
+
+
 class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
     """
     Custom A2A card resolver that supports multiple well-known paths.
     
-    Extends the base A2ACardResolver to try both:
-    - /.well-known/agent-card.json (standard)
-    - /.well-known/agent.json (previous/alternative)
+    Extends the base A2ACardResolver to:
+    - Try both /.well-known/agent-card.json (standard) and /.well-known/agent.json (previous/alternative)
+    - Fix agent card URLs that contain localhost/internal addresses by replacing them with the original base_url
+    
+    This fixes a common issue where agent cards are deployed with internal URLs
+    (e.g., "http://0.0.0.0:8001/") that don't work when accessed from external clients.
     """
+    
+    def _fix_agent_card_url(self, agent_card: "AgentCard") -> "AgentCard":
+        """
+        Fix the agent card URL if it contains a localhost/internal address.
+        
+        Many A2A agents are deployed with agent cards that contain internal URLs
+        like "http://0.0.0.0:8001/" or "http://localhost:8000/". This method
+        replaces such URLs with the original base_url used to fetch the card.
+        
+        Args:
+            agent_card: The agent card to fix
+            
+        Returns:
+            The agent card with the URL fixed if necessary
+        """
+        card_url = getattr(agent_card, "url", None)
+        
+        if card_url and _is_localhost_or_internal_url(card_url):
+            # Normalize base_url to ensure it ends with /
+            fixed_url = self.base_url.rstrip("/") + "/"
+            
+            verbose_logger.warning(
+                f"Agent card contains localhost/internal URL '{card_url}'. "
+                f"Replacing with base_url '{fixed_url}'. "
+                f"Consider updating the agent's configuration to use the correct public URL."
+            )
+            
+            # Create a new agent card with the fixed URL
+            # We need to handle this carefully to preserve all other fields
+            agent_card.url = fixed_url
+        
+        return agent_card
     
     async def get_agent_card(
         self,
@@ -44,6 +110,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
         Fetch the agent card, trying multiple well-known paths.
         
         First tries the standard path, then falls back to the previous path.
+        Also fixes agent card URLs that contain localhost/internal addresses.
         
         Args:
             relative_card_path: Optional path to the agent card endpoint.
@@ -51,17 +118,18 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
             http_kwargs: Optional dictionary of keyword arguments to pass to httpx.get
             
         Returns:
-            AgentCard from the A2A agent
+            AgentCard from the A2A agent (with URL fixed if necessary)
             
         Raises:
             A2AClientHTTPError or A2AClientJSONError if both paths fail
         """
         # If a specific path is provided, use the parent implementation
         if relative_card_path is not None:
-            return await super().get_agent_card(
+            agent_card = await super().get_agent_card(
                 relative_card_path=relative_card_path,
                 http_kwargs=http_kwargs,
             )
+            return self._fix_agent_card_url(agent_card)
         
         # Try both well-known paths
         paths = [
@@ -75,10 +143,11 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
                 verbose_logger.debug(
                     f"Attempting to fetch agent card from {self.base_url}{path}"
                 )
-                return await super().get_agent_card(
+                agent_card = await super().get_agent_card(
                     relative_card_path=path,
                     http_kwargs=http_kwargs,
                 )
+                return self._fix_agent_card_url(agent_card)
             except Exception as e:
                 verbose_logger.debug(
                     f"Failed to fetch agent card from {self.base_url}{path}: {e}"
