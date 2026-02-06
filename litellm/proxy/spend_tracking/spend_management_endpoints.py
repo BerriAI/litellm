@@ -52,6 +52,14 @@ class ErrorStatsResponse(BaseModel):
     data: List[Dict[str, Any]]
 
 
+class FailureLogsAnalyticsPaginatedResponse(BaseModel):
+    data: List[Dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 @router.get(
     "/spend/keys",
     tags=["Budget & Spend Tracking"],
@@ -2189,21 +2197,40 @@ async def ui_view_error_stats(
 
         time_diff_hours = (end_date_obj - start_date_obj).total_seconds() / 3600
 
-        if time_diff_hours < 12:
-            time_bucket_display = "2 minutes"
-            bucket_seconds = 120
-        elif time_diff_hours < 24:
-            time_bucket_display = "5 minutes"
-            bucket_seconds = 300
-        elif time_diff_hours < 72:
-            time_bucket_display = "10 minutes"
-            bucket_seconds = 600
-        elif time_diff_hours < 168:
-            time_bucket_display = "20 minutes"
-            bucket_seconds = 1200
-        else:
-            time_bucket_display = "1 hour"
-            bucket_seconds = 3600
+        # Calculate bucket size dynamically to keep buckets < 700
+        # Formula: bucket_seconds = (time_diff_hours * 3600) / max_buckets
+        max_buckets = 700
+        total_seconds = time_diff_hours * 3600
+        min_bucket_seconds = total_seconds / max_buckets
+
+        # Define sensible bucket intervals in ascending order
+        bucket_intervals = [
+            (60, "1 minute"),
+            (120, "2 minutes"),
+            (300, "5 minutes"),
+            (600, "10 minutes"),
+            (900, "15 minutes"),
+            (1800, "30 minutes"),
+            (3600, "1 hour"),
+            (7200, "2 hours"),
+            (14400, "4 hours"),
+            (28800, "8 hours"),
+            (43200, "12 hours"),
+            (86400, "1 day"),
+            (172800, "2 days"),
+            (259200, "3 days"),
+            (604800, "1 week"),
+            (1209600, "2 weeks"),
+            (2592000, "1 month"),
+        ]
+
+        # Find the smallest bucket interval that satisfies the constraint
+        # Default to the largest interval (1 month)
+        bucket_seconds, time_bucket_display = bucket_intervals[-1]
+        for bucket_sec, display in bucket_intervals:
+            if bucket_sec >= min_bucket_seconds:
+                bucket_seconds, time_bucket_display = bucket_sec, display
+                break
 
         sql_query = f"""
         SELECT
@@ -2285,6 +2312,283 @@ async def ui_view_error_stats(
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_error_stats: {e}")
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/spend/logs/failure_logs_analytics_paginated",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": FailureLogsAnalyticsPaginatedResponse},
+    },
+)
+async def ui_view_failure_logs_analytics_paginated(
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by api key",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by team_id",
+    ),
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by request_id",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing failure logs",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view failure logs",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by user_id",
+    ),
+    end_user: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by end user",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None, description="Filter by model"
+    ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter by key alias"
+    ),
+    error_classes: Optional[str] = fastapi.Query(
+        default=None,
+        description="Comma-separated list of error classes to filter by",
+    ),
+    page: int = fastapi.Query(
+        default=1,
+        ge=1,
+        description="Page number for pagination",
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        ge=1,
+        le=500,
+        description="Number of items per page",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get paginated failure logs filtered by error classes and other criteria.
+
+    Only returns logs where metadata.error_information.error_class is set.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Parse date strings - supports "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DDTHH:MM"
+        try:
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%dT%H:%M").replace(
+                tzinfo=timezone.utc
+            )
+
+        try:
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%dT%H:%M").replace(
+                tzinfo=timezone.utc
+            )
+
+        start_date_iso = start_date_obj.isoformat()
+        end_date_iso = end_date_obj.isoformat()
+
+        where_conditions: dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
+
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
+
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
+
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
+
+        if user_id is not None:
+            where_conditions["user"] = user_id
+
+        if model is not None:
+            where_conditions["model"] = model
+
+        if end_user is not None:
+            where_conditions["end_user"] = end_user
+
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias,
+            }
+
+        # Parse error classes
+        error_class_list = []
+        if error_classes:
+            error_class_list = [ec.strip() for ec in error_classes.split(",") if ec.strip()]
+
+        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        if not is_admin_view:
+            if team_id is not None:
+                can_view_team = await _can_team_member_view_log(
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=team_id,
+                )
+                if not can_view_team:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view team spend for team_id={}".format(
+                                team_id
+                            )
+                        },
+                    )
+                where_conditions["team_id"] = team_id
+            else:
+                if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+                    where_conditions["user"] = user_api_key_dict.user_id
+                    where_conditions.pop("team_id", None)
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view spend logs"
+                        },
+                    )
+
+        # Build SQL query for failure logs with error class filter
+        sql_query = """
+        SELECT *
+        FROM "LiteLLM_SpendLogs"
+        WHERE (metadata::jsonb)->'error_information'->>'error_class' IS NOT NULL
+        AND status = 'failure'
+        """
+
+        params = []
+        param_index = 1
+
+        if "startTime" in where_conditions:
+            sql_query += f" AND \"startTime\" >= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["gte"])
+            param_index += 1
+            sql_query += f" AND \"startTime\" <= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["lte"])
+            param_index += 1
+
+        if "team_id" in where_conditions:
+            sql_query += f" AND team_id = ${param_index}"
+            params.append(where_conditions["team_id"])
+            param_index += 1
+
+        if "api_key" in where_conditions:
+            sql_query += f" AND api_key = ${param_index}"
+            params.append(where_conditions["api_key"])
+            param_index += 1
+
+        if "request_id" in where_conditions:
+            sql_query += f" AND request_id = ${param_index}"
+            params.append(where_conditions["request_id"])
+            param_index += 1
+
+        if "user" in where_conditions:
+            sql_query += f" AND \"user\" = ${param_index}"
+            params.append(where_conditions["user"])
+            param_index += 1
+
+        if "model" in where_conditions:
+            sql_query += f" AND model = ${param_index}"
+            params.append(where_conditions["model"])
+            param_index += 1
+
+        if "end_user" in where_conditions:
+            sql_query += f" AND end_user = ${param_index}"
+            params.append(where_conditions["end_user"])
+            param_index += 1
+
+        if "metadata" in where_conditions:
+            sql_query += f" AND metadata::text LIKE ${param_index}"
+            params.append(f'%{where_conditions["metadata"]["string_contains"]}%')
+            param_index += 1
+
+        # Filter by selected error classes
+        if error_class_list:
+            placeholders = []
+            for error_class in error_class_list:
+                placeholders.append(f"${param_index}")
+                params.append(error_class)
+                param_index += 1
+            sql_query += f" AND (metadata::jsonb)->'error_information'->>'error_class' IN ({', '.join(placeholders)})"
+
+        # Get total count
+        count_query = sql_query.replace("SELECT *", "SELECT COUNT(*) as total")
+        count_result = await prisma_client.db.query_raw(count_query, *params)
+        total = count_result[0].get("total", 0) if count_result else 0
+
+        # Calculate pages
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+        # Add ordering and pagination
+        sql_query += f" ORDER BY \"startTime\" DESC LIMIT ${param_index} OFFSET ${param_index + 1}"
+        params.append(page_size)
+        param_index += 1
+        params.append((page - 1) * page_size)
+
+        # Execute paginated query
+        db_response = await prisma_client.db.query_raw(sql_query, *params)
+
+        if db_response is None:
+            return {
+                "data": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
+            }
+
+        # Convert rows to dict
+        data = []
+        for row in db_response:
+            data.append(dict(row))
+
+        return {
+            "data": data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_failure_logs_analytics_paginated: {e}")
         raise handle_exception_on_proxy(e)
 
 

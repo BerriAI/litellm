@@ -2826,6 +2826,68 @@ export const errorStatsCall = async (
   }
 };
 
+export const failureLogsAnalyticsPaginatedCall = async (
+  accessToken: string,
+  params: {
+    api_key?: string;
+    team_id?: string;
+    request_id?: string;
+    start_date?: string;
+    end_date?: string;
+    user_id?: string;
+    end_user?: string;
+    model?: string;
+    key_alias?: string;
+    error_classes?: string;
+    page?: number;
+    page_size?: number;
+  }
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs/failure_logs_analytics_paginated` : `/spend/logs/failure_logs_analytics_paginated`;
+
+    const queryParams = new URLSearchParams();
+    if (params.api_key) queryParams.append("api_key", params.api_key);
+    if (params.team_id) queryParams.append("team_id", params.team_id);
+    if (params.request_id) queryParams.append("request_id", params.request_id);
+    if (params.start_date) queryParams.append("start_date", params.start_date);
+    if (params.end_date) queryParams.append("end_date", params.end_date);
+    if (params.user_id) queryParams.append("user_id", params.user_id);
+    if (params.end_user) queryParams.append("end_user", params.end_user);
+    if (params.model) queryParams.append("model", params.model);
+    if (params.key_alias) queryParams.append("key_alias", params.key_alias);
+    if (params.error_classes) queryParams.append("error_classes", params.error_classes);
+    if (params.page) queryParams.append("page", params.page.toString());
+    if (params.page_size) queryParams.append("page_size", params.page_size.toString());
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch failure logs:", error);
+    throw error;
+  }
+};
+
 export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
