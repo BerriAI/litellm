@@ -468,6 +468,77 @@ class TestLiteLLMCompletionResponsesConfig:
             ]
             assert item.status != "stop"
 
+    def test_transform_chat_completion_response_preserves_hidden_params(self):
+        """Test that _hidden_params from chat completion response are preserved in responses API response"""
+        # Setup
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Test response",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+        # Set hidden params on the chat completion response
+        chat_completion_response._hidden_params = {
+            "model_id": "abc123",
+            "cache_key": "some-cache-key",
+            "custom_llm_provider": "openai",
+        }
+
+        # Execute
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        # Assert
+        assert hasattr(responses_api_response, "_hidden_params")
+        assert responses_api_response._hidden_params == {
+            "model_id": "abc123",
+            "cache_key": "some-cache-key",
+            "custom_llm_provider": "openai",
+        }
+
+    def test_transform_chat_completion_response_handles_missing_hidden_params(self):
+        """Test that missing _hidden_params defaults to empty dict"""
+        # Setup - no _hidden_params set
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Test response",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+
+        # Execute
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        # Assert - should default to empty dict
+        assert hasattr(responses_api_response, "_hidden_params")
+        assert responses_api_response._hidden_params == {}
 
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""

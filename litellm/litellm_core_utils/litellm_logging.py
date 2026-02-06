@@ -2442,6 +2442,36 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             ) is not None:
                 emit_standard_logging_payload(standard_logging_payload)
+        elif self.call_type == "pass_through_endpoint":
+            print_verbose(
+                "Async success callbacks: Got a pass-through endpoint response"
+            )
+
+            self.model_call_details["async_complete_streaming_response"] = result
+
+            # cost calculation not possible for pass-through
+            self.model_call_details["response_cost"] = None
+
+            ## STANDARDIZED LOGGING PAYLOAD
+            self.model_call_details[
+                "standard_logging_object"
+            ] = get_standard_logging_object_payload(
+                kwargs=self.model_call_details,
+                init_response_obj=result,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=self,
+                status="success",
+                standard_built_in_tools_params=self.standard_built_in_tools_params,
+            )
+
+            # print standard logging payload
+            if (
+                standard_logging_payload := self.model_call_details.get(
+                    "standard_logging_object"
+                )
+            ) is not None:
+                emit_standard_logging_payload(standard_logging_payload)
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -3887,18 +3917,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             return langfuse_logger  # type: ignore
         elif logging_integration == "langfuse_otel":
             from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
-            from litellm.integrations.opentelemetry import (
-                OpenTelemetry,
-                OpenTelemetryConfig,
-            )
-
-            langfuse_otel_config = LangfuseOtelLogger.get_langfuse_otel_config()
-
-            # The endpoint and headers are now set as environment variables by get_langfuse_otel_config()
-            otel_config = OpenTelemetryConfig(
-                exporter=langfuse_otel_config.protocol,
-                headers=langfuse_otel_config.otlp_auth_headers,
-            )
 
             for callback in _in_memory_loggers:
                 if (
@@ -3906,8 +3924,10 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     and callback.callback_name == "langfuse_otel"
                 ):
                     return callback  # type: ignore
+            # Allow LangfuseOtelLogger to initialize its own config safely
+            # This prevents startup crashes if LANGFUSE keys are not in env (e.g. for dynamic usage)
             _otel_logger = LangfuseOtelLogger(
-                config=otel_config, callback_name="langfuse_otel"
+                config=None, callback_name="langfuse_otel"
             )
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore

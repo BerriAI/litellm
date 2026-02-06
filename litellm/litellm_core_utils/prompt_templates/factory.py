@@ -2190,6 +2190,16 @@ def anthropic_messages_pt(  # noqa: PLR0915
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
 
+            # Extract compaction_blocks from provider_specific_fields and add them first
+            _provider_specific_fields_raw = assistant_content_block.get(
+                "provider_specific_fields"
+            )
+            if isinstance(_provider_specific_fields_raw, dict):
+                _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
+                if _compaction_blocks and isinstance(_compaction_blocks, list):
+                    # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
+                    assistant_content.extend(_compaction_blocks)  # type: ignore
+
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             if (
                 thinking_blocks is not None
@@ -3399,6 +3409,59 @@ def _convert_to_bedrock_tool_call_result(
     return content_block
 
 
+def _deduplicate_bedrock_content_blocks(
+    blocks: List[BedrockContentBlock],
+    block_key: str,
+    id_key: str = "toolUseId",
+) -> List[BedrockContentBlock]:
+    """
+    Remove duplicate content blocks that share the same ID under ``block_key``.
+
+    Bedrock requires all toolResult and toolUse IDs within a single message to
+    be unique.  When merging consecutive messages, duplicates can occur if the
+    same tool_call_id appears multiple times in conversation history.
+
+    When duplicates exist, the first occurrence is retained and subsequent ones
+    are discarded.  A warning is logged for every dropped block so that
+    upstream duplication bugs remain visible.
+
+    Blocks that do not contain ``block_key`` (e.g., cachePoint, text) are
+    always preserved.
+
+    Args:
+        blocks: The list of Bedrock content blocks to deduplicate.
+        block_key: The dict key to inspect (e.g. ``"toolResult"`` or ``"toolUse"``).
+        id_key: The nested key that holds the unique ID (default ``"toolUseId"``).
+    """
+    seen_ids: Set[str] = set()
+    deduplicated: List[BedrockContentBlock] = []
+    for block in blocks:
+        keyed = block.get(block_key)
+        if keyed is not None and isinstance(keyed, dict):
+            block_id = keyed.get(id_key)
+            if block_id:
+                if block_id in seen_ids:
+                    verbose_logger.warning(
+                        "Bedrock Converse: dropping duplicate %s block with "
+                        "%s=%s. This may indicate duplicate tool messages in "
+                        "conversation history.",
+                        block_key,
+                        id_key,
+                        block_id,
+                    )
+                    continue
+                seen_ids.add(block_id)
+        deduplicated.append(block)
+    return deduplicated
+
+
+def _deduplicate_bedrock_tool_content(
+    tool_content: List[BedrockContentBlock],
+) -> List[BedrockContentBlock]:
+    """Convenience wrapper: deduplicate ``toolResult`` blocks by ``toolUseId``."""
+    return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
+
+
 def _insert_assistant_continue_message(
     messages: List[BedrockMessageBlock],
     assistant_continue_message: Optional[
@@ -3867,6 +3930,8 @@ class BedrockConverseMessagesProcessor:
                     tool_content.append(cache_point_block)
 
                 msg_i += 1
+            # Deduplicate toolResult blocks with the same toolUseId
+            tool_content = _deduplicate_bedrock_tool_content(tool_content)
             if tool_content:
                 # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
                 if len(contents) > 0 and contents[-1]["role"] == "user":
@@ -3932,10 +3997,12 @@ class BedrockConverseMessagesProcessor:
                                     assistant_parts=assistants_parts,
                                 )
                             elif element["type"] == "text":
-                                assistants_part = BedrockContentBlock(
-                                    text=element["text"]
-                                )
-                                assistants_parts.append(assistants_part)
+                                # Skip completely empty strings to avoid blank content blocks
+                                if element.get("text", "").strip():
+                                    assistants_part = BedrockContentBlock(
+                                        text=element["text"]
+                                    )
+                                    assistants_parts.append(assistants_part)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
@@ -3960,9 +4027,12 @@ class BedrockConverseMessagesProcessor:
                 elif _assistant_content is not None and isinstance(
                     _assistant_content, str
                 ):
-                    assistant_content.append(
-                        BedrockContentBlock(text=_assistant_content)
-                    )
+                    # Skip completely empty strings to avoid blank content blocks
+                    if _assistant_content.strip():
+                        assistant_content.append(
+                            BedrockContentBlock(text=_assistant_content)
+                        )
+                    # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
                     _cache_point_block = (
                         litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -3979,6 +4049,8 @@ class BedrockConverseMessagesProcessor:
                     )
 
                 msg_i += 1
+
+            assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
 
             if assistant_content:
                 contents.append(
@@ -4230,6 +4302,8 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 tool_content.append(cache_point_block)
 
             msg_i += 1
+        # Deduplicate toolResult blocks with the same toolUseId
+        tool_content = _deduplicate_bedrock_tool_content(tool_content)
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
             if len(contents) > 0 and contents[-1]["role"] == "user":
@@ -4289,12 +4363,11 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 assistant_parts=assistants_parts,
                             )
                         elif element["type"] == "text":
-                            # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                            text_content = (
-                                element["text"] if element["text"].strip() else "."
-                            )
-                            assistants_part = BedrockContentBlock(text=text_content)
-                            assistants_parts.append(assistants_part)
+                            # AWS Bedrock doesn't allow empty or whitespace-only text content
+                            # Skip completely empty strings to avoid blank content blocks
+                            if element.get("text", "").strip():
+                                assistants_part = BedrockContentBlock(text=element["text"])
+                                assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -4317,9 +4390,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
-                # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                text_content = _assistant_content if _assistant_content.strip() else "."
-                assistant_content.append(BedrockContentBlock(text=text_content))
+                # Skip completely empty strings to avoid blank content blocks
+                if _assistant_content.strip():
+                    assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -4335,6 +4408,8 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 )
 
             msg_i += 1
+
+        assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
 
         if assistant_content:
             contents.append(

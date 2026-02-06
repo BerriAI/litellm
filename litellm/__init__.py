@@ -261,6 +261,8 @@ extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
+# Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
+proxy_auth: Optional[Any] = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -351,7 +353,7 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
-max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessions
+max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
@@ -1378,6 +1380,7 @@ if TYPE_CHECKING:
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
+    from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig

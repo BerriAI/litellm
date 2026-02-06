@@ -78,6 +78,7 @@ class TestProxyBaseLLMRequestProcessing:
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
     @pytest.mark.asyncio
+<<<<<<< HEAD
     async def test_should_apply_hierarchical_router_settings_as_override(
         self, monkeypatch
     ):
@@ -164,6 +165,8 @@ class TestProxyBaseLLMRequestProcessing:
         assert "model_list" not in router_settings_override
 
     @pytest.mark.asyncio
+=======
+>>>>>>> origin
     async def test_stream_timeout_header_processing(self):
         """
         Test that x-litellm-stream-timeout header gets processed and added to request data as stream_timeout.

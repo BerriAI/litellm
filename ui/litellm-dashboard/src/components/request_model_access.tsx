@@ -60,7 +60,7 @@ const RequestAccess: React.FC<RequestAccessProps> = ({ userModels, accessToken, 
       </Button>
       <Modal
         title="Request Access"
-        visible={isModalVisible}
+        open={isModalVisible}
         width={800}
         footer={null}
         onOk={handleOk}
