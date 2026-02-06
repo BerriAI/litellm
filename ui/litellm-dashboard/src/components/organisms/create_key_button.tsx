@@ -1,35 +1,9 @@
 "use client";
-import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { useQueryClient } from "@tanstack/react-query";
+
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, message, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
-import debounce from "lodash/debounce";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, message } from "antd";
 import React, { useCallback, useEffect, useState } from "react";
-import { rolesWithWriteAccess } from "../../utils/roles";
-import AgentSelector from "../agent_management/AgentSelector";
-import { mapDisplayToInternalNames } from "../callback_info_helpers";
-import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
-import SchemaFormFields from "../common_components/check_openapi_schema";
-import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
-import ModelAliasManager from "../common_components/ModelAliasManager";
-import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
-import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
-import TeamDropdown from "../common_components/team_dropdown";
-import ProjectDropdown from "../common_components/ProjectDropdown";
-import { CreateUserButton } from "../CreateUserButton";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Team } from "../key_team_helpers/key_list";
-import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import NotificationsManager from "../molecules/notifications_manager";
 import {
   getAgentsList,
   getGuardrailsList,
@@ -42,18 +16,59 @@ import {
   proxyBaseUrl,
   userFilterUICall,
 } from "../networking";
+
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import AgentSelector from "../agent_management/AgentSelector";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import { CreateUserButton } from "../CreateUserButton";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import ModelAliasManager from "../common_components/ModelAliasManager";
+import NotificationsManager from "../molecules/notifications_manager";
 import NumericalInput from "../shared/numerical_input";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
+import ProjectDropdown from "../common_components/ProjectDropdown";
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import SchemaFormFields from "../common_components/check_openapi_schema";
+import { Team } from "../key_team_helpers/key_list";
+import TeamDropdown from "../common_components/team_dropdown";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import debounce from "lodash/debounce";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { mapDisplayToInternalNames } from "../callback_info_helpers";
+import { rolesWithWriteAccess } from "../../utils/roles";
 import { simplifyKeyGenerateError } from "./utils";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useQueryClient } from "@tanstack/react-query";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const { Option } = Select;
+
+/**
+ * Interface for pre-filling the create key form from URL parameters
+ */
+export interface CreateKeyPrefillData {
+  owned_by?: "you" | "service_account" | "another_user";
+  team_id?: string;
+  key_alias?: string;
+  models?: string[];
+  key_type?: "default" | "llm_api" | "management";
+}
 
 interface CreateKeyProps {
   team: Team | null;
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 interface User {
@@ -144,7 +159,7 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
+const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
@@ -159,6 +174,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
+  const [hasPrefilled, setHasPrefilled] = useState(false);
+  const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
@@ -283,6 +300,55 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
 
     fetchPossibleRoles();
   }, [accessToken]);
+
+  // Auto-open modal and prefill form from URL params (deep link).
+  // Guarded by write access so we don't open for read-only users.
+  useEffect(() => {
+    if (autoOpenCreate && !hasPrefilled && teams && userRole && rolesWithWriteAccess.includes(userRole)) {
+      // Open the modal
+      setIsModalVisible(true);
+      setHasPrefilled(true);
+
+      // Apply prefill data if provided
+      if (prefillData) {
+        // Set key owner (owned_by) - validate that "another_user" is only allowed for Admin
+        if (prefillData.owned_by) {
+          if (prefillData.owned_by === "another_user" && userRole !== "Admin") {
+            // Ignore invalid owned_by for non-admin users, fall back to default
+            setKeyOwner("you");
+          } else {
+            setKeyOwner(prefillData.owned_by);
+          }
+        }
+
+        // Set team - find the team by ID and set it (only if team exists in user's teams)
+        if (prefillData.team_id) {
+          const selectedTeam = teams?.find((t) => t.team_id === prefillData.team_id) || null;
+          if (selectedTeam) {
+            setSelectedCreateKeyTeam(selectedTeam);
+            form.setFieldsValue({ team_id: prefillData.team_id });
+          }
+          // Silently ignore invalid team_id - don't prefill with a team user doesn't have access to
+        }
+
+        // Set key alias
+        if (prefillData.key_alias) {
+          form.setFieldsValue({ key_alias: prefillData.key_alias });
+        }
+
+        // Defer model selection until we load the allowed model list.
+        if (prefillData.models && prefillData.models.length > 0) {
+          setPendingPrefillModels(prefillData.models);
+        }
+
+        // Set key type
+        if (prefillData.key_type) {
+          setKeyType(prefillData.key_type);
+          form.setFieldsValue({ key_type: prefillData.key_type });
+        }
+      }
+    }
+  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
 
   // Check if team selection is required
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
@@ -477,6 +543,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
+  // Fetch available models when team or auth changes.
+  // Note: Model prefill from URL params is handled by the useEffect below, which
+  // watches for pendingPrefillModels + modelsToPick to both be populated.
   useEffect(() => {
     if (selectedProjectId) {
       // When a project is selected, use the project's models
@@ -492,23 +561,28 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         setModelsToPick(allModels);
       });
     }
-    form.setFieldValue("models", []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole]);
-
-  // Sync team when project is selected but teams loaded later (race condition)
-  useEffect(() => {
-    if (!selectedProjectId || !teams) return;
-    const project = projects?.find((p) => p.project_id === selectedProjectId);
-    if (!project?.team_id) return;
-    // If team is already set correctly, skip
-    if (selectedCreateKeyTeam?.team_id === project.team_id) return;
-    const projectTeam = teams.find((t) => t.team_id === project.team_id) || null;
-    if (projectTeam) {
-      setSelectedCreateKeyTeam(projectTeam);
-      form.setFieldValue("team_id", projectTeam.team_id);
+    // Only clear models if we don't have pending prefill models
+    if (!pendingPrefillModels) {
+      form.setFieldValue("models", []);
     }
-  }, [teams, selectedProjectId, projects]);
+  }, [selectedCreateKeyTeam, accessToken, userID, userRole, form]);
+
+  // Apply deferred model prefill once the available model list arrives.
+  // This handles timing where prefill data arrives before or after models are fetched.
+  useEffect(() => {
+    if (!pendingPrefillModels || pendingPrefillModels.length === 0) {
+      return;
+    }
+    if (!modelsToPick || modelsToPick.length === 0) {
+      return;
+    }
+
+    const validModels = pendingPrefillModels.filter((model) => modelsToPick.includes(model));
+    if (validModels.length > 0) {
+      form.setFieldsValue({ models: validModels });
+    }
+    setPendingPrefillModels(null);
+  }, [pendingPrefillModels, modelsToPick, form]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
