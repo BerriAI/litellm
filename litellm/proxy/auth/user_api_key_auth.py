@@ -903,7 +903,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    abbreviate_api_key(api_key)
+                    f"{api_key[:3]}...{api_key[-4:]}" if len(api_key) > 7 else api_key
                 )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
