@@ -11,6 +11,9 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import (
+    filter_and_transform_beta_headers,
+)
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
@@ -60,6 +63,7 @@ from ..common_utils import (
     BedrockModelInfo,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
+    is_claude_4_5_on_bedrock,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -68,6 +72,14 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "computer_",
     "bash_",
     "text_editor_",
+]
+
+# Beta header patterns that are not supported by Bedrock Converse API
+# These will be filtered out to prevent errors
+UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
+    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
+    "prompt-caching",  # Prompt caching not supported in Converse API
+    "compact-2026-01-12", # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
 
@@ -338,6 +350,56 @@ class AmazonConverseConfig(BaseConfig):
                 "maxReasoningEffort": reasoning_effort,
             }
         }
+
+    def _handle_reasoning_effort_parameter(
+        self, model: str, reasoning_effort: str, optional_params: dict
+    ) -> None:
+        """
+        Handle the reasoning_effort parameter based on the model type.
+
+        Different model families handle reasoning effort differently:
+        - GPT-OSS models: Keep reasoning_effort as-is (passed to additionalModelRequestFields)
+        - Nova Lite 2 models: Transform to reasoningConfig structure
+        - Other models (Anthropic, etc.): Convert to thinking parameter
+
+        Args:
+            model: The model identifier
+            reasoning_effort: The reasoning effort value
+            optional_params: Dictionary of optional parameters to update in-place
+
+        Examples:
+            >>> config = AmazonConverseConfig()
+            >>> params = {}
+            >>> config._handle_reasoning_effort_parameter("gpt-oss-model", "high", params)
+            >>> params
+            {'reasoning_effort': 'high'}
+
+            >>> params = {}
+            >>> config._handle_reasoning_effort_parameter("amazon.nova-2-lite-v1:0", "high", params)
+            >>> params
+            {'reasoningConfig': {'type': 'enabled', 'maxReasoningEffort': 'high'}}
+
+            >>> params = {}
+            >>> config._handle_reasoning_effort_parameter("anthropic.claude-3", "high", params)
+            >>> params
+            {'thinking': {'type': 'enabled', 'budget_tokens': 10000}}
+        """
+        if "gpt-oss" in model:
+            # GPT-OSS models: keep reasoning_effort as-is
+            # It will be passed through to additionalModelRequestFields
+            optional_params["reasoning_effort"] = reasoning_effort
+        elif self._is_nova_lite_2_model(model):
+            # Nova Lite 2 models: transform to reasoningConfig
+            reasoning_config = self._transform_reasoning_effort_to_reasoning_config(
+                reasoning_effort
+            )
+            optional_params.update(reasoning_config)
+        else:
+            # Anthropic and other models: convert to thinking parameter
+            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort=reasoning_effort, model=model
+            )
+
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
@@ -967,7 +1029,28 @@ class AmazonConverseConfig(BaseConfig):
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
-                anthropic_beta_list.append("computer-use-2024-10-22")
+                # Determine the correct computer-use beta header based on model
+                # "computer-use-2025-11-24" for Claude Opus 4.6, Claude Opus 4.5
+                # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
+                # "computer-use-2024-10-22" for older models
+                model_lower = model.lower()
+                if "opus-4.6" in model_lower or "opus_4.6" in model_lower or "opus-4-6" in model_lower or "opus_4_6" in model_lower:
+                    computer_use_header = "computer-use-2025-11-24"
+                elif "opus-4.5" in model_lower or "opus_4.5" in model_lower or "opus-4-5" in model_lower or "opus_4_5" in model_lower:
+                    computer_use_header = "computer-use-2025-11-24"
+                elif any(pattern in model_lower for pattern in [
+                    "sonnet-4.5", "sonnet_4.5", "sonnet-4-5", "sonnet_4_5",
+                    "haiku-4.5", "haiku_4.5", "haiku-4-5", "haiku_4_5",
+                    "opus-4.1", "opus_4.1", "opus-4-1", "opus_4_1",
+                    "sonnet-4", "sonnet_4",
+                    "opus-4", "opus_4",
+                    "sonnet-3.7", "sonnet_3.7", "sonnet-3-7", "sonnet_3_7"
+                ]):
+                    computer_use_header = "computer-use-2025-01-24"
+                else:
+                    computer_use_header = "computer-use-2024-10-22"
+                
+                anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools = self._transform_computer_use_tools(
                     computer_use_tools
@@ -989,7 +1072,14 @@ class AmazonConverseConfig(BaseConfig):
                 if beta not in seen:
                     unique_betas.append(beta)
                     seen.add(beta)
-            additional_request_params["anthropic_beta"] = unique_betas
+
+            filtered_betas = filter_and_transform_beta_headers(
+                beta_headers=unique_betas,
+                provider="bedrock_converse",
+            )
+
+            if filtered_betas:
+                additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 

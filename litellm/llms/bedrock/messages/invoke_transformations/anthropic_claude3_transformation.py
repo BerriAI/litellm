@@ -12,6 +12,9 @@ from typing import (
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import (
+    filter_and_transform_beta_headers,
+)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -49,6 +52,10 @@ class AmazonAnthropicClaudeMessagesConfig(
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
+
+    # Beta header patterns that are not supported by Bedrock Invoke API
+    # These will be filtered out to prevent 400 "invalid beta flag" errors
+
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -128,6 +135,182 @@ class AmazonAnthropicClaudeMessagesConfig(
                                 cache_control = item["cache_control"]
                                 if isinstance(cache_control, dict) and "ttl" in cache_control:
                                     cache_control.pop("ttl", None)
+
+    def _supports_extended_thinking_on_bedrock(self, model: str) -> bool:
+        """
+        Check if the model supports extended thinking beta headers on Bedrock.
+
+        On 3rd-party platforms (e.g., Amazon Bedrock), extended thinking is only
+        supported on: Claude Opus 4.5, Claude Opus 4.1, Opus 4, or Sonnet 4.
+
+        Ref: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+
+        Args:
+            model: The model name
+
+        Returns:
+            True if the model supports extended thinking on Bedrock
+        """
+        model_lower = model.lower()
+
+        # Supported models on Bedrock for extended thinking
+        supported_patterns = [
+            "opus-4.5", "opus_4.5", "opus-4-5", "opus_4_5",  # Opus 4.5
+            "opus-4.1", "opus_4.1", "opus-4-1", "opus_4_1",  # Opus 4.1
+            "opus-4", "opus_4",                               # Opus 4
+            "sonnet-4", "sonnet_4",                           # Sonnet 4
+        ]
+
+        return any(pattern in model_lower for pattern in supported_patterns)
+
+    def _filter_unsupported_beta_headers_for_bedrock(
+        self, model: str, beta_set: set
+    ) -> None:
+        """
+        Remove beta headers that are not supported on Bedrock for the given model.
+
+        Extended thinking beta headers are only supported on specific Claude 4+ models.
+        Advanced tool use headers are not supported on Bedrock Invoke API.
+        This prevents 400 "invalid beta flag" errors on Bedrock.
+
+        Note: Bedrock Invoke API fails with a 400 error when unsupported beta headers
+        are sent, returning: {"message":"invalid beta flag"}
+
+        Args:
+            model: The model name
+            beta_set: The set of beta headers to filter in-place
+        """
+        # 1. Handle header transformations BEFORE filtering
+        # (advanced-tool-use -> tool-search-tool)
+        # This must happen before filtering because advanced-tool-use is in the unsupported list
+        has_advanced_tool_use = "advanced-tool-use-2025-11-20" in beta_set
+        if has_advanced_tool_use and self._supports_tool_search_on_bedrock(model):
+            beta_set.discard("advanced-tool-use-2025-11-20")
+            beta_set.add("tool-search-tool-2025-10-19")
+            beta_set.add("tool-examples-2025-10-29")
+
+        # 2. Apply provider-level filtering using centralized JSON config
+        beta_list = list(beta_set)
+        filtered_list = filter_and_transform_beta_headers(
+            beta_headers=beta_list,
+            provider="bedrock",
+        )
+
+        # Update the set with filtered headers
+        beta_set.clear()
+        beta_set.update(filtered_list)
+
+        # 2.1. Handle model-specific exceptions: structured-outputs is only supported on Opus 4.6
+        # Re-add structured-outputs if it was in the original set and model is Opus 4.6
+        model_lower = model.lower()
+        is_opus_4_6 = any(pattern in model_lower for pattern in ["opus-4.6", "opus_4.6", "opus-4-6", "opus_4_6"])
+        if is_opus_4_6 and "structured-outputs-2025-11-13" in beta_list:
+            beta_set.add("structured-outputs-2025-11-13")
+
+        # 3. Filter out extended thinking headers for models that don't support them
+        extended_thinking_patterns = [
+            "extended-thinking",
+            "interleaved-thinking",
+        ]
+        if not self._supports_extended_thinking_on_bedrock(model):
+            beta_headers_to_remove = set()
+            for beta in beta_set:
+                for pattern in extended_thinking_patterns:
+                    if pattern in beta.lower():
+                        beta_headers_to_remove.add(beta)
+                        break
+
+            for beta in beta_headers_to_remove:
+                beta_set.discard(beta)
+
+    def _get_tool_search_beta_header_for_bedrock(
+        self,
+        model: str,
+        tool_search_used: bool,
+        programmatic_tool_calling_used: bool,
+        input_examples_used: bool,
+        beta_set: set,
+    ) -> None:
+        """
+        Adjust tool search beta header for Bedrock.
+
+        Bedrock requires a different beta header for tool search on Opus 4 models
+        when tool search is used without programmatic tool calling or input examples.
+
+        Note: On Amazon Bedrock, server-side tool search is only supported on Claude Opus 4
+        with the `tool-search-tool-2025-10-19` beta header.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+
+        Args:
+            model: The model name
+            tool_search_used: Whether tool search is used
+            programmatic_tool_calling_used: Whether programmatic tool calling is used
+            input_examples_used: Whether input examples are used
+            beta_set: The set of beta headers to modify in-place
+        """
+        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
+            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+            if "opus-4" in model.lower() or "opus_4" in model.lower():
+                beta_set.add("tool-search-tool-2025-10-19")
+
+    def _convert_output_format_to_inline_schema(
+        self,
+        output_format: Dict,
+        anthropic_messages_request: Dict,
+    ) -> None:
+        """
+        Convert Anthropic output_format to inline schema in message content.
+
+        Bedrock Invoke doesn't support the output_format parameter, so we embed
+        the schema directly into the user message content as text instructions.
+
+        This approach adds the schema to the last user message, instructing the model
+        to respond in the specified JSON format.
+
+        Args:
+            output_format: The output_format dict with 'type' and 'schema'
+            anthropic_messages_request: The request dict to modify in-place
+
+        Ref: https://aws.amazon.com/blogs/machine-learning/structured-data-response-with-amazon-bedrock-prompt-engineering-and-tool-use/
+        """
+        import json
+
+        # Extract schema from output_format
+        schema = output_format.get("schema")
+        if not schema:
+            return
+
+        # Get messages from the request
+        messages = anthropic_messages_request.get("messages", [])
+        if not messages:
+            return
+
+        # Find the last user message
+        last_user_message_idx = None
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "user":
+                last_user_message_idx = idx
+                break
+
+        if last_user_message_idx is None:
+            return
+
+        last_user_message = messages[last_user_message_idx]
+        content = last_user_message.get("content", [])
+
+        # Ensure content is a list
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+            last_user_message["content"] = content
+
+        # Add schema as text content to the message
+        schema_text = {
+            "type": "text",
+            "text": json.dumps(schema)
+        }
+        content.append(schema_text)
+
 
     def transform_anthropic_messages_request(
         self,

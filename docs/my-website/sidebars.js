@@ -109,14 +109,28 @@ const sidebars = {
       type: "category",
       label: "AI Tools (OpenWebUI, Claude Code, etc.)",
       items: [
-        "tutorials/claude_responses_api",
+        "tutorials/openweb_ui",
+        {
+          type: "category",
+          label: "Claude Code",
+          items: [
+            "tutorials/claude_responses_api",
+            "tutorials/claude_code_max_subscription",
+            "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_websearch",
+            "tutorials/claude_mcp",
+            "tutorials/claude_non_anthropic_models",
+            "tutorials/claude_code_plugin_marketplace",
+            "tutorials/claude_code_beta_headers",
+          ]
+        },
+        "tutorials/opencode_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
         "tutorials/openai_codex",
-        "tutorials/openweb_ui"
       ]
     },
 
