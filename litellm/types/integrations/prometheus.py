@@ -54,6 +54,10 @@ def _sanitize_prometheus_label_value(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
 
+    # Coerce non-string values (int, bool, etc.) to str
+    if not isinstance(value, str):
+        return str(value)
+
     # Remove Unicode line/paragraph separators that break text format
     value = value.replace("\u2028", "").replace("\u2029", "")
 

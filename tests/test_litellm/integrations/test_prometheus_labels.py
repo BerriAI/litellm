@@ -362,6 +362,17 @@ def test_prometheus_label_value_sanitization_none():
     print("✅ None values pass through unchanged")
 
 
+def test_prometheus_label_value_sanitization_non_string_types():
+    """Test that non-string values (int, bool, etc.) are coerced to str."""
+    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+
+    assert _sanitize_prometheus_label_value(200) == "200"
+    assert _sanitize_prometheus_label_value(True) == "True"
+    assert _sanitize_prometheus_label_value(3.14) == "3.14"
+
+    print("✅ Non-string values are coerced to str")
+
+
 if __name__ == "__main__":
     test_user_email_in_required_metrics()
     test_user_email_label_exists()
@@ -374,4 +385,5 @@ if __name__ == "__main__":
     test_prometheus_label_value_sanitization()
     test_prometheus_label_value_sanitization_unicode_paragraph_separator()
     test_prometheus_label_value_sanitization_none()
+    test_prometheus_label_value_sanitization_non_string_types()
     print("\n✅ All prometheus label tests passed!")
