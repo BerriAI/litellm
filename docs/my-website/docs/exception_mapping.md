@@ -12,6 +12,7 @@ All exceptions can be imported from `litellm` - e.g. `from litellm import BadReq
 | 400 | UnsupportedParamsError | litellm.BadRequestError | Raised when unsupported params are passed |
 | 400         | ContextWindowExceededError| litellm.BadRequestError | Special error type for context window exceeded error messages - enables context window fallbacks |
 | 400         | ContentPolicyViolationError| litellm.BadRequestError | Special error type for content policy violation error messages - enables content policy fallbacks |
+| 400         | ImageFetchError | litellm.BadRequestError | Raised when there are errors fetching or processing images |
 | 400 | InvalidRequestError | openai.BadRequestError | Deprecated error, use BadRequestError instead |
 | 401         | AuthenticationError      | openai.AuthenticationError |
 | 403         | PermissionDeniedError    | openai.PermissionDeniedError |
@@ -110,6 +111,85 @@ except openai.APITimeoutError as e:
     should_retry = litellm._should_retry(e.status_code)
     print(f"should_retry: {should_retry}")
 ```
+
+## Advanced
+
+### Accessing Provider-Specific Error Details
+
+LiteLLM exceptions include a `provider_specific_fields` attribute that contains additional error information specific to each provider. This is particularly useful for Azure OpenAI, which provides detailed content filtering information.
+
+#### Azure OpenAI - Content Policy Violation Inner Error Access
+
+When Azure OpenAI returns content policy violations, you can access the detailed content filtering results through the `innererror` field:
+
+```python
+import litellm
+from litellm.exceptions import ContentPolicyViolationError
+
+try:
+    response = litellm.completion(
+        model="azure/gpt-4",
+        messages=[
+            {
+                "role": "user", 
+                "content": "Some content that might violate policies"
+            }
+        ]
+    )
+except ContentPolicyViolationError as e:
+    # Access Azure-specific error details
+    if e.provider_specific_fields and "innererror" in e.provider_specific_fields:
+        innererror = e.provider_specific_fields["innererror"]
+        
+        # Access content filter results
+        content_filter_result = innererror.get("content_filter_result", {})
+        
+        print(f"Content filter code: {innererror.get('code')}")
+        print(f"Hate filtered: {content_filter_result.get('hate', {}).get('filtered')}")
+        print(f"Violence severity: {content_filter_result.get('violence', {}).get('severity')}")
+        print(f"Sexual content filtered: {content_filter_result.get('sexual', {}).get('filtered')}")
+```
+
+**Example Response Structure:**
+
+When calling the LiteLLM proxy, content policy violations will return detailed filtering information:
+
+```json
+{
+  "error": {
+    "message": "litellm.ContentPolicyViolationError: AzureException - The response was filtered due to the prompt triggering Azure OpenAI's content management policy...",
+    "type": null,
+    "param": null,
+    "code": "400",
+    "provider_specific_fields": {
+      "innererror": {
+        "code": "ResponsibleAIPolicyViolation",
+        "content_filter_result": {
+          "hate": {
+            "filtered": true,
+            "severity": "high"
+          },
+          "jailbreak": {
+            "filtered": false,
+            "detected": false
+          },
+          "self_harm": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "sexual": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "violence": {
+            "filtered": true,
+            "severity": "medium"
+          }
+        }
+      }
+    }
+  }
+}
 
 ## Details 
 

@@ -41,7 +41,7 @@ def test_weighted_selection_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -54,7 +54,7 @@ def test_weighted_selection_router():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -64,10 +64,10 @@ def test_weighted_selection_router():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-2"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -97,7 +97,7 @@ def test_weighted_selection_router_tpm():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -110,7 +110,7 @@ def test_weighted_selection_router_tpm():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -120,10 +120,10 @@ def test_weighted_selection_router_tpm():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-2"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -153,7 +153,7 @@ def test_weighted_selection_router_tpm_as_router_param():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -166,7 +166,7 @@ def test_weighted_selection_router_tpm_as_router_param():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -176,10 +176,10 @@ def test_weighted_selection_router_tpm_as_router_param():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-2"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -210,7 +210,7 @@ def test_weighted_selection_router_rpm_as_router_param():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -224,7 +224,7 @@ def test_weighted_selection_router_rpm_as_router_param():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -234,10 +234,10 @@ def test_weighted_selection_router_rpm_as_router_param():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-2"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -266,7 +266,7 @@ def test_weighted_selection_router_no_rpm_set():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -286,7 +286,7 @@ def test_weighted_selection_router_no_rpm_set():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("claude-1")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -296,7 +296,7 @@ def test_weighted_selection_router_no_rpm_set():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
         assert (
             selection_counts["bedrock/claude1.2"] / total_requests == 1
         ), f"Assertion failed: Selection counts {selection_counts}"
@@ -325,7 +325,7 @@ def test_model_group_aliases():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -358,7 +358,7 @@ def test_model_group_aliases():
                 )
 
         # test that
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         selection_counts = defaultdict(int)
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
@@ -369,10 +369,10 @@ def test_model_group_aliases():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-2"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -383,6 +383,7 @@ def test_model_group_aliases():
 # test_model_group_aliases()
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_usage_based_routing():
     """
     in this test we, have a model group with two models in it, model-a and model-b.
@@ -396,7 +397,7 @@ def test_usage_based_routing():
                 "model": f"azure/{deployment_name}",
                 "api_key": os.environ["AZURE_API_KEY"],
                 "api_version": os.environ["AZURE_API_VERSION"],
-                "api_base": os.environ["AZURE_API_BASE"],
+                "api_base": "https://fake-api.openai.com/v1",
             }
             return params
 
@@ -552,7 +553,7 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -566,10 +567,10 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         for _ in range(1000):
             selected_model = await router.async_get_available_deployment(
-                "gpt-3.5-turbo"
+                "gpt-3.5-turbo", request_kwargs={}
             )
             selected_model_id = selected_model["litellm_params"]["model"]
             selected_model_name = selected_model_id
@@ -579,14 +580,216 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
         total_requests = sum(selection_counts.values())
 
         if rpm_list[0] is not None or tpm_list[0] is not None:
-            # Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+            # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
             assert (
-                selection_counts["azure/chatgpt-v-2"] / total_requests > 0.89
-            ), f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+                selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
+            ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
         else:
             # Assert both are used
-            assert selection_counts["azure/chatgpt-v-2"] > 0
+            assert selection_counts["azure/gpt-4.1-mini"] > 0
             assert selection_counts["gpt-3.5-turbo"] > 0
+        router.reset()
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_get_available_deployment_for_pass_through():
+    """
+    Test get_available_deployment_for_pass_through function
+    - Tests that only deployments with use_in_pass_through=True are returned
+    - Tests that BadRequestError is raised when no pass-through deployments exist
+    """
+    try:
+        litellm.set_verbose = False
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "use_in_pass_through": True,
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "use_in_pass_through": False,
+                },
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+        )
+
+        # Test that only pass-through deployment is returned
+        selected_model = router.get_available_deployment_for_pass_through(
+            "gpt-3.5-turbo"
+        )
+        assert selected_model["litellm_params"]["model"] == "gpt-3.5-turbo"
+        assert selected_model["litellm_params"]["use_in_pass_through"] is True
+
+        router.reset()
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_get_available_deployment_for_pass_through_no_deployments():
+    """
+    Test get_available_deployment_for_pass_through raises BadRequestError
+    when no deployments have use_in_pass_through=True
+    """
+    try:
+        litellm.set_verbose = False
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "use_in_pass_through": False,
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "use_in_pass_through": False,
+                },
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+        )
+
+        # Test that BadRequestError is raised when no pass-through deployments exist
+        try:
+            router.get_available_deployment_for_pass_through("gpt-3.5-turbo")
+            pytest.fail(
+                "Expected BadRequestError when no pass-through deployments exist"
+            )
+        except litellm.BadRequestError as e:
+            assert "use_in_pass_through=True" in str(e)
+
+        router.reset()
+    except Exception as e:
+        if isinstance(e, litellm.BadRequestError):
+            pass  # Expected error
+        else:
+            traceback.print_exc()
+            pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_async_get_available_deployment_for_pass_through():
+    """
+    Test async_get_available_deployment_for_pass_through function
+    - Tests that only deployments with use_in_pass_through=True are returned
+    - Tests async version works correctly
+    """
+    try:
+        litellm.set_verbose = False
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "use_in_pass_through": True,
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "use_in_pass_through": False,
+                },
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+        )
+
+        # Test that only pass-through deployment is returned
+        selected_model = await router.async_get_available_deployment_for_pass_through(
+            model="gpt-3.5-turbo", request_kwargs={}
+        )
+        assert selected_model["litellm_params"]["model"] == "gpt-3.5-turbo"
+        assert selected_model["litellm_params"]["use_in_pass_through"] is True
+
+        router.reset()
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_filter_pass_through_deployments():
+    """
+    Test _filter_pass_through_deployments function
+    - Tests that it correctly filters deployments with use_in_pass_through=True
+    """
+    try:
+        litellm.set_verbose = False
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "use_in_pass_through": True,
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "use_in_pass_through": False,
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/gpt-35-turbo",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "use_in_pass_through": True,
+                },
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+        )
+
+        # Get all healthy deployments
+        healthy_deployments = router.get_model_list()
+
+        # Filter pass-through deployments
+        pass_through_deployments = router._filter_pass_through_deployments(
+            healthy_deployments
+        )
+
+        # Should only have 2 deployments with use_in_pass_through=True
+        assert len(pass_through_deployments) == 2
+
+        # Verify all returned deployments have use_in_pass_through=True
+        for deployment in pass_through_deployments:
+            assert deployment["litellm_params"]["use_in_pass_through"] is True
+
         router.reset()
     except Exception as e:
         traceback.print_exc()

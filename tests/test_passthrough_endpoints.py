@@ -17,7 +17,7 @@ dotenv.load_dotenv()
 async def cohere_rerank(session):
     url = "http://localhost:4000/v1/rerank"
     headers = {
-        "Authorization": f"bearer {os.getenv('COHERE_API_KEY')}",
+        "Authorization": f"Bearer {os.getenv('COHERE_API_KEY')}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }

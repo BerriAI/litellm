@@ -4,7 +4,7 @@
 
 import asyncio
 import os
-from typing import List, Literal, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -15,7 +15,10 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.router import ModelGroupInfo
+from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_utc_datetime
+
+from .rate_limiter_utils import convert_priority_to_percent
 
 
 class DynamicRateLimiterCache:
@@ -71,7 +74,6 @@ class DynamicRateLimiterCache:
 
 
 class _PROXY_DynamicRateLimitHandler(CustomLogger):
-
     # Class variables or attributes
     def __init__(self, internal_usage_cache: DualCache):
         self.internal_usage_cache = DynamicRateLimiterCache(cache=internal_usage_cache)
@@ -100,6 +102,11 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             - active_projects: int or null
         """
         try:
+            # Get model info first for conversion
+            model_group_info: Optional[ModelGroupInfo] = (
+                self.llm_router.get_model_group_info(model_group=model)
+            )
+
             weight: float = 1
             if (
                 litellm.priority_reservation is None
@@ -116,17 +123,16 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                         "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
                     )
                 else:
-                    weight = litellm.priority_reservation[priority]
+                    value = litellm.priority_reservation[priority]
+                    weight = convert_priority_to_percent(value, model_group_info)
 
             active_projects = await self.internal_usage_cache.async_get_cache(
                 model=model
             )
-            current_model_tpm, current_model_rpm = (
-                await self.llm_router.get_model_group_usage(model_group=model)
-            )
-            model_group_info: Optional[ModelGroupInfo] = (
-                self.llm_router.get_model_group_info(model_group=model)
-            )
+            (
+                current_model_tpm,
+                current_model_rpm,
+            ) = await self.llm_router.get_model_group_usage(model_group=model)
             total_model_tpm: Optional[int] = None
             total_model_rpm: Optional[int] = None
             if model_group_info is not None:
@@ -188,16 +194,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
@@ -210,10 +207,14 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             key_priority: Optional[str] = user_api_key_dict.metadata.get(
                 "priority", None
             )
-            available_tpm, available_rpm, model_tpm, model_rpm, active_projects = (
-                await self.check_available_usage(
-                    model=data["model"], priority=key_priority
-                )
+            (
+                available_tpm,
+                available_rpm,
+                model_tpm,
+                model_rpm,
+                active_projects,
+            ) = await self.check_available_usage(
+                model=data["model"], priority=key_priority
             )
             ### CHECK TPM ###
             if available_tpm is not None and available_tpm == 0:
@@ -267,10 +268,14 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 key_priority: Optional[str] = user_api_key_dict.metadata.get(
                     "priority", None
                 )
-                available_tpm, available_rpm, model_tpm, model_rpm, active_projects = (
-                    await self.check_available_usage(
-                        model=model_info["model_name"], priority=key_priority
-                    )
+                (
+                    available_tpm,
+                    available_rpm,
+                    model_tpm,
+                    model_rpm,
+                    active_projects,
+                ) = await self.check_available_usage(
+                    model=model_info["model_name"], priority=key_priority
                 )
                 response._hidden_params["additional_headers"] = (
                     {  # Add additional response headers - easier debugging

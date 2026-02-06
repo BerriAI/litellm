@@ -31,8 +31,10 @@ async def generate_key(session, models=[]):
         return await response.json()
 
 
-async def get_models(session, key):
+async def get_models(session, key, only_model_access_groups=False):
     url = "http://0.0.0.0:4000/models"
+    if only_model_access_groups:
+        url += "?only_model_access_groups=True"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -47,30 +49,76 @@ async def get_models(session, key):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
 
 
 @pytest.mark.asyncio
-async def test_get_models():
+async def test_get_models_multiple_tests():
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
-        await get_models(session=session, key=key)
+        models = await get_models(session=session, key=key)
+        print(f"\n\nmodels: {models}")
+        assert len(models["data"]) > 0
+
+        ## Test only_model_access_groups
+        new_response = await get_models(
+            session=session, key=key, only_model_access_groups=True
+        )
+        print(f"\n\nnew_response: {new_response}")
+        assert (
+            len(new_response["data"]) == 0
+        )  # no model access groups set on config.yaml
 
 
-async def add_models(session, model_id="123", model_name="azure-gpt-3.5"):
+async def add_models(
+    session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234", team_id=None
+):
     url = "http://0.0.0.0:4000/model/new"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
 
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-2",
-            "api_key": "os.environ/AZURE_API_KEY",
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "openai/gpt-4.1-nano",
+            "api_key": "os.environ/OPENAI_API_KEY",
+        },
+        "model_info": {"id": model_id},
+    }
+
+    if team_id:
+        data["model_info"]["team_id"] = team_id
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+        print(f"Add models {response_text}")
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_json = await response.json()
+        return response_json
+
+
+async def update_model(
+    session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234"
+):
+    url = "http://0.0.0.0:4000/model/update"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    data = {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "openai/gpt-4.1-nano",
+            "api_key": "os.environ/OPENAI_API_KEY",
         },
         "model_info": {"id": model_id},
     }
@@ -96,6 +144,24 @@ async def get_model_info(session, key, litellm_model_id=None):
         url = f"http://0.0.0.0:4000/model/info?litellm_model_id={litellm_model_id}"
     else:
         url = "http://0.0.0.0:4000/model/info"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
+
+
+async def get_model_group_info(session, key):
+    url = "http://0.0.0.0:4000/model_group/info"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -180,13 +246,13 @@ async def test_get_specific_model():
         )
 
 
-async def delete_model(session, model_id="123"):
+async def delete_model(session, model_id="123", key="sk-1234"):
     """
     Make sure only models user has access to are returned
     """
     url = "http://0.0.0.0:4000/model/delete"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     data = {"id": model_id}
@@ -210,7 +276,7 @@ async def test_add_and_delete_models():
     - Delete model
     - Call model -> expect to fail
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -241,10 +307,8 @@ async def add_model_for_health_checking(session, model_id="123"):
     data = {
         "model_name": f"azure-model-health-check-{model_id}",
         "litellm_params": {
-            "model": "azure/chatgpt-v-2",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "gpt-4.1-nano",
+            "api_key": os.getenv("OPENAI_API_KEY"),
         },
         "model_info": {"id": model_id},
     }
@@ -334,7 +398,7 @@ async def test_add_model_run_health():
     Call /health
     -> Ensure the health check for the endpoint is working as expected
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -366,7 +430,7 @@ async def test_add_model_run_health():
 
         assert _health_info["healthy_count"] == 1
         assert (
-            _healthy_endpooint["model"] == "azure/chatgpt-v-2"
+            _healthy_endpooint["model"] == "gpt-4.1-nano"
         )  # this is the model that got added
 
         # assert httpx client is is unchanges
@@ -394,3 +458,102 @@ async def test_add_model_run_health():
 
         # cleanup
         await delete_model(session=session, model_id=model_id)
+
+
+@pytest.mark.asyncio
+async def test_get_personal_models_for_user():
+    """
+    Test /models endpoint with team
+    """
+    from tests.test_users import new_user
+
+    async with aiohttp.ClientSession() as session:
+        # Creat a user
+        user_data = await new_user(session=session, i=0, models=["gpt-3.5-turbo"])
+        user_id = user_data["user_id"]
+        user_api_key = user_data["key"]
+
+        model_group_info = await get_model_group_info(session=session, key=user_api_key)
+        print(model_group_info)
+
+        assert len(model_group_info["data"]) == 1
+        assert model_group_info["data"][0]["model_group"] == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_model_group_info_e2e():
+    """
+    Test /model/group/info endpoint
+    """
+    async with aiohttp.ClientSession() as session:
+        models = await get_models(session=session, key="sk-1234")
+        print(models)
+
+        expected_models = [
+            "anthropic/claude-3-5-haiku-20241022",
+            "anthropic/claude-3-opus-20240229",
+        ]
+
+        model_group_info = await get_model_group_info(session=session, key="sk-1234")
+        print(model_group_info)
+
+        has_anthropic_claude_3_5_haiku = False
+        has_anthropic_claude_3_opus = False
+        for model in model_group_info["data"]:
+            if model["model_group"] == "anthropic/claude-3-5-haiku-20241022":
+                has_anthropic_claude_3_5_haiku = True
+            if model["model_group"] == "anthropic/claude-3-opus-20240229":
+                has_anthropic_claude_3_opus = True
+
+        assert has_anthropic_claude_3_5_haiku and has_anthropic_claude_3_opus
+
+
+@pytest.mark.asyncio
+async def test_team_model_e2e():
+    """
+    Test team model e2e
+
+    - create team
+    - create user
+    - add user to team as admin
+    - add model to team
+    - update model
+    - delete model
+    """
+    from tests.test_users import new_user
+    from tests.test_team import new_team
+    from litellm._uuid import uuid
+
+    async with aiohttp.ClientSession() as session:
+        # Creat a user
+        user_data = await new_user(session=session, i=0)
+        user_id = user_data["user_id"]
+        user_api_key = user_data["key"]
+
+        # Create a team
+        member_list = [
+            {"role": "admin", "user_id": user_id},
+        ]
+        team_data = await new_team(session=session, member_list=member_list, i=0)
+        team_id = team_data["team_id"]
+
+        model_id = str(uuid.uuid4())
+        model_name = "my-test-model"
+        # Add model to team
+        model_data = await add_models(
+            session=session,
+            model_id=model_id,
+            model_name=model_name,
+            key=user_api_key,
+            team_id=team_id,
+        )
+        model_id = model_data["model_id"]
+
+        # Update model
+        model_data = await update_model(
+            session=session, model_id=model_id, model_name=model_name, key=user_api_key
+        )
+        model_id = model_data["model_id"]
+
+        # Delete model
+        await delete_model(session=session, model_id=model_id, key=user_api_key)

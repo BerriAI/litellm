@@ -13,19 +13,20 @@ import os
 import httpx
 
 
-def get_model_cost_map(url: str):
+def get_model_cost_map(url: str) -> dict:
     if (
         os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
         or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
     ):
-        import importlib.resources
+        from importlib.resources import files
         import json
 
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        content = json.loads(
+            files("litellm")
+            .joinpath("model_prices_and_context_window_backup.json")
+            .read_text(encoding="utf-8")
+        )
+        return content
 
     try:
         response = httpx.get(
@@ -35,11 +36,12 @@ def get_model_cost_map(url: str):
         content = response.json()
         return content
     except Exception:
-        import importlib.resources
+        from importlib.resources import files
         import json
 
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        content = json.loads(
+            files("litellm")
+            .joinpath("model_prices_and_context_window_backup.json")
+            .read_text(encoding="utf-8")
+        )
+        return content

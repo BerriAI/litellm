@@ -59,6 +59,7 @@ class BaseSecretManager(ABC):
         description: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None
     ) -> Dict[str, Any]:
         """
         Asynchronously write a secret to the secret manager.
@@ -69,6 +70,9 @@ class BaseSecretManager(ABC):
             description (Optional[str]): Description of the secret. Some secret managers allow storing a description with the secret.
             optional_params (Optional[dict]): Additional parameters specific to the secret manager
             timeout (Optional[Union[float, httpx.Timeout]]): Request timeout
+            tags: Optional dict or list of tags to apply, e.g.
+                  {"Environment": "Prod", "Owner": "AI-Platform"} or
+                  [{"Key": "Environment", "Value": "Prod"}]
         Returns:
             Dict[str, Any]: Response from the secret manager containing write operation details
         """

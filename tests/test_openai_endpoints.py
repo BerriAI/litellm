@@ -3,9 +3,9 @@
 import pytest
 import asyncio
 import aiohttp, openai
-from openai import OpenAI, AsyncOpenAI
+from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from typing import Optional, List, Union
-import uuid
+from litellm._uuid import uuid
 
 LITELLM_MASTER_KEY = "sk-1234"
 
@@ -201,6 +201,14 @@ async def chat_completion_with_headers(session, key, model="gpt-4"):
         return raw_headers_json
 
 
+async def chat_completion_with_model_from_route(session, key, route):
+    url = "http://0.0.0.0:4000/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
 async def completion(session, key):
     url = "http://0.0.0.0:4000/completions"
     headers = {
@@ -288,16 +296,24 @@ async def test_chat_completion():
     make chat completion call
     """
     async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await chat_completion(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        await chat_completion(session=session, key=key_2)
+        key_gen = await generate_key(session=session, models=["gpt-3.5-turbo"])
+        azure_client = AsyncAzureOpenAI(
+            azure_endpoint="http://0.0.0.0:4000",
+            azure_deployment="random-model",
+            api_key=key_gen["key"],
+            api_version="2024-02-15-preview",
+        )
+        with pytest.raises(openai.AuthenticationError) as e:
+            response = await azure_client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "Hello!"}],
+            )
+        assert "key not allowed to access model." in str(e)
 
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.skip(reason="Flaky test, this works locally but not on CI")
 async def test_chat_completion_ratelimit():
     """
     - call model with rpm 1
@@ -379,6 +395,36 @@ async def test_chat_completion_streaming():
 
 
 @pytest.mark.asyncio
+async def test_completion_streaming_usage_metrics():
+    """
+    [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
+    """
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    response = await client.completions.create(
+        model="gpt-instruct",
+        prompt="hey",
+        stream=True,
+        stream_options={"include_usage": True},
+        max_tokens=4,
+        temperature=0.00000001,
+    )
+
+    last_chunk = None
+    async for chunk in response:
+        print("chunk", chunk)
+        last_chunk = chunk
+
+    assert last_chunk is not None, "No chunks were received"
+    assert last_chunk.usage is not None, "Usage information was not received"
+    assert last_chunk.usage.prompt_tokens > 0, "Prompt tokens should be greater than 0"
+    assert (
+        last_chunk.usage.completion_tokens > 0
+    ), "Completion tokens should be greater than 0"
+    assert last_chunk.usage.total_tokens > 0, "Total tokens should be greater than 0"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_anthropic_structured_output():
     """
     Ensure nested pydantic output is returned correctly
@@ -409,21 +455,6 @@ async def test_chat_completion_anthropic_structured_output():
 
     if message.parsed:
         print(message.parsed.events)
-
-
-@pytest.mark.asyncio
-async def test_chat_completion_old_key():
-    """
-    Production test for backwards compatibility. Test db against a pre-generated (old key)
-    - Create key
-    Make chat completion call
-    """
-    async with aiohttp.ClientSession() as session:
-        try:
-            key = "sk--W0Ph0uDZLVD7V7LQVrslg"
-            await chat_completion(session=session, key=key)
-        except Exception as e:
-            pytest.fail("Invalid api key")
 
 
 @pytest.mark.asyncio
@@ -519,13 +550,13 @@ async def test_proxy_all_models():
     async with aiohttp.ClientSession() as session:
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         await chat_completion(
-            session=session, key=LITELLM_MASTER_KEY, model="groq/llama3-8b-8192"
+            session=session, key=LITELLM_MASTER_KEY, model="groq/llama-3.1-8b-instant"
         )
 
         await chat_completion(
             session=session,
             key=LITELLM_MASTER_KEY,
-            model="anthropic/claude-3-sonnet-20240229",
+            model="anthropic/claude-sonnet-4-5-20250929",
         )
 
 

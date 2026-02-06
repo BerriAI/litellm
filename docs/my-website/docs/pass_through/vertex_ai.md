@@ -13,7 +13,102 @@ Pass-through endpoints for Vertex AI - call provider-specific endpoint, in nativ
 | End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
 | Streaming | ✅ | |
 
+## Supported Endpoints
+
+LiteLLM supports 3 vertex ai passthrough routes:
+
+1. `/vertex_ai` → routes to `https://{vertex_location}-aiplatform.googleapis.com/`
+2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/) - [See Search Datastores Guide](./vertex_ai_search_datastores.md)
+3. `/vertex_ai/live` → upgrades to the Vertex AI Live API WebSocket (`google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`) - [See Live WebSocket Guide](./vertex_ai_live_websocket.md)
+
+## How to use
+
 Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex_ai`
+
+LiteLLM supports 3 flows for calling Vertex AI endpoints via pass-through:
+
+1. **Specific Credentials**: Admin sets passthrough credentials for a specific project/region.
+
+2. **Default Credentials**: Admin sets default credentials.
+
+3. **Client-Side Credentials**: User can send client-side credentials through to Vertex AI (default behavior - if no default or mapped credentials are found, the request is passed through directly).
+
+
+## Example Usage
+
+<Tabs>
+<TabItem value="specific_credentials" label="Specific Project/Region">
+
+```yaml
+model_list:
+  - model_name: gemini-1.0-pro
+    litellm_params:
+      model: vertex_ai/gemini-1.0-pro
+      vertex_project: adroit-crow-413218
+      vertex_location: us-central1
+      vertex_credentials: /path/to/credentials.json
+      use_in_pass_through: true # 👈 KEY CHANGE
+```
+
+</TabItem>
+<TabItem value="default_credentials" label="Default Credentials">
+
+<Tabs>
+<TabItem value="yaml" label="Set in config.yaml">
+
+```yaml
+default_vertex_config:
+  vertex_project: adroit-crow-413218
+  vertex_location: us-central1
+  vertex_credentials: /path/to/credentials.json
+```
+</TabItem>
+<TabItem value="env_var" label="Set in environment variables">
+
+```bash
+export DEFAULT_VERTEXAI_PROJECT="adroit-crow-413218"
+export DEFAULT_VERTEXAI_LOCATION="us-central1"
+export DEFAULT_GOOGLE_APPLICATION_CREDENTIALS="/path/to/credentials.json"
+```
+
+</TabItem>
+</Tabs>
+</TabItem>
+<TabItem value="client_credentials" label="Client Credentials">
+
+Try Gemini 2.0 Flash (curl)
+
+```
+MODEL_ID="gemini-2.0-flash-001"
+PROJECT_ID="YOUR_PROJECT_ID"
+```
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer $(gcloud auth application-default print-access-token)" \
+  -H "Content-Type: application/json" \
+  "${LITELLM_PROXY_BASE_URL}/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:streamGenerateContent" -d \
+  $'{
+    "contents": {
+      "role": "user",
+      "parts": [
+        {
+        "fileData": {
+          "mimeType": "image/png",
+          "fileUri": "gs://generativeai-downloads/images/scones.jpg"
+          }
+        },
+        {
+          "text": "Describe this picture."
+        }
+      ]
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 
 #### **Example Usage**
@@ -22,7 +117,7 @@ Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE
 <TabItem value="curl" label="curl">
 
 ```bash
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{
@@ -76,6 +171,50 @@ generateContent();
 </Tabs>
 
 
+## Vertex AI Live API WebSocket
+
+LiteLLM can now proxy the Vertex AI Live API to help you experiment with streaming audio/text from Gemini Live models without exposing Google credentials to clients.
+
+- Configure default Vertex credentials via `default_vertex_config` or environment variables (see examples above).
+- Connect to `wss://<PROXY_URL>/vertex_ai/live`. LiteLLM will exchange your saved credentials for a short-lived access token and forward messages bidirectionally.
+- Optional query params `vertex_project`, `vertex_location`, and `model` let you override defaults for multi-project setups or global-only models.
+
+```python title="client.py"
+import asyncio
+import json
+
+from websockets.asyncio.client import connect
+
+
+async def main() -> None:
+    headers = {
+        "x-litellm-api-key": "Bearer sk-your-litellm-key",
+        "Content-Type": "application/json",
+    }
+    async with connect(
+        "ws://localhost:4000/vertex_ai/live",
+        additional_headers=headers,
+    ) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "setup": {
+                        "model": "projects/your-project/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09",
+                        "generation_config": {"response_modalities": ["TEXT"]},
+                    }
+                }
+            )
+        )
+
+        async for message in ws:
+            print("server:", message)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+
 ## Quick Start
 
 Let's call the Vertex AI [`/generateContent` endpoint](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference)
@@ -101,7 +240,7 @@ litellm
 Let's call the Google AI Studio token counting endpoint
 
 ```bash
-curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex-ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
@@ -128,7 +267,7 @@ curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:gen
 
 LiteLLM Proxy Server supports two methods of authentication to Vertex AI:
 
-1. Pass Vertex Credetials client side to proxy server
+1. Pass Vertex Credentials client side to proxy server
 
 2. Set Vertex AI credentials on proxy server
 
@@ -140,7 +279,7 @@ LiteLLM Proxy Server supports two methods of authentication to Vertex AI:
 
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-001:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
@@ -152,7 +291,7 @@ curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-0
 
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/textembedding-gecko@001:predict \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/textembedding-gecko@001:predict \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"instances":[{"content": "gm"}]}'
@@ -162,7 +301,7 @@ curl http://localhost:4000/vertex_ai/publishers/google/models/textembedding-geck
 ### Imagen API
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/imagen-3.0-generate-001:predict \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/imagen-3.0-generate-001:predict \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"instances":[{"prompt": "make an otter"}], "parameters": {"sampleCount": 1}}'
@@ -172,7 +311,7 @@ curl http://localhost:4000/vertex_ai/publishers/google/models/imagen-3.0-generat
 ### Count Tokens API
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-001:countTokens \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:countTokens \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
@@ -183,7 +322,7 @@ Create Fine Tuning Job
 
 
 ```shell
-curl http://localhost:4000/vertex_ai/tuningJobs \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:tuningJobs \
       -H "Content-Type: application/json" \
       -H "x-litellm-api-key: Bearer sk-1234" \
       -d '{
@@ -243,7 +382,7 @@ Expected Response
 
 
 ```bash
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{
@@ -268,7 +407,7 @@ tags: ["vertex-js-sdk", "pass-through-endpoint"]
 <TabItem value="curl" label="curl">
 
 ```bash
-curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -H "tags: vertex-js-sdk,pass-through-endpoint" \
@@ -322,3 +461,48 @@ generateContent();
 
 </TabItem>
 </Tabs>
+
+### Using Anthropic Beta Features on Vertex AI
+
+When using Anthropic models via Vertex AI passthrough (e.g., Claude on Vertex), you can enable Anthropic beta features like extended context windows.
+
+The `anthropic-beta` header is automatically forwarded to Vertex AI when calling Anthropic models.
+
+```bash
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "anthropic-beta: context-1m-2025-08-07" \
+  -d '{
+    "anthropic_version": "vertex-2023-10-16",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 500
+  }'
+```
+
+### Forwarding Custom Headers with `x-pass-` Prefix
+
+You can forward any custom header to the provider by prefixing it with `x-pass-`. The prefix is stripped before the header is sent to the provider.
+
+For example:
+- `x-pass-anthropic-beta: value` becomes `anthropic-beta: value`
+- `x-pass-custom-header: value` becomes `custom-header: value`
+
+This is useful when you need to send provider-specific headers that aren't in the default allowlist.
+
+```bash
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "x-pass-anthropic-beta: context-1m-2025-08-07" \
+  -H "x-pass-custom-feature: enabled" \
+  -d '{
+    "anthropic_version": "vertex-2023-10-16",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 500
+  }'
+```
+
+:::info
+The `x-pass-` prefix works for all LLM pass-through endpoints, not just Vertex AI.
+:::

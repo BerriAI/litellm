@@ -69,10 +69,10 @@ async def langfuse_proxy_route(
         request=request, api_key="Bearer {}".format(api_key)
     )
 
-    callback_settings_obj: Optional[TeamCallbackMetadata] = (
-        _get_dynamic_logging_metadata(
-            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
-        )
+    callback_settings_obj: Optional[
+        TeamCallbackMetadata
+    ] = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
     dynamic_langfuse_public_key: Optional[str] = None
@@ -128,12 +128,12 @@ async def langfuse_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": langfuse_combined_key},
+        query_params=dict(request.query_params),  # type: ignore
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        query_params=dict(request.query_params),  # type: ignore
     )
 
     return received_value

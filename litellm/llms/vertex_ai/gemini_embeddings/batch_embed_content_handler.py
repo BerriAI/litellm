@@ -8,7 +8,7 @@ from typing import Any, Literal, Optional, Union
 import httpx
 
 import litellm
-from litellm import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -43,11 +43,11 @@ class GoogleBatchEmbeddings(VertexLLM):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        aembedding=False,
+        aembedding: Optional[bool] = False,
         timeout=300,
         client=None,
+        extra_headers: Optional[dict] = None,
     ) -> EmbeddingResponse:
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -91,6 +91,15 @@ class GoogleBatchEmbeddings(VertexLLM):
         headers = {
             "Content-Type": "application/json; charset=utf-8",
         }
+        if auth_header is not None:
+            if isinstance(auth_header, dict):
+                # For Gemini with custom api_base: auth_header is {"x-goog-api-key": "..."}
+                headers.update(auth_header)
+            else:
+                # For Vertex AI: auth_header is a Bearer token string
+                headers["Authorization"] = f"Bearer {auth_header}"
+        if extra_headers is not None:
+            headers.update(extra_headers)
 
         ## LOGGING
         logging_obj.pre_call(

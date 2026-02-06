@@ -9,12 +9,12 @@ Has 4 methods:
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -52,4 +52,13 @@ class BaseCache(ABC):
         raise NotImplementedError
 
     async def disconnect(self):
+        raise NotImplementedError
+    
+    async def test_connection(self) -> dict:
+        """
+        Test the cache connection.
+        
+        Returns:
+            dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
+        """
         raise NotImplementedError

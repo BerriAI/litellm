@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 import httpx
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ChatCompletionAssistantMessage
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -25,7 +25,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         self,
         api_base: Optional[str],
         api_key: Optional[str],
-        model: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")  # type: ignore
         dynamic_api_key = (
@@ -34,7 +33,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     @staticmethod
-    def _convert_tool_response_to_message(
+    def _json_mode_convert_tool_response_to_message(
         message: ChatCompletionAssistantMessage, json_mode: bool
     ) -> ChatCompletionAssistantMessage:
         """
@@ -62,6 +61,23 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         return message
 
     @staticmethod
+    def _sanitize_usage_obj(response_json: dict) -> dict:
+        """
+        Checks for a 'usage' object in the response and replaces any None token values with 0.
+        This enforces OpenAI compatibility for providers that might return null.
+
+        This method is future-proof and sanitizes any key ending in '_tokens'.
+        """
+        if "usage" in response_json and isinstance(response_json.get("usage"), dict):
+            usage = response_json["usage"]
+            # Iterate through all keys in the usage dictionary
+            for key, value in usage.items():
+                # Sanitize if the key ends with '_tokens' and its value is None
+                if key.endswith("_tokens") and value is None:
+                    usage[key] = 0
+        return response_json
+
+    @staticmethod
     def _transform_response(
         model: str,
         response: httpx.Response,
@@ -74,8 +90,8 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         messages: List,
         print_verbose,
         encoding,
-        json_mode: bool,
-        custom_llm_provider: str,
+        json_mode: Optional[bool],
+        custom_llm_provider: Optional[str],
         base_model: Optional[str],
     ) -> ModelResponse:
         response_json = response.json()
@@ -86,22 +102,59 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": data},
         )
 
+        # Sanitize the usage object at the source
+        response_json = OpenAILikeChatConfig._sanitize_usage_obj(response_json)
+
         if json_mode:
             for choice in response_json["choices"]:
-                message = OpenAILikeChatConfig._convert_tool_response_to_message(
-                    choice.get("message"), json_mode
+                message = (
+                    OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
+                        choice.get("message"), json_mode
+                    )
                 )
                 choice["message"] = message
 
         returned_response = ModelResponse(**response_json)
 
-        returned_response.model = (
-            custom_llm_provider + "/" + (returned_response.model or "")
-        )
+        if custom_llm_provider is not None:
+            returned_response.model = (
+                custom_llm_provider + "/" + (returned_response.model or "")
+            )
 
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
         return returned_response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        return OpenAILikeChatConfig._transform_response(
+            model=model,
+            response=raw_response,
+            model_response=model_response,
+            stream=optional_params.get("stream", False),
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+            data=request_data,
+            messages=messages,
+            print_verbose=None,
+            encoding=None,
+            json_mode=json_mode,
+            custom_llm_provider=None,
+            base_model=None,
+        )
 
     def map_openai_params(
         self,

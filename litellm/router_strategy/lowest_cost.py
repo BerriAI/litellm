@@ -16,10 +16,9 @@ class LowestCostLoggingHandler(CustomLogger):
     logged_failure: int = 0
 
     def __init__(
-        self, router_cache: DualCache, model_list: list, routing_args: dict = {}
+        self, router_cache: DualCache, routing_args: dict = {}
     ):
         self.router_cache = router_cache
-        self.model_list = model_list
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:

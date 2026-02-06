@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
 from .integrations.datadog.datadog import DataDogLogger
@@ -15,11 +14,14 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    Span = Union[_Span, Any]
     OTELClass = OpenTelemetry
 else:
     Span = Any
     OTELClass = Any
+    UserAPIKeyAuth = Any
 
 
 class ServiceLogging(CustomLogger):
@@ -124,6 +126,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:
@@ -142,16 +145,19 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm.proxy.proxy_server import open_telemetry_logger
+                _otel_logger_to_use: Optional[OpenTelemetry] = None
+                if isinstance(callback, OpenTelemetry):
+                    _otel_logger_to_use = callback
+                else:
+                    from litellm.proxy.proxy_server import open_telemetry_logger
 
-                await self.init_otel_logger_if_none()
+                    if open_telemetry_logger is not None and isinstance(
+                        open_telemetry_logger, OpenTelemetry
+                    ):
+                        _otel_logger_to_use = open_telemetry_logger
 
-                if (
-                    parent_otel_span is not None
-                    and open_telemetry_logger is not None
-                    and isinstance(open_telemetry_logger, OpenTelemetry)
-                ):
-                    await self.otel_logger.async_service_success_hook(
+                if _otel_logger_to_use is not None and parent_otel_span is not None:
+                    await _otel_logger_to_use.async_service_success_hook(
                         payload=payload,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
@@ -229,6 +235,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:
@@ -249,20 +256,24 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm.proxy.proxy_server import open_telemetry_logger
+                _otel_logger_to_use: Optional[OpenTelemetry] = None
+                if isinstance(callback, OpenTelemetry):
+                    _otel_logger_to_use = callback
+                else:
+                    from litellm.proxy.proxy_server import open_telemetry_logger
 
-                await self.init_otel_logger_if_none()
+                    if open_telemetry_logger is not None and isinstance(
+                        open_telemetry_logger, OpenTelemetry
+                    ):
+                        _otel_logger_to_use = open_telemetry_logger
 
                 if not isinstance(error, str):
                     error = str(error)
 
-                if (
-                    parent_otel_span is not None
-                    and open_telemetry_logger is not None
-                    and isinstance(open_telemetry_logger, OpenTelemetry)
-                ):
-                    await self.otel_logger.async_service_success_hook(
+                if _otel_logger_to_use is not None and parent_otel_span is not None:
+                    await _otel_logger_to_use.async_service_failure_hook(
                         payload=payload,
+                        error=error,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
@@ -274,6 +285,7 @@ class ServiceLogging(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         """
         Hook to track failed litellm-service calls

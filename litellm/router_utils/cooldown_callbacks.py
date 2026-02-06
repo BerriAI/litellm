@@ -22,7 +22,7 @@ async def router_cooldown_event_callback(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,
     exception_status: Union[str, int],
-    cooldown_time: float,
+    cooldown_time: Optional[float],
 ):
     """
     Callback triggered when a deployment is put into cooldown by litellm
@@ -87,6 +87,9 @@ def _get_prometheus_logger_from_callbacks() -> Optional[PrometheusLogger]:
     Checks if prometheus is a initalized callback, if yes returns it
     """
     from litellm.integrations.prometheus import PrometheusLogger
+
+    if PrometheusLogger is None:
+        return None
 
     for _callback in litellm._async_success_callback:
         if isinstance(_callback, PrometheusLogger):

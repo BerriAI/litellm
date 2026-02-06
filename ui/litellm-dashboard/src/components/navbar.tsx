@@ -1,133 +1,159 @@
-"use client";
-
-import Link from "next/link";
-import Image from "next/image";
-import React, { useEffect, useState } from "react";
-import type { MenuProps } from "antd";
-import { Dropdown, Space } from "antd";
-import { useSearchParams } from "next/navigation";
+import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
 import {
-  Button,
-  Text,
-  Metric,
-  Title,
-  TextInput,
-  Grid,
-  Col,
-  Card,
-} from "@tremor/react";
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  MoonOutlined,
+  SunOutlined,
+} from "@ant-design/icons";
+import { Switch, Tag } from "antd";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
+import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
+import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 
-
-// Define the props type
 interface NavbarProps {
   userID: string | null;
-  userRole: string | null;
   userEmail: string | null;
+  userRole: string | null;
   premiumUser: boolean;
-  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
+  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
+  accessToken: string | null;
+  isPublicPage: boolean;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
+
 const Navbar: React.FC<NavbarProps> = ({
   userID,
-  userRole,
   userEmail,
+  userRole,
   premiumUser,
-  setProxySettings,
   proxySettings,
+  setProxySettings,
+  accessToken,
+  isPublicPage = false,
+  sidebarCollapsed = false,
+  onToggleSidebar,
+  isDarkMode,
+  toggleDarkMode
 }) => {
-  console.log("User ID:", userID);
-  console.log("userEmail:", userEmail);
-  console.log("premiumUser:", premiumUser);
+  const baseUrl = getProxyBaseUrl();
+  const [logoutUrl, setLogoutUrl] = useState("");
+  const { logoUrl } = useTheme();
+  const { data: healthData } = useHealthReadiness();
+  const version = healthData?.litellm_version;
 
-  // const userColors = require('./ui_colors.json') || {};
-  const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal != true) {
-    console.log = function() {};
-  }
-  const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-  const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
-  let logoutUrl = "";
+  // Simple logo URL: use custom logo if available, otherwise default
+  const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
-  console.log("PROXY_settings=", proxySettings);
+  useEffect(() => {
+    const initializeProxySettings = async () => {
+      if (accessToken) {
+        const settings = await fetchProxySettings(accessToken);
+        console.log("response from fetchProxySettings", settings);
+        if (settings) {
+          setProxySettings(settings);
+        }
+      }
+    };
 
-  if (proxySettings) {
-    if (proxySettings.PROXY_LOGOUT_URL && proxySettings.PROXY_LOGOUT_URL !== undefined) {
-      logoutUrl = proxySettings.PROXY_LOGOUT_URL;
-    }
-  }
+    initializeProxySettings();
+  }, [accessToken]);
 
-  console.log("logoutUrl=", logoutUrl);
+  useEffect(() => {
+    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
+  }, [proxySettings]);
 
   const handleLogout = () => {
-    // Clear cookies
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    clearTokenCookies();
     window.location.href = logoutUrl;
-  }
-   
-
-  const items: MenuProps["items"] = [
-    {
-      key: "1",
-      label: (
-        <>
-          <p>Role: {userRole}</p>
-          <p>ID: {userID}</p>
-          <p>Premium User: {String(premiumUser)}</p>
-        </>
-      ),
-    },
-    {
-      key: "2",
-      label: <p onClick={handleLogout}>Logout</p>,
-    }
-  ];
+  };
 
   return (
-    <>
-      <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="w-full px-4">
-          <div className="flex justify-between items-center h-14">
-            {/* Left side - Just Logo */}
-            <div className="flex items-center">
-              <Link href="/" className="flex items-center">
-                <button className="text-gray-800 rounded text-center">
-                  <img
-                    src={imageUrl}
-                    alt="LiteLLM Brand"
-                    className="h-10 w-40 object-contain"
-                  />
-                </button>
-              </Link>
-            </div>
-
-            {/* Right side - Links and Admin */}
-            <div className="flex items-center space-x-6">
-              <a 
-                href="https://docs.litellm.ai/docs/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-gray-600 hover:text-gray-800"
+    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <div className="w-full">
+        <div className="flex items-center h-14 px-4">
+          <div className="flex items-center flex-shrink-0">
+            {onToggleSidebar && (
+              <button
+                onClick={onToggleSidebar}
+                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
-                Docs
-              </a>
-              <Dropdown menu={{ items }}>
-                <button className="flex items-center text-sm text-gray-600 hover:text-gray-800">
-                  User
-                  <svg 
-                    className="ml-1 w-4 h-4" 
-                    fill="none" 
-                    stroke="currentColor" 
-                    viewBox="0 0 24 24"
+                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
+              </button>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+                <div className="relative">
+                  <div className="h-10 max-w-48 flex items-center justify-center overflow-hidden">
+                    <img
+                      src={imageUrl}
+                      alt="LiteLLM Brand"
+                      className="max-w-full max-h-full w-auto h-auto object-contain"
+                    />
+                  </div>
+                </div>
+              </Link>
+              {version && (
+                <div className="relative">
+                  <span
+                    className="absolute -top-1 -left-2 text-lg animate-bounce"
+                    style={{ animationDuration: "2s" }}
+                    title="Thanks for using LiteLLM!"
                   >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-              </Dropdown>
+                    ❄️
+                  </span>
+                  <Tag className="relative text-xs font-medium cursor-pointer z-10">
+                    <a
+                      href="https://docs.litellm.ai/release_notes"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-shrink-0"
+                    >
+                      v{version}
+                    </a>
+                  </Tag>
+                </div>
+              )}
             </div>
           </div>
+          {/* Right side nav items */}
+          <div className="flex items-center space-x-5 ml-auto">
+            <CommunityEngagementButtons />
+            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
+            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
+            {false && <Switch
+              data-testid="dark-mode-toggle"
+              checked={isDarkMode}
+              onChange={toggleDarkMode}
+              checkedChildren={<MoonOutlined />}
+              unCheckedChildren={<SunOutlined />}
+            />}
+            <a
+              href="https://docs.litellm.ai/docs/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              Docs
+            </a>
+
+            {!isPublicPage && (
+              <UserDropdown onLogout={handleLogout} />
+            )}
+          </div>
         </div>
-      </nav>
-    </>
+      </div>
+    </nav>
   );
 };
 

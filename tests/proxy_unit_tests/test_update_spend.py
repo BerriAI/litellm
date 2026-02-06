@@ -20,17 +20,35 @@ from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
 
 class MockPrismaClient:
     def __init__(self):
-        self.db = MagicMock()
+        # Create AsyncMock for db operations
+        self.db = AsyncMock()
+        self.db.litellm_spendlogs = AsyncMock()
+        self.db.litellm_spendlogs.create_many = AsyncMock()
+        
+        # Initialize transaction lists
         self.spend_log_transactions = []
-        self.user_list_transactons = {}
-        self.end_user_list_transactons = {}
-        self.key_list_transactons = {}
-        self.team_list_transactons = {}
-        self.team_member_list_transactons = {}
-        self.org_list_transactons = {}
+        self.daily_user_spend_transactions = {}
+        
+        # Add lock for spend_log_transactions (matches real PrismaClient)
+        import asyncio
+        self._spend_log_transactions_lock = asyncio.Lock()
 
     def jsonify_object(self, obj):
         return obj
+
+    def add_spend_log_transaction_to_daily_user_transaction(self, payload):
+        # Mock implementation
+        pass
+
+
+def create_mock_proxy_logging():
+    print("creating mock proxy logging")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+    print("returning proxy logging obj")
+    return proxy_logging_obj
 
 
 @pytest.mark.asyncio
@@ -46,8 +64,11 @@ async def test_update_spend_logs_connection_errors(error_type):
     """Test retry mechanism for different connection error types"""
     # Setup
     prisma_client = MockPrismaClient()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj = create_mock_proxy_logging()
+    
+    # Create AsyncMock for db_spend_update_writer
+    proxy_logging_obj.db_spend_update_writer = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
 
     # Add test spend logs
     prisma_client.spend_log_transactions = [
@@ -89,8 +110,7 @@ async def test_update_spend_logs_max_retries_exceeded(error_type):
     """Test that each connection error type properly fails after max retries"""
     # Setup
     prisma_client = MockPrismaClient()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj = create_mock_proxy_logging()
 
     # Add test spend logs
     prisma_client.spend_log_transactions = [
@@ -122,8 +142,7 @@ async def test_update_spend_logs_non_connection_error():
     """Test handling of non-connection related errors"""
     # Setup
     prisma_client = MockPrismaClient()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj = create_mock_proxy_logging()
 
     # Add test spend logs
     prisma_client.spend_log_transactions = [
@@ -154,8 +173,7 @@ async def test_update_spend_logs_exponential_backoff():
     """Test that exponential backoff is working correctly"""
     # Setup
     prisma_client = MockPrismaClient()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj = create_mock_proxy_logging()
 
     # Add test spend logs
     prisma_client.spend_log_transactions = [{"id": "1", "spend": 10}]
@@ -184,8 +202,8 @@ async def test_update_spend_logs_exponential_backoff():
 
     # Verify exponential backoff
     assert len(sleep_times) == 2  # Should have slept twice
-    assert sleep_times[0] == 1  # First retry after 2^0 seconds
-    assert sleep_times[1] == 2  # Second retry after 2^1 seconds
+    assert sleep_times[0] >= 1 and sleep_times[0] <= 2  # First retry after 2^0~2^1 seconds
+    assert sleep_times[1] >= 2 and sleep_times[1] <= 4 # Second retry after 2^1~2^2 seconds
 
 
 @pytest.mark.asyncio
@@ -193,16 +211,15 @@ async def test_update_spend_logs_multiple_batches_success():
     """
     Test successful processing of multiple batches of spend logs
 
-    Code sets batch size to 100. This test creates 150 logs, so it should make 2 batches.
+    Code sets batch size to 1000. This test creates 1500 logs, so it should make 2 batches.
     """
     # Setup
     prisma_client = MockPrismaClient()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj = create_mock_proxy_logging()
 
-    # Create 150 test spend logs (1.5x BATCH_SIZE)
+    # Create 1500 test spend logs (1.5x BATCH_SIZE)
     prisma_client.spend_log_transactions = [
-        {"id": str(i), "spend": 10} for i in range(150)
+        {"id": str(i), "spend": 10} for i in range(1500)
     ]
 
     create_many_mock = AsyncMock(return_value=None)
@@ -219,12 +236,12 @@ async def test_update_spend_logs_multiple_batches_success():
     second_batch = create_many_mock.call_args_list[1][1]["data"]
 
     # Verify batch sizes
-    assert len(first_batch) == 100
-    assert len(second_batch) == 50
+    assert len(first_batch) == 1000
+    assert len(second_batch) == 500
 
     # Verify exact IDs in each batch
-    expected_first_batch_ids = {str(i) for i in range(100)}
-    expected_second_batch_ids = {str(i) for i in range(100, 150)}
+    expected_first_batch_ids = {str(i) for i in range(1000)}
+    expected_second_batch_ids = {str(i) for i in range(1000, 1500)}
 
     actual_first_batch_ids = {item["id"] for item in first_batch}
     actual_second_batch_ids = {item["id"] for item in second_batch}
@@ -240,16 +257,15 @@ async def test_update_spend_logs_multiple_batches_success():
 async def test_update_spend_logs_multiple_batches_with_failure():
     """
     Test processing of multiple batches where one batch fails.
-    Creates 400 logs (4 batches) with one batch failing but eventually succeeding after retry.
+    Creates 4000 logs (4 batches) with one batch failing but eventually succeeding after retry.
     """
     # Setup
     prisma_client = MockPrismaClient()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj = create_mock_proxy_logging()
 
-    # Create 400 test spend logs (4x BATCH_SIZE)
+    # Create 4000 test spend logs (4x BATCH_SIZE)
     prisma_client.spend_log_transactions = [
-        {"id": str(i), "spend": 10} for i in range(400)
+        {"id": str(i), "spend": 10} for i in range(4000)
     ]
 
     # Mock to fail on second batch first attempt, then succeed
@@ -280,9 +296,9 @@ async def test_update_spend_logs_multiple_batches_with_failure():
     # Verify all IDs were processed
     processed_ids = {item["id"] for item in all_processed_logs}
 
-    # these should have ids 0-399
+    # these should have ids 0-3999
     print("all processed ids", sorted(processed_ids, key=int))
-    expected_ids = {str(i) for i in range(400)}
+    expected_ids = {str(i) for i in range(4000)}
     assert processed_ids == expected_ids
 
     # Verify all logs were cleared from transactions

@@ -1,0 +1,263 @@
+#### Search Endpoints #####
+
+import orjson
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import ORJSONResponse
+
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import *
+from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+router = APIRouter()
+
+
+@router.post(
+    "/v1/search/{search_tool_name}",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+@router.post(
+    "/search/{search_tool_name}",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+@router.post(
+    "/v1/search",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+@router.post(
+    "/search",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+async def search(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    search_tool_name: Optional[str] = None,
+):
+    """
+    Search endpoint for performing web searches.
+    
+    Follows the Perplexity Search API spec:
+    https://docs.perplexity.ai/api-reference/search-post
+    
+    The search_tool_name can be passed either:
+    1. In the URL path: /v1/search/{search_tool_name}
+    2. In the request body: {"search_tool_name": "..."}
+    
+    Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
+    ```bash
+    curl -X POST "http://localhost:4000/v1/search/litellm-search" \
+        -H "Authorization: Bearer sk-1234" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "query": "latest AI developments 2024",
+            "max_results": 5,
+            "search_domain_filter": ["arxiv.org", "nature.com"],
+            "country": "US"
+        }'
+    ```
+    
+    Example with search_tool_name in body:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/search" \
+        -H "Authorization: Bearer sk-1234" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "search_tool_name": "litellm-search",
+            "query": "latest AI developments 2024",
+            "max_results": 5,
+            "search_domain_filter": ["arxiv.org", "nature.com"],
+            "country": "US"
+        }'
+    ```
+    
+    Request Body Parameters (when search_tool_name not in URL):
+    - search_tool_name (str, required if not in URL): Name of the search tool configured in router
+    - query (str or list[str], required): Search query
+    - max_results (int, optional): Maximum number of results (1-20), default 10
+    - search_domain_filter (list[str], optional): List of domains to filter (max 20)
+    - max_tokens_per_page (int, optional): Max tokens per page, default 1024
+    - country (str, optional): Country code filter (e.g., 'US', 'GB', 'DE')
+    
+    When using URL path parameter, only Perplexity-compatible parameters are needed in body:
+    - query (str or list[str], required): Search query
+    - max_results (int, optional): Maximum number of results (1-20), default 10
+    - search_domain_filter (list[str], optional): List of domains to filter (max 20)
+    - max_tokens_per_page (int, optional): Max tokens per page, default 1024
+    - country (str, optional): Country code filter (e.g., 'US', 'GB', 'DE')
+    
+    Response follows Perplexity Search API format:
+    ```json
+    {
+        "object": "search",
+        "results": [
+            {
+                "title": "Result title",
+                "url": "https://example.com",
+                "snippet": "Result snippet...",
+                "date": "2024-01-01",
+                "last_updated": "2024-01-01"
+            }
+        ]
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    # Read request body
+    body = await request.body()
+    data = orjson.loads(body)
+    
+    # If search_tool_name is provided in URL path, use it (takes precedence over body)
+    if search_tool_name is not None:
+        data["search_tool_name"] = search_tool_name
+
+    if "search_tool_name" in data and data["search_tool_name"]:
+        data["model"] = data["search_tool_name"]
+        
+        if llm_router is not None and hasattr(llm_router, "search_tools"):
+            search_tool_name_value = data["search_tool_name"]
+            
+            verbose_proxy_logger.debug(
+                f"Search endpoint - Looking for search_tool_name: {search_tool_name_value}. "
+                f"Available search tools in router: {[tool.get('search_tool_name') for tool in llm_router.search_tools]}. "
+                f"Total search tools: {len(llm_router.search_tools)}"
+            )
+            
+            matching_tools = [
+                tool for tool in llm_router.search_tools
+                if tool.get("search_tool_name") == search_tool_name_value
+            ]
+            
+            if matching_tools:
+                search_tool = matching_tools[0]
+                search_provider = search_tool.get("litellm_params", {}).get("search_provider")
+                
+                if search_provider:
+                    data["custom_llm_provider"] = search_provider
+                
+                if "metadata" not in data:
+                    data["metadata"] = {}
+                data["metadata"]["model_group"] = search_tool_name_value
+
+    # Process request using ProxyBaseLLMRequestProcessing
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="asearch",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+@router.get(
+    "/v1/search/tools",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+@router.get(
+    "/search/tools",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+async def list_search_tools(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List all available search tools configured in the router.
+    
+    This endpoint returns the search tools that are currently loaded and available
+    for use with the /v1/search endpoint.
+    
+    Example:
+    ```bash
+    curl -X GET "http://localhost:4000/v1/search/tools" \
+        -H "Authorization: Bearer sk-1234"
+    ```
+    
+    Response:
+    ```json
+    {
+        "object": "list",
+        "data": [
+            {
+                "search_tool_name": "litellm-search",
+                "search_provider": "perplexity",
+                "description": "Perplexity search tool"
+            }
+        ]
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        search_tools_list = []
+        
+        if llm_router is not None and hasattr(llm_router, "search_tools"):
+            for tool in llm_router.search_tools:
+                tool_info = {
+                    "search_tool_name": tool.get("search_tool_name"),
+                    "search_provider": tool.get("litellm_params", {}).get("search_provider"),
+                }
+                
+                # Add description if available
+                if "search_tool_info" in tool and tool["search_tool_info"]:
+                    description = tool["search_tool_info"].get("description")
+                    if description:
+                        tool_info["description"] = description
+                
+                search_tools_list.append(tool_info)
+        
+        return {
+            "object": "list",
+            "data": search_tools_list
+        }
+    except Exception as e:
+        from litellm._logging import verbose_proxy_logger
+        verbose_proxy_logger.exception(f"Error listing search tools: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

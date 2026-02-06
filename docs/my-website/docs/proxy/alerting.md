@@ -148,7 +148,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [], 
     extra_body={
         "metadata": {
@@ -213,18 +213,18 @@ model_list:
 general_settings: 
   master_key: sk-1234
   alerting: ["slack"]
-  alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
+  alerting_threshold: 0.0001 # (Seconds) set an artificially low threshold for testing alerting
   alert_to_webhook_url: {
-    "llm_exceptions": "https://hooks.slack.com/services/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",
-    "llm_too_slow": "https://hooks.slack.com/services/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",
-    "llm_requests_hanging": "https://hooks.slack.com/services/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",
-    "budget_alerts": "https://hooks.slack.com/services/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",
-    "db_exceptions": "https://hooks.slack.com/services/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",
-    "daily_reports": "https://hooks.slack.com/services/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",
-    "spend_reports": "https://hooks.slack.com/services/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",
-    "cooldown_deployment": "https://hooks.slack.com/services/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",
-    "new_model_added": "https://hooks.slack.com/services/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",
-    "outage_alerts": "https://hooks.slack.com/services/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",
+    "llm_exceptions": "example-slack-webhook-url",
+    "llm_too_slow": "example-slack-webhook-url",
+    "llm_requests_hanging": "example-slack-webhook-url",
+    "budget_alerts": "example-slack-webhook-url",
+    "db_exceptions": "example-slack-webhook-url",
+    "daily_reports": "example-slack-webhook-url",
+    "spend_reports": "example-slack-webhook-url",
+    "cooldown_deployment": "example-slack-webhook-url",
+    "new_model_added": "example-slack-webhook-url",
+    "outage_alerts": "example-slack-webhook-url",
   }
 
 litellm_settings:
@@ -247,7 +247,7 @@ model_list:
 general_settings: 
   master_key: sk-1234
   alerting: ["slack"]
-  alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
+  alerting_threshold: 0.0001 # (Seconds) set an artificially low threshold for testing alerting
   alert_to_webhook_url: {
     "llm_exceptions": ["os.environ/SLACK_WEBHOOK_URL", "os.environ/SLACK_WEBHOOK_URL_2"],
     "llm_too_slow": ["https://webhook.site/7843a980-a494-4967-80fb-d502dbc16886", "https://webhook.site/28cfb179-f4fb-4408-8129-729ff55cf213"],
@@ -399,7 +399,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 {
   "spend": 1, # the spend for the 'event_group'
   "max_budget": 0, # the 'max_budget' set for the 'event_group'
-  "token": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+  "token": "example-api-key-123",
   "user_id": "default_user_id",
   "team_id": null,
   "user_email": null,
@@ -425,7 +425,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 - `projected_exceeded_date` *str or null*: The date when the budget is projected to be exceeded, returned when 'soft_budget' is set for key (optional).
 - `projected_spend` *float or null*: The projected spend amount, returned when 'soft_budget' is set for key (optional).
 - `event` *Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]*: The type of event that triggered the webhook. Possible values are:
-    * "spend_tracked": Emitted whenver spend is tracked for a customer id. 
+    * "spend_tracked": Emitted whenever spend is tracked for a customer id. 
     * "budget_crossed": Indicates that the spend has exceeded the max budget.
     * "threshold_crossed": Indicates that spend has crossed a threshold (currently sent when 85% and 95% of budget is reached).
     * "projected_limit_exceeded": For "key" only - Indicates that the projected spend is expected to exceed the soft budget threshold.
@@ -480,7 +480,7 @@ LLM-related Alerts
 | `cooldown_deployment` | Alerts when a deployment is put into cooldown | ✅ |
 | `new_model_added` | Notifications when a new model is added to litellm proxy through /model/new| ✅ |
 | `outage_alerts` | Alerts when a specific LLM deployment is facing an outage | ✅ |
-| `region_outage_alerts` | Alerts when a specfic LLM region is facing an outage. Example us-east-1 | ✅ |
+| `region_outage_alerts` | Alerts when a specific LLM region is facing an outage. Example us-east-1 | ✅ |
 
 Budget and Spend Alerts
 

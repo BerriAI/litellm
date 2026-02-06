@@ -1,3 +1,7 @@
+"""
+Legacy /v1/embedding handler for Bedrock Cohere. 
+"""
+
 import json
 from typing import Any, Callable, Optional, Union
 
@@ -13,18 +17,22 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.bedrock import CohereEmbeddingRequest
 from litellm.types.utils import EmbeddingResponse
 
-from .transformation import CohereEmbeddingConfig
+from .v1_transformation import CohereEmbeddingConfig
 
 
 def validate_environment(api_key, headers: dict):
-    headers.update(
-        {
-            "Request-Source": "unspecified:litellm",
-            "accept": "application/json",
-            "content-type": "application/json",
-        }
-    )
-    if api_key:
+    # Create a lowercase key lookup to avoid duplicate headers with different cases
+    # This is important when headers come from AWS signed requests (which use Title-Case)
+    existing_keys_lower = {k.lower(): k for k in headers.keys()}
+
+    # Only add headers if they don't already exist (case-insensitive check)
+    if "request-source" not in existing_keys_lower:
+        headers["Request-Source"] = "unspecified:litellm"
+    if "accept" not in existing_keys_lower:
+        headers["accept"] = "application/json"
+    if "content-type" not in existing_keys_lower:
+        headers["content-type"] = "application/json"
+    if api_key and "authorization" not in existing_keys_lower:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
@@ -56,7 +64,6 @@ async def async_embedding(
     encoding: Callable,
     client: Optional[AsyncHTTPHandler] = None,
 ):
-
     ## LOGGING
     logging_obj.pre_call(
         input=input,

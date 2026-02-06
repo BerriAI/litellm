@@ -32,7 +32,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "rMzWaBvIk"
+          "uid": "${DS_PROMETHEUS}"
         },
         "fieldConfig": {
           "defaults": {
@@ -110,7 +110,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "rMzWaBvIk"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "histogram_quantile(0.99, sum(rate(litellm_self_latency_bucket{self=\"self\"}[1m])) by (le))",
@@ -125,7 +125,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "rMzWaBvIk"
+          "uid": "${DS_PROMETHEUS}"
         },
         "fieldConfig": {
           "defaults": {
@@ -216,7 +216,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "rMzWaBvIk"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "sum(increase(litellm_spend_metric_total[30d])) by (hashed_api_key)",
@@ -232,7 +232,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "rMzWaBvIk"
+          "uid": "${DS_PROMETHEUS}"
         },
         "fieldConfig": {
           "defaults": {
@@ -309,7 +309,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "rMzWaBvIk"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "sum by (model) (increase(litellm_requests_metric_total[5m]))",
@@ -324,7 +324,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "rMzWaBvIk"
+          "uid": "${DS_PROMETHEUS}"
         },
         "fieldConfig": {
           "defaults": {
@@ -375,7 +375,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "rMzWaBvIk"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "sum(increase(litellm_llm_api_failed_requests_metric_total[1h]))",
@@ -390,7 +390,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "rMzWaBvIk"
+          "uid": "${DS_PROMETHEUS}"
         },
         "fieldConfig": {
           "defaults": {
@@ -468,7 +468,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "rMzWaBvIk"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "sum(increase(litellm_spend_metric_total[30d])) by (model)",
@@ -483,7 +483,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "rMzWaBvIk"
+          "uid": "${DS_PROMETHEUS}"
         },
         "fieldConfig": {
           "defaults": {
@@ -560,7 +560,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "rMzWaBvIk"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "sum(increase(litellm_total_tokens_total[5m])) by (model)",
@@ -579,7 +579,27 @@
     "style": "dark",
     "tags": [],
     "templating": {
-      "list": []
+      "list": [
+        {
+          "current": {
+            "selected": false,
+            "text": "prometheus",
+            "value": "edx8memhpd9tsa"
+          },
+          "hide": 0,
+          "includeAll": false,
+          "label": "datasource",
+          "multi": false,
+          "name": "DS_PROMETHEUS",
+          "options": [],
+          "query": "prometheus",
+          "queryValue": "",
+          "refresh": 1,
+          "regex": "",
+          "skipUrlSync": false,
+          "type": "datasource"
+        }
+      ]
     },
     "time": {
       "from": "now-1h",

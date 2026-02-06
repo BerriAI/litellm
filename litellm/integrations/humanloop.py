@@ -4,15 +4,17 @@ Humanloop integration
 https://humanloop.com/
 """
 
-from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .custom_logger import CustomLogger
@@ -152,9 +154,14 @@ class HumanloopLogger(CustomLogger):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[
         str,
         List[AllMessageValues],
@@ -164,6 +171,9 @@ class HumanloopLogger(CustomLogger):
             "humanloop_api_key"
         ) or get_secret_str("HUMANLOOP_API_KEY")
 
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for Humanloop integration")
+
         if humanloop_api_key is None:
             return super().get_chat_completion_prompt(
                 model=model,
@@ -172,6 +182,7 @@ class HumanloopLogger(CustomLogger):
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=dynamic_callback_params,
+                prompt_spec=prompt_spec,
             )
 
         prompt_template = prompt_manager._get_prompt_from_id(

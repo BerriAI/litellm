@@ -15,6 +15,7 @@ import litellm
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     exception_type,
+    get_litellm_params,
     get_llm_provider,
     get_secret,
     supports_httpx_timeout,
@@ -86,6 +87,7 @@ def get_assistants(
     optional_params = GenericLiteLLMParams(
         api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
     )
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -108,6 +110,7 @@ def get_assistants(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -169,6 +172,7 @@ def get_assistants(
             max_retries=optional_params.max_retries,
             client=client,
             aget_assistants=aget_assistants,  # type: ignore
+            litellm_params=litellm_params_dict,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -270,6 +274,7 @@ def create_assistants(
     optional_params = GenericLiteLLMParams(
         api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
     )
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -300,11 +305,17 @@ def create_assistants(
         "response_format": response_format,
     }
 
+    # only send params that are not None
+    create_assistant_data = {
+        k: v for k, v in create_assistant_data.items() if v is not None
+    }
+
     response: Optional[Union[Coroutine[Any, Any, Assistant], Assistant]] = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -371,6 +382,7 @@ def create_assistants(
             client=client,
             async_create_assistants=async_create_assistants,
             create_assistant_data=create_assistant_data,
+            litellm_params=litellm_params_dict,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -445,6 +457,8 @@ def delete_assistant(
         api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
     )
 
+    litellm_params_dict = get_litellm_params(**kwargs)
+
     async_delete_assistants: Optional[bool] = kwargs.pop(
         "async_delete_assistants", None
     )
@@ -478,6 +492,7 @@ def delete_assistant(
         api_base = (
             optional_params.api_base
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -544,6 +559,7 @@ def delete_assistant(
             max_retries=optional_params.max_retries,
             client=client,
             async_delete_assistants=async_delete_assistants,
+            litellm_params=litellm_params_dict,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -639,6 +655,7 @@ def create_thread(
     """
     acreate_thread = kwargs.get("acreate_thread", None)
     optional_params = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -664,6 +681,7 @@ def create_thread(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -731,6 +749,7 @@ def create_thread(
             max_retries=optional_params.max_retries,
             client=client,
             acreate_thread=acreate_thread,
+            litellm_params=litellm_params_dict,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -795,7 +814,7 @@ def get_thread(
     """Get the thread object, given a thread_id"""
     aget_thread = kwargs.pop("aget_thread", None)
     optional_params = GenericLiteLLMParams(**kwargs)
-
+    litellm_params_dict = get_litellm_params(**kwargs)
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
     # set timeout for 10 minutes by default
@@ -818,6 +837,7 @@ def get_thread(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -884,6 +904,7 @@ def get_thread(
             max_retries=optional_params.max_retries,
             client=client,
             aget_thread=aget_thread,
+            litellm_params=litellm_params_dict,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -972,6 +993,7 @@ def add_message(
     _message_data = MessageData(
         role=role, content=content, attachments=attachments, metadata=metadata
     )
+    litellm_params_dict = get_litellm_params(**kwargs)
     optional_params = GenericLiteLLMParams(**kwargs)
 
     message_data = get_optional_params_add_message(
@@ -1004,6 +1026,7 @@ def add_message(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -1068,6 +1091,7 @@ def add_message(
             max_retries=optional_params.max_retries,
             client=client,
             a_add_message=a_add_message,
+            litellm_params=litellm_params_dict,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -1139,6 +1163,7 @@ def get_messages(
 ) -> SyncCursorPage[OpenAIMessage]:
     aget_messages = kwargs.pop("aget_messages", None)
     optional_params = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -1163,6 +1188,7 @@ def get_messages(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -1225,6 +1251,7 @@ def get_messages(
             max_retries=optional_params.max_retries,
             client=client,
             aget_messages=aget_messages,
+            litellm_params=litellm_params_dict,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -1337,6 +1364,7 @@ def run_thread(
     """Run a given thread + assistant."""
     arun_thread = kwargs.pop("arun_thread", None)
     optional_params = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -1359,6 +1387,7 @@ def run_thread(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -1437,6 +1466,7 @@ def run_thread(
             max_retries=optional_params.max_retries,
             client=client,
             arun_thread=arun_thread,
+            litellm_params=litellm_params_dict,
         )  # type: ignore
     else:
         raise litellm.exceptions.BadRequestError(

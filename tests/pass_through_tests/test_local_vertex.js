@@ -20,7 +20,7 @@ const requestOptions = {
 };
 
 const generativeModel = vertexAI.getGenerativeModel(
-    { model: 'gemini-1.0-pro' },
+    { model: 'gemini-2.5-flash-lite' },
     requestOptions
 );
 

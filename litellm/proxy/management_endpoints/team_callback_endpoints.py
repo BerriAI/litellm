@@ -6,7 +6,7 @@ Use this when each team should control its own callbacks
 
 import json
 import traceback
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
@@ -79,10 +79,14 @@ async def add_team_callbacks(
 
     """
     try:
+        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
 
         # Check if team_id exists already
         _existing_team = await prisma_client.get_data(
@@ -98,65 +102,30 @@ async def add_team_callbacks(
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
-        team_callback_settings = team_metadata.get("callback_settings", {})
-        # expect callback settings to be
-        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
-        if data.callback_type == "success":
-            if team_callback_settings_obj.success_callback is None:
-                team_callback_settings_obj.success_callback = []
+        team_callback_settings: List[dict] = team_metadata.get(
+            "logging"
+        )  # will be dict of type AddTeamCallback
+        if team_callback_settings is None or not isinstance(
+            team_callback_settings, list
+        ):
+            team_callback_settings = []
 
-            if data.callback_name in team_callback_settings_obj.success_callback:
+        ## check if it already exists, for the same callback event
+        for callback in team_callback_settings:
+            if (
+                callback.get("callback_name") == data.callback_name
+                and callback.get("callback_type") == data.callback_type
+            ):
                 raise ProxyException(
-                    message=f"callback_name = {data.callback_name} already exists in failure_callback, for team_id = {team_id}. \n Existing failure_callback = {team_callback_settings_obj.success_callback}",
+                    message=f"callback_name = {data.callback_name} already exists in team_callback_settings, for team_id = {team_id} and event = {data.callback_type}",
                     code=status.HTTP_400_BAD_REQUEST,
                     type=ProxyErrorTypes.bad_request_error,
                     param="callback_name",
                 )
 
-            team_callback_settings_obj.success_callback.append(data.callback_name)
-        elif data.callback_type == "failure":
-            if team_callback_settings_obj.failure_callback is None:
-                team_callback_settings_obj.failure_callback = []
+        team_callback_settings.append(data.model_dump())
 
-            if data.callback_name in team_callback_settings_obj.failure_callback:
-                raise ProxyException(
-                    message=f"callback_name = {data.callback_name} already exists in failure_callback, for team_id = {team_id}. \n Existing failure_callback = {team_callback_settings_obj.failure_callback}",
-                    code=status.HTTP_400_BAD_REQUEST,
-                    type=ProxyErrorTypes.bad_request_error,
-                    param="callback_name",
-                )
-            team_callback_settings_obj.failure_callback.append(data.callback_name)
-        elif data.callback_type == "success_and_failure":
-            if team_callback_settings_obj.success_callback is None:
-                team_callback_settings_obj.success_callback = []
-            if team_callback_settings_obj.failure_callback is None:
-                team_callback_settings_obj.failure_callback = []
-            if data.callback_name in team_callback_settings_obj.success_callback:
-                raise ProxyException(
-                    message=f"callback_name = {data.callback_name} already exists in success_callback, for team_id = {team_id}. \n Existing success_callback = {team_callback_settings_obj.success_callback}",
-                    code=status.HTTP_400_BAD_REQUEST,
-                    type=ProxyErrorTypes.bad_request_error,
-                    param="callback_name",
-                )
-
-            if data.callback_name in team_callback_settings_obj.failure_callback:
-                raise ProxyException(
-                    message=f"callback_name = {data.callback_name} already exists in failure_callback, for team_id = {team_id}. \n Existing failure_callback = {team_callback_settings_obj.failure_callback}",
-                    code=status.HTTP_400_BAD_REQUEST,
-                    type=ProxyErrorTypes.bad_request_error,
-                    param="callback_name",
-                )
-
-            team_callback_settings_obj.success_callback.append(data.callback_name)
-            team_callback_settings_obj.failure_callback.append(data.callback_name)
-        for var, value in data.callback_vars.items():
-            if team_callback_settings_obj.callback_vars is None:
-                team_callback_settings_obj.callback_vars = {}
-            team_callback_settings_obj.callback_vars[var] = value
-
-        team_callback_settings_obj_dict = team_callback_settings_obj.model_dump()
-
-        team_metadata["callback_settings"] = team_callback_settings_obj_dict
+        team_metadata["logging"] = team_callback_settings
         team_metadata_json = json.dumps(team_metadata)  # update team_metadata
 
         new_team_row = await prisma_client.db.litellm_teamtable.update(
@@ -168,22 +137,16 @@ async def add_team_callbacks(
             "data": new_team_row,
         }
 
+    except HTTPException as e:
+        raise e
+    except ProxyException as e:
+        raise e
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
-                type=ProxyErrorTypes.internal_server_error.value,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,

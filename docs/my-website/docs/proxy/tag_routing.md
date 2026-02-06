@@ -5,6 +5,12 @@ This is useful for
 - Implementing free / paid tiers for users
 - Controlling model access per team, example Team A can access gpt-4 deployment A, Team B can access gpt-4 deployment B (LLM Access Control For Teams )
 
+:::info
+## See here for spend tags
+- [Track spend per tag](cost_tracking#-custom-tags)
+- [Setup Budgets per Virtual Key, Team](users)
+:::
+
 ## Quick Start
 
 ### 1. Define tags on config.yaml 
@@ -141,6 +147,26 @@ Response
    "total_tokens": 22
  }
 }
+```
+
+## Calling via Request Header
+
+You can also call via request header `x-litellm-tags`
+
+```shell
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'x-litellm-tags: free,my-custom-tag' \
+-d '{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how'\''s it going 123456?"
+    }
+  ]
+}'
 ```
 
 ## Setting Default Tags 
@@ -304,7 +330,4 @@ Here's how to set up and use team-based tag routing using curl commands:
 
 By following these steps and using these curl commands, you can implement and test team-based tag routing in your LiteLLM Proxy setup, ensuring that different teams are routed to the appropriate models or deployments based on their assigned tags.
 
-## Other Tag Based Features
-- [Track spend per tag](cost_tracking#-custom-tags)
-- [Setup Budgets per Virtual Key, Team](users)
 

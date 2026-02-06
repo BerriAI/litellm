@@ -7,42 +7,42 @@ https://github.com/BerriAI/litellm
 
 ## **Call 100+ LLMs using the OpenAI Input/Output Format**
 
-- Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
-- [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
+- Translate inputs to provider's endpoints (`/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, and more)
+- [Consistent output](https://docs.litellm.ai/docs/supported_endpoints) - same response format regardless of which provider you use
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 - Track spend & set budgets per project [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
 ## How to use LiteLLM
-You can use litellm through either:
-1. [LiteLLM Proxy Server](#litellm-proxy-server-llm-gateway) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
-2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
 
-### **When to use LiteLLM Proxy Server (LLM Gateway)**
+You can use LiteLLM through either the Proxy Server or Python SDK. Both gives you a unified interface to access multiple LLMs (100+ LLMs). Choose the option that best fits your needs:
 
-:::tip
+<table style={{width: '100%', tableLayout: 'fixed'}}>
+<thead>
+<tr>
+<th style={{width: '14%'}}></th>
+<th style={{width: '43%'}}><strong><a href="#litellm-proxy-server-llm-gateway">LiteLLM Proxy Server</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="#basic-usage">LiteLLM Python SDK</a></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style={{width: '14%'}}><strong>Use Case</strong></td>
+<td style={{width: '43%'}}>Central service (LLM Gateway) to access multiple LLMs</td>
+<td style={{width: '43%'}}>Use LiteLLM directly in your Python code</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Who Uses It?</strong></td>
+<td style={{width: '43%'}}>Gen AI Enablement / ML Platform Teams</td>
+<td style={{width: '43%'}}>Developers building LLM projects</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Key Features</strong></td>
+<td style={{width: '43%'}}>• Centralized API gateway with authentication & authorization<br />• Multi-tenant cost tracking and spend management per project/user<br />• Per-project customization (logging, guardrails, caching)<br />• Virtual keys for secure access control<br />• Admin dashboard UI for monitoring and management</td>
+<td style={{width: '43%'}}>• Direct Python library integration in your codebase<br />• Router with retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - <a href="https://docs.litellm.ai/docs/routing">Router</a><br />• Application-level load balancing and cost tracking<br />• Exception handling with OpenAI-compatible errors<br />• Observability callbacks (Lunary, MLflow, Langfuse, etc.)</td>
+</tr>
+</tbody>
+</table>
 
-Use LiteLLM Proxy Server if you want a **central service (LLM Gateway) to access multiple LLMs**
-
-Typically used by Gen AI Enablement /  ML PLatform Teams
-
-:::
-
-  - LiteLLM Proxy gives you a unified interface to access multiple LLMs (100+ LLMs)
-  - Track LLM Usage and setup guardrails
-  - Customize Logging, Guardrails, Caching per project
-
-### **When to use LiteLLM Python SDK**
-
-:::tip
-
-  Use LiteLLM Python SDK if you want to use LiteLLM in your **python code**
-
-Typically used by developers building llm projects
-
-:::
-
-  - LiteLLM SDK gives you a unified interface to access multiple LLMs (100+ LLMs) 
-  - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 
 ## **LiteLLM Python SDK**
 
@@ -111,8 +111,8 @@ from litellm import completion
 import os
 
 # auth: run 'gcloud auth application-default'
-os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
-os.environ["VERTEX_LOCATION"] = "us-central1"
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
 
 response = completion(
   model="vertex_ai/gemini-1.5-pro",
@@ -209,16 +209,49 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="novita" label="Novita AI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://novita.ai/settings/key-management to get your API key
+os.environ["NOVITA_API_KEY"] = "novita-api-key"
+
+response = completion(
+  model="novita/deepseek/deepseek-r1",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="vercel" label="Vercel AI Gateway">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for insturctions on obtaining a key
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
+
+response = completion(
+  model="vercel_ai_gateway/openai/gpt-4o",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
 
 </Tabs>
 
-### Response Format (OpenAI Format)
+### Response Format (OpenAI Chat Completions Format)
 
 ```json
 {
     "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
     "created": 1734366691,
-    "model": "claude-3-sonnet-20240229",
+    "model": "gpt-4o-2024-08-06",
     "object": "chat.completion",
     "system_fingerprint": null,
     "choices": [
@@ -412,6 +445,41 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="novita" label="Novita AI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://novita.ai/settings/key-management to get your API key
+os.environ["NOVITA_API_KEY"] = "novita_api_key"
+
+response = completion(
+  model="novita/deepseek/deepseek-r1",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+<TabItem value="vercel" label="Vercel AI Gateway">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for insturctions on obtaining a key
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
+
+response = completion(
+  model="vercel_ai_gateway/openai/gpt-4o",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
 
 </Tabs>
 
@@ -446,16 +514,32 @@ response = completion(
 LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
 
 ```python
-from openai.error import OpenAIError
+import litellm
 from litellm import completion
+import os
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
 try:
-    # some code
-    completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
-except OpenAIError as e:
-    print(e)
+    completion(model="anthropic/claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+except litellm.AuthenticationError as e:
+    # Thrown when the API key is invalid
+    print(f"Authentication failed: {e}")
+except litellm.RateLimitError as e:
+    # Thrown when you've exceeded your rate limit
+    print(f"Rate limited: {e}")
+except litellm.APIError as e:
+    # Thrown for general API errors
+    print(f"API error: {e}")
 ```
+### See How LiteLLM Transforms Your Requests
+
+Want to understand how LiteLLM parses and normalizes your LLM API requests? Use the `/utils/transform_request` endpoint to see exactly how your request is transformed internally.
+
+You can try it out now directly on our Demo App!
+Go to the [LiteLLM API docs for transform_request](https://litellm-api.up.railway.app/#/llm%20utils/transform_request_utils_transform_request_post)
+
+LiteLLM will show you the normalized, provider-agnostic version of your request. This is useful for debugging, learning, and understanding how LiteLLM handles different providers and options.
+
 
 ### Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 LiteLLM exposes pre defined callbacks to send data to Lunary, MLflow, Langfuse, Helicone, Promptlayer, Traceloop, Slack
@@ -573,7 +657,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
 

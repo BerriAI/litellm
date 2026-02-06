@@ -4,9 +4,23 @@ import TabItem from '@theme/TabItem';
 
 # OpenTelemetry - Tracing LLMs with any observability tool
 
-OpenTelemetry is a CNCF standard for observability. It connects to any observability tool, such as Jaeger, Zipkin, Datadog, New Relic, Traceloop and others.
+OpenTelemetry is a CNCF standard for observability. It connects to any observability tool, such as Jaeger, Zipkin, Datadog, New Relic, Traceloop, Levo AI and others.
 
 <Image img={require('../../img/traceloop_dash.png')} />
+
+:::note Change in v1.81.0
+
+From v1.81.0, the request/response will be set as attributes on the parent "Received Proxy Server Request" span by default. This allows you to see the request/response in the parent span in your observability tool.
+
+**Note:** When making multiple LLM calls within an external OTEL span context, the last call's attributes will overwrite previous calls' attributes on the parent span.
+
+To use the older behavior with nested "litellm_request" spans (which creates separate spans for each call), set the following environment variable:
+
+```shell
+USE_OTEL_LITELLM_REQUEST_SPAN=true
+```
+
+:::
 
 ## Getting Started
 
@@ -34,8 +48,9 @@ OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
 <TabItem value="otel-col" label="Log to OTEL HTTP Collector">
 
 ```shell
-OTEL_EXPORTER="otlp_http"
-OTEL_ENDPOINT="http://0.0.0.0:4318"
+OTEL_EXPORTER_OTLP_ENDPOINT="http://0.0.0.0:4318"
+OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+OTEL_EXPORTER_OTLP_HEADERS="api-key=key,other-config-value=value"
 ```
 
 </TabItem>
@@ -43,9 +58,12 @@ OTEL_ENDPOINT="http://0.0.0.0:4318"
 <TabItem value="otel-col-grpc" label="Log to OTEL GRPC Collector">
 
 ```shell
-OTEL_EXPORTER="otlp_grpc"
-OTEL_ENDPOINT="http://0.0.0.0:4317"
+OTEL_EXPORTER_OTLP_ENDPOINT="http://0.0.0.0:4318"
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_EXPORTER_OTLP_HEADERS="api-key=key,other-config-value=value"
 ```
+
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
 
 </TabItem>
 
@@ -56,6 +74,8 @@ OTEL_EXPORTER="otlp_grpc"
 OTEL_ENDPOINT="https://api.lmnr.ai:8443"
 OTEL_HEADERS="authorization=Bearer <project-api-key>"
 ```
+
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
 
 </TabItem>
 
@@ -98,8 +118,18 @@ LiteLLM emits the user_api_key_metadata
 - user_id
 - team_id
 
-for successful + failed requests 
+for successful + failed requests
 
 click under `litellm_request` in the trace
 
 <Image img={require('../../img/otel_debug_trace.png')} />
+
+### Not seeing traces land on Integration
+
+If you don't see traces landing on your integration, set `OTEL_DEBUG="True"` in your LiteLLM environment and try again.
+
+```shell
+export OTEL_DEBUG="True"
+```
+
+This will emit any logging issues to the console.

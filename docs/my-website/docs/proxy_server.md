@@ -337,7 +337,7 @@ export OPENAI_API_KEY="sk-1234"
 ```
 
 ```shell 
-export OPENAI_API_BASE="http://0.0.0.0:8000"
+export OPENAI_BASE_URL="http://0.0.0.0:8000"
 ```
 ```shell
 python3 run.py --task "a script that says hello world" --name "hello world"
@@ -572,7 +572,7 @@ export OPENAI_API_KEY="sk-1234"
 ```
 
 ```shell 
-export OPENAI_API_BASE="http://0.0.0.0:8000"
+export OPENAI_BASE_URL="http://0.0.0.0:8000"
 ```
 ```shell
 python3 run.py --task "a script that says hello world" --name "hello world"

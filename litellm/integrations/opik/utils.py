@@ -1,7 +1,7 @@
 import configparser
 import os
 import time
-from typing import Dict, Final, List, Optional
+from typing import Any, Dict, Final, List, Optional, Tuple
 
 CONFIG_FILE_PATH_DEFAULT: Final[str] = "~/.opik.config"
 
@@ -99,12 +99,26 @@ def create_usage_object(usage):
     return usage_dict
 
 
-def _remove_nulls(x):
-    x_ = {k: v for k, v in x.items() if v is not None}
-    return x_
+def _remove_nulls(x: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove None values from dict."""
+    return {k: v for k, v in x.items() if v is not None}
 
 
-def get_traces_and_spans_from_payload(payload: List):
+def get_traces_and_spans_from_payload(
+    payload: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Separate traces and spans from payload.
+
+    Traces are identified by not having a "type" field.
+    Spans are identified by having a "type" field.
+
+    Args:
+        payload: List of dicts containing trace and span data
+
+    Returns:
+        Tuple of (traces, spans) where both are lists of dicts with null values removed
+    """
     traces = [_remove_nulls(x) for x in payload if "type" not in x]
     spans = [_remove_nulls(x) for x in payload if "type" in x]
     return traces, spans

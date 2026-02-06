@@ -7,7 +7,7 @@ import re
 from re import Match
 from typing import Dict, List, Optional, Tuple
 
-from litellm import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm._logging import verbose_router_logger
 
 
@@ -105,13 +105,11 @@ class PatternMatchRouter:
         new_deployments = []
         for deployment in deployments:
             new_deployment = copy.deepcopy(deployment)
-            new_deployment["litellm_params"]["model"] = (
-                PatternMatchRouter.set_deployment_model_name(
-                    matched_pattern=matched_pattern,
-                    litellm_deployment_litellm_model=deployment["litellm_params"][
-                        "model"
-                    ],
-                )
+            new_deployment["litellm_params"][
+                "model"
+            ] = PatternMatchRouter.set_deployment_model_name(
+                matched_pattern=matched_pattern,
+                litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
             )
             new_deployments.append(new_deployment)
 

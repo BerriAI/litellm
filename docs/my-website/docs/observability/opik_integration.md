@@ -140,6 +140,7 @@ These can be passed inside metadata with the `opik` key.
 - `project_name` - Name of the Opik project to send data to.
 - `current_span_data` - The current span data to be used for tracing.
 - `tags` - Tags to be used for tracing.
+- `thread_id` - The thread id to group together multiple related traces.
 
 ### Usage
 
@@ -159,8 +160,10 @@ response = litellm.completion(
     messages=messages,
     metadata = {
         "opik": {
+            "project_name": "your-opik-project-name",
             "current_span_data": get_current_span_data(),
             "tags": ["streaming-test"],
+            "thread_id": "your-thread-id"
         },
     }
 )
@@ -174,7 +177,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-  "model": "gpt-3.5-turbo-testing",
+  "model": "gpt-3.5-turbo",
   "messages": [
     {
       "role": "user",
@@ -183,8 +186,10 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
   ],
   "metadata": {
     "opik": {
+      "project_name": "your-opik-project-name",
       "current_span_data": "...",
       "tags": ["streaming-test"],
+      "thread_id": "your-thread-id"
     },
   }
 }'
@@ -195,14 +200,61 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 
 
+You can also pass the fields as part of the request header with a `opik_*` prefix:
+
+```shell
+curl --location --request POST 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'opik_project_name: your-opik-project-name' \
+    --header 'opik_thread_id: your-thread-id' \
+    --header 'opik_tags: ["streaming-test"]' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "What's the weather like in Boston today?"
+        }
+    ]
+}'
+```
+
+## Automatic Metadata from API Keys
+
+In some cases, the requester may be unable or unaware of how to add Opik metadata to their requests. To ensure all Opik-related actions are properly tracked, LiteLLM Proxy can automatically associate metadata from a user-specific API key when none is provided in the request.
+
+### How It Works
+
+When you create an API key in LiteLLM Proxy, you can attach Opik-specific metadata to the key itself. This metadata will be automatically applied to all requests made with that key, unless the request explicitly provides its own Opik metadata (which takes precedence).
 
 
+### Usage
 
+**Step 1: Save Opik Metadata to the corresponding Api Key**
+Go to 'Virtual Keys', click on your choosen api key and edit 'Settings'.
+Now save the opik metadata as user api key metdata.
 
+<Image img={require('../../img/opik_key_metadata.png')} />
 
+**Step 2: Use the key - Opik metadata is automatically applied**
 
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-key-from-step-1' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather like in Boston today?"
+    }
+  ]
+}'
+```
 
-
+All requests made with this key will automatically be tracked in the "TestProject" Opik project with the specified tags, without requiring the user to pass metadata in each request.
 
 
 ## Support & Talk to Founders

@@ -1,5 +1,7 @@
 from datetime import datetime
-from typing import List, Literal, Optional, TypedDict, Union
+from typing import List, Literal, Optional, Union
+
+from typing_extensions import TypedDict
 
 from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 

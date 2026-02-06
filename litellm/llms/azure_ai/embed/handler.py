@@ -17,7 +17,6 @@ from .cohere_transformation import AzureAICohereConfig
 
 
 class AzureAIEmbedding(OpenAIChatCompletion):
-
     def _process_response(
         self,
         image_embedding_responses: Optional[List],
@@ -59,7 +58,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         data: ImageEmbeddingRequest,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str],
         api_base: Optional[str],
@@ -139,13 +138,12 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         input: List,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
     ) -> EmbeddingResponse:
-
         (
             image_embeddings_request,
             v1_embeddings_request,
@@ -212,6 +210,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         client=None,
         aembedding=None,
         max_retries: Optional[int] = None,
+        shared_session=None,
     ) -> EmbeddingResponse:
         """
         - Separate image url from text
@@ -277,6 +276,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                     else None
                 ),
                 aembedding=aembedding,
+                shared_session=shared_session,
             )
 
             text_embedding_responses = response.data

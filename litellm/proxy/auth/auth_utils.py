@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 
@@ -14,7 +15,6 @@ from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 def _get_request_ip_address(
     request: Request, use_x_forwarded_for: Optional[bool] = False
 ) -> Optional[str]:
-
     client_ip = None
     if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"]
@@ -252,29 +252,37 @@ def route_in_additonal_public_routes(current_route: str):
     - bool - True if the route is defined in public_routes
     - bool - False if the route is not defined in public_routes
 
+    Supports wildcard patterns (e.g., "/api/*" matches "/api/users", "/api/users/123")
 
     In order to use this the litellm config.yaml should have the following in general_settings:
 
     ```yaml
     general_settings:
         master_key: sk-1234
-        public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
+        public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate", "/api/*"]
     ```
     """
-
-    # check if user is premium_user - if not do nothing
+    from litellm.proxy.auth.route_checks import RouteChecks
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     try:
         if premium_user is not True:
             return False
-        # check if this is defined on the config
         if general_settings is None:
             return False
 
         routes_defined = general_settings.get("public_routes", [])
+
+        # Check exact match first
         if current_route in routes_defined:
             return True
+
+        # Check wildcard patterns
+        for route_pattern in routes_defined:
+            if RouteChecks._route_matches_wildcard_pattern(
+                route=current_route, pattern=route_pattern
+            ):
+                return True
 
         return False
     except Exception as e:
@@ -303,6 +311,88 @@ def get_request_route(request: Request) -> str:
         return request.url.path
 
 
+def normalize_request_route(route: str) -> str:
+    """
+    Normalize request routes by replacing dynamic path parameters with placeholders.
+    
+    This prevents high cardinality in Prometheus metrics by collapsing routes like:
+    - /v1/responses/1234567890 -> /v1/responses/{response_id}
+    - /v1/threads/thread_123 -> /v1/threads/{thread_id}
+    
+    Args:
+        route: The request route path
+        
+    Returns:
+        Normalized route with dynamic parameters replaced by placeholders
+        
+    Examples:
+        >>> normalize_request_route("/v1/responses/abc123")
+        '/v1/responses/{response_id}'
+        >>> normalize_request_route("/v1/responses/abc123/cancel")
+        '/v1/responses/{response_id}/cancel'
+        >>> normalize_request_route("/chat/completions")
+        '/chat/completions'
+    """
+    # Define patterns for routes with dynamic IDs
+    # Format: (regex_pattern, replacement_template)
+    patterns = [
+        # Responses API - must come before generic patterns
+        (r'^(/(?:openai/)?v1/responses)/([^/]+)(/input_items)$', r'\1/{response_id}\3'),
+        (r'^(/(?:openai/)?v1/responses)/([^/]+)(/cancel)$', r'\1/{response_id}\3'),
+        (r'^(/(?:openai/)?v1/responses)/([^/]+)$', r'\1/{response_id}'),
+        (r'^(/responses)/([^/]+)(/input_items)$', r'\1/{response_id}\3'),
+        (r'^(/responses)/([^/]+)(/cancel)$', r'\1/{response_id}\3'),
+        (r'^(/responses)/([^/]+)$', r'\1/{response_id}'),
+        
+        # Threads API
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)/([^/]+)$', r'\1/{thread_id}\3/{run_id}\5/{step_id}'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)$', r'\1/{thread_id}\3/{run_id}\5'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/cancel)$', r'\1/{thread_id}\3/{run_id}\5'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/submit_tool_outputs)$', r'\1/{thread_id}\3/{run_id}\5'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)$', r'\1/{thread_id}\3/{run_id}'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)$', r'\1/{thread_id}\3'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/messages)/([^/]+)$', r'\1/{thread_id}\3/{message_id}'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/messages)$', r'\1/{thread_id}\3'),
+        (r'^(/(?:openai/)?v1/threads)/([^/]+)$', r'\1/{thread_id}'),
+        
+        # Vector Stores API
+        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)/([^/]+)$', r'\1/{vector_store_id}\3/{file_id}'),
+        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)$', r'\1/{vector_store_id}\3'),
+        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)/([^/]+)$', r'\1/{vector_store_id}\3/{batch_id}'),
+        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)$', r'\1/{vector_store_id}\3'),
+        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)$', r'\1/{vector_store_id}'),
+        
+        # Assistants API
+        (r'^(/(?:openai/)?v1/assistants)/([^/]+)$', r'\1/{assistant_id}'),
+        
+        # Files API
+        (r'^(/(?:openai/)?v1/files)/([^/]+)(/content)$', r'\1/{file_id}\3'),
+        (r'^(/(?:openai/)?v1/files)/([^/]+)$', r'\1/{file_id}'),
+        
+        # Batches API
+        (r'^(/(?:openai/)?v1/batches)/([^/]+)(/cancel)$', r'\1/{batch_id}\3'),
+        (r'^(/(?:openai/)?v1/batches)/([^/]+)$', r'\1/{batch_id}'),
+        
+        # Fine-tuning API
+        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/events)$', r'\1/{fine_tuning_job_id}\3'),
+        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/cancel)$', r'\1/{fine_tuning_job_id}\3'),
+        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/checkpoints)$', r'\1/{fine_tuning_job_id}\3'),
+        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)$', r'\1/{fine_tuning_job_id}'),
+        
+        # Models API
+        (r'^(/(?:openai/)?v1/models)/([^/]+)$', r'\1/{model}'),
+    ]
+    
+    # Apply patterns in order
+    for pattern, replacement in patterns:
+        normalized = re.sub(pattern, replacement, route)
+        if normalized != route:
+            return normalized
+    
+    # Return original route if no pattern matched
+    return route
+
+
 async def check_if_request_size_is_safe(request: Request) -> bool:
     """
     Enterprise Only:
@@ -321,6 +411,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     max_request_size_mb = general_settings.get("max_request_size_mb", None)
+
     if max_request_size_mb is not None:
         # Check if premium user
         if premium_user is not True:
@@ -414,28 +505,95 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
-def get_key_model_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
+def get_key_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    """
+    Get the model rpm limit for a given api key.
+
+    Priority order (returns first found):
+    1. Key metadata (model_rpm_limit)
+    2. Key model_max_budget (rpm_limit per model)
+    3. Team metadata (model_rpm_limit)
+    """
+    # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
-        if "model_rpm_limit" in user_api_key_dict.metadata:
-            return user_api_key_dict.metadata["model_rpm_limit"]
-    elif user_api_key_dict.model_max_budget:
+        result = user_api_key_dict.metadata.get("model_rpm_limit")
+        if result:
+            return result
+
+    # 2. Check model_max_budget
+    if user_api_key_dict.model_max_budget:
         model_rpm_limit: Dict[str, Any] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
-            if "rpm_limit" in budget and budget["rpm_limit"] is not None:
+            if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
-        return model_rpm_limit
+        if model_rpm_limit:
+            return model_rpm_limit
+
+    # 3. Fallback to team metadata
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_rpm_limit")
 
     return None
 
 
-def get_key_model_tpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
-    if user_api_key_dict.metadata:
-        if "model_tpm_limit" in user_api_key_dict.metadata:
-            return user_api_key_dict.metadata["model_tpm_limit"]
-    elif user_api_key_dict.model_max_budget:
-        if "tpm_limit" in user_api_key_dict.model_max_budget:
-            return user_api_key_dict.model_max_budget["tpm_limit"]
+def get_key_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    """
+    Get the model tpm limit for a given api key.
 
+    Priority order (returns first found):
+    1. Key metadata (model_tpm_limit)
+    2. Key model_max_budget (tpm_limit per model)
+    3. Team metadata (model_tpm_limit)
+    """
+    # 1. Check key metadata first (takes priority)
+    if user_api_key_dict.metadata:
+        result = user_api_key_dict.metadata.get("model_tpm_limit")
+        if result:
+            return result
+
+    # 2. Check model_max_budget (iterate per-model like RPM does)
+    if user_api_key_dict.model_max_budget:
+        model_tpm_limit: Dict[str, Any] = {}
+        for model, budget in user_api_key_dict.model_max_budget.items():
+            if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
+                model_tpm_limit[model] = budget["tpm_limit"]
+        if model_tpm_limit:
+            return model_tpm_limit
+
+    # 3. Fallback to team metadata
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_tpm_limit")
+
+    return None
+
+
+def get_model_rate_limit_from_metadata(
+    user_api_key_dict: UserAPIKeyAuth,
+    metadata_accessor_key: Literal["team_metadata", "organization_metadata"],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> Optional[Dict[str, int]]:
+    if getattr(user_api_key_dict, metadata_accessor_key):
+        return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
+    return None
+
+
+def get_team_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+    return None
+
+
+def get_team_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_tpm_limit")
     return None
 
 
@@ -450,32 +608,6 @@ def is_pass_through_provider_route(route: str) -> bool:
             return True
 
     return False
-
-
-def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
-    """
-    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on /vertex-ai/{endpoint} routes
-    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on provider pass through routes
-    ex /vertex-ai/{endpoint} routes
-    Run virtual key auth if the following is try:
-    - User is premium_user
-    - User has enabled litellm_setting.use_client_credentials_pass_through_routes
-    """
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    if premium_user is not True:
-
-        return False
-
-    # premium use has opted into using client credentials
-    if (
-        general_settings.get("use_client_credentials_pass_through_routes", False)
-        is True
-    ):
-        return False
-
-    # only enabled for LiteLLM Enterprise
-    return True
 
 
 def _has_user_setup_sso():
@@ -496,15 +628,162 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
-    # openai - check 'user'
-    if "user" in request_body and request_body["user"] is not None:
-        return str(request_body["user"])
-    # anthropic - check 'litellm_metadata'
-    end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
-    if end_user_id:
-        return str(end_user_id)
-    metadata = request_body.get("metadata")
-    if metadata and "user_id" in metadata and metadata["user_id"] is not None:
-        return str(metadata["user_id"])
+def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
+    """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
+    if not user_id_mapping:
+        return None
+    items = user_id_mapping if isinstance(user_id_mapping, list) else [user_id_mapping]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("litellm_user_role")
+        header_name = item.get("header_name")
+        if role is None or not header_name:
+            continue
+        if str(role).lower() == str(LitellmUserRoles.CUSTOMER).lower():
+            return header_name
     return None
+
+def _get_customer_id_from_standard_headers(
+    request_headers: Optional[dict],
+) -> Optional[str]:
+    """
+    Check standard customer ID headers for a customer/end-user ID.
+
+    This enables tools like Claude Code to pass customer IDs via ANTHROPIC_CUSTOM_HEADERS.
+    No configuration required - these headers are always checked.
+
+    Args:
+        request_headers: The request headers dict
+
+    Returns:
+        The customer ID if found in standard headers, None otherwise
+    """
+    if request_headers is None:
+        return None
+
+    for standard_header in STANDARD_CUSTOMER_ID_HEADERS:
+        for header_name, header_value in request_headers.items():
+            if header_name.lower() == standard_header.lower():
+                user_id_str = str(header_value) if header_value is not None else ""
+                if user_id_str.strip():
+                    return user_id_str
+    return None
+
+
+def get_end_user_id_from_request_body(
+    request_body: dict, request_headers: Optional[dict] = None
+) -> Optional[str]:
+    # Import general_settings here to avoid potential circular import issues at module level
+    # and to ensure it's fetched at runtime.
+    from litellm.proxy.proxy_server import general_settings
+
+    # Check 1: Standard customer ID headers (always checked, no configuration required)
+    customer_id = _get_customer_id_from_standard_headers(request_headers=request_headers)
+    if customer_id is not None:
+        return customer_id
+
+    # Check 2: Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
+    # User query: "system not respecting user_header_name property"
+    # This implies the key in general_settings is 'user_header_name'.
+    if request_headers is not None:
+        custom_header_name_to_check: Optional[str] = None
+
+        # Prefer user mappings (new behavior)
+        user_id_mapping = general_settings.get("user_header_mappings", None)
+        if user_id_mapping:
+            custom_header_name_to_check = get_customer_user_header_from_mapping(
+                user_id_mapping
+            )
+
+        # Fallback to deprecated user_header_name if mapping did not specify
+        if not custom_header_name_to_check:
+            user_id_header_config_key = "user_header_name"
+            value = general_settings.get(user_id_header_config_key)
+            if isinstance(value, str) and value.strip() != "":
+                custom_header_name_to_check = value
+
+        # If we have a header name to check, try to read it from request headers
+        if isinstance(custom_header_name_to_check, str):
+            for header_name, header_value in request_headers.items():
+                if header_name.lower() == custom_header_name_to_check.lower():
+                    user_id_from_header = header_value
+                    user_id_str = (
+                        str(user_id_from_header)
+                        if user_id_from_header is not None
+                        else ""
+                    )
+                    if user_id_str.strip():
+                        return user_id_str
+
+    # Check 3: 'user' field in request_body (commonly OpenAI)
+    if "user" in request_body and request_body["user"] is not None:
+        user_from_body_user_field = request_body["user"]
+        return str(user_from_body_user_field)
+
+    # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
+    litellm_metadata = request_body.get("litellm_metadata")
+    if isinstance(litellm_metadata, dict):
+        user_from_litellm_metadata = litellm_metadata.get("user")
+        if user_from_litellm_metadata is not None:
+            return str(user_from_litellm_metadata)
+
+    # Check 5: 'metadata.user_id' in request_body (another common pattern)
+    metadata_dict = request_body.get("metadata")
+    if isinstance(metadata_dict, dict):
+        user_id_from_metadata_field = metadata_dict.get("user_id")
+        if user_id_from_metadata_field is not None:
+            return str(user_id_from_metadata_field)
+
+    return None
+
+
+def get_model_from_request(
+    request_data: dict, route: str
+) -> Optional[Union[str, List[str]]]:
+    # First try to get model from request_data
+    model = request_data.get("model") or request_data.get("target_model_names")
+
+    if model is not None:
+        model_names = model.split(",")
+        if len(model_names) == 1:
+            model = model_names[0].strip()
+        else:
+            model = [m.strip() for m in model_names]
+
+    # If model not in request_data, try to extract from route
+    if model is None:
+        # Parse model from route that follows the pattern /openai/deployments/{model}/*
+        match = re.match(r"/openai/deployments/([^/]+)", route)
+        if match:
+            model = match.group(1)
+
+    # If still not found, extract model from Google generateContent-style routes.
+    # These routes put the model in the path and allow "/" inside the model id.
+    # Examples:
+    # - /v1beta/models/gemini-2.0-flash:generateContent
+    # - /v1beta/models/bedrock/claude-sonnet-3.7:generateContent
+    # - /models/custom/ns/model:streamGenerateContent
+    if model is None and not route.lower().startswith("/vertex"):
+        google_match = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route)
+        if google_match:
+            model = google_match.group(1)
+
+    if model is None and not route.lower().startswith("/vertex"):
+        google_match = re.search(r"^/models/([^:]+):", route)
+        if google_match:
+            model = google_match.group(1)
+
+    # If still not found, extract from Vertex AI passthrough route
+    # Pattern: /vertex_ai/.../models/{model_id}:*
+    # Example: /vertex_ai/v1/.../models/gemini-1.5-pro:generateContent
+    if model is None and route.lower().startswith("/vertex"):
+        vertex_match = re.search(r"/models/([^:]+)", route)
+        if vertex_match:
+            model = vertex_match.group(1)
+
+    return model
+
+
+def abbreviate_api_key(api_key: str) -> str:
+    return f"sk-...{api_key[-4:]}"

@@ -194,7 +194,7 @@ def create_async_task(**completion_kwargs):
     By default a standard set of arguments are used for the litellm.acompletion function.
     """
     completion_args = {
-        "model": "azure/chatgpt-v-2",
+        "model": "azure/gpt-4.1-mini",
         "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,
@@ -212,7 +212,7 @@ def create_async_task(**completion_kwargs):
 @pytest.mark.flaky(retries=12, delay=2)
 async def test_langfuse_logging_without_request_response(stream, langfuse_client):
     try:
-        import uuid
+        from litellm._uuid import uuid
 
         _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
         litellm.set_verbose = True
@@ -276,7 +276,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output
     """
-    import uuid
+    from litellm._uuid import uuid
 
     _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
     litellm.set_verbose = True
@@ -314,7 +314,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
     """
-    import uuid
+    from litellm._uuid import uuid
 
     for mask_value in [True, False]:
         _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
@@ -364,7 +364,7 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
     Release is just set for the trace
     Tags is just set for the trace
     """
-    import uuid
+    from litellm._uuid import uuid
 
     litellm.set_verbose = True
     litellm.success_callback = ["langfuse"]
@@ -939,7 +939,7 @@ def test_aaalangfuse_dynamic_logging():
 
     Covers the team-logging scenario.
     """
-    import uuid
+    from litellm._uuid import uuid
 
     import langfuse
 
@@ -1019,7 +1019,7 @@ generation_params = {
                 ],
             },
         },
-        "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key": "sk-test-mock-api-key-123",
         "litellm_api_version": "0.0.0",
         "user_api_key_user_id": "default_user_id",
         "user_api_key_spend": 0.0,
@@ -1142,7 +1142,7 @@ def test_langfuse_prompt_type(prompt):
                 ],
             },
         },
-        "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key": "sk-test-mock-api-key-123",
         "litellm_api_version": "0.0.0",
         "user_api_key_user_id": "default_user_id",
         "user_api_key_spend": 0.0,

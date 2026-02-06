@@ -1,10 +1,22 @@
-# Rerank
+# /rerank
 
 :::tip
 
 LiteLLM Follows the [cohere api request / response for the rerank api](https://cohere.com/rerank)
 
 :::
+
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input query only (not documents) |
+| Supported Providers | Cohere, Together AI, Azure AI, DeepInfra, Nvidia NIM, Infinity, Fireworks AI, Voyage AI | |
 
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
@@ -109,11 +121,19 @@ curl http://0.0.0.0:4000/rerank \
 
 ## **Supported Providers**
 
+#### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
+
 | Provider    | Link to Usage      |
 |-------------|--------------------|
-| Cohere      |   [Usage](#quick-start)                 |
+| Cohere (v1 + v2 clients)      |   [Usage](#quick-start)                 |
 | Together AI|   [Usage](../docs/providers/togetherai)                 |  
-| Azure AI|   [Usage](../docs/providers/azure_ai)                 |  
+| Azure AI|   [Usage](../docs/providers/azure_ai#rerank-endpoint)                 |  
 | Jina AI|   [Usage](../docs/providers/jina_ai)                 |  
 | AWS Bedrock|   [Usage](../docs/providers/bedrock#rerank-api)                 |  
+| HuggingFace|   [Usage](../docs/providers/huggingface_rerank)                 |  
 | Infinity|   [Usage](../docs/providers/infinity)                 |  
+| vLLM|   [Usage](../docs/providers/vllm#rerank-endpoint)                 |  
+| DeepInfra|   [Usage](../docs/providers/deepinfra#rerank-endpoint)                 |
+| Vertex AI|   [Usage](../docs/providers/vertex#rerank-api)                 |
+| Fireworks AI|   [Usage](../docs/providers/fireworks_ai#rerank-endpoint)                 |
+| Voyage AI|   [Usage](../docs/providers/voyage#rerank)                 |  

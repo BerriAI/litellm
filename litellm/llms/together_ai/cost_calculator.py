@@ -4,6 +4,16 @@ Handles calculating cost for together ai models
 
 import re
 
+from litellm.constants import (
+    TOGETHER_AI_4_B,
+    TOGETHER_AI_8_B,
+    TOGETHER_AI_21_B,
+    TOGETHER_AI_41_B,
+    TOGETHER_AI_80_B,
+    TOGETHER_AI_110_B,
+    TOGETHER_AI_EMBEDDING_150_M,
+    TOGETHER_AI_EMBEDDING_350_M,
+)
 from litellm.types.utils import CallTypes
 
 
@@ -31,17 +41,17 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
         else:
             return model_name
         # Determine the category based on the number of parameters
-        if params_billion <= 4.0:
+        if params_billion <= TOGETHER_AI_4_B:
             category = "together-ai-up-to-4b"
-        elif params_billion <= 8.0:
+        elif params_billion <= TOGETHER_AI_8_B:
             category = "together-ai-4.1b-8b"
-        elif params_billion <= 21.0:
+        elif params_billion <= TOGETHER_AI_21_B:
             category = "together-ai-8.1b-21b"
-        elif params_billion <= 41.0:
+        elif params_billion <= TOGETHER_AI_41_B:
             category = "together-ai-21.1b-41b"
-        elif params_billion <= 80.0:
+        elif params_billion <= TOGETHER_AI_80_B:
             category = "together-ai-41.1b-80b"
-        elif params_billion <= 110.0:
+        elif params_billion <= TOGETHER_AI_110_B:
             category = "together-ai-81.1b-110b"
         if category is not None:
             return category
@@ -69,9 +79,9 @@ def get_model_params_and_category_embeddings(model_name) -> str:
         else:
             return model_name
         # Determine the category based on the number of parameters
-        if params_million <= 150:
+        if params_million <= TOGETHER_AI_EMBEDDING_150_M:
             category = "together-ai-embedding-up-to-150m"
-        elif params_million <= 350:
+        elif params_million <= TOGETHER_AI_EMBEDDING_350_M:
             category = "together-ai-embedding-151m-to-350m"
         if category is not None:
             return category

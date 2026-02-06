@@ -4,10 +4,14 @@ Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/c
 Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
+from litellm import verbose_logger
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.watsonx import WatsonXAIEndpoint
+from litellm.types.llms.watsonx import (
+    WatsonXAIEndpoint,
+    WatsonXModelPattern,
+)
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -15,7 +19,6 @@ from ..common_utils import IBMWatsonXMixin
 
 
 class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
-
     def get_supported_openai_params(self, model: str) -> List:
         return [
             "temperature",  # equivalent to temperature
@@ -26,12 +29,13 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             "seed",  # equivalent to random_seed
             "stream",  # equivalent to stream
             "tools",
-            "tool_choice",  # equivalent to tool_choice + tool_choice_options
+            "tool_choice",  # equivalent to tool_choice + tool_choice_option
             "logprobs",
             "top_logprobs",
             "n",
             "presence_penalty",
             "response_format",
+            "reasoning_effort",
         ]
 
     def is_tool_choice_option(self, tool_choice: Optional[Union[str, dict]]) -> bool:
@@ -62,7 +66,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
         _tool_choice = non_default_params.pop("tool_choice", None)
         if self.is_tool_choice_option(_tool_choice):
-            optional_params["tool_choice_options"] = _tool_choice
+            optional_params["tool_choice_option"] = _tool_choice
         elif _tool_choice is not None:
             optional_params["tool_choice"] = _tool_choice
         return super().map_openai_params(
@@ -80,9 +84,11 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
@@ -107,3 +113,138 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             url=url, api_version=optional_params.pop("api_version", None)
         )
         return url
+
+    @staticmethod
+    def _apply_prompt_template_core(
+        model: str, messages: List[Dict[str, str]], hf_template_fn
+    ) -> Optional[str]:
+        """Core logic for applying prompt templates"""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            custom_prompt,
+            ibm_granite_pt,
+            mistral_instruct_pt,
+        )
+
+        if WatsonXModelPattern.GRANITE_CHAT.value in model:
+            return ibm_granite_pt(messages=messages)
+        elif WatsonXModelPattern.IBM_MISTRAL.value in model:
+            return mistral_instruct_pt(messages=messages)
+        elif WatsonXModelPattern.GPT_OSS.value in model:
+            # Extract HuggingFace model name from watsonx/ or watsonx_text/ prefix
+            if "watsonx/" in model:
+                hf_model = model.split("watsonx/")[-1]
+            elif "watsonx_text/" in model:
+                hf_model = model.split("watsonx_text/")[-1]
+            else:
+                hf_model = model
+            try:
+                result = hf_template_fn(model=hf_model, messages=messages)
+                # Return result if it's truthy (not None and not empty string)
+                # The caller will handle None/empty by falling back to default
+                if result:
+                    return result
+            except Exception:
+                # Silently fall through to return None - caller will handle fallback
+                pass
+        elif WatsonXModelPattern.LLAMA3_INSTRUCT.value in model:
+            return custom_prompt(
+                role_dict={
+                    "system": {
+                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "user": {
+                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                },
+                messages=messages,
+                initial_prompt_value="<|begin_of_text|>",
+                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
+            )
+        return None
+
+    @staticmethod
+    async def aapply_prompt_template(
+        model: str, messages: List[Dict[str, str]]
+    ) -> Optional[str]:
+        """Apply prompt template (async version)"""
+        import litellm
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            ahf_chat_template,
+            custom_prompt,
+            hf_chat_template,
+            ibm_granite_pt,
+            mistral_instruct_pt,
+        )
+
+        if WatsonXModelPattern.GRANITE_CHAT.value in model:
+            return ibm_granite_pt(messages=messages)
+        elif WatsonXModelPattern.IBM_MISTRAL.value in model:
+            return mistral_instruct_pt(messages=messages)
+        elif WatsonXModelPattern.GPT_OSS.value in model:
+            # Extract HuggingFace model name from watsonx/ or watsonx_text/ prefix
+            if "watsonx/" in model:
+                hf_model = model.split("watsonx/")[-1]
+            elif "watsonx_text/" in model:
+                hf_model = model.split("watsonx_text/")[-1]
+            else:
+                hf_model = model
+            try:
+                # Use sync if cached, async if not
+                if hf_model in litellm.known_tokenizer_config:
+                    result = hf_chat_template(model=hf_model, messages=messages)
+                else:
+                    result = await ahf_chat_template(model=hf_model, messages=messages)
+                # Return result if it's truthy (not None and not empty string)
+                # The caller (_aconvert_watsonx_messages_core) will handle None/empty by falling back to default
+                if result:
+                    return result
+            except Exception as e:
+                # Log the exception for debugging but don't raise it
+                # The caller will fall back to default prompt factory
+                try:
+                    verbose_logger.debug(
+                        f"Failed to apply HuggingFace template for model {hf_model}: {e}"
+                    )
+                except Exception:
+                    # If logging fails, silently continue - don't break the flow
+                    pass
+        elif WatsonXModelPattern.LLAMA3_INSTRUCT.value in model:
+            return custom_prompt(
+                role_dict={
+                    "system": {
+                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "user": {
+                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                },
+                messages=messages,
+                initial_prompt_value="<|begin_of_text|>",
+                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
+            )
+        return None
+
+    @staticmethod
+    def apply_prompt_template(
+        model: str, messages: List[Dict[str, str]]
+    ) -> Optional[str]:
+        """Apply prompt template (sync version)"""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            hf_chat_template,
+        )
+
+        return IBMWatsonXChatConfig._apply_prompt_template_core(
+            model=model, messages=messages, hf_template_fn=hf_chat_template
+        )

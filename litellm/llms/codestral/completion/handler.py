@@ -9,6 +9,7 @@ import httpx  # type: ignore
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
@@ -314,7 +315,6 @@ class CodestralTextCompletion:
             return _response
         ### SYNC COMPLETION
         else:
-
             response = litellm.module_level_client.post(
                 url=completion_url,
                 headers=headers,
@@ -334,6 +334,7 @@ class CodestralTextCompletion:
             encoding=encoding,
         )
 
+    @track_llm_api_timing()
     async def async_completion(
         self,
         model: str,
@@ -352,13 +353,11 @@ class CodestralTextCompletion:
         logger_fn=None,
         headers={},
     ) -> TextCompletionResponse:
-
         async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL,
             params={"timeout": timeout},
         )
         try:
-
             response = await async_handler.post(
                 api_base, headers=headers, data=json.dumps(data)
             )
@@ -385,6 +384,7 @@ class CodestralTextCompletion:
             encoding=encoding,
         )
 
+    @track_llm_api_timing()
     async def async_streaming(
         self,
         model: str,

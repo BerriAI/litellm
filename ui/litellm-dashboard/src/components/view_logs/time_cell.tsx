@@ -7,15 +7,17 @@ interface TimeCellProps {
 const getLocalTime = (utcTime: string): string => {
   try {
     const date = new Date(utcTime);
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    }).replace(',', '');
+    return date
+      .toLocaleString("en-US", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      })
+      .replace(",", "");
   } catch (e) {
     return "Error converting time";
   }
@@ -23,11 +25,13 @@ const getLocalTime = (utcTime: string): string => {
 
 export const TimeCell: React.FC<TimeCellProps> = ({ utcTime }) => {
   return (
-    <span style={{
-      fontFamily: 'monospace',
-      width: '180px',
-      display: 'inline-block'
-    }}>
+    <span
+      style={{
+        fontFamily: "monospace",
+        width: "180px",
+        display: "inline-block",
+      }}
+    >
       {getLocalTime(utcTime)}
     </span>
   );

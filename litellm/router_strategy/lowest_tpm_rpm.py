@@ -23,10 +23,9 @@ class LowestTPMLoggingHandler(CustomLogger):
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
     def __init__(
-        self, router_cache: DualCache, model_list: list, routing_args: dict = {}
+        self, router_cache: DualCache, routing_args: dict = {}
     ):
         self.router_cache = router_cache
-        self.model_list = model_list
         self.routing_args = RoutingArgs(**routing_args)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -34,6 +33,8 @@ class LowestTPMLoggingHandler(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
+            if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
+                return
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
@@ -93,6 +94,8 @@ class LowestTPMLoggingHandler(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
+            if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
+                return
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
@@ -100,12 +103,17 @@ class LowestTPMLoggingHandler(CustomLogger):
                     "model_group", None
                 )
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                model_info = kwargs["litellm_params"].get("model_info")
+                id = None
+                if model_info is not None and isinstance(model_info, dict):
+                    id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
                     id = str(id)
 
+                if "usage" not in response_obj:
+                    return
                 total_tokens = response_obj["usage"]["total_tokens"]
 
                 # ------------
@@ -144,7 +152,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            verbose_router_logger.error(
+            verbose_router_logger.exception(
                 "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {}".format(
                     str(e)
                 )

@@ -23,6 +23,8 @@ from litellm.utils import (
     get_optional_params,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_requester_metadata,
+    validate_openai_optional_params,
 )
 
 ## get_optional_params_embeddings
@@ -65,6 +67,81 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
         model="claude-3", custom_llm_provider="anthropic", stop=stop_sequence
     )
     assert len(optional_params) == expected_count
+
+
+def test_get_requester_metadata_returns_none_for_empty():
+    metadata = {"requester_metadata": {}}
+    assert get_requester_metadata(metadata) is None
+
+
+@patch("litellm.main.openai_chat_completions.completion")
+def test_requester_metadata_forwarded_to_openai(mock_completion):
+    mock_completion.return_value = MagicMock()
+    metadata = {
+        "requester_metadata": {
+            "custom_meta_key": "value",
+            "hidden_params": "secret",
+            "int_value": 123,
+        }
+    }
+
+    original_api_key = litellm.api_key
+    litellm.api_key = "sk-test"
+    original_preview_flag = litellm.enable_preview_features
+    litellm.enable_preview_features = True
+
+    try:
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=metadata,
+        )
+    finally:
+        litellm.api_key = original_api_key
+        litellm.enable_preview_features = original_preview_flag
+
+    sent_metadata = mock_completion.call_args.kwargs["optional_params"]["metadata"]
+    assert sent_metadata == {"custom_meta_key": "value"}
+
+
+def test_get_optional_params_with_allowed_openai_params():
+    """
+    Test if use can dynamically pass in allowed_openai_params to override default behavior
+    """
+    litellm.drop_params = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Get the current time in a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name, e.g. San Francisco",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    response_format = {"type": "json"}
+    reasoning_effort = "low"
+    optional_params = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=["tools", "reasoning_effort", "response_format"],
+        tools=tools,
+        response_format=response_format,
+        reasoning_effort=reasoning_effort,
+    )
+    print(f"optional_params: {optional_params}")
+    assert optional_params["tools"] == tools
+    assert optional_params["response_format"] == response_format
+    assert optional_params["reasoning_effort"] == reasoning_effort
 
 
 def test_bedrock_optional_params_embeddings():
@@ -147,7 +224,7 @@ def test_bedrock_optional_params_simple(model):
         ("bedrock/amazon.titan-embed-text-v1", False, None),
         ("bedrock/amazon.titan-embed-image-v1", True, "embeddingConfig"),
         ("bedrock/amazon.titan-embed-text-v2:0", True, "dimensions"),
-        ("bedrock/cohere.embed-multilingual-v3", False, None),
+        ("bedrock/cohere.embed-multilingual-v3", True, None),
     ],
 )
 def test_bedrock_optional_params_embeddings_dimension(
@@ -193,7 +270,7 @@ def test_openai_optional_params_embeddings():
 def test_azure_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         encoding_format=None,
         custom_llm_provider="azure",
@@ -372,7 +449,7 @@ def test_azure_tool_choice(api_version):
     """
     litellm.drop_params = True
     optional_params = litellm.utils.get_optional_params(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,
@@ -435,6 +512,27 @@ def test_dynamic_drop_params_e2e():
         mock_response.assert_called_once()
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
+
+
+def test_dynamic_pass_additional_params():
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
+        try:
+            response = litellm.completion(
+                model="command-r",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                custom_param="test",
+                api_key="my-custom-key",
+            )
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            pass
+
+        mock_response.assert_called_once()
+        print(mock_response.call_args.kwargs["data"])
+        assert "custom_param" in mock_response.call_args.kwargs["data"]
+        assert "api_key" not in mock_response.call_args.kwargs["data"]
 
 
 @pytest.mark.parametrize(
@@ -535,6 +633,7 @@ def test_dynamic_drop_additional_params_e2e():
                 additional_drop_params=["response_format"],
             )
         except Exception as e:
+            print(f"Error occurred: {e}")
             pass
 
         mock_response.assert_called_once()
@@ -573,7 +672,10 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+    with patch(
+        "litellm.main.get_optional_params",
+        new=MagicMock(return_value={"max_retries": 0}),
+    ) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -940,7 +1042,7 @@ def test_watsonx_tool_choice():
         model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto"
     )
     print(optional_params)
-    assert optional_params["tool_choice_options"] == "auto"
+    assert optional_params["tool_choice_option"] == "auto"
 
 
 def test_watsonx_text_top_k():
@@ -1067,3 +1169,815 @@ def test_gemini_frequency_penalty():
         model="gemini-1.5-flash", custom_llm_provider="gemini", frequency_penalty=0.5
     )
     assert optional_params["frequency_penalty"] == 0.5
+
+
+def test_azure_prediction_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        prediction={
+            "type": "content",
+            "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+        },
+    )
+    assert optional_params["prediction"] == {
+        "type": "content",
+        "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+    }
+
+
+def test_vertex_ai_ft_llama():
+    optional_params = get_optional_params(
+        model="1984786713414729728",
+        custom_llm_provider="vertex_ai",
+        frequency_penalty=0.5,
+        max_retries=10,
+    )
+    assert optional_params["frequency_penalty"] == 0.5
+    assert "max_retries" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model, expected_thinking",
+    [
+        ("claude-3-5-sonnet", False),
+        ("claude-3-7-sonnet", True),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_anthropic_thinking_param(model, expected_thinking):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider="anthropic",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        drop_params=True,
+    )
+    if expected_thinking:
+        assert "thinking" in optional_params
+    else:
+        assert "thinking" not in optional_params
+
+
+def test_bedrock_invoke_anthropic_max_tokens():
+    passed_params = {
+        "model": "invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "functions": None,
+        "function_call": None,
+        "temperature": 0.8,
+        "top_p": None,
+        "n": 1,
+        "stream": False,
+        "stream_options": None,
+        "stop": None,
+        "max_tokens": None,
+        "max_completion_tokens": 1024,
+        "modalities": None,
+        "prediction": None,
+        "audio": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+        "logit_bias": None,
+        "user": None,
+        "custom_llm_provider": "bedrock",
+        "response_format": {"type": "text"},
+        "seed": None,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_plan",
+                    "description": "Generate a plan to execute the task using only the tools outlined in your context.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {
+                                            "type": "string",
+                                            "description": "The type of step to execute",
+                                        },
+                                        "tool_name": {
+                                            "type": "string",
+                                            "description": "The name of the tool to use for this step",
+                                        },
+                                        "tool_input": {
+                                            "type": "object",
+                                            "description": "The input to pass to the tool. Make sure this complies with the schema for the tool.",
+                                        },
+                                        "tool_output": {
+                                            "type": "object",
+                                            "description": "(Optional) The output from the tool if needed for future steps. Make sure this complies with the schema for the tool.",
+                                        },
+                                    },
+                                    "required": ["type"],
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_wire_tool",
+                    "description": "Create a wire transfer with complete wire instructions",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "company_id": {
+                                "type": "integer",
+                                "description": "The ID of the company receiving the investment",
+                            },
+                            "investment_id": {
+                                "type": "integer",
+                                "description": "The ID of the investment memo",
+                            },
+                            "dollar_amount": {
+                                "type": "number",
+                                "description": "The amount to wire in USD",
+                            },
+                            "wiring_instructions": {
+                                "type": "object",
+                                "description": "Complete bank account and routing information for the wire",
+                                "properties": {
+                                    "account_name": {
+                                        "type": "string",
+                                        "description": "Name on the bank account",
+                                    },
+                                    "address_1": {
+                                        "type": "string",
+                                        "description": "Primary address line",
+                                    },
+                                    "address_2": {
+                                        "type": "string",
+                                        "description": "Secondary address line (optional)",
+                                    },
+                                    "city": {"type": "string"},
+                                    "state": {"type": "string"},
+                                    "zip": {"type": "string"},
+                                    "country": {"type": "string", "default": "US"},
+                                    "bank_name": {"type": "string"},
+                                    "account_number": {"type": "string"},
+                                    "routing_number": {"type": "string"},
+                                    "account_type": {
+                                        "type": "string",
+                                        "enum": ["checking", "savings"],
+                                        "default": "checking",
+                                    },
+                                    "swift_code": {
+                                        "type": "string",
+                                        "description": "Required for international wires",
+                                    },
+                                    "iban": {
+                                        "type": "string",
+                                        "description": "Required for some international wires",
+                                    },
+                                    "bank_city": {"type": "string"},
+                                    "bank_state": {"type": "string"},
+                                    "bank_country": {"type": "string", "default": "US"},
+                                    "bank_to_bank_instructions": {
+                                        "type": "string",
+                                        "description": "Additional instructions for the bank (optional)",
+                                    },
+                                    "intermediary_bank_name": {
+                                        "type": "string",
+                                        "description": "Name of intermediary bank if required (optional)",
+                                    },
+                                },
+                                "required": [
+                                    "account_name",
+                                    "address_1",
+                                    "country",
+                                    "bank_name",
+                                    "account_number",
+                                    "routing_number",
+                                    "account_type",
+                                    "bank_country",
+                                ],
+                            },
+                        },
+                        "required": [
+                            "company_id",
+                            "investment_id",
+                            "dollar_amount",
+                            "wiring_instructions",
+                        ],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_companies",
+                    "description": "Search for companies by name or other criteria to get their IDs",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Name or part of name to search for",
+                            },
+                            "batch": {
+                                "type": "string",
+                                "description": 'Optional batch filter (e.g., "W21", "S22")',
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": [
+                                    "live",
+                                    "dead",
+                                    "adrift",
+                                    "exited",
+                                    "went_public",
+                                    "all",
+                                ],
+                                "description": "Filter by company status",
+                                "default": "live",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 10,
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "description": "Success or error status",
+                            },
+                            "results": {
+                                "type": "array",
+                                "description": "List of companies matching the search criteria",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "integer",
+                                            "description": "Company ID to use in other API calls",
+                                        },
+                                        "name": {"type": "string"},
+                                        "batch": {"type": "string"},
+                                        "status": {"type": "string"},
+                                        "valuation": {"type": "string"},
+                                        "url": {"type": "string"},
+                                        "description": {"type": "string"},
+                                        "founders": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "results_count": {
+                                "type": "integer",
+                                "description": "Number of companies returned",
+                            },
+                            "total_matches": {
+                                "type": "integer",
+                                "description": "Total number of matches found",
+                            },
+                        },
+                    },
+                },
+            },
+        ],
+        "tool_choice": None,
+        "max_retries": 0,
+        "logprobs": None,
+        "top_logprobs": None,
+        "extra_headers": None,
+        "api_version": None,
+        "parallel_tool_calls": None,
+        "drop_params": True,
+        "reasoning_effort": None,
+        "additional_drop_params": None,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an AI assistant that helps prepare a wire for a pro rata investment.",
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        "thinking": None,
+        "kwargs": {},
+    }
+    optional_params = get_optional_params(**passed_params)
+    print(f"optional_params: {optional_params}")
+
+    assert "max_tokens_to_sample" not in optional_params
+    assert optional_params["max_tokens"] == 1024
+
+
+def test_bedrock_invoke_claude_4_anthropic_max_tokens():
+    passed_params = {
+        "model": "invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "functions": None,
+        "function_call": None,
+        "temperature": 0.8,
+        "top_p": None,
+        "n": 1,
+        "stream": False,
+        "stream_options": None,
+        "stop": None,
+        "max_tokens": None,
+        "max_completion_tokens": 1024,
+        "modalities": None,
+        "prediction": None,
+        "audio": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+        "logit_bias": None,
+        "user": None,
+        "custom_llm_provider": "bedrock",
+        "response_format": {"type": "text"},
+        "seed": None,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_plan",
+                    "description": "Generate a plan to execute the task using only the tools outlined in your context.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {
+                                            "type": "string",
+                                            "description": "The type of step to execute",
+                                        },
+                                        "tool_name": {
+                                            "type": "string",
+                                            "description": "The name of the tool to use for this step",
+                                        },
+                                        "tool_input": {
+                                            "type": "object",
+                                            "description": "The input to pass to the tool. Make sure this complies with the schema for the tool.",
+                                        },
+                                        "tool_output": {
+                                            "type": "object",
+                                            "description": "(Optional) The output from the tool if needed for future steps. Make sure this complies with the schema for the tool.",
+                                        },
+                                    },
+                                    "required": ["type"],
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_wire_tool",
+                    "description": "Create a wire transfer with complete wire instructions",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "company_id": {
+                                "type": "integer",
+                                "description": "The ID of the company receiving the investment",
+                            },
+                            "investment_id": {
+                                "type": "integer",
+                                "description": "The ID of the investment memo",
+                            },
+                            "dollar_amount": {
+                                "type": "number",
+                                "description": "The amount to wire in USD",
+                            },
+                            "wiring_instructions": {
+                                "type": "object",
+                                "description": "Complete bank account and routing information for the wire",
+                                "properties": {
+                                    "account_name": {
+                                        "type": "string",
+                                        "description": "Name on the bank account",
+                                    },
+                                    "address_1": {
+                                        "type": "string",
+                                        "description": "Primary address line",
+                                    },
+                                    "address_2": {
+                                        "type": "string",
+                                        "description": "Secondary address line (optional)",
+                                    },
+                                    "city": {"type": "string"},
+                                    "state": {"type": "string"},
+                                    "zip": {"type": "string"},
+                                    "country": {"type": "string", "default": "US"},
+                                    "bank_name": {"type": "string"},
+                                    "account_number": {"type": "string"},
+                                    "routing_number": {"type": "string"},
+                                    "account_type": {
+                                        "type": "string",
+                                        "enum": ["checking", "savings"],
+                                        "default": "checking",
+                                    },
+                                    "swift_code": {
+                                        "type": "string",
+                                        "description": "Required for international wires",
+                                    },
+                                    "iban": {
+                                        "type": "string",
+                                        "description": "Required for some international wires",
+                                    },
+                                    "bank_city": {"type": "string"},
+                                    "bank_state": {"type": "string"},
+                                    "bank_country": {"type": "string", "default": "US"},
+                                    "bank_to_bank_instructions": {
+                                        "type": "string",
+                                        "description": "Additional instructions for the bank (optional)",
+                                    },
+                                    "intermediary_bank_name": {
+                                        "type": "string",
+                                        "description": "Name of intermediary bank if required (optional)",
+                                    },
+                                },
+                                "required": [
+                                    "account_name",
+                                    "address_1",
+                                    "country",
+                                    "bank_name",
+                                    "account_number",
+                                    "routing_number",
+                                    "account_type",
+                                    "bank_country",
+                                ],
+                            },
+                        },
+                        "required": [
+                            "company_id",
+                            "investment_id",
+                            "dollar_amount",
+                            "wiring_instructions",
+                        ],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_companies",
+                    "description": "Search for companies by name or other criteria to get their IDs",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Name or part of name to search for",
+                            },
+                            "batch": {
+                                "type": "string",
+                                "description": 'Optional batch filter (e.g., "W21", "S22")',
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": [
+                                    "live",
+                                    "dead",
+                                    "adrift",
+                                    "exited",
+                                    "went_public",
+                                    "all",
+                                ],
+                                "description": "Filter by company status",
+                                "default": "live",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 10,
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "description": "Success or error status",
+                            },
+                            "results": {
+                                "type": "array",
+                                "description": "List of companies matching the search criteria",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "integer",
+                                            "description": "Company ID to use in other API calls",
+                                        },
+                                        "name": {"type": "string"},
+                                        "batch": {"type": "string"},
+                                        "status": {"type": "string"},
+                                        "valuation": {"type": "string"},
+                                        "url": {"type": "string"},
+                                        "description": {"type": "string"},
+                                        "founders": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "results_count": {
+                                "type": "integer",
+                                "description": "Number of companies returned",
+                            },
+                            "total_matches": {
+                                "type": "integer",
+                                "description": "Total number of matches found",
+                            },
+                        },
+                    },
+                },
+            },
+        ],
+        "tool_choice": None,
+        "max_retries": 0,
+        "logprobs": None,
+        "top_logprobs": None,
+        "extra_headers": None,
+        "api_version": None,
+        "parallel_tool_calls": None,
+        "drop_params": True,
+        "reasoning_effort": None,
+        "additional_drop_params": None,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an AI assistant that helps prepare a wire for a pro rata investment.",
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        "thinking": None,
+        "kwargs": {},
+    }
+    optional_params = get_optional_params(**passed_params)
+    print(f"optional_params: {optional_params}")
+
+    assert "max_tokens_to_sample" not in optional_params
+    assert optional_params["max_tokens"] == 1024
+
+
+def test_azure_modalities_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        modalities=["text", "audio"],
+        audio={"type": "audio_input", "input": "test.wav"},
+    )
+    assert optional_params["modalities"] == ["text", "audio"]
+    assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+
+def test_litellm_proxy_thinking_param():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="litellm_proxy",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    assert optional_params["extra_body"]["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 1024,
+    }
+
+
+def test_gemini_modalities_param():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        modalities=["text", "image"],
+    )
+
+    assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
+
+
+def test_azure_response_format_param():
+    optional_params = litellm.get_optional_params(
+        model="azure/o_series/test-o3-mini",
+        custom_llm_provider="azure/o_series",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_time",
+                    "description": "Get the current time in a given location.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city name, e.g. San Francisco",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("claude-3-7-sonnet-20240620-v1:0", "anthropic"),
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("invoke/anthropic.claude-3-7-sonnet-20240620-v1:0", "bedrock"),
+        ("claude-3-7-sonnet@20250219", "vertex_ai"),
+    ],
+)
+def test_anthropic_unified_reasoning_content(model, provider):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        reasoning_effort="high",
+    )
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+def test_azure_response_format(monkeypatch):
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-02-01")
+    optional_params = get_optional_params(
+        model="azure/gpt-4o-mini",
+        custom_llm_provider="azure",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params["response_format"] == {"type": "json_object"}
+
+
+def test_cohere_embed_dimensions_param():
+    optional_params = get_optional_params_embeddings(
+        model="embed-multilingual-v3.0",
+        custom_llm_provider="cohere",
+        encoding_format="float",
+    )
+    assert optional_params["embedding_types"] == ["float"]
+
+
+def test_optional_params_with_additional_drop_params():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        additional_drop_params=["red"],
+        drop_params=True,
+        red="blue",
+    )
+    print(f"optional_params: {optional_params}")
+    assert "red" not in optional_params
+    assert "red" not in optional_params["extra_body"]
+
+
+def test_azure_ai_cohere_embed_input_type_param():
+    optional_params = get_optional_params_embeddings(
+        model="embed-v-4-0",
+        custom_llm_provider="azure_ai",
+        input_type="text",
+        dimensions=1536,
+    )
+    assert optional_params["dimensions"] == 1536
+    assert optional_params["extra_body"]["input_type"] == "text"
+
+
+def test_optional_params_image_gen_with_aspect_ratio():
+    optional_params = get_optional_params_image_gen(
+        model="imagen-4.0-ultra-generate-001",
+        custom_llm_provider="vertex_ai",
+        aspect_ratio="16:9",
+    )
+    assert optional_params["aspect_ratio"] == "16:9"
+
+
+def test_optional_params_responses_api_allowed_openai_params():
+    from litellm import responses
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = litellm.responses(
+                model="openai/o1-pro",
+                input="Tell me a three sentence bedtime story about a unicorn.",
+                max_output_tokens=100,
+                top_logprobs=10,
+                allowed_openai_params=["top_logprobs"],
+                client=client,
+            )
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            print("error: ", e)
+
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs
+        print("request_body: ", request_body)
+        assert "top_logprobs" in request_body["json"]
+
+
+def test_validate_openai_optional_params_stop_truncation():
+    """
+    Test that validate_openai_optional_params truncates stop sequences to 4 elements
+    when more than 4 are provided, as OpenAI only supports up to 4 stop sequences.
+    """
+    # Test with more than 4 stop sequences - should truncate to 4
+    stop_sequences = ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+    result = validate_openai_optional_params(stop=stop_sequences)
+    assert result == ["stop1", "stop2", "stop3", "stop4"]
+    assert len(result) == 4
+    
+    # Test with exactly 4 stop sequences - should not truncate
+    stop_sequences_4 = ["stop1", "stop2", "stop3", "stop4"]
+    result = validate_openai_optional_params(stop=stop_sequences_4)
+    assert result == ["stop1", "stop2", "stop3", "stop4"]
+    assert len(result) == 4
+    
+    # Test with less than 4 stop sequences - should not truncate
+    stop_sequences_2 = ["stop1", "stop2"]
+    result = validate_openai_optional_params(stop=stop_sequences_2)
+    assert result == ["stop1", "stop2"]
+    assert len(result) == 2
+    
+    # Test with single stop sequence as string - should return as is
+    stop_string = "stop1"
+    result = validate_openai_optional_params(stop=stop_string)
+    assert result == "stop1"
+    
+    # Test with None - should return None
+    result = validate_openai_optional_params(stop=None)
+    assert result is None
+    
+    # Test with empty list - should return empty list
+    result = validate_openai_optional_params(stop=[])
+    assert result == []
+
+
+def test_validate_openai_optional_params_disable_stop_sequence_limit():
+    """
+    Test that validate_openai_optional_params respects the disable_stop_sequence_limit flag.
+    When litellm.disable_stop_sequence_limit is True, stop sequences should not be truncated.
+    """
+    # Save original value
+    original_value = litellm.disable_stop_sequence_limit
+    
+    try:
+        # Test with disable_stop_sequence_limit = True - should NOT truncate
+        litellm.disable_stop_sequence_limit = True
+        stop_sequences = ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+        result = validate_openai_optional_params(stop=stop_sequences)
+        assert result == ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+        assert len(result) == 6
+        
+        # Test with disable_stop_sequence_limit = False - should truncate to 4
+        litellm.disable_stop_sequence_limit = False
+        stop_sequences = ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+        result = validate_openai_optional_params(stop=stop_sequences)
+        assert result == ["stop1", "stop2", "stop3", "stop4"]
+        assert len(result) == 4
+    finally:
+        # Restore original value
+        litellm.disable_stop_sequence_limit = original_value
+
+
+def test_validate_openai_optional_params_integration():
+    """
+    Test that validate_openai_optional_params is properly integrated in the completion flow.
+    """
+    # Test that completion with more than 4 stop sequences works without error
+    try:
+        with patch("litellm.llms.openai.openai.OpenAI") as mock_client:
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = "Test response"
+            mock_response.model = "gpt-3.5-turbo"
+            mock_response.id = "test-id"
+            mock_response.created = 1234567890
+            mock_response.usage = MagicMock()
+            mock_response.usage.prompt_tokens = 10
+            mock_response.usage.completion_tokens = 5
+            mock_response.usage.total_tokens = 15
+            
+            mock_client.return_value.chat.completions.create.return_value = mock_response
+            
+            # Call completion with more than 4 stop sequences
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello"}],
+                stop=["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"],
+                mock_response="Test response"  # This will use mock
+            )
+            
+            # Verify the call was made (stop sequences should be truncated internally)
+            assert response is not None
+    except Exception as e:
+        # Should not raise an exception
+        pytest.fail(f"validate_openai_optional_params integration failed: {e}")

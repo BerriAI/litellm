@@ -108,7 +108,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         stream: Optional[bool] = None,
         **kwargs,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -228,6 +228,45 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
+    def _build_request_payload(
+        self, model: str, prompt: str, optional_params: Dict
+    ) -> Dict:
+        """Shared logic to build request payload"""
+        extra_body_params = optional_params.pop("extra_body", {})
+        optional_params.update(extra_body_params)
+        watsonx_api_params = _get_api_params(params=optional_params, model=model)
+        watsonx_auth_payload = self._prepare_payload(
+            model=model, api_params=watsonx_api_params
+        )
+
+        return {
+            "input": prompt,
+            "moderations": optional_params.pop("moderations", {}),
+            "parameters": optional_params,
+            **watsonx_auth_payload,
+        }
+
+    async def atransform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
+        headers: Dict,
+    ) -> Dict:
+        """Async version of transform_request"""
+        from litellm.llms.watsonx.common_utils import (
+            aconvert_watsonx_messages_to_prompt,
+        )
+
+        provider = model.split("/")[0]
+        prompt = await aconvert_watsonx_messages_to_prompt(
+            model=model, messages=messages, provider=provider, custom_prompt_dict={}
+        )
+        return self._build_request_payload(
+            model=model, prompt=prompt, optional_params=optional_params
+        )
+
     def transform_request(
         self,
         model: str,
@@ -236,31 +275,14 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         litellm_params: Dict,
         headers: Dict,
     ) -> Dict:
+        """Sync version of transform_request"""
         provider = model.split("/")[0]
         prompt = convert_watsonx_messages_to_prompt(
-            model=model,
-            messages=messages,
-            provider=provider,
-            custom_prompt_dict={},
+            model=model, messages=messages, provider=provider, custom_prompt_dict={}
         )
-        extra_body_params = optional_params.pop("extra_body", {})
-        optional_params.update(extra_body_params)
-        watsonx_api_params = _get_api_params(params=optional_params)
-
-        watsonx_auth_payload = self._prepare_payload(
-            model=model,
-            api_params=watsonx_api_params,
+        return self._build_request_payload(
+            model=model, prompt=prompt, optional_params=optional_params
         )
-
-        # init the payload to the text generation call
-        payload = {
-            "input": prompt,
-            "moderations": optional_params.pop("moderations", {}),
-            "parameters": optional_params,
-            **watsonx_auth_payload,
-        }
-
-        return payload
 
     def transform_response(
         self,
@@ -300,9 +322,14 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             json_resp["results"][0]["stop_reason"]
         )
         if json_resp.get("created_at"):
-            model_response.created = int(
-                datetime.fromisoformat(json_resp["created_at"]).timestamp()
-            )
+            try:
+                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+            except ValueError:
+                # datetime.fromisoformat cannot handle 'Z' in Python 3.10
+                created_datetime = datetime.fromisoformat(
+                    f'{json_resp["created_at"].rstrip("Z")}+00:00'
+                )
+            model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
         usage = Usage(
@@ -315,9 +342,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)

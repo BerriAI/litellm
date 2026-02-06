@@ -26,15 +26,19 @@ else:
 class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
         Ensure - /v1/chat/completions is at the end of the url
 
         """
+        if api_base is None:
+            api_base = "https://api.openai.com"
 
         if not api_base.endswith("/chat/completions"):
             api_base += "/chat/completions"
@@ -46,6 +50,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:

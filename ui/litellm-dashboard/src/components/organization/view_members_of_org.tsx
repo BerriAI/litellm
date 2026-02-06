@@ -1,38 +1,26 @@
-import React, { FC } from 'react';
+import React, { FC } from "react";
 
 import { Organization, EditModalProps, OrganizationMember } from "./types";
-import {
-    TextInput,
-    Button,
-    Card,
-    Col,
-    Table,
-    TableHead,
-    TableHeaderCell,
-    TableBody,
-    TableRow,
-    TableCell,
-} from "@tremor/react";
-  
+import { Card, Col, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+
 interface Member {
   user_email?: string;
   user_id?: string;
   role: string;
 }
 
-
 interface MemberListTableProps {
   selectedEntity?: Organization;
   onEditSubmit: (entity: Organization) => void;
   editModalComponent: React.ComponentType<EditModalProps>;
-  entityType: 'team' | 'organization';
+  entityType: "team" | "organization";
 }
 
 const MemberListTable: FC<MemberListTableProps> = ({
   selectedEntity,
   onEditSubmit,
   editModalComponent: EditModal,
-  entityType
+  entityType,
 }) => {
   const [editModalVisible, setEditModalVisible] = React.useState(false);
 
@@ -46,7 +34,7 @@ const MemberListTable: FC<MemberListTableProps> = ({
   };
 
   const getMemberIdentifier = (member: Member) => {
-    return member.user_email || member.user_id || 'Unknown Member';
+    return member.user_email || member.user_id || "Unknown Member";
   };
 
   return (
@@ -55,24 +43,22 @@ const MemberListTable: FC<MemberListTableProps> = ({
         <Table>
           <TableHead>
             <TableRow>
-              <TableHeaderCell>
-                {entityType === 'team' ? 'Team Member' : 'Organization Member'}
-              </TableHeaderCell>
+              <TableHeaderCell>{entityType === "team" ? "Team Member" : "Organization Member"}</TableHeaderCell>
               <TableHeaderCell>Role</TableHeaderCell>
             </TableRow>
           </TableHead>
 
           <TableBody>
-          {(selectedEntity?.members ?? []).map((value: OrganizationMember, index: number) => (
-            <TableRow key={`${value.user_id}-${index}`}>
+            {(selectedEntity?.members ?? []).map((value: OrganizationMember, index: number) => (
+              <TableRow key={`${value.user_id}-${index}`}>
                 <TableCell>{value.user_id}</TableCell>
                 <TableCell>{value.user_role}</TableCell>
-            </TableRow>
+              </TableRow>
             ))}
           </TableBody>
         </Table>
       </Card>
-      
+
       {selectedEntity && (
         <EditModal
           visible={editModalVisible}

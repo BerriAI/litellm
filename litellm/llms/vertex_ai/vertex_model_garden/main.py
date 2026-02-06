@@ -20,9 +20,10 @@ from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
 
-from ..common_utils import VertexAIError
+from ..common_utils import VertexAIError, get_vertex_base_model_name
 from ..vertex_llm_base import VertexBase
 
 
@@ -34,8 +35,8 @@ def create_vertex_url(
     api_base: Optional[str] = None,
 ) -> str:
     """Return the base url for the vertex garden models"""
-    #  f"https://{self.endpoint.location}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT_ID}/locations/{self.endpoint.location}"
-    return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
+    base_url = get_vertex_base_url(vertex_location)
+    return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
 
 class VertexAIModelGardenModels(VertexBase):
@@ -76,7 +77,6 @@ class VertexAIModelGardenModels(VertexBase):
                 VertexLLM,
             )
         except Exception as e:
-
             raise VertexAIError(
                 status_code=400,
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
@@ -90,7 +90,7 @@ class VertexAIModelGardenModels(VertexBase):
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-            model = model.replace("openai/", "")
+            model = get_vertex_base_model_name(model=model)
             vertex_httpx_logic = VertexLLM()
 
             access_token, project_id = vertex_httpx_logic._ensure_access_token(
@@ -124,6 +124,10 @@ class VertexAIModelGardenModels(VertexBase):
                 stream=stream,
                 auth_header=None,
                 url=default_api_base,
+                model=model,
+                vertex_project=vertex_project or project_id,
+                vertex_location=vertex_location or "us-central1",
+                vertex_api_version="v1beta1",
             )
             model = ""
             return openai_like_chat_completions.completion(

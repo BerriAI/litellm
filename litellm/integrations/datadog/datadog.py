@@ -15,19 +15,30 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import datetime
-import json
 import os
 import traceback
-import uuid
 from datetime import datetime as datetimeObj
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from httpx import Response
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.datadog.datadog_mock_client import (
+    should_use_datadog_mock,
+    create_mock_datadog_client,
+)
+from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_hostname,
+    get_datadog_service,
+    get_datadog_source,
+    get_datadog_tags,
+    get_datadog_base_url_from_env,
+)
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -35,17 +46,23 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.datadog import *
-from litellm.types.services import ServiceLoggerPayload
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import StandardLoggingPayload
 
-from ..base_health_check import HealthCheckIntegration
+from ..additional_logging_utils import AdditionalLoggingUtils
 
-DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
+# max number of logs DD API can accept
+
+
+# specify what ServiceTypes are logged as success events to DD. (We don't want to spam DD traces with large number of service types)
+DD_LOGGED_SUCCESS_SERVICE_TYPES = [
+    ServiceTypes.RESET_BUDGET_JOB,
+]
 
 
 class DataDogLogger(
     CustomBatchLogger,
-    HealthCheckIntegration,
+    AdditionalLoggingUtils,
 ):
     # Class variables or attributes
     def __init__(
@@ -55,35 +72,48 @@ class DataDogLogger(
         """
         Initializes the datadog logger, checks if the correct env variables are set
 
-        Required environment variables:
+        Required environment variables (Direct API):
         `DD_API_KEY` - your datadog api key
         `DD_SITE` - your datadog site, example = `"us5.datadoghq.com"`
+
+        Optional environment variables (DataDog Agent):
+        `LITELLM_DD_AGENT_HOST` - hostname or IP of DataDog agent, example = `"localhost"`
+        `LITELLM_DD_AGENT_PORT` - port of DataDog agent (default: 10518 for logs)
+
+        Note: We use LITELLM_DD_AGENT_HOST instead of DD_AGENT_HOST to avoid conflicts
+        with ddtrace which automatically sets DD_AGENT_HOST for APM tracing.
         """
         try:
             verbose_logger.debug("Datadog: in init datadog logger")
-            # check if the correct env variables are set
-            if os.getenv("DD_API_KEY", None) is None:
-                raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
-            if os.getenv("DD_SITE", None) is None:
-                raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+            
+            self.is_mock_mode = should_use_datadog_mock()
+            
+            if self.is_mock_mode:
+                create_mock_datadog_client()
+                verbose_logger.debug("[DATADOG MOCK] Datadog logger initialized in mock mode")
+
+            #########################################################
+            # Handle datadog_params set as litellm.datadog_params
+            #########################################################
+            dict_datadog_params = self._get_datadog_params()
+            kwargs.update(dict_datadog_params)
+
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
-            self.DD_API_KEY = os.getenv("DD_API_KEY")
-            self.intake_url = (
-                f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
-            )
 
-            ###################################
-            # OPTIONAL -only used for testing
-            dd_base_url: Optional[str] = (
-                os.getenv("_DATADOG_BASE_URL")
-                or os.getenv("DATADOG_BASE_URL")
-                or os.getenv("DD_BASE_URL")
-            )
-            if dd_base_url is not None:
+            # Configure DataDog endpoint (Agent or Direct API)
+            # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
+            dd_agent_host = os.getenv("LITELLM_DD_AGENT_HOST")
+            if dd_agent_host:
+                self._configure_dd_agent(dd_agent_host=dd_agent_host)
+            else:
+                self._configure_dd_direct_api()
+
+            # Optional override for testing
+            dd_base_url = get_datadog_base_url_from_env()
+            if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/v2/logs"
-            ###################################
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -95,6 +125,52 @@ class DataDogLogger(
                 f"Datadog: Got exception on init Datadog client {str(e)}"
             )
             raise e
+
+    def _get_datadog_params(self) -> Dict:
+        """
+        Get the datadog_params from litellm.datadog_params
+
+        These are params specific to initializing the DataDogLogger e.g. turn_off_message_logging
+        """
+        dict_datadog_params: Dict = {}
+        if litellm.datadog_params is not None:
+            if isinstance(litellm.datadog_params, DatadogInitParams):
+                dict_datadog_params = litellm.datadog_params.model_dump()
+            elif isinstance(litellm.datadog_params, Dict):
+                # only allow params that are of DatadogInitParams
+                dict_datadog_params = DatadogInitParams(
+                    **litellm.datadog_params
+                ).model_dump()
+        return dict_datadog_params
+
+    def _configure_dd_agent(self, dd_agent_host: str) -> None:
+        """
+        Configure DataDog Agent for log forwarding
+
+        Args:
+            dd_agent_host: Hostname or IP of DataDog agent
+        """
+        dd_agent_port = os.getenv(
+            "LITELLM_DD_AGENT_PORT", "10518"
+        )  # default port for logs
+        self.intake_url = f"http://{dd_agent_host}:{dd_agent_port}/api/v2/logs"
+        self.DD_API_KEY = os.getenv("DD_API_KEY")  # Optional when using agent
+        verbose_logger.debug(f"Datadog: Using DD Agent at {self.intake_url}")
+
+    def _configure_dd_direct_api(self) -> None:
+        """
+        Configure direct DataDog API connection
+
+        Raises:
+            Exception: If required environment variables are not set
+        """
+        if os.getenv("DD_API_KEY", None) is None:
+            raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
+        if os.getenv("DD_SITE", None) is None:
+            raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+
+        self.DD_API_KEY = os.getenv("DD_API_KEY")
+        self.intake_url = f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -154,6 +230,9 @@ class DataDogLogger(
                 len(self.log_queue),
                 self.intake_url,
             )
+            
+            if self.is_mock_mode:
+                verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             response = await self.async_send_compressed_data(self.log_queue)
             if response.status_code == 413:
@@ -166,11 +245,16 @@ class DataDogLogger(
                     f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
                 )
 
-            verbose_logger.debug(
-                "Datadog: Response from datadog API status_code: %s, text: %s",
-                response.status_code,
-                response.text,
-            )
+            if self.is_mock_mode:
+                verbose_logger.debug(
+                    f"[DATADOG MOCK] Batch of {len(self.log_queue)} events successfully mocked"
+                )
+            else:
+                verbose_logger.debug(
+                    "Datadog: Response from datadog API status_code: %s, text: %s",
+                    response.status_code,
+                    response.text,
+                )
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
@@ -199,12 +283,16 @@ class DataDogLogger(
                     end_time=end_time,
                 )
 
+            # Build headers
+            headers = {}
+            # Add API key if available (required for direct API, optional for agent)
+            if self.DD_API_KEY:
+                headers["DD-API-KEY"] = self.DD_API_KEY
+
             response = self.sync_client.post(
                 url=self.intake_url,
                 json=dd_payload,  # type: ignore
-                headers={
-                    "DD-API-KEY": self.DD_API_KEY,
-                },
+                headers=headers,
             )
 
             response.raise_for_status()
@@ -227,7 +315,6 @@ class DataDogLogger(
         pass
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
-
         dd_payload = self.create_datadog_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,
@@ -248,18 +335,19 @@ class DataDogLogger(
         standard_logging_object: StandardLoggingPayload,
         status: DataDogStatus,
     ) -> DatadogPayload:
-        json_payload = json.dumps(standard_logging_object, default=str)
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        json_payload = safe_dumps(standard_logging_object)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
-            ddsource=self._get_datadog_source(),
-            ddtags=self._get_datadog_tags(
-                standard_logging_object=standard_logging_object
-            ),
-            hostname=self._get_datadog_hostname(),
+            ddsource=get_datadog_source(),
+            ddtags=get_datadog_tags(standard_logging_object=standard_logging_object),
+            hostname=get_datadog_hostname(),
             message=json_payload,
-            service=self._get_datadog_service(),
+            service=get_datadog_service(),
             status=status,
         )
+        self._add_trace_context_to_payload(dd_payload=dd_payload)
         return dd_payload
 
     def create_datadog_logging_payload(
@@ -312,17 +400,25 @@ class DataDogLogger(
         """
 
         import gzip
-        import json
 
-        compressed_data = gzip.compress(json.dumps(data, default=str).encode("utf-8"))
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
+
+        # Build headers
+        headers = {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+        }
+
+        # Add API key if available (required for direct API, optional for agent)
+        if self.DD_API_KEY:
+            headers["DD-API-KEY"] = self.DD_API_KEY
+
         response = await self.async_client.post(
             url=self.intake_url,
             data=compressed_data,  # type: ignore
-            headers={
-                "DD-API-KEY": self.DD_API_KEY,
-                "Content-Encoding": "gzip",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         return response
 
@@ -340,18 +436,18 @@ class DataDogLogger(
 
         - example - Redis is failing / erroring, will be logged on DataDog
         """
-
         try:
-            import json
-
             _payload_dict = payload.model_dump()
-            _dd_message_str = json.dumps(_payload_dict, default=str)
+            _payload_dict.update(event_metadata or {})
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+            _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
-                ddsource="litellm",
-                ddtags="",
-                hostname="",
+                ddsource=get_datadog_source(),
+                ddtags=get_datadog_tags(),
+                hostname=get_datadog_hostname(),
                 message=_dd_message_str,
-                service="litellm-server",
+                service=get_datadog_service(),
                 status=DataDogStatus.WARN,
             )
 
@@ -377,7 +473,32 @@ class DataDogLogger(
 
         No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
         """
-        return
+        try:
+            # intentionally done. Don't want to log all service types to DD
+            if payload.service not in DD_LOGGED_SUCCESS_SERVICE_TYPES:
+                return
+
+            _payload_dict = payload.model_dump()
+            _payload_dict.update(event_metadata or {})
+
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+            _dd_message_str = safe_dumps(_payload_dict)
+            _dd_payload = DatadogPayload(
+                ddsource=get_datadog_source(),
+                ddtags=get_datadog_tags(),
+                hostname=get_datadog_hostname(),
+                message=_dd_message_str,
+                service=get_datadog_service(),
+                status=DataDogStatus.INFO,
+            )
+
+            self.log_queue.append(_dd_payload)
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog: Logger - Exception in async_service_failure_hook: {e}"
+            )
 
     def _create_v0_logging_payload(
         self,
@@ -392,7 +513,6 @@ class DataDogLogger(
 
         (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
         """
-        import json
 
         litellm_params = kwargs.get("litellm_params", {})
         metadata = (
@@ -449,68 +569,71 @@ class DataDogLogger(
             "metadata": clean_metadata,
         }
 
-        json_payload = json.dumps(payload, default=str)
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        json_payload = safe_dumps(payload)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
         dd_payload = DatadogPayload(
-            ddsource=self._get_datadog_source(),
-            ddtags=self._get_datadog_tags(),
-            hostname=self._get_datadog_hostname(),
+            ddsource=get_datadog_source(),
+            ddtags=get_datadog_tags(),
+            hostname=get_datadog_hostname(),
             message=json_payload,
-            service=self._get_datadog_service(),
+            service=get_datadog_service(),
             status=DataDogStatus.INFO,
         )
         return dd_payload
 
-    @staticmethod
-    def _get_datadog_tags(
-        standard_logging_object: Optional[StandardLoggingPayload] = None,
-    ) -> str:
-        """
-        Get the datadog tags for the request
+    def _add_trace_context_to_payload(
+        self,
+        dd_payload: DatadogPayload,
+    ) -> None:
+        """Attach Datadog APM trace context if one is active."""
 
-        DD tags need to be as follows:
-            - tags: ["user_handle:dog@gmail.com", "app_version:1.0.0"]
-        """
-        base_tags = {
-            "env": os.getenv("DD_ENV", "unknown"),
-            "service": os.getenv("DD_SERVICE", "litellm"),
-            "version": os.getenv("DD_VERSION", "unknown"),
-            "HOSTNAME": DataDogLogger._get_datadog_hostname(),
-            "POD_NAME": os.getenv("POD_NAME", "unknown"),
-        }
+        try:
+            trace_context = self._get_active_trace_context()
+            if trace_context is None:
+                return
 
-        tags = [f"{k}:{v}" for k, v in base_tags.items()]
-
-        if standard_logging_object:
-            _request_tags: List[str] = (
-                standard_logging_object.get("request_tags", []) or []
+            dd_payload["dd.trace_id"] = trace_context["trace_id"]
+            span_id = trace_context.get("span_id")
+            if span_id is not None:
+                dd_payload["dd.span_id"] = span_id
+        except Exception:
+            verbose_logger.exception(
+                "Datadog: Failed to attach trace context to payload"
             )
-            request_tags = [f"request_tag:{tag}" for tag in _request_tags]
-            tags.extend(request_tags)
 
-        return ",".join(tags)
+    def _get_active_trace_context(self) -> Optional[Dict[str, str]]:
+        try:
+            current_span = None
+            current_span_fn = getattr(tracer, "current_span", None)
+            if callable(current_span_fn):
+                current_span = current_span_fn()
 
-    @staticmethod
-    def _get_datadog_source():
-        return os.getenv("DD_SOURCE", "litellm")
+            if current_span is None:
+                current_root_span_fn = getattr(tracer, "current_root_span", None)
+                if callable(current_root_span_fn):
+                    current_span = current_root_span_fn()
 
-    @staticmethod
-    def _get_datadog_service():
-        return os.getenv("DD_SERVICE", "litellm-server")
+            if current_span is None:
+                return None
 
-    @staticmethod
-    def _get_datadog_hostname():
-        return os.getenv("HOSTNAME", "")
+            trace_id = getattr(current_span, "trace_id", None)
+            if trace_id is None:
+                return None
 
-    @staticmethod
-    def _get_datadog_env():
-        return os.getenv("DD_ENV", "unknown")
-
-    @staticmethod
-    def _get_datadog_pod_name():
-        return os.getenv("POD_NAME", "unknown")
+            span_id = getattr(current_span, "span_id", None)
+            trace_context: Dict[str, str] = {"trace_id": str(trace_id)}
+            if span_id is not None:
+                trace_context["span_id"] = str(span_id)
+            return trace_context
+        except Exception:
+            verbose_logger.exception(
+                "Datadog: Failed to retrieve active trace context from tracer"
+            )
+            return None
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         """
@@ -543,3 +666,11 @@ class DataDogLogger(
                 status="unhealthy",
                 error_message=str(e),
             )
+
+    async def get_request_response_payload(
+        self,
+        request_id: str,
+        start_time_utc: Optional[datetimeObj],
+        end_time_utc: Optional[datetimeObj],
+    ) -> Optional[dict]:
+        pass

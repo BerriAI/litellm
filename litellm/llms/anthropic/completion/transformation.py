@@ -11,6 +11,7 @@ from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_MAX_TOKENS
 from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
@@ -65,14 +66,16 @@ class AnthropicTextConfig(BaseConfig):
 
     def __init__(
         self,
-        max_tokens_to_sample: Optional[int] = 256,  # anthropic requires a default
+        max_tokens_to_sample: Optional[
+            int
+        ] = DEFAULT_MAX_TOKENS,  # anthropic requires a default
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
         top_k: Optional[int] = None,
         metadata: Optional[dict] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -84,6 +87,7 @@ class AnthropicTextConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -287,7 +291,7 @@ class AnthropicTextCompletionResponseIterator(BaseModelResponseIterator):
             _chunk_text = chunk.get("completion", None)
             if _chunk_text is not None and isinstance(_chunk_text, str):
                 text = _chunk_text
-            finish_reason = chunk.get("stop_reason", None)
+            finish_reason = chunk.get("stop_reason") or ""
             if finish_reason is not None:
                 is_finished = True
             returned_chunk = GenericStreamingChunk(

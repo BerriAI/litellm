@@ -11,7 +11,12 @@
 	// },
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
+	"features": {
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "lts"
+		},
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
+	},
 
 	// Configure tool-specific properties.
 	"customizations": {
@@ -30,7 +35,7 @@
 	
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	"forwardPorts": [4000],
-
+	
 	"containerEnv": {
 		"LITELLM_LOG": "DEBUG"
 	},
@@ -48,5 +53,5 @@
 	// "remoteUser": "litellm",
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pipx install poetry && poetry install -E extra_proxy -E proxy"
+	"postCreateCommand": "bash ./.devcontainer/post-create.sh"
 }

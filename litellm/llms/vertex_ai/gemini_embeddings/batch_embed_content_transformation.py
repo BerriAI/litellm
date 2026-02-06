@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 from typing import List
 
-from litellm import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse
 from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
     ContentType,
@@ -52,7 +52,6 @@ def process_response(
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
 ) -> EmbeddingResponse:
-
     openai_embeddings: List[Embedding] = []
     for embedding in _predictions["embeddings"]:
         openai_embedding = Embedding(

@@ -80,6 +80,53 @@ def test_get_usage(response_obj, expected_values):
     assert usage.total_tokens == expected_values[2]
 
 
+def test_get_usage_from_image_generation_response():
+    """
+    Test that image generation usage (with input_tokens/output_tokens format)
+    is correctly transformed to standard usage format with image_tokens preserved.
+
+    Note: get_usage_from_response_obj() is used by multiple endpoints including
+    /images/generations and Response API (/responses), both of which use the
+    input_tokens/output_tokens format instead of prompt_tokens/completion_tokens.
+
+    This tests the fix for the bug where image_tokens were being lost during
+    spend log creation for /images/generations endpoint.
+    """
+    # Simulating image generation response usage from OpenAI
+    response_obj = {
+        "usage": {
+            "input_tokens": 13,
+            "output_tokens": 372,
+            "total_tokens": 385,
+            "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 13,
+            },
+            "output_tokens_details": {
+                "image_tokens": 272,
+                "text_tokens": 100,
+            },
+        }
+    }
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    # Check basic token counts are mapped correctly
+    assert usage.prompt_tokens == 13
+    assert usage.completion_tokens == 372
+    assert usage.total_tokens == 385
+
+    # Check that prompt_tokens_details contains image_tokens and text_tokens
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.image_tokens == 0
+    assert usage.prompt_tokens_details.text_tokens == 13
+
+    # Check that completion_tokens_details contains image_tokens and text_tokens
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.image_tokens == 272
+    assert usage.completion_tokens_details.text_tokens == 100
+
+
 def test_get_additional_headers():
     additional_headers = {
         "x-ratelimit-limit-requests": "2000",
@@ -132,6 +179,7 @@ def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
         ("user_api_key_team_id", "test_team_id"),
         ("user_api_key_user_id", "test_user_id"),
         ("user_api_key_team_alias", "test_team_alias"),
+        ("user_api_key_spend", 10.50),
         ("spend_logs_metadata", {"key": "value"}),
         ("requester_ip_address", "127.0.0.1"),
         ("requester_metadata", {"user_agent": "test_agent"}),
@@ -328,6 +376,48 @@ def test_get_final_response_obj():
         litellm.turn_off_message_logging = False
 
 
+def test_get_standard_logging_payload_trace_id():
+    """Test _get_standard_logging_payload_trace_id with different input scenarios"""
+    # Test case 1: When litellm_trace_id is provided in litellm_params
+    from unittest.mock import MagicMock
+    
+    # Create a mock Logging object
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "default-trace-id"
+    
+    # Test when litellm_trace_id is in litellm_params
+    litellm_params = {"litellm_trace_id": "dynamic-trace-id"}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params=litellm_params
+    )
+    assert result == "dynamic-trace-id"
+    
+    # Test case 2: When litellm_trace_id is not provided in litellm_params
+    litellm_params = {}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params=litellm_params
+    )
+    assert result == "default-trace-id"
+    
+    # Test case 3: When litellm_params is None
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params={}
+    )
+    assert result == "default-trace-id"
+    
+    # Test case 4: When litellm_trace_id in params is not a string
+    litellm_params = {"litellm_trace_id": 12345}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params=litellm_params
+    )
+    assert result == "12345"
+    assert isinstance(result, str)
+
+
 def test_truncate_standard_logging_payload():
     """
     1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
@@ -413,6 +503,7 @@ def test_get_error_information():
     assert result["error_code"] == "429"
     assert result["error_class"] == "RateLimitError"
     assert result["llm_provider"] == "openai"
+    assert result["error_message"] == "litellm.RateLimitError: Test error"
 
 
 def test_get_response_time():
@@ -472,3 +563,328 @@ def test_standard_logging_metadata_requester_metadata(
 ):
     result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
     assert result["requester_metadata"] == expected_requester_metadata
+
+
+def test_cost_breakdown_in_standard_logging_payload():
+    """
+    Test that cost breakdown fields are properly included in StandardLoggingPayload.
+    Tests input_cost, output_cost, tool_usage_cost, and total_cost fields.
+    """
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload, Logging
+    from litellm.types.utils import Usage
+    from datetime import datetime
+    import time
+    
+    # Create a mock logging object with cost breakdown
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-123",
+        function_id="test-function"
+    )
+    
+    # Simulate cost breakdown being stored during cost calculation
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.0035,
+        cost_for_built_in_tools_cost_usd_dollar=0.0005
+    )
+    
+    # Mock response object
+    mock_response = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?"
+                },
+                "finish_reason": "stop"
+            }
+        ]
+    }
+    
+    # Create kwargs
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.0035,
+        "custom_llm_provider": "openai",
+    }
+    
+    start_time = datetime.now()
+    end_time = datetime.now()
+    
+    # Get the standard logging payload
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success"
+    )
+    
+    # Verify the cost breakdown field is present
+    assert payload is not None
+    assert payload["cost_breakdown"] is not None
+    assert payload["cost_breakdown"]["input_cost"] == 0.001
+    assert payload["cost_breakdown"]["output_cost"] == 0.002
+    assert payload["cost_breakdown"]["tool_usage_cost"] == 0.0005
+    assert payload["cost_breakdown"]["total_cost"] == 0.0035
+    assert payload["response_cost"] == 0.0035
+    
+    print("✅ Cost breakdown test passed!")
+
+
+def test_cost_breakdown_missing_in_standard_logging_payload():
+    """
+    Test that cost breakdown field is None when not available (e.g., for embedding calls)
+    """
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload, Logging
+    from datetime import datetime
+    
+    # Create a mock logging object without cost breakdown
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="embedding",  # Non-completion call type
+        start_time=datetime.now(),
+        litellm_call_id="test-123",
+        function_id="test-function"
+    )
+    
+    # No cost breakdown stored
+    
+    # Mock response object
+    mock_response = {
+        "object": "list",
+        "data": [{"embedding": [0.1, 0.2, 0.3]}],
+        "model": "text-embedding-ada-002",
+        "usage": {"prompt_tokens": 10, "total_tokens": 10}
+    }
+    
+    kwargs = {
+        "model": "text-embedding-ada-002",
+        "input": ["Hello"],
+        "response_cost": 0.0001,
+        "custom_llm_provider": "openai",
+    }
+    
+    start_time = datetime.now()
+    end_time = datetime.now()
+    
+    # Get the standard logging payload
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success"
+    )
+    
+    # Verify the cost breakdown field is None for non-completion calls
+    assert payload is not None
+    assert payload["cost_breakdown"] is None
+    assert payload["response_cost"] == 0.0001
+    
+    print("✅ Cost breakdown missing test passed!")
+
+
+def test_merge_litellm_metadata_basic():
+    """
+    Test that merge_litellm_metadata correctly merges metadata and litellm_metadata.
+    User API key fields (from metadata) should take precedence over model-related fields (from litellm_metadata).
+    """
+    litellm_params = {
+        "metadata": {
+            "user_api_key": "test-key-123",
+            "user_api_key_user_id": "user-456",
+            "user_api_key_team_id": "team-789",
+        },
+        "litellm_metadata": {
+            "model_group": "gpt-4-group",
+            "model_info": {"id": "model-123"},
+            "tags": ["tag1", "tag2"],
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # Check that user API key fields are present
+    assert result["user_api_key"] == "test-key-123"
+    assert result["user_api_key_user_id"] == "user-456"
+    assert result["user_api_key_team_id"] == "team-789"
+
+    # Check that model-related fields are present
+    assert result["model_group"] == "gpt-4-group"
+    assert result["model_info"] == {"id": "model-123"}
+    assert result["tags"] == ["tag1", "tag2"]
+
+
+def test_merge_litellm_metadata_precedence():
+    """
+    Test that metadata fields take precedence over litellm_metadata when there are conflicts.
+    """
+    litellm_params = {
+        "metadata": {
+            "tags": ["user-tag1", "user-tag2"],
+            "custom_field": "from_metadata",
+        },
+        "litellm_metadata": {
+            "tags": ["model-tag1", "model-tag2"],  # This should NOT overwrite
+            "custom_field": "from_litellm_metadata",  # This should NOT overwrite
+            "model_group": "gpt-4-group",  # This should be included
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # metadata values should take precedence
+    assert result["tags"] == ["user-tag1", "user-tag2"]
+    assert result["custom_field"] == "from_metadata"
+
+    # litellm_metadata values should only be included if not in metadata
+    assert result["model_group"] == "gpt-4-group"
+
+
+def test_merge_litellm_metadata_skip_non_serializable():
+    """
+    Test that non-serializable objects like UserAPIKeyAuth are skipped.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    litellm_params = {
+        "metadata": {
+            "user_api_key": "test-key-123",
+            "user_api_key_auth": user_api_key_auth,  # This should be skipped
+            "safe_field": "safe_value",
+        },
+        "litellm_metadata": {
+            "model_group": "gpt-4-group",
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # user_api_key_auth should be skipped
+    assert "user_api_key_auth" not in result
+
+    # Other fields should be present
+    assert result["user_api_key"] == "test-key-123"
+    assert result["safe_field"] == "safe_value"
+    assert result["model_group"] == "gpt-4-group"
+
+
+def test_merge_litellm_metadata_empty_params():
+    """
+    Test that merge_litellm_metadata handles empty or missing metadata gracefully.
+    """
+    # Test with empty litellm_params
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata({})
+    assert result == {}
+
+    # Test with only metadata
+    litellm_params = {
+        "metadata": {
+            "user_api_key": "test-key",
+        }
+    }
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert result == {"user_api_key": "test-key"}
+
+    # Test with only litellm_metadata
+    litellm_params = {
+        "litellm_metadata": {
+            "model_group": "gpt-4-group",
+        }
+    }
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert result == {"model_group": "gpt-4-group"}
+
+    # Test with None values
+    litellm_params = {
+        "metadata": None,
+        "litellm_metadata": None,
+    }
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert result == {}
+
+
+def test_merge_litellm_metadata_bedrock_passthrough_scenario():
+    """
+    Test merge_litellm_metadata in a Bedrock passthrough scenario where both 
+    user API key metadata and model metadata need to be merged.
+    
+    This is the specific scenario that was fixed - bedrock passthrough requests
+    should include complete user authentication metadata in logging.
+    """
+    litellm_params = {
+        "metadata": {
+            # User API key fields from authentication
+            "user_api_key": "sk-bedrock-test-key-123",
+            "user_api_key_hash": "hashed-key-123",
+            "user_api_key_user_id": "bedrock-user-456",
+            "user_api_key_team_id": "bedrock-team-789",
+            "user_api_key_org_id": "bedrock-org-101",
+            "user_api_key_alias": "bedrock-key-alias",
+            "user_api_key_team_alias": "bedrock-team-alias",
+            "user_api_key_end_user_id": "end-user-123",
+            "user_api_key_request_route": "/bedrock/model/invoke",
+        },
+        "litellm_metadata": {
+            # Model-related fields from Bedrock configuration
+            "model_group": "bedrock-claude-group",
+            "model_info": {
+                "id": "anthropic.claude-3-sonnet",
+                "mode": "chat",
+            },
+            "aws_region_name": "us-east-1",
+            "tags": ["production", "bedrock"],
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # Verify all user API key fields are present
+    assert result["user_api_key"] == "sk-bedrock-test-key-123"
+    assert result["user_api_key_hash"] == "hashed-key-123"
+    assert result["user_api_key_user_id"] == "bedrock-user-456"
+    assert result["user_api_key_team_id"] == "bedrock-team-789"
+    assert result["user_api_key_org_id"] == "bedrock-org-101"
+    assert result["user_api_key_alias"] == "bedrock-key-alias"
+    assert result["user_api_key_team_alias"] == "bedrock-team-alias"
+    assert result["user_api_key_end_user_id"] == "end-user-123"
+    assert result["user_api_key_request_route"] == "/bedrock/model/invoke"
+
+    # Verify all model-related fields are present
+    assert result["model_group"] == "bedrock-claude-group"
+    assert result["model_info"] == {
+        "id": "anthropic.claude-3-sonnet",
+        "mode": "chat",
+    }
+    assert result["aws_region_name"] == "us-east-1"
+    assert result["tags"] == ["production", "bedrock"]
+
+    # Verify total number of fields (9 user fields + 4 model fields = 13)
+    assert len(result) == 13

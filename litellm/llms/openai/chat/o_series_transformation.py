@@ -11,7 +11,7 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param) 
 """
 
-from typing import List, Optional
+from typing import Any, Coroutine, List, Literal, Optional, Union, cast, overload
 
 import litellm
 from litellm import verbose_logger
@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.utils import (
     supports_function_calling,
+    supports_parallel_function_calling,
     supports_response_schema,
     supports_system_messages,
 )
@@ -42,23 +43,6 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         O-series models support `developer` role.
         """
         return messages
-
-    def should_fake_stream(
-        self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
-    ) -> bool:
-        if stream is not True:
-            return False
-
-        if model is None:
-            return True
-        supported_stream_models = ["o1-mini", "o1-preview"]
-        for supported_model in supported_stream_models:
-            if supported_model in model:
-                return False
-        return True
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -93,13 +77,18 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             model, custom_llm_provider
         )
         _supports_response_schema = supports_response_schema(model, custom_llm_provider)
+        _supports_parallel_tool_calls = supports_parallel_function_calling(
+            model, custom_llm_provider
+        )
 
         if not _supports_function_calling:
             non_supported_params.append("tools")
             non_supported_params.append("tool_choice")
-            non_supported_params.append("parallel_tool_calls")
             non_supported_params.append("function_call")
             non_supported_params.append("functions")
+
+        if not _supports_parallel_tool_calls:
+            non_supported_params.append("parallel_tool_calls")
 
         if not _supports_response_schema:
             non_supported_params.append("response_format")
@@ -141,15 +130,29 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         )
 
     def is_model_o_series_model(self, model: str) -> bool:
-        if model in litellm.open_ai_chat_completion_models and (
-            "o1" in model or "o3" in model
-        ):
-            return True
-        return False
+        model = model.split("/")[-1]  # could be "openai/o3" or "o3"
+        return model in litellm.open_ai_chat_completion_models and any(
+            model.startswith(pfx) for pfx in ("o1", "o3", "o4")
+        )
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]:
+        ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str
-    ) -> List[AllMessageValues]:
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)
@@ -163,4 +166,11 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                 )
                 messages[i] = new_message  # Replace the old message with the new one
 
-        return messages
+        if is_async:
+            return super()._transform_messages(
+                messages, model, is_async=cast(Literal[True], True)
+            )
+        else:
+            return super()._transform_messages(
+                messages, model, is_async=cast(Literal[False], False)
+            )

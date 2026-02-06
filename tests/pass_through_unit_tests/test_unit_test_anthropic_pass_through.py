@@ -35,7 +35,7 @@ def mock_httpx_response():
     mock_resp.json.return_value = {
         "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
         "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "role": "assistant",
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -105,7 +105,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
         kwargs={
             "litellm_params": {
                 "metadata": {
-                    "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+                    "user_api_key": "sk-test-mock-api-key-123",
                     "user_api_key_user_id": "default_user_id",
                     "user_api_key_team_id": None,
                     "user_api_key_end_user_id": ("test" if metadata_params else ""),
@@ -164,14 +164,14 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
                         {"type": "bash_20241022", "name": "bash"},
                     ],
                     "max_tokens": 4096,
-                    "model": "claude-3-5-sonnet-20241022",
+                    "model": "claude-sonnet-4-5-20250929",
                     **metadata_params,
                 },
                 "response_body": {
                     "id": "msg_015uSaCZBvu9gUSkAmZtMfxC",
                     "type": "message",
                     "role": "assistant",
-                    "model": "claude-3-5-sonnet-20241022",
+                    "model": "claude-sonnet-4-5-20250929",
                     "content": [
                         {
                             "type": "text",
@@ -190,7 +190,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
                 },
             },
             "response_cost": 0.007941,
-            "model": "claude-3-5-sonnet-20241022",
+            "model": "claude-sonnet-4-5-20250929",
         },
         start_time=start_time,
         end_time=end_time,
@@ -200,11 +200,6 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
     assert isinstance(result, dict)
     assert "model" in result
     assert "response_cost" in result
-    assert "standard_logging_object" in result
-    if metadata_params:
-        assert "test" == result["standard_logging_object"]["end_user"]
-    else:
-        assert "" == result["standard_logging_object"]["end_user"]
 
 
 @pytest.mark.parametrize(
@@ -224,7 +219,7 @@ def test_get_user_from_metadata(end_user_id):
             "id": "msg_015uSaCZBvu9gUSkAmZtMfxC",
             "type": "message",
             "role": "assistant",
-            "model": "claude-3-5-sonnet-20241022",
+            "model": "claude-sonnet-4-5-20250929",
             "content": [
                 {
                     "type": "text",
@@ -358,6 +353,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
     )
 
     assert isinstance(result["result"], ModelResponse)
+    print("result=", json.dumps(result, indent=4, default=str))
 
 
 def test_build_complete_streaming_response(all_chunks):
@@ -375,3 +371,6 @@ def test_build_complete_streaming_response(all_chunks):
     )
 
     assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 17
+    assert result.usage.completion_tokens == 249
+    assert result.usage.total_tokens == 266

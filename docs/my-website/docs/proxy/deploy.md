@@ -2,36 +2,68 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# Docker, Deployment
+# Docker, Helm, Terraform
+
+:::info No Limits on LiteLLM OSS
+There are **no limits** on the number of users, keys, or teams you can create on LiteLLM OSS.
+:::
 
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
+> Note: Production requires at least 4 CPU cores and 8 GB RAM.
+
 ## Quick Start
+
+:::info
+Facing issues with pulling the docker image? Email us at support@berri.ai.
+:::
 
 To start using Litellm, run the following commands in a shell:
 
-```bash
-# Get the code
-git clone https://github.com/BerriAI/litellm
+<Tabs>
 
-# Go to folder
-cd litellm
+<TabItem value="docker" label="Docker">
+
+```
+docker pull docker.litellm.ai/berriai/litellm:main-latest
+```
+
+[**See all docker images**](https://github.com/orgs/BerriAI/packages)
+
+</TabItem>
+
+<TabItem value="pip" label="LiteLLM CLI (pip package)">
+
+```shell
+$ pip install 'litellm[proxy]'
+```
+
+</TabItem>
+
+<TabItem value="docker-compose" label="Docker Compose (Proxy + DB)">
+
+Use this docker compose to spin up the proxy with a postgres database running locally. 
+
+```bash
+# Get the docker compose file
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/prometheus.yml
 
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 
 # Add the litellm salt key - you cannot change this after adding a model
 # It is used to encrypt / decrypt your LLM API Key credentials
-# We recommned - https://1password.com/password-generator/ 
+# We recommend - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
 echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 
-source .env
-
 # Start
-docker-compose up
+docker compose up
 ```
 
+</TabItem>
+</Tabs>
 
 ### Docker Run 
 
@@ -41,12 +73,12 @@ Example `litellm_config.yaml`
 
 ```yaml
 model_list:
-  - model_name: azure-gpt-3.5
+  - model_name: azure-gpt-4o
     litellm_params:
       model: azure/<your-azure-model-deployment>
       api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
       api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
-      api_version: "2023-07-01-preview"
+      api_version: "2025-01-01-preview"
 ```
 
 
@@ -59,7 +91,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-stable \
     --config /app/config.yaml --detailed_debug
 ```
 
@@ -67,13 +99,13 @@ Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/l
 
 #### Step 3. TEST Request
 
-  Pass `model=azure-gpt-3.5` this was set on step 1
+  Pass `model=azure-gpt-4o` this was set on step 1
 
   ```shell
   curl --location 'http://0.0.0.0:4000/chat/completions' \
       --header 'Content-Type: application/json' \
       --data '{
-      "model": "azure-gpt-3.5",
+      "model": "azure-gpt-4o",
       "messages": [
           {
           "role": "user",
@@ -89,12 +121,12 @@ See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli):
 
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
+docker run docker.litellm.ai/berriai/litellm:main-stable --config your_config.yaml
 ```
 
 Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
+docker run docker.litellm.ai/berriai/litellm:main-stable --port 8002 --num_workers 8
 ```
 
 
@@ -102,7 +134,7 @@ docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 
 ```shell
 # Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
+FROM docker.litellm.ai/berriai/litellm:main-stable
 
 # Set the working directory to /app
 WORKDIR /app
@@ -125,7 +157,9 @@ CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 
 ### Build from litellm `pip` package
 
-Follow these instructons to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
+Follow these instructions to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
+
+**Note:** You'll need to copy the `schema.prisma` file from the [litellm repository](https://github.com/BerriAI/litellm/blob/main/schema.prisma) to your build directory alongside the Dockerfile and requirements.txt.
 
 Dockerfile 
 
@@ -149,6 +183,12 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
     ${HOME}/venv/bin/pip install -r requirements.txt
 
+# Copy Prisma schema file
+COPY schema.prisma .
+
+# Generate prisma client
+RUN prisma generate
+
 EXPOSE 4000/tcp
 
 ENTRYPOINT ["litellm"]
@@ -160,6 +200,7 @@ Example `requirements.txt`
 
 ```shell
 litellm[proxy]==1.57.3 # Specify the litellm version you want to use
+litellm-enterprise
 prometheus_client
 langfuse
 prisma
@@ -189,7 +230,7 @@ docker run \
 
 s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
 
-👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
+👉 [Go here for Terraform](https://github.com/BerriAI/terraform-provider-litellm)
 
 ### Kubernetes
 
@@ -205,9 +246,9 @@ metadata:
 data:
   config.yaml: |
       model_list: 
-        - model_name: gpt-3.5-turbo
+        - model_name: gpt-4o
           litellm_params:
-            model: azure/gpt-turbo-small-ca
+            model: azure/gpt-4o-ca
             api_base: https://my-endpoint-canada-berri992.openai.azure.com/
             api_key: os.environ/CA_AZURE_OPENAI_API_KEY
 ---
@@ -236,7 +277,10 @@ spec:
     spec:
       containers:
       - name: litellm
-        image: ghcr.io/berriai/litellm:main-latest # it is recommended to fix a version generally
+        image: docker.litellm.ai/berriai/litellm:main-stable # it is recommended to fix a version generally
+        args:
+          - "--config"
+          - "/app/proxy_server_config.yaml"
         ports:
         - containerPort: 4000
         volumeMounts:
@@ -253,7 +297,7 @@ spec:
 ```
 
 :::info
-To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-latest`.
+To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-stable`.
 :::
 
 
@@ -270,9 +314,9 @@ Use this when you want to use litellm helm chart as a dependency for other chart
 #### Step 1. Pull the litellm helm chart
 
 ```bash
-helm pull oci://ghcr.io/berriai/litellm-helm
+helm pull oci://docker.litellm.ai/berriai/litellm-helm
 
-# Pulled: ghcr.io/berriai/litellm-helm:0.1.2
+# Pulled: docker.litellm.ai/berriai/litellm-helm:0.1.2
 # Digest: sha256:7d3ded1c99c1597f9ad4dc49d84327cf1db6e0faa0eeea0c614be5526ae94e2a
 ```
 
@@ -320,6 +364,26 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 ### Deploy with Database
 ##### Docker, Kubernetes, Helm Chart
 
+:::warning High Traffic Deployments (1000+ RPS)
+
+If you expect high traffic (1000+ requests per second), **Redis is required** to prevent database connection exhaustion and deadlocks.
+
+Add this to your config:
+```yaml
+general_settings:
+  use_redis_transaction_buffer: true
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: your-redis-host
+```
+
+See [Resolve DB Deadlocks](/docs/proxy/db_deadlocks) for details.
+
+:::
+
 Requirements:
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
 - Set a `LITELLM_MASTER_KEY`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`)
@@ -331,7 +395,7 @@ Requirements:
 We maintain a [separate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
 
 ```shell
-docker pull ghcr.io/berriai/litellm-database:main-latest
+docker pull docker.litellm.ai/berriai/litellm-database:main-stable
 ```
 
 ```shell
@@ -342,7 +406,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm-database:main-latest \
+    docker.litellm.ai/berriai/litellm-database:main-stable \
     --config /app/config.yaml --detailed_debug
 ```
 
@@ -370,7 +434,7 @@ spec:
     spec:
       containers:
         - name: litellm-container
-          image: ghcr.io/berriai/litellm:main-latest
+          image: docker.litellm.ai/berriai/litellm:main-stable
           imagePullPolicy: Always
           env:
             - name: AZURE_API_KEY
@@ -386,7 +450,8 @@ spec:
             - "/app/proxy_config.yaml"  # Update the path to mount the config file
           volumeMounts:                 # Define volume mount for proxy_config.yaml
             - name: config-volume
-              mountPath: /app
+              mountPath: /app/proxy_config.yaml
+              subPath: config.yaml      # Specify the field under data of the ConfigMap litellm-config
               readOnly: true
           livenessProbe:
             httpGet:
@@ -506,9 +571,9 @@ Use this when you want to use litellm helm chart as a dependency for other chart
 #### Step 1. Pull the litellm helm chart
 
 ```bash
-helm pull oci://ghcr.io/berriai/litellm-helm
+helm pull oci://docker.litellm.ai/berriai/litellm-helm
 
-# Pulled: ghcr.io/berriai/litellm-helm:0.1.2
+# Pulled: docker.litellm.ai/berriai/litellm-helm:0.1.2
 # Digest: sha256:7d3ded1c99c1597f9ad4dc49d84327cf1db6e0faa0eeea0c614be5526ae94e2a
 ```
 
@@ -544,15 +609,15 @@ LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances,
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4o-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
@@ -565,7 +630,7 @@ router_settings:
 Start docker container with config
 
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
+docker run docker.litellm.ai/berriai/litellm:main-stable --config your_config.yaml
 ```
 
 ### Deploy with Database + Redis
@@ -576,15 +641,15 @@ LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances,
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4o-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
@@ -600,7 +665,7 @@ Start `litellm-database`docker container with config
 docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
-ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+docker.litellm.ai/berriai/litellm-database:main-stable --config your_config.yaml
 ```
 
 ###  (Non Root) - without Internet Connection
@@ -610,7 +675,7 @@ By default `prisma generate` downloads [prisma's engine binaries](https://www.pr
 Use this docker image to deploy litellm with pre-generated prisma binaries.
 
 ```bash
-docker pull ghcr.io/berriai/litellm-non_root:main-stable
+docker pull docker.litellm.ai/berriai/litellm-non_root:main-stable
 ```
 
 [Published Docker Image link](https://github.com/BerriAI/litellm/pkgs/container/litellm-non_root)
@@ -619,101 +684,8 @@ docker pull ghcr.io/berriai/litellm-non_root:main-stable
 
 ### 1. Custom server root path (Proxy base url)
 
-💥 Use this when you want to serve LiteLLM on a custom base url path like `https://localhost:4000/api/v1` 
+Refer to [Custom Root Path](./custom_root_ui) for more details.
 
-:::info
-
-In a Kubernetes deployment, it's possible to utilize a shared DNS to host multiple applications by modifying the virtual service
-
-:::
-
-Customize the root path to eliminate the need for employing multiple DNS configurations during deployment.
-
-Step 1.
-👉 Set `SERVER_ROOT_PATH` in your .env and this will be set as your server root path
-```
-export SERVER_ROOT_PATH="/api/v1"
-```
-
-**Step 2** (If you want the Proxy Admin UI to work with your root path you need to use this dockerfile)
-- Use the dockerfile below (it uses litellm as a base image)
-- 👉 Set `UI_BASE_PATH=$SERVER_ROOT_PATH/ui` in the Dockerfile, example `UI_BASE_PATH=/api/v1/ui`
-
-Dockerfile
-
-```shell
-# Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
-
-# Set the working directory to /app
-WORKDIR /app
-
-# Install Node.js and npm (adjust version as needed)
-RUN apt-get update && apt-get install -y nodejs npm
-
-# Copy the UI source into the container
-COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
-
-# Set an environment variable for UI_BASE_PATH
-# This can be overridden at build time
-# set UI_BASE_PATH to "<your server root path>/ui"
-# 👇👇 Enter your UI_BASE_PATH here
-ENV UI_BASE_PATH="/api/v1/ui" 
-
-# Build the UI with the specified UI_BASE_PATH
-WORKDIR /app/ui/litellm-dashboard
-RUN npm install
-RUN UI_BASE_PATH=$UI_BASE_PATH npm run build
-
-# Create the destination directory
-RUN mkdir -p /app/litellm/proxy/_experimental/out
-
-# Move the built files to the appropriate location
-# Assuming the build output is in ./out directory
-RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
-    mv ./out/* /app/litellm/proxy/_experimental/out/
-
-# Switch back to the main app directory
-WORKDIR /app
-
-# Make sure your entrypoint.sh is executable
-RUN chmod +x ./docker/entrypoint.sh
-
-# Expose the necessary port
-EXPOSE 4000/tcp
-
-# Override the CMD instruction with your desired command and arguments
-# only use --detailed_debug for debugging
-CMD ["--port", "4000", "--config", "config.yaml"]
-```
-
-**Step 3** build this Dockerfile
-
-```shell
-docker build -f Dockerfile -t litellm-prod-build . --progress=plain
-```
-
-**Step 4. Run Proxy with `SERVER_ROOT_PATH` set in your env **
-
-```shell
-docker run \
-    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
-    -p 4000:4000 \
-    -e LITELLM_LOG="DEBUG"\
-    -e SERVER_ROOT_PATH="/api/v1"\
-    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
-    -e LITELLM_MASTER_KEY="sk-1234"\
-    litellm-prod-build \
-    --config /app/config.yaml
-```
-
-After running the proxy you can access it on `http://0.0.0.0:4000/api/v1/` (since we set `SERVER_ROOT_PATH="/api/v1"`)
-
-**Step 5. Verify Running on correct path**
-
-<Image img={require('../../img/custom_root_path.png')} />
-
-**That's it**, that's all you need to run the proxy on a custom root path
 
 ### 2. SSL Certification 
 
@@ -722,7 +694,7 @@ Use this, If you need to set ssl certificates for your on prem litellm proxy
 Pass `ssl_keyfile_path` (Path to the SSL keyfile) and `ssl_certfile_path` (Path to the SSL certfile) when starting litellm proxy 
 
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest \
+docker run docker.litellm.ai/berriai/litellm:main-stable \
     --ssl_keyfile_path ssl_test/keyfile.key \
     --ssl_certfile_path ssl_test/certfile.crt
 ```
@@ -737,7 +709,7 @@ Step 1. Build your custom docker image with hypercorn
 
 ```shell
 # Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
+FROM docker.litellm.ai/berriai/litellm:main-stable
 
 # Set the working directory to /app
 WORKDIR /app
@@ -776,7 +748,48 @@ docker run \
     --run_hypercorn
 ```
 
-### 4. config.yaml file on s3, GCS Bucket Object/url
+### 4. Keepalive Timeout
+
+Defaults to 5 seconds. Between requests, connections must receive new data within this period or be disconnected.
+
+
+Usage Example:
+In this example, we set the keepalive timeout to 75 seconds.
+
+```shell showLineNumbers title="docker run"
+docker run docker.litellm.ai/berriai/litellm:main-stable \
+    --keepalive_timeout 75
+```
+
+Or set via environment variable:
+In this example, we set the keepalive timeout to 75 seconds.
+
+```shell showLineNumbers title="Environment Variable"
+export KEEPALIVE_TIMEOUT=75
+docker run docker.litellm.ai/berriai/litellm:main-stable
+```
+
+
+### Restart Workers After N Requests
+
+Use this to mitigate memory growth by recycling workers after a fixed number of requests. When set, each worker restarts after completing the specified number of requests. Defaults to disabled when unset.
+
+Usage Examples:
+
+```shell showLineNumbers title="docker run (CLI flag)"
+docker run docker.litellm.ai/berriai/litellm:main-stable \
+    --max_requests_before_restart 10000
+```
+
+Or set via environment variable:
+
+```shell showLineNumbers title="Environment Variable"
+export MAX_REQUESTS_BEFORE_RESTART=10000
+docker run docker.litellm.ai/berriai/litellm:main-stable
+```
+
+
+### 5. config.yaml file on s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 
@@ -801,7 +814,7 @@ docker run --name litellm-proxy \
    -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
    -e LITELLM_CONFIG_BUCKET_TYPE="gcs" \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest --detailed_debug
+   docker.litellm.ai/berriai/litellm-database:main-stable --detailed_debug
 ```
 
 </TabItem>
@@ -822,14 +835,48 @@ docker run --name litellm-proxy \
    -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
    -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest
+   docker.litellm.ai/berriai/litellm-database:main-stable
 ```
 </TabItem>
 </Tabs>
 
+### 6. Disable pulling live model prices
+
+Disable pulling the model prices from LiteLLM's [hosted model prices file](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), if you're seeing long cold start times or network security issues.
+
+```env
+export LITELLM_LOCAL_MODEL_COST_MAP="True"
+```
+
+This will use the local model prices file instead.
+
 ## Platform-specific Guide
 
 <Tabs>
+<TabItem value="AWS ECS" label="AWS ECS - Elastic Container Service">
+
+### Terraform-based ECS Deployment
+
+LiteLLM maintains a dedicated Terraform tutorial for deploying the proxy on ECS. Follow the step-by-step guide in the [litellm-ecs-deployment repository](https://github.com/BerriAI/litellm-ecs-deployment) to provision the required ECS services, task definitions, and supporting AWS resources.
+
+1. Clone the tutorial repository to review the Terraform modules and variables.
+  ```bash
+  git clone https://github.com/BerriAI/litellm-ecs-deployment.git
+  cd litellm-ecs-deployment
+  ```
+
+2. Initialize and validate the Terraform project before applying it to your chosen workspace/account.
+  ```bash
+  terraform init
+  terraform plan
+  terraform apply
+  ```
+
+3. Once `terraform apply` completes, do `./build.sh` to push the repository on ECR and update the ECS cluster. Use that endpoint (port `4000` by default) for API requests to your LiteLLM proxy.
+
+
+</TabItem>
+
 <TabItem value="AWS EKS" label="AWS EKS - Kubernetes">
 
 ### Kubernetes (AWS EKS)
@@ -915,7 +962,7 @@ Run the following command, replacing `<database_url>` with the value you copied 
 docker run --name litellm-proxy \
    -e DATABASE_URL=<database_url> \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest
+   docker.litellm.ai/berriai/litellm-database:main-stable
 ```
 
 #### 4. Access the Application:
@@ -942,7 +989,7 @@ https://litellm-7yjrj3ha2q-uc.a.run.app is our example proxy, substitute it with
 curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-     "model": "gpt-3.5-turbo",
+     "model": "gpt-4o",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
      "temperature": 0.7
    }'
@@ -994,12 +1041,12 @@ services:
       context: .
       args:
         target: runtime
-    image: ghcr.io/berriai/litellm:main-latest
+    image: docker.litellm.ai/berriai/litellm:main-stable
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
     volumes:
       - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
-    # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
+    # You can change the port or number of workers as per your requirements or pass any new supported CLI argument. Make sure the port passed here matches with the container port defined above in `ports` value
     command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
 
 # ...rest of your docker-compose config if any
@@ -1049,3 +1096,33 @@ export DATABASE_SCHEMA="schema-name" # skip to use the default "public" schema
 litellm --config /path/to/config.yaml --iam_token_db_auth
 ```
 
+### ✨ Blocking web crawlers
+
+Note: This is an [enterprise only feature](https://docs.litellm.ai/docs/enterprise).
+
+To block web crawlers from indexing the proxy server endpoints, set the `block_robots` setting to `true` in your `litellm_config.yaml` file.
+
+```yaml showLineNumbers title="litellm_config.yaml"
+general_settings:
+  block_robots: true
+```
+
+#### How it works
+
+When this is enabled, the `/robots.txt` endpoint will return a 200 status code with the following content:
+
+```shell showLineNumbers title="robots.txt"
+User-agent: *
+Disallow: /
+```
+
+## Deployment FAQ
+
+**Q: Is Postgres the only supported database, or do you support other ones (like Mongo)?**
+
+A: We explored MySQL but that was hard to maintain and led to bugs for customers. Currently, PostgreSQL is our primary supported database for production deployments.
+
+
+**Q: If there is Postgres downtime, how does LiteLLM react? Does it fail-open or is there API downtime?**
+
+A: You can gracefully handle DB unavailability if it's on your VPC. See our production guide for more details: [Gracefully Handle DB Unavailability](https://docs.litellm.ai/docs/proxy/prod#6-if-running-litellm-on-vpc-gracefully-handle-db-unavailability)

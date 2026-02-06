@@ -6,6 +6,21 @@ import Image from '@theme/IdealImage';
 - Reject data before making llm api calls / before returning the response 
 - Enforce 'user' param for all openai endpoint calls
 
+:::tip
+**Understanding Callback Hooks?** Check out our [Callback Management Guide](../observability/callback_management.md) to understand the differences between proxy-specific hooks like `async_pre_call_hook` and general logging hooks like `async_log_success_event`.
+:::
+
+## Which Hook Should I Use?
+
+| Hook | Use Case | When It Runs |
+|------|----------|--------------|
+| `async_pre_call_hook` | Modify incoming request before it's sent to model | Before the LLM API call is made |
+| `async_moderation_hook` | Run checks on input in parallel to LLM API call | In parallel with the LLM API call |
+| `async_post_call_success_hook` | Modify outgoing response (non-streaming) | After successful LLM API call, for non-streaming responses |
+| `async_post_call_failure_hook` | Transform error responses sent to clients | After failed LLM API call |
+| `async_post_call_streaming_hook` | Modify outgoing response (streaming) | After successful LLM API call, for streaming responses |
+| `async_post_call_response_headers_hook` | Inject custom HTTP response headers | After LLM API call (both success and failure) |
+
 See a complete example with our [parallel request rate limiter](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py)
 
 ## Quick Start
@@ -18,7 +33,8 @@ This function is called just before a litellm completion call is made, and allow
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
 from litellm.proxy.proxy_server import UserAPIKeyAuth, DualCache
-from typing import Optional, Literal
+from litellm.types.utils import ModelResponseStream
+from typing import Any, AsyncGenerator, Optional, Literal
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
@@ -44,8 +60,23 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
         self, 
         request_data: dict,
         original_exception: Exception, 
-        user_api_key_dict: UserAPIKeyAuth
-    ):
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
+    ) -> Optional[HTTPException]:
+        """
+        Transform error responses sent to clients.
+        
+        Return an HTTPException to replace the original error with a user-friendly message.
+        Return None to use the original exception.
+        
+        Example:
+            if isinstance(original_exception, litellm.ContextWindowExceededError):
+                return HTTPException(
+                    status_code=400,
+                    detail="Your prompt is too long. Please reduce the length and try again."
+                )
+            return None  # Use original exception
+        """
         pass
 
     async def async_post_call_success_hook(
@@ -70,6 +101,33 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
         response: str,
     ):
         pass
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Passes the entire stream to the guardrail
+
+        This is useful for plugins that need to see the entire stream.
+        """
+        async for item in response:
+            yield item
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Inject custom headers into HTTP response (runs for both success and failure).
+        """
+        return {"x-custom-header": "custom-value"}
+
 proxy_handler_instance = MyCustomHandler()
 ```
 
@@ -308,4 +366,67 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     "system_fingerprint": null,
     "usage": {}
 }
+```
+
+## Advanced - Transform Error Responses
+
+Transform technical API errors into user-friendly messages using `async_post_call_failure_hook`. Return an `HTTPException` to replace the original error, or `None` to use the original exception.
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+from fastapi import HTTPException
+from typing import Optional
+import litellm
+
+class MyErrorTransformer(CustomLogger):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
+    ) -> Optional[HTTPException]:
+        if isinstance(original_exception, litellm.ContextWindowExceededError):
+            return HTTPException(
+                status_code=400,
+                detail="Your prompt is too long. Please reduce the length and try again."
+            )
+        if isinstance(original_exception, litellm.RateLimitError):
+            return HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please try again in a moment."
+            )
+        return None  # Use original exception
+
+proxy_handler_instance = MyErrorTransformer()
+```
+
+**Result:** Clients receive `"Your prompt is too long..."` instead of `"ContextWindowExceededError: Prompt exceeds context window"`.
+
+## Advanced - Inject Custom HTTP Response Headers
+
+Use `async_post_call_response_headers_hook` to inject custom HTTP headers into responses. This hook runs for **both successful and failed** LLM API calls.
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.proxy_server import UserAPIKeyAuth
+from typing import Any, Dict, Optional
+
+class CustomHeaderLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Inject custom headers into all responses (success and failure).
+        """
+        return {"x-custom-header": "custom-value"}
+
+proxy_handler_instance = CustomHeaderLogger()
 ```

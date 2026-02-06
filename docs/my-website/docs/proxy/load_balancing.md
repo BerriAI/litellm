@@ -13,6 +13,27 @@ For more details on routing strategies / params, see [Routing](../routing.md)
 
 :::
 
+## How Load Balancing Works
+
+LiteLLM automatically distributes requests across multiple deployments of the same model using its built-in router. the proxy routes traffic to optimize performance and reliability.
+
+"simple-shuffle" routing strategy is used by default
+
+### Routing Strategies
+
+| Strategy | Description | When to Use |
+|----------|-------------|-------------|
+| **simple-shuffle** (recommended) | Randomly distributes requests | General purpose, good for even load distribution |
+| **least-busy** | Routes to deployment with fewest active requests | High concurrency scenarios |
+| **usage-based-routing** (bad for perf) | Routes to deployment with lowest current usage (RPM/TPM) | When you want to respect rate limits evenly |
+| **latency-based-routing** | Routes to fastest responding deployment | Latency-critical applications |
+| **cost-based-routing** | Routes to deployment with lowest cost | Cost-sensitive applications |
+
+:::tip Deployment Priority
+Use the `order` parameter to prioritize specific deployments. [See Deployment Ordering](#deployment-ordering-priority) for details.
+:::
+
+
 ## Quick Start - Load Balancing
 #### Step 1 - Set deployments on config
 
@@ -47,6 +68,67 @@ router_settings:
   redis_password: <your redis password>
   redis_port: 1992
 ```
+
+## Enforce Model Rate Limits
+
+Strictly enforce RPM/TPM limits set on deployments. When limits are exceeded, requests are blocked **before** reaching the LLM provider with a `429 Too Many Requests` error.
+
+:::info
+By default, `rpm` and `tpm` values are only used for **routing decisions** (picking deployments with capacity). With `enforce_model_rate_limits`, they become **hard limits**.
+:::
+
+### Quick Start
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 60     # 60 requests per minute
+    tpm: 90000  # 90k tokens per minute
+
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits  # 👈 Enables strict enforcement
+```
+
+### How It Works
+
+| Limit Type | Enforcement | Accuracy |
+|------------|-------------|----------|
+| **RPM** | Hard limit - blocked at exact threshold | 100% accurate |
+| **TPM** | Best-effort - may slightly exceed | Blocked when already over limit |
+
+**Why TPM is best-effort:** Token count is unknown until the LLM responds. TPM is checked before each request (blocks if already over), and tracked after (adds actual tokens used).
+
+### Error Response
+
+```json
+{
+  "error": {
+    "message": "Model rate limit exceeded. RPM limit=60, current usage=60",
+    "type": "rate_limit_error",
+    "code": 429
+  }
+}
+```
+
+Response includes `retry-after: 60` header.
+
+### Multi-Instance Deployment
+
+For multiple LiteLLM proxy instances, add Redis to share rate limit state:
+
+```yaml
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits
+  redis_host: redis.example.com
+  redis_port: 6379
+  redis_password: your-password
+```
+
 
 :::info
 Detailed information about [routing strategies can be found here](../routing)
@@ -107,48 +189,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 </TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-import os 
-
-os.environ["OPENAI_API_KEY"] = "anything"
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model="gpt-3.5-turbo",
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
 
 </Tabs>
-
-
 ### Test - Loadbalancing
 
 In this request, the following will occur:
 1. A rate limit exception will be raised 
-2. LiteLLM proxy will retry the request on the model group (default is 3).
+2. LiteLLM proxy will retry the request on the model group (default retries are 3).
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -190,6 +237,9 @@ router_settings:
   redis_host: <your redis host>
   redis_password: <your redis password>
   redis_port: 1992
+  cache_params:
+    type: redis
+    max_connections: 100  # maximum Redis connections in the pool; tune based on expected concurrency/load
 ```
 
 ## Router settings on config - routing_strategy, model_group_alias
@@ -257,3 +307,43 @@ class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `/v1/models`, `/v1/model/info`, `/v1/model_group/info`
 ```
+
+## Deployment Ordering (Priority)
+
+Set `order` in `litellm_params` to prioritize deployments. Lower values = higher priority. When multiple deployments share the same `order`, the routing strategy picks among them.
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-primary
+      api_key: os.environ/AZURE_API_KEY
+      order: 1  # 👈 Highest priority - always tried first
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-fallback
+      api_key: os.environ/AZURE_API_KEY_2
+      order: 2  # 👈 Used when order=1 is unavailable
+
+router_settings:
+  enable_pre_call_checks: true  # 👈 Required for 'order' to work
+```
+
+:::important
+The `order` parameter requires `enable_pre_call_checks: true` in `router_settings`.
+:::
+
+If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
+
+### When You'll See Load Balancing in Action
+
+**Immediate Effects:**
+
+- Different deployments serve subsequent requests (visible in logs)
+- Better response times during high traffic
+
+**Observable Benefits:**
+- **Higher throughput**: More requests handled simultaneously across deployments
+- **Improved reliability**: If one deployment fails, traffic automatically routes to healthy ones
+- **Better resource utilization**: Load spread evenly across all available deployments

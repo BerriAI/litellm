@@ -6,7 +6,26 @@ import Image from '@theme/IdealImage';
 
 Use this if you want to create Virtual Keys that are not owned by a specific user but instead created for production projects
 
+Why use a service account key?
+  - Prevent key from being deleted when user is deleted.
+  - Apply team limits, not team member limits to key.
+
 ## Usage
+
+Use the `/key/service-account/generate` endpoint to generate a service account key.
+
+
+```bash
+curl -L -X POST 'http://localhost:4000/key/service-account/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "team_id": "my-unique-team"
+}'
+```
+
+## Example - require `user` param for all service account requests
+
 
 ### 1. Set settings for Service Accounts
 

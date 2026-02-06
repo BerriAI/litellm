@@ -38,7 +38,12 @@ def generate_iam_token(api_key=None, **params) -> str:
         headers = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
-            api_key = get_secret_str("WX_API_KEY") or get_secret_str("WATSONX_API_KEY")
+            api_key = (
+                get_secret_str("WX_API_KEY")
+                or get_secret_str("WATSONX_API_KEY")
+                or get_secret_str("WATSONX_APIKEY")
+                or get_secret_str("WATSONX_ZENAPIKEY")
+            )
         if api_key is None:
             raise ValueError("API key is required")
         headers["Accept"] = "application/json"
@@ -76,9 +81,7 @@ def _generate_watsonx_token(api_key: Optional[str], token: Optional[str]) -> str
     return token
 
 
-def _get_api_params(
-    params: dict,
-) -> WatsonXAPIParams:
+def _get_api_params(params: dict, model: Optional[str] = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -114,10 +117,15 @@ def _get_api_params(
             or get_secret_str("SPACE_ID")
         )
 
-    if project_id is None:
+    if (
+        project_id is None
+        and space_id is None
+        and model is not None
+        and not model.startswith("deployment/")
+    ):
         raise WatsonXAIError(
             status_code=401,
-            message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
+            message="Error: Watsonx project_id and space_id not set. Set WX_PROJECT_ID or WX_SPACE_ID in environment variables or pass in as a parameter.",
         )
 
     return WatsonXAPIParams(
@@ -127,17 +135,20 @@ def _get_api_params(
     )
 
 
-def convert_watsonx_messages_to_prompt(
+async def _aconvert_watsonx_messages_core(
     model: str,
     messages: List[AllMessageValues],
     provider: str,
     custom_prompt_dict: Dict,
+    apply_template_fn,
 ) -> str:
+    """Async core logic for converting watsonx messages to prompt"""
+    from litellm.types.llms.watsonx import WatsonXModelPattern
+
     # handle anthropic prompts and amazon titan prompts
     if model in custom_prompt_dict:
-        # check if the model has a registered custom prompt
         model_prompt_dict = custom_prompt_dict[model]
-        prompt = ptf.custom_prompt(
+        return ptf.custom_prompt(
             messages=messages,
             role_dict=model_prompt_dict.get(
                 "role_dict", model_prompt_dict.get("roles")
@@ -147,14 +158,89 @@ def convert_watsonx_messages_to_prompt(
             bos_token=model_prompt_dict.get("bos_token", ""),
             eos_token=model_prompt_dict.get("eos_token", ""),
         )
-        return prompt
-    elif provider == "ibm-mistralai":
-        prompt = ptf.mistral_instruct_pt(messages=messages)
+    elif provider == WatsonXModelPattern.IBM_MISTRALAI.value:
+        return ptf.mistral_instruct_pt(messages=messages)
     else:
-        prompt: str = ptf.prompt_factory(  # type: ignore
+        # Try applying specific template first
+        result = await apply_template_fn(model=model, messages=messages)
+        if result:
+            return result
+        # Fallback to default
+        return ptf.prompt_factory(
             model=model, messages=messages, custom_llm_provider="watsonx"
+        )  # type: ignore
+
+
+def _convert_watsonx_messages_core(
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
+    apply_template_fn,
+) -> str:
+    """Sync core logic for converting watsonx messages to prompt"""
+    from litellm.types.llms.watsonx import WatsonXModelPattern
+
+    # handle anthropic prompts and amazon titan prompts
+    if model in custom_prompt_dict:
+        model_prompt_dict = custom_prompt_dict[model]
+        return ptf.custom_prompt(
+            messages=messages,
+            role_dict=model_prompt_dict.get(
+                "role_dict", model_prompt_dict.get("roles")
+            ),
+            initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
+            final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
+            bos_token=model_prompt_dict.get("bos_token", ""),
+            eos_token=model_prompt_dict.get("eos_token", ""),
         )
-    return prompt
+    elif provider == WatsonXModelPattern.IBM_MISTRALAI.value:
+        return ptf.mistral_instruct_pt(messages=messages)
+    else:
+        # Try applying specific template first
+        result = apply_template_fn(model=model, messages=messages)
+        if result:
+            return result
+        # Fallback to default
+        return ptf.prompt_factory(
+            model=model, messages=messages, custom_llm_provider="watsonx"
+        )  # type: ignore
+
+
+async def aconvert_watsonx_messages_to_prompt(
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
+) -> str:
+    """Async version of convert_watsonx_messages_to_prompt"""
+    from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+
+    return await _aconvert_watsonx_messages_core(
+        model=model,
+        messages=messages,
+        provider=provider,
+        custom_prompt_dict=custom_prompt_dict,
+        apply_template_fn=IBMWatsonXChatConfig.aapply_prompt_template,
+    )
+
+
+def convert_watsonx_messages_to_prompt(
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
+) -> str:
+    """Sync version of convert_watsonx_messages_to_prompt"""
+    from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+
+    return _convert_watsonx_messages_core(
+        model=model,
+        messages=messages,
+        provider=provider,
+        custom_prompt_dict=custom_prompt_dict,
+        apply_template_fn=IBMWatsonXChatConfig.apply_prompt_template,
+    )
 
 
 # Mixin class for shared IBM Watson X functionality
@@ -165,6 +251,7 @@ class IBMWatsonXMixin:
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
@@ -179,9 +266,14 @@ class IBMWatsonXMixin:
             Optional[str],
             optional_params.get("token") or get_secret_str("WATSONX_TOKEN"),
         )
+        zen_api_key = cast(
+            Optional[str],
+            optional_params.pop("zen_api_key", None)
+            or get_secret_str("WATSONX_ZENAPIKEY"),
+        )
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        elif zen_api_key := get_secret_str("WATSONX_ZENAPIKEY"):
+        elif zen_api_key:
             headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
             token = _generate_watsonx_token(api_key=api_key, token=token)
@@ -228,6 +320,7 @@ class IBMWatsonXMixin:
             or get_secret_str("WATSONX_APIKEY")
             or get_secret_str("WATSONX_API_KEY")
             or get_secret_str("WX_API_KEY")
+            or get_secret_str("WATSONX_ZENAPIKEY")
         )
 
         api_base = (
@@ -279,13 +372,12 @@ class IBMWatsonXMixin:
     def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
         payload: dict = {}
         if model.startswith("deployment/"):
-            if api_params["space_id"] is None:
-                raise WatsonXAIError(
-                    status_code=401,
-                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
-                )
-            payload["space_id"] = api_params["space_id"]
-            return payload
+            return (
+                {}
+            )  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model
-        payload["project_id"] = api_params["project_id"]
+        if api_params["project_id"] is not None:
+            payload["project_id"] = api_params["project_id"]
+        else:
+            payload["space_id"] = api_params["space_id"]
         return payload

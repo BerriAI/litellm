@@ -19,12 +19,7 @@
 
 body {
   color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  background: linear-gradient(to bottom, transparent, rgb(var(--background-end-rgb))) rgb(var(--background-start-rgb));
 }
 
 @layer utilities {
@@ -41,9 +36,4 @@ body {
 
 .custom-border {
   border: 1px solid var(--neutral-border);
-}
-
-.max-w-md {
-  display: flex;
-  max-width: 100px !important;
 }

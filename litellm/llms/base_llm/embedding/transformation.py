@@ -43,8 +43,10 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """

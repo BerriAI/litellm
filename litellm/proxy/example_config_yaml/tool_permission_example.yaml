@@ -1,0 +1,37 @@
+model_list:
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+guardrails:
+  - guardrail_name: "tool-permission-guardrail"
+    litellm_params:
+      guardrail: tool_permission
+      mode: "post_call"
+      default_on: true  # Apply to all requests by default
+      violation_message_template: "this violates our org policy, we don't support executing {tool_name} commands"
+      rules:
+        - id: "allow_bash"
+          tool_name: "Bash"
+          decision: "allow"
+        - id: "allow_github_mcp"
+          tool_name: "mcp__github_*"
+          decision: "allow"
+        - id: "allow_aws_documentation"
+          tool_name: "mcp__aws-documentation_*_documentation"
+          decision: "allow"
+        - id: "deny_read_commands"
+          tool_name: "Read"
+          decision: "Deny"
+      default_action: "deny"  # deny by default if no rule matches
+      on_disallowed_action: "block"  # block by default if no rule matches
+
+# Optional: Configure general settings
+general_settings:
+  master_key: sk-1234
+  
+# Optional: Add logging configuration
+litellm_settings:
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]

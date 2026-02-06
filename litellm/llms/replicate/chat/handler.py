@@ -4,6 +4,7 @@ import time
 from typing import Callable, List, Union
 
 import litellm
+from litellm.constants import REPLICATE_POLLING_DELAY_SECONDS
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -28,7 +29,9 @@ def handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        time.sleep(0.5)  # prevent being rate limited by replicate
+        time.sleep(
+            REPLICATE_POLLING_DELAY_SECONDS
+        )  # prevent being rate limited by replicate
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
@@ -77,20 +80,30 @@ async def async_handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        await asyncio.sleep(0.5)  # prevent being rate limited by replicate
-        print_verbose(f"replicate: polling endpoint: {prediction_url}")
+        await asyncio.sleep(
+            REPLICATE_POLLING_DELAY_SECONDS
+        )  # prevent being rate limited by replicate
         response = await http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
-            status = response_data["status"]
-            if "output" in response_data:
+            status = response_data.get("status", "")
+            # Check that "output" exists and is not None or empty
+            output_present = "output" in response_data and response_data["output"] is not None
+            if output_present:
                 try:
-                    output_string = "".join(response_data["output"])
+                    # If output is None or not a list, treat as empty string
+                    if isinstance(response_data["output"], list):
+                        output_string = "".join(response_data["output"])
+                    elif response_data["output"] is None:
+                        output_string = ""
+                    else:
+                        # fallback for other types; convert to string safely
+                        output_string = str(response_data["output"])
                 except Exception:
                     raise ReplicateError(
                         status_code=422,
                         message="Unable to parse response. Got={}".format(
-                            response_data["output"]
+                            response_data.get("output", None)
                         ),
                         headers=response.headers,
                     )
@@ -98,7 +111,7 @@ async def async_handle_prediction_response_streaming(
                 print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}
                 previous_output = output_string
-            status = response_data["status"]
+            status = response_data.get("status", "")
             if status == "failed":
                 replicate_error = response_data.get("error", "")
                 raise ReplicateError(
@@ -136,6 +149,7 @@ def completion(
         model=model,
         messages=messages,
         optional_params=optional_params,
+        litellm_params=litellm_params,
     )
     # Start a prediction and get the prediction URL
     version_id = replicate_config.model_to_version_id(model)
@@ -169,7 +183,11 @@ def completion(
     )  # for pricing this must remain right before calling api
 
     prediction_url = replicate_config.get_complete_url(
-        api_base=api_base, model=model, optional_params=optional_params
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
     )
 
     ## COMPLETION CALL
@@ -203,7 +221,7 @@ def completion(
             response = httpx_client.get(url=prediction_url, headers=headers)
             if (
                 response.status_code == 200
-                and response.json().get("status") == "processing"
+                and response.json().get("status") in ["processing", "starting"]
             ):
                 continue
             return litellm.ReplicateConfig().transform_response(
@@ -241,9 +259,12 @@ async def async_completion(
     print_verbose,
     headers: dict,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
-
     prediction_url = replicate_config.get_complete_url(
-        api_base=api_base, model=model, optional_params=optional_params
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
     )
     async_handler = get_async_httpx_client(
         llm_provider=litellm.LlmProviders.REPLICATE,
@@ -271,7 +292,7 @@ async def async_completion(
         response = await async_handler.get(url=prediction_url, headers=headers)
         if (
             response.status_code == 200
-            and response.json().get("status") == "processing"
+            and response.json().get("status") in ["processing", "starting"]
         ):
             continue
         return litellm.ReplicateConfig().transform_response(

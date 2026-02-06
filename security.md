@@ -12,6 +12,11 @@
 - For installation and configuration, see: [Self-hosting guided](https://docs.litellm.ai/docs/proxy/deploy)
 - **Telemetry** We run no telemetry when you self host LiteLLM
 
+
+:::info
+✨ SSO is free for up to 5 users. After that, an enterprise license is required. [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
+:::
+
 ### LiteLLM Cloud
 
 - We encrypt all data stored using your `LITELLM_MASTER_KEY` and in transit using TLS.
@@ -21,9 +26,6 @@
 - All users have access to SSO (Single Sign-On) through OAuth 2.0 with Google, Okta, Microsoft, KeyCloak. 
 - Audit Logs with retention policy
 - Control Allowed IP Addresses that can access your Cloud LiteLLM Instance
-
-For security inquiries, please contact us at support@berri.ai
-
 
 For security inquiries, please contact us at support@berri.ai
 

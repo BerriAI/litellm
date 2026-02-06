@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import tempfile
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 import pytest
@@ -21,7 +21,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket import (
     StandardLoggingPayload,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
-
+from unittest.mock import patch
 verbose_logger.setLevel(logging.DEBUG)
 
 
@@ -29,6 +29,7 @@ def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
+    os.environ["GCS_USE_BATCHED_LOGGING"] = "false"
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/vertex_key.json"
 
@@ -83,7 +84,7 @@ async def test_aaabasic_gcs_logger():
         mock_response="Hi!",
         metadata={
             "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
             "user_api_key_alias": None,
             "user_api_end_user_max_budget": None,
             "litellm_api_version": "0.0.0",
@@ -108,14 +109,13 @@ async def test_aaabasic_gcs_logger():
             },
             "endpoint": "http://localhost:4000/chat/completions",
             "model_group": "gpt-3.5-turbo",
-            "deployment": "azure/chatgpt-v-2",
             "model_info": {
                 "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
                 "db_model": False,
             },
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
             "caching_groups": None,
-            "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+            "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-3', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
         },
     )
 
@@ -156,7 +156,7 @@ async def test_aaabasic_gcs_logger():
 
     assert (
         gcs_payload["metadata"]["user_api_key_hash"]
-        == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+        == "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
     )
     assert gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
 
@@ -192,7 +192,7 @@ async def test_basic_gcs_logger_failure():
             metadata={
                 "gcs_log_id": gcs_log_id,
                 "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
-                "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+                "user_api_key": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
                 "user_api_key_alias": None,
                 "user_api_end_user_max_budget": None,
                 "litellm_api_version": "0.0.0",
@@ -216,14 +216,13 @@ async def test_basic_gcs_logger_failure():
                 },
                 "endpoint": "http://localhost:4000/chat/completions",
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
                 "model_info": {
                     "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
                     "db_model": False,
                 },
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                 "caching_groups": None,
-                "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+                "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-3', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
             },
         )
     except Exception:
@@ -261,7 +260,7 @@ async def test_basic_gcs_logger_failure():
 
     assert (
         gcs_payload["metadata"]["user_api_key_hash"]
-        == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+        == "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
     )
     assert gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
 
@@ -601,7 +600,7 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
         mock_response="Hi!",
         metadata={
             "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
             "user_api_key_alias": None,
             "user_api_end_user_max_budget": None,
             "litellm_api_version": "0.0.0",
@@ -626,14 +625,13 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
             },
             "endpoint": "http://localhost:4000/chat/completions",
             "model_group": "gpt-3.5-turbo",
-            "deployment": "azure/chatgpt-v-2",
             "model_info": {
                 "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
                 "db_model": False,
             },
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
             "caching_groups": None,
-            "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+            "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-3', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
         },
     )
 
@@ -674,7 +672,7 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
 
     assert (
         gcs_payload["metadata"]["user_api_key_hash"]
-        == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+        == "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
     )
     assert gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
 
@@ -687,3 +685,63 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
     # clean up
     if old_bucket_name is not None:
         os.environ["GCS_BUCKET_NAME"] = old_bucket_name
+
+@pytest.mark.skip(reason="This test is flaky on ci/cd")
+def test_create_file_e2e():
+    """
+    Asserts 'create_file' is called with the correct arguments
+    """
+    load_vertex_ai_credentials()
+    test_file_content = b"test audio content"
+    test_file = ("test.wav", test_file_content, "audio/wav")
+
+    from litellm import create_file
+    response = create_file(
+        file=test_file,
+        purpose="user_data",
+        custom_llm_provider="vertex_ai",
+    )
+    print("response", response)
+    assert response is not None
+
+@pytest.mark.skip(reason="This test is flaky on ci/cd")
+def test_create_file_e2e_jsonl():
+    """
+    Asserts 'create_file' is called with the correct arguments
+    """
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    example_jsonl = [{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}},{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}}]
+    
+    # Create and write to the file
+    file_path = "example.jsonl"
+    with open(file_path, "w") as f:
+        for item in example_jsonl:
+            f.write(json.dumps(item) + "\n")
+    
+    # Verify file content
+    with open(file_path, "r") as f:
+        content = f.read()
+        print("File content:", content)
+        assert len(content) > 0, "File is empty"
+
+    from litellm import create_file
+    with patch.object(client, "post") as mock_create_file:
+        try: 
+            response = create_file(
+                file=open(file_path, "rb"), 
+                purpose="user_data",
+                custom_llm_provider="vertex_ai",
+                client=client,
+            )
+        except Exception as e:
+            print("error", e)
+
+        mock_create_file.assert_called_once()
+
+        print(f"kwargs: {mock_create_file.call_args.kwargs}")
+
+        assert mock_create_file.call_args.kwargs["data"] is not None and len(mock_create_file.call_args.kwargs["data"]) > 0

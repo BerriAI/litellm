@@ -37,7 +37,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        watsonx_api_params = _get_api_params(params=optional_params)
+        watsonx_api_params = _get_api_params(params=optional_params, model=model)
         watsonx_auth_payload = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,
@@ -52,8 +52,10 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
