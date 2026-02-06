@@ -26,6 +26,7 @@ interface LogsTableToolbarProps {
   isButtonLoading: boolean;
   onRefetch: () => void;
   filteredLogs: PaginatedResponse;
+  showPagination?: boolean;
 }
 
 export function LogsTableToolbar({
@@ -48,6 +49,7 @@ export function LogsTableToolbar({
   isButtonLoading,
   onRefetch,
   filteredLogs,
+  showPagination = true,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const quickSelectRef = useRef<HTMLDivElement>(null);
@@ -192,33 +194,35 @@ export function LogsTableToolbar({
             )}
           </div>
 
-          <div className="flex items-center space-x-4">
-            <span className="text-sm text-gray-700 whitespace-nowrap">
-              Showing {isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
-              {isLoading ? "..." : filteredLogs ? Math.min(currentPage * pageSize, filteredLogs.total) : 0} of{" "}
-              {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
-            </span>
-            <div className="flex items-center space-x-2">
-              <span className="text-sm text-gray-700 min-w-[90px]">
-                Page {isLoading ? "..." : currentPage} of{" "}
-                {isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
+          {showPagination && (
+            <div className="flex items-center space-x-4">
+              <span className="text-sm text-gray-700 whitespace-nowrap">
+                Showing {isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
+                {isLoading ? "..." : filteredLogs ? Math.min(currentPage * pageSize, filteredLogs.total) : 0} of{" "}
+                {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
               </span>
-              <button
-                onClick={() => onCurrentPageChange((p: number) => Math.max(1, p - 1))}
-                disabled={isLoading || currentPage === 1}
-                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => onCurrentPageChange((p: number) => Math.min(filteredLogs.total_pages || 1, p + 1))}
-                disabled={isLoading || currentPage === (filteredLogs.total_pages || 1)}
-                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-gray-700 min-w-[90px]">
+                  Page {isLoading ? "..." : currentPage} of{" "}
+                  {isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
+                </span>
+                <button
+                  onClick={() => onCurrentPageChange((p: number) => Math.max(1, p - 1))}
+                  disabled={isLoading || currentPage === 1}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => onCurrentPageChange((p: number) => Math.min(filteredLogs.total_pages || 1, p + 1))}
+                  disabled={isLoading || currentPage === (filteredLogs.total_pages || 1)}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
       {isLiveTail && currentPage === 1 && (

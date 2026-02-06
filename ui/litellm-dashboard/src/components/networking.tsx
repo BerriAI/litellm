@@ -2059,6 +2059,49 @@ export const errorStatsCall = async (
   }
 };
 
+export const failureLogsAnalyticsPaginatedCall = async (
+  accessToken: string,
+  params: {
+    api_key?: string;
+    team_id?: string;
+    request_id?: string;
+    start_date?: string;
+    end_date?: string;
+    user_id?: string;
+    end_user?: string;
+    model?: string;
+    model_id?: string;
+    key_alias?: string;
+    error_classes?: string;
+    page?: number;
+    page_size?: number;
+  },
+) => {
+  try {
+    return await apiClient.get(`/spend/logs/failure_logs_analytics_paginated`, {
+      accessToken,
+      query: {
+        api_key: params.api_key || undefined,
+        team_id: params.team_id || undefined,
+        request_id: params.request_id || undefined,
+        start_date: params.start_date || undefined,
+        end_date: params.end_date || undefined,
+        user_id: params.user_id || undefined,
+        end_user: params.end_user || undefined,
+        model: params.model || undefined,
+        model_id: params.model_id || undefined,
+        key_alias: params.key_alias || undefined,
+        error_classes: params.error_classes || undefined,
+        page: params.page,
+        page_size: params.page_size,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch failure logs:", error);
+    throw error;
+  }
+};
+
 export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;

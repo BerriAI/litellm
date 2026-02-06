@@ -2,12 +2,13 @@ import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { useQuery } from "@tanstack/react-query";
+import { Switch } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import FilterComponent from "../molecules/filter";
-import { errorStatsCall, keyInfoV1Call } from "../networking";
+import { errorStatsCall, failureLogsAnalyticsPaginatedCall, keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
@@ -28,12 +29,36 @@ interface SpendLogsTableProps {
   premiumUser: boolean;
 }
 
+interface ErrorStatsResponse {
+  time_bucket_size: string;
+  data: Array<{
+    time_bucket: string;
+    extracted_error: string;
+    count: number;
+  }>;
+}
+
+interface FailureLogsAnalyticsResponse {
+  data: LogEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+const emptyFailureLogsAnalytics: FailureLogsAnalyticsResponse = {
+  data: [],
+  total: 0,
+  page: 1,
+  page_size: 50,
+  total_pages: 0,
+};
+
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
 
-  // New state variables for Start and End Time
   const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
   const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
 
@@ -43,6 +68,10 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
   const [activeTab, setActiveTab] = useState("request logs");
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [selectedErrorCategories, setSelectedErrorCategories] = useState<string[]>([]);
+  const [failureLogsAnalyticsCurrentPage, setFailureLogsAnalyticsCurrentPage] = useState(1);
+  const [failureLogsAnalyticsCurrentPageSize] = useState(50);
 
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -58,7 +87,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
     const storedValue = sessionStorage.getItem("isLiveTail");
-    // default to true if nothing is stored
     return storedValue !== null ? JSON.parse(storedValue) : true;
   });
 
@@ -114,7 +142,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     currentPage,
   });
 
-  const errorStatsQuery = useQuery({
+  const errorStatsQuery = useQuery<ErrorStatsResponse>({
     queryKey: ["errorStats", startTime, endTime, isCustomDate, filters, filterByCurrentUser ? userID : null, activeTab],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -143,10 +171,60 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
         )) || { time_bucket_size: "", data: [] }
       );
     },
-    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs" && showAnalytics,
+    refetchInterval: isLiveTail && !isCustomDate ? 15000 : false,
     refetchIntervalInBackground: false,
   });
+
+  const failureLogsAnalytics = useQuery<FailureLogsAnalyticsResponse>({
+    queryKey: [
+      "failureLogsAnalytics",
+      startTime,
+      endTime,
+      isCustomDate,
+      filters,
+      filterByCurrentUser ? userID : null,
+      selectedErrorCategories,
+      failureLogsAnalyticsCurrentPage,
+      failureLogsAnalyticsCurrentPageSize,
+      activeTab,
+    ],
+    queryFn: async () => {
+      if (!accessToken || !token || !userRole || !userID) {
+        return emptyFailureLogsAnalytics;
+      }
+
+      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+      const formattedEndTime = isCustomDate
+        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+      return (
+        (await failureLogsAnalyticsPaginatedCall(accessToken, {
+          api_key: filters[FILTER_KEYS.KEY_HASH] || undefined,
+          team_id: filters[FILTER_KEYS.TEAM_ID] || undefined,
+          request_id: filters[FILTER_KEYS.REQUEST_ID] || undefined,
+          start_date: formattedStartTime,
+          end_date: formattedEndTime,
+          user_id: filters[FILTER_KEYS.USER_ID] || (filterByCurrentUser ? userID ?? undefined : undefined),
+          end_user: filters[FILTER_KEYS.END_USER] || undefined,
+          model: filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL] || undefined,
+          model_id: filters[FILTER_KEYS.MODEL] || undefined,
+          key_alias: filters[FILTER_KEYS.KEY_ALIAS] || undefined,
+          error_classes: selectedErrorCategories.length > 0 ? selectedErrorCategories.join(",") : undefined,
+          page: failureLogsAnalyticsCurrentPage,
+          page_size: failureLogsAnalyticsCurrentPageSize,
+        })) || emptyFailureLogsAnalytics
+      );
+    },
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs" && showAnalytics,
+    refetchInterval: isLiveTail && !isCustomDate ? 15000 : false,
+    refetchIntervalInBackground: false,
+  });
+
+  useEffect(() => {
+    setFailureLogsAnalyticsCurrentPage(1);
+  }, [selectedErrorCategories, startTime, endTime, filters]);
 
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
@@ -154,6 +232,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
     setSelectedTimeInterval({ value: 24, unit: "hours" });
+    setSelectedErrorCategories([]);
+    setFailureLogsAnalyticsCurrentPage(1);
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
@@ -176,7 +256,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
         log.model.includes(searchTerm) ||
         (log.user && log.user.includes(searchTerm));
 
-      // No need for additional filtering since we're now handling this in the API call
       return matchesSearch;
     });
 
@@ -198,8 +277,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
       {},
     );
 
-    // Build a single-pass map of session_id → representative request_id.
-    // Prefers an LLM row over an MCP row as the representative.
     const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
     for (const log of searchedLogs) {
       if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
@@ -210,42 +287,38 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
       }
     }
 
-    return (
-      searchedLogs
-        .map((log) => {
-          const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
-          return {
-            ...log,
-            request_duration_ms: log.request_duration_ms,
-            session_llm_count: sessionComposition?.llm ?? undefined,
-            session_mcp_count: sessionComposition?.mcp ?? undefined,
-            session_agent_count: sessionComposition?.agent ?? undefined,
-            onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-            onSessionClick: (sessionId: string) => {
-              if (sessionId) {
-                setSelectedSessionId(sessionId);
-                setSelectedLog(log);
-                setIsDrawerOpen(true);
-              }
-            },
-          };
-        })
-        // Deduplicate multi-call sessions using the pre-built map (O(1) per row).
-        .filter((log) => {
-          if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-          return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
-        })
-    );
+    return searchedLogs
+      .map((log) => {
+        const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
+        return {
+          ...log,
+          request_duration_ms: log.request_duration_ms,
+          session_llm_count: sessionComposition?.llm ?? undefined,
+          session_mcp_count: sessionComposition?.mcp ?? undefined,
+          session_agent_count: sessionComposition?.agent ?? undefined,
+          onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
+          onSessionClick: (sessionId: string) => {
+            if (sessionId) {
+              setSelectedSessionId(sessionId);
+              setSelectedLog(log);
+              setIsDrawerOpen(true);
+            }
+          },
+        };
+      })
+      .filter((log) => {
+        if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
+        return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
+      });
   }, [filteredLogs.data, searchTerm]);
 
-  // Keep the Fetch button busy until the table has actually committed the new
-  // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
-  // without this the button clears while stale rows are still on screen.
   const deferredData = useDeferredValue(filteredData);
   const isStale = deferredData !== filteredData;
-  const isButtonLoading = logsQuery.isFetching || isStale;
+  const isButtonLoading = logsQuery.isFetching || isStale || (showAnalytics && failureLogsAnalytics.isFetching);
   const isRefiltering = logsQuery.isPlaceholderData;
   const isLogsLoading = logsQuery.isLoading || isRefiltering;
+  const failureLogsData = failureLogsAnalytics.data ?? emptyFailureLogsAnalytics;
+  const drawerLogs = showAnalytics ? failureLogsData.data : filteredData;
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
@@ -256,14 +329,12 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   }
 
   const handleRowClick = (log: LogEntry) => {
-    // Multi-call session row: open in the same right-side drawer (session mode)
     if (log.session_id && (log.session_total_count || 1) > 1) {
       setSelectedSessionId(log.session_id);
       setSelectedLog(log);
       setIsDrawerOpen(true);
       return;
     }
-    // Single-call row: open the detail drawer
     setSelectedSessionId(null);
     setSelectedLog(log);
     setIsDrawerOpen(true);
@@ -319,20 +390,96 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     isButtonLoading={isButtonLoading}
                     onRefetch={() => {
                       logsQuery.refetch();
-                      errorStatsQuery.refetch();
+                      if (showAnalytics) {
+                        errorStatsQuery.refetch();
+                        failureLogsAnalytics.refetch();
+                      }
                     }}
                     filteredLogs={filteredLogs}
+                    showPagination={!showAnalytics}
                   />
-                  <DataTable
-                    columns={columns}
-                    data={deferredData}
-                    onRowClick={handleRowClick}
-                    isLoading={isLogsLoading}
-                  />
-                  <ErrorStatsTable
-                    data={errorStatsQuery.data?.data || []}
-                    timeBucketSize={errorStatsQuery.data?.time_bucket_size}
-                  />
+                  <div className="border-b px-6 py-3 flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-900">Analytics</span>
+                    <Switch checked={showAnalytics} onChange={setShowAnalytics} />
+                  </div>
+                  {showAnalytics ? (
+                    <>
+                      <ErrorStatsTable
+                        data={errorStatsQuery.data?.data || []}
+                        timeBucketSize={errorStatsQuery.data?.time_bucket_size}
+                        onTimeRangeSelect={(selectedStartTime, selectedEndTime) => {
+                          setStartTime(selectedStartTime);
+                          setEndTime(selectedEndTime);
+                          setFailureLogsAnalyticsCurrentPage(1);
+                        }}
+                        setCurrentPage={setCurrentPage}
+                        setIsCustomDate={setIsCustomDate}
+                        onSelectedCategoriesChange={setSelectedErrorCategories}
+                      />
+                      <div className="mt-6 px-4 pb-4">
+                        {failureLogsData.total > 0 && (
+                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-2">
+                            <h2 className="text-lg font-semibold">Failure Logs</h2>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm text-gray-700">
+                                Page {failureLogsAnalytics.isLoading ? "..." : failureLogsAnalyticsCurrentPage} of{" "}
+                                {failureLogsAnalytics.isLoading ? "..." : failureLogsData.total_pages}
+                              </span>
+                              <span className="text-sm text-gray-700">
+                                Showing{" "}
+                                {failureLogsAnalytics.isLoading
+                                  ? "..."
+                                  : (failureLogsAnalyticsCurrentPage - 1) * failureLogsAnalyticsCurrentPageSize +
+                                    1}{" "}
+                                -{" "}
+                                {failureLogsAnalytics.isLoading
+                                  ? "..."
+                                  : Math.min(
+                                      failureLogsAnalyticsCurrentPage * failureLogsAnalyticsCurrentPageSize,
+                                      failureLogsData.total,
+                                    )}{" "}
+                                of {failureLogsAnalytics.isLoading ? "..." : failureLogsData.total} results
+                              </span>
+                              <button
+                                onClick={() => setFailureLogsAnalyticsCurrentPage((page) => Math.max(1, page - 1))}
+                                disabled={failureLogsAnalytics.isLoading || failureLogsAnalyticsCurrentPage === 1}
+                                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                Previous
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setFailureLogsAnalyticsCurrentPage((page) =>
+                                    Math.min(failureLogsData.total_pages || 1, page + 1),
+                                  )
+                                }
+                                disabled={
+                                  failureLogsAnalytics.isLoading ||
+                                  failureLogsAnalyticsCurrentPage === (failureLogsData.total_pages || 1)
+                                }
+                                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                Next
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        <DataTable
+                          columns={columns}
+                          data={failureLogsData.data}
+                          onRowClick={handleRowClick}
+                          isLoading={failureLogsAnalytics.isLoading}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <DataTable
+                      columns={columns}
+                      data={deferredData}
+                      onRowClick={handleRowClick}
+                      isLoading={isLogsLoading}
+                    />
+                  )}
                 </div>
               </>
             )}
@@ -356,7 +503,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
         </TabPanels>
       </TabGroup>
 
-      {/* Log Details Drawer */}
       <LogDetailsDrawer
         open={isDrawerOpen}
         onClose={() => {
@@ -366,7 +512,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
         logEntry={selectedLog}
         sessionId={selectedSessionId}
         accessToken={accessToken}
-        allLogs={filteredData}
+        allLogs={drawerLogs}
         onSelectLog={setSelectedLog}
         startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
       />
