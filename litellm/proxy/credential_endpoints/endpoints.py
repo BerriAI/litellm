@@ -19,6 +19,89 @@ from litellm.types.utils import CreateCredentialItem, CredentialItem
 router = APIRouter()
 
 
+def validate_aws_credential(credential_name: str, test_role_assumption: bool = False) -> dict:
+    """
+    Validate that an AWS credential exists and optionally test role assumption.
+
+    Args:
+        credential_name: Name of the credential to validate
+        test_role_assumption: If True and the credential contains aws_role_name,
+                             attempt to assume the role to verify it works
+
+    Returns:
+        dict with validation results:
+        - valid: bool indicating if credential is valid
+        - message: str with details about validation
+        - credential_params: list of AWS params found in the credential
+
+    Raises:
+        HTTPException if credential not found or validation fails
+    """
+    credential_values = CredentialAccessor.get_credential_values(credential_name)
+    if not credential_values:
+        raise HTTPException(
+            status_code=404,
+            detail=f"AWS credential '{credential_name}' not found"
+        )
+
+    # Check which AWS params are present
+    aws_params = [
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_region_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_bedrock_runtime_endpoint",
+        "aws_external_id",
+    ]
+    found_params = [p for p in aws_params if p in credential_values]
+
+    if not found_params:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credential '{credential_name}' does not contain any AWS authentication parameters"
+        )
+
+    result = {
+        "valid": True,
+        "message": f"Credential '{credential_name}' contains valid AWS parameters",
+        "credential_params": found_params,
+    }
+
+    # Optionally test role assumption
+    if test_role_assumption and "aws_role_name" in credential_values:
+        try:
+            from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+            aws_llm = BaseAWSLLM()
+            # Attempt to get credentials - this will try to assume the role
+            aws_llm.get_credentials(
+                aws_access_key_id=credential_values.get("aws_access_key_id"),
+                aws_secret_access_key=credential_values.get("aws_secret_access_key"),
+                aws_session_token=credential_values.get("aws_session_token"),
+                aws_region_name=credential_values.get("aws_region_name", "us-east-1"),
+                aws_session_name=credential_values.get("aws_session_name", "litellm-validation"),
+                aws_profile_name=credential_values.get("aws_profile_name"),
+                aws_role_name=credential_values.get("aws_role_name"),
+                aws_web_identity_token=credential_values.get("aws_web_identity_token"),
+                aws_sts_endpoint=credential_values.get("aws_sts_endpoint"),
+                aws_external_id=credential_values.get("aws_external_id"),
+            )
+            result["role_assumption_tested"] = True
+            result["message"] = f"Credential '{credential_name}' successfully assumed role {credential_values['aws_role_name']}"
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to assume role with credential '{credential_name}': {str(e)}"
+            )
+
+    return result
+
+
 class CredentialHelperUtils:
     @staticmethod
     def encrypt_credential_values(credential: CredentialItem, new_encryption_key: Optional[str] = None) -> CredentialItem:
@@ -324,3 +407,41 @@ async def update_credential(
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/credentials/{credential_name:path}/validate_aws",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+)
+async def validate_aws_credential_endpoint(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: str = Path(..., description="The credential name to validate"),
+    test_role_assumption: bool = False,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Validate that an AWS credential exists and optionally test role assumption.
+
+    This endpoint can be used to verify that:
+    1. The credential exists in the credential store
+    2. The credential contains valid AWS authentication parameters
+    3. (Optional) The role can be successfully assumed if aws_role_name is present
+
+    Args:
+        credential_name: Name of the credential to validate
+        test_role_assumption: If True, attempt to assume the role to verify it works
+
+    Returns:
+        Validation results including found AWS parameters and role assumption status
+    """
+    try:
+        result = validate_aws_credential(
+            credential_name=credential_name,
+            test_role_assumption=test_role_assumption,
+        )
+        return {"success": True, **result}
+    except Exception as e:
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)

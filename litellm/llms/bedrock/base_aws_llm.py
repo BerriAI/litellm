@@ -244,6 +244,7 @@ class BaseAWSLLM:
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
                     aws_session_token=aws_session_token,
+                    aws_region_name=aws_region_name,
                     aws_role_name=aws_role_name,
                     aws_session_name=aws_session_name,
                     aws_external_id=aws_external_id,
@@ -768,16 +769,35 @@ class BaseAWSLLM:
         aws_access_key_id: Optional[str],
         aws_secret_access_key: Optional[str],
         aws_session_token: Optional[str],
+        aws_region_name: Optional[str],
         aws_role_name: str,
         aws_session_name: str,
         aws_external_id: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> Tuple[Credentials, Optional[int]]:
         """
-        Authenticate with AWS Role
+        Authenticate with AWS Role.
+
+        Args:
+            aws_access_key_id: AWS access key ID (optional, uses ambient credentials if not provided)
+            aws_secret_access_key: AWS secret access key
+            aws_session_token: AWS session token for temporary credentials
+            aws_region_name: AWS region for STS endpoint (ensures regional consistency)
+            aws_role_name: The ARN of the role to assume
+            aws_session_name: Name for the assumed role session
+            aws_external_id: External ID for role assumption (optional)
+            ssl_verify: SSL verification setting
+
+        Returns:
+            Tuple of (Credentials, cache_ttl)
         """
         import boto3
         from botocore.credentials import Credentials
+
+        verbose_logger.debug(
+            f"_auth_with_aws_role called with role={aws_role_name}, "
+            f"region={aws_region_name}, session={aws_session_name}"
+        )
 
         # Check if we're in an EKS/IRSA environment
         web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
@@ -798,9 +818,10 @@ class BaseAWSLLM:
             )
 
             try:
-                # Get region from environment
+                # Use provided region, or fall back to environment, then default
                 region = (
-                    os.getenv("AWS_REGION")
+                    aws_region_name
+                    or os.getenv("AWS_REGION")
                     or os.getenv("AWS_DEFAULT_REGION")
                     or "us-east-1"
                 )
@@ -843,15 +864,19 @@ class BaseAWSLLM:
 
         # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
         # This allows the web identity token to work automatically
+        # Always include region_name to ensure regional consistency for STS calls
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client(
-                    "sts", verify=self._get_ssl_verify(ssl_verify)
+                    "sts",
+                    region_name=aws_region_name,
+                    verify=self._get_ssl_verify(ssl_verify),
                 )
         else:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client(
                     "sts",
+                    region_name=aws_region_name,
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
                     aws_session_token=aws_session_token,
@@ -867,7 +892,40 @@ class BaseAWSLLM:
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
 
-        sts_response = sts_client.assume_role(**assume_role_params)
+        verbose_logger.debug(
+            f"Assuming role {aws_role_name} with session {aws_session_name} in region {aws_region_name}"
+        )
+
+        try:
+            sts_response = sts_client.assume_role(**assume_role_params)
+        except Exception as e:
+            error_message = str(e)
+            verbose_logger.error(
+                f"Failed to assume role {aws_role_name}: {error_message}"
+            )
+            # Check for common AWS STS errors and provide helpful messages
+            if "InvalidIdentityToken" in error_message:
+                verbose_logger.error(
+                    "InvalidIdentityToken: The security token is invalid or expired. "
+                    "This may happen when cached credentials become stale."
+                )
+            elif "ExpiredTokenException" in error_message:
+                verbose_logger.error(
+                    "ExpiredTokenException: The security token has expired. "
+                    "Consider refreshing credentials or reducing cache TTL."
+                )
+            elif "AccessDenied" in error_message:
+                verbose_logger.error(
+                    f"AccessDenied: The role {aws_role_name} cannot be assumed. "
+                    "Please verify: 1) The trust policy allows the current identity, "
+                    "2) The ExternalId matches if required, 3) IAM permissions are correct."
+                )
+            elif "RegionDisabledException" in error_message:
+                verbose_logger.error(
+                    f"RegionDisabledException: STS is not enabled in region {aws_region_name}. "
+                    "Enable STS in this region or use a different region."
+                )
+            raise
 
         # Extract the credentials from the response and convert to Session Credentials
         sts_credentials = sts_response["Credentials"]

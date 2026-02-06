@@ -784,6 +784,155 @@ class LiteLLMProxyRequestSetup:
         return tags
 
 
+# AWS authentication parameters that can be passed per-request
+AWS_CREDENTIAL_PARAMS = [
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_bedrock_runtime_endpoint",
+    "aws_external_id",
+]
+
+
+def _get_aws_credentials_from_credential_name(
+    credential_name: str,
+) -> Dict[str, Any]:
+    """
+    Retrieve AWS credentials from the credential store by name.
+
+    Args:
+        credential_name: The name of the stored credential
+
+    Returns:
+        Dictionary of AWS credential parameters
+    """
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+    credential_values = CredentialAccessor.get_credential_values(credential_name)
+    if not credential_values:
+        verbose_proxy_logger.debug(
+            f"Credential '{credential_name}' not found in credential store"
+        )
+        return {}
+
+    # Filter to only AWS-related parameters
+    aws_creds = {}
+    for param in AWS_CREDENTIAL_PARAMS:
+        if param in credential_values:
+            aws_creds[param] = credential_values[param]
+
+    verbose_proxy_logger.debug(
+        f"Retrieved AWS credentials from '{credential_name}': {list(aws_creds.keys())}"
+    )
+    return aws_creds
+
+
+def _extract_aws_credentials_from_metadata(
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Extract AWS credential parameters from request metadata.
+
+    Args:
+        metadata: Request metadata dictionary
+
+    Returns:
+        Dictionary of AWS credential parameters found in metadata
+    """
+    if not metadata:
+        return {}
+
+    aws_creds = {}
+    for param in AWS_CREDENTIAL_PARAMS:
+        if param in metadata:
+            aws_creds[param] = metadata[param]
+
+    if aws_creds:
+        verbose_proxy_logger.debug(
+            f"Extracted AWS credentials from request metadata: {list(aws_creds.keys())}"
+        )
+
+    return aws_creds
+
+
+def add_aws_credentials_to_request(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    _metadata_variable_name: str,
+) -> dict:
+    """
+    Add AWS credentials to the request data.
+
+    Priority order (highest to lowest):
+    1. Per-request metadata (aws_role_name, aws_access_key_id, etc.)
+    2. Per-request aws_credential_name in metadata
+    3. Key-level aws_credential_name in key metadata
+    4. Team-level aws_credential_name in team metadata
+
+    Args:
+        data: The request data dictionary
+        user_api_key_dict: User API key authentication info
+        _metadata_variable_name: Name of the metadata field in data
+
+    Returns:
+        Updated data dictionary with AWS credentials merged in
+    """
+    aws_credentials: Dict[str, Any] = {}
+
+    # Priority 4: Team-level aws_credential_name
+    team_metadata = user_api_key_dict.team_metadata or {}
+    if "aws_credential_name" in team_metadata:
+        team_cred_name = team_metadata["aws_credential_name"]
+        verbose_proxy_logger.debug(
+            f"Found team aws_credential_name: {team_cred_name}"
+        )
+        team_creds = _get_aws_credentials_from_credential_name(team_cred_name)
+        aws_credentials.update(team_creds)
+
+    # Priority 3: Key-level aws_credential_name (overrides team)
+    key_metadata = user_api_key_dict.metadata or {}
+    if "aws_credential_name" in key_metadata:
+        key_cred_name = key_metadata["aws_credential_name"]
+        verbose_proxy_logger.debug(
+            f"Found key aws_credential_name: {key_cred_name}"
+        )
+        key_creds = _get_aws_credentials_from_credential_name(key_cred_name)
+        aws_credentials.update(key_creds)
+
+    # Priority 2: Per-request aws_credential_name in metadata (overrides key/team)
+    request_metadata = data.get(_metadata_variable_name, {})
+    if isinstance(request_metadata, dict) and "aws_credential_name" in request_metadata:
+        request_cred_name = request_metadata["aws_credential_name"]
+        verbose_proxy_logger.debug(
+            f"Found request aws_credential_name: {request_cred_name}"
+        )
+        request_creds = _get_aws_credentials_from_credential_name(request_cred_name)
+        aws_credentials.update(request_creds)
+
+    # Priority 1: Direct AWS params in request metadata (highest priority)
+    if isinstance(request_metadata, dict):
+        direct_aws_creds = _extract_aws_credentials_from_metadata(request_metadata)
+        aws_credentials.update(direct_aws_creds)
+
+    # Merge AWS credentials into data
+    if aws_credentials:
+        verbose_proxy_logger.debug(
+            f"Merging AWS credentials into request: {list(aws_credentials.keys())}"
+        )
+        for param, value in aws_credentials.items():
+            # Only set if not already in data (preserve explicit request params)
+            if param not in data:
+                data[param] = value
+
+    return data
+
+
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
     request: Request,
@@ -1130,6 +1279,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     _update_model_if_key_alias_exists(
         data=data,
         user_api_key_dict=user_api_key_dict,
+    )
+
+    # AWS Credentials from request metadata, key metadata, or team metadata
+    # This allows per-request, per-key, or per-team AWS IAM role assumption
+    data = add_aws_credentials_to_request(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name=_metadata_variable_name,
     )
 
     verbose_proxy_logger.debug(
