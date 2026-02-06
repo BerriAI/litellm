@@ -23,7 +23,7 @@ def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     # If usage has inference_geo, prepend it as prefix to model name
-    if hasattr(usage, "inference_geo") and usage.inference_geo and usage.inference_geo.lower() != "global":
+    if hasattr(usage, "inference_geo") and usage.inference_geo and usage.inference_geo.lower() not in ["global", "not_available"]:
         model_with_geo_prefix = f"{usage.inference_geo}/{model}"
     else:
         model_with_geo_prefix = model
