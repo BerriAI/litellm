@@ -1656,9 +1656,27 @@ class AWSEventStreamDecoder:
     ) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
+        import json
 
         event_stream_buffer = EventStreamBuffer()
+        is_first_chunk = True
+        
         for chunk in iterator:
+            if is_first_chunk:
+                is_first_chunk = False
+                if chunk.strip().startswith(b"{"):
+                    try:
+                        from litellm.exceptions import BadRequestError
+                        error_data = json.loads(chunk)
+                        error_msg = error_data.get("message") or error_data.get("Message") or str(error_data)
+                        raise BadRequestError(
+                            message=f"Bedrock Error: {error_msg}",
+                            model=getattr(self, "model", "bedrock-unknown"),
+                            llm_provider="bedrock"
+                        )
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        pass
+
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
                 message = self._parse_message_from_event(event)
@@ -1672,9 +1690,32 @@ class AWSEventStreamDecoder:
     ) -> AsyncIterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
+        import json
 
         event_stream_buffer = EventStreamBuffer()
+        is_first_chunk = True
+
         async for chunk in iterator:
+            if is_first_chunk:
+                is_first_chunk = False
+
+                # If it starts with '{', it's a JSON error, not a binary stream
+                if chunk.strip().startswith(b"{"):
+                    try:
+                        from litellm.exceptions import BadRequestError
+                        error_data = json.loads(chunk)
+                        # Extract message and raise a clear exception
+                        error_msg = error_data.get("message") or error_data.get("Message") or str(error_data)
+                        
+                        raise BadRequestError(
+                            message=f"Bedrock Error: {error_msg}",
+                            model=getattr(self, "model", "bedrock-unknown"),
+                            llm_provider="bedrock"
+                        )
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        # If parsing fails, fall back to normal stream processing
+                        pass
+                    
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
                 message = self._parse_message_from_event(event)
