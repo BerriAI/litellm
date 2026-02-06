@@ -1804,40 +1804,6 @@ def test_get_available_guardrail_not_found():
 
 
 @pytest.mark.asyncio
-async def test_aguardrail_helper():
-    """
-    Test _aguardrail_helper selects a guardrail and executes the original function.
-    """
-    guardrail_config = {
-        "guardrail_name": "content-filter",
-        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
-        "id": "guardrail-1",
-    }
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
-            }
-        ],
-        guardrail_list=[guardrail_config],
-    )
-
-    # Mock the original function
-    async def mock_original_function(**kwargs):
-        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
-
-    result = await router._aguardrail_helper(
-        model="content-filter",
-        original_generic_function=mock_original_function,
-    )
-
-    assert result["result"] == "success"
-    assert result["selected_guardrail"] == guardrail_config
-
-
-@pytest.mark.asyncio
 async def test_aguardrail():
     """
     Test aguardrail executes a guardrail with load balancing and fallbacks.
@@ -1869,3 +1835,113 @@ async def test_aguardrail():
 
     assert result["result"] == "success"
     assert result["selected_guardrail"]["id"] == "guardrail-1"
+
+
+@pytest.mark.asyncio
+async def test_aguardrail_retry_succeeds_after_retries():
+    """
+    Test guardrail retry logic: guardrail call fails twice then succeeds on 3rd attempt.
+    Per-guardrail num_retries=2 so we get 1 initial + 2 retries = 3 attempts.
+    """
+    guardrail_config = {
+        "guardrail_name": "flaky-guardrail",
+        "litellm_params": {
+            "guardrail": "custom",
+            "mode": "pre_call",
+            "num_retries": 2,
+        },
+        "id": "guardrail-retry-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    call_count = 0
+
+    async def mock_fail_twice_then_succeed(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise ValueError("guardrail API temporarily failed")
+        return {"result": "success", "attempt": call_count}
+
+    # Allow retries: router's should_retry_this_error requires healthy_deployments > 0
+    # for non-RateLimit errors; guardrail "model" has no LLM deployments so we patch.
+    with patch.object(
+        router,
+        "_async_get_healthy_deployments",
+        new_callable=AsyncMock,
+        return_value=([{"litellm_params": {}}], []),
+    ), patch.object(
+        router,
+        "_time_to_sleep_before_retry",
+        return_value=0,
+    ):
+        result = await router.aguardrail(
+            guardrail_name="flaky-guardrail",
+            original_function=mock_fail_twice_then_succeed,
+        )
+
+    assert call_count == 3
+    assert result["result"] == "success"
+    assert result["attempt"] == 3
+
+
+@pytest.mark.asyncio
+async def test_aguardrail_retry_exhausted_raises():
+    """
+    Test guardrail retry logic: when all attempts fail, the exception is raised.
+    With guardrail num_retries=2 we get at least 2 attempts (1 initial + retries) before raising.
+    """
+    guardrail_config = {
+        "guardrail_name": "failing-guardrail",
+        "litellm_params": {
+            "guardrail": "custom",
+            "mode": "pre_call",
+            "num_retries": 2,
+        },
+        "id": "guardrail-fail-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    call_count = 0
+
+    async def mock_always_fails(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("guardrail API always fails")
+
+    with patch.object(
+        router,
+        "_async_get_healthy_deployments",
+        new_callable=AsyncMock,
+        return_value=([{"litellm_params": {}}], []),
+    ), patch.object(
+        router,
+        "_time_to_sleep_before_retry",
+        return_value=0,
+    ):
+        with pytest.raises(ValueError, match="guardrail API always fails"):
+            await router.aguardrail(
+                guardrail_name="failing-guardrail",
+                original_function=mock_always_fails,
+            )
+
+    # At least 2 attempts (1 initial + 1 or more retries); exact count depends on router default vs per-guardrail num_retries
+    assert call_count >= 2

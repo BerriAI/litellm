@@ -239,6 +239,7 @@ class Router:
         default_priority: Optional[int] = None,
         ## RELIABILITY ##
         num_retries: Optional[int] = None,
+        guardrail_num_retries: Optional[int] = None,  # num retries for guardrail API calls; defaults to num_retries when None
         max_fallbacks: Optional[
             int
         ] = None,  # max fallbacks to try before exiting the call. Defaults to 5.
@@ -489,6 +490,8 @@ class Router:
             self.num_retries = litellm.num_retries
         else:
             self.num_retries = openai.DEFAULT_MAX_RETRIES
+
+        self.guardrail_num_retries = guardrail_num_retries
 
         if max_fallbacks is not None:
             self.max_fallbacks = max_fallbacks
@@ -3180,6 +3183,9 @@ class Router:
         """
         Execute a guardrail with load balancing and fallbacks.
 
+        Uses _ageneric_api_call_with_fallbacks with use_guardrail_list=True so guardrails
+        share the same retry/fallback path as generic API calls.
+
         Args:
             guardrail_name: Name of the guardrail to execute
             original_function: The guardrail's execution function (e.g., async_pre_call_hook)
@@ -3188,19 +3194,12 @@ class Router:
         Returns:
             Result from the guardrail execution
         """
-        kwargs["model"] = guardrail_name  # For fallback system compatibility
-        kwargs["original_generic_function"] = original_function
-        kwargs["original_function"] = self._aguardrail_helper
-        self._update_kwargs_before_fallbacks(
+        return await self._ageneric_api_call_with_fallbacks(
             model=guardrail_name,
-            kwargs=kwargs,
-            metadata_variable_name="litellm_metadata",
+            original_function=original_function,
+            use_guardrail_list=True,
+            **kwargs,
         )
-        verbose_router_logger.debug(
-            f"Inside aguardrail() - guardrail_name: {guardrail_name}; kwargs: {kwargs}"
-        )
-        response = await self.async_function_with_fallbacks(**kwargs)
-        return response
 
     async def _aguardrail_helper(
         self,
@@ -3267,15 +3266,30 @@ class Router:
         )
 
     async def _ageneric_api_call_with_fallbacks(
-        self, model: str, original_function: Callable, **kwargs
+        self,
+        model: str,
+        original_function: Callable,
+        use_guardrail_list: bool = False,
+        **kwargs,
     ):
         """
-        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router.
+
+        When use_guardrail_list=True, treats model as guardrail_name and selects from
+        guardrail_list (same retry/fallback path as aguardrail).
         """
         try:
             kwargs["model"] = model
             kwargs["original_generic_function"] = original_function
             kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+            if use_guardrail_list:
+                kwargs["use_guardrail_list"] = True
+                if kwargs.get("num_retries") is None:
+                    kwargs["num_retries"] = (
+                        self.guardrail_num_retries
+                        if self.guardrail_num_retries is not None
+                        else self.num_retries
+                    )
             self._update_kwargs_before_fallbacks(
                 model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata"
             )
@@ -3332,8 +3346,17 @@ class Router:
         self, model: str, original_generic_function: Callable, **kwargs
     ):
         """
-        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router.
+        When use_guardrail_list=True, selects from guardrail_list and calls original_generic_function with selected_guardrail in kwargs.
         """
+
+        use_guardrail_list = kwargs.pop("use_guardrail_list", False)
+        if use_guardrail_list:
+            selected_guardrail = self.get_available_guardrail(
+                guardrail_name=model,
+            )
+            kwargs["selected_guardrail"] = selected_guardrail
+            return await original_generic_function(**kwargs)
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         function_name = "_ageneric_api_call_with_fallbacks"
@@ -4918,6 +4941,11 @@ class Router:
         except Exception as e:
             current_attempt = None
             original_exception = e
+            # Per-guardrail num_retries: set on exception from selected_guardrail so retry loop uses it
+            if kwargs.get("selected_guardrail") is not None:
+                self._set_deployment_num_retries_on_exception(
+                    e, kwargs["selected_guardrail"]
+                )
             deployment_num_retries = getattr(e, "num_retries", None)
 
             if deployment_num_retries is not None and isinstance(

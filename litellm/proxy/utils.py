@@ -841,6 +841,61 @@ class ProxyLogging:
         ]
         return len(matching) > 1
 
+    def _should_use_guardrail_via_router(self, guardrail_name: str) -> bool:
+        """
+        Check if this guardrail should be executed via the router (for retries/fallbacks).
+
+        Returns True when the router exists and has this guardrail in its guardrail_list.
+        """
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None or not hasattr(llm_router, "guardrail_list"):
+            return False
+        return any(
+            g.get("guardrail_name") == guardrail_name
+            for g in llm_router.guardrail_list
+        )
+
+    async def _execute_guardrail_via_router(
+        self,
+        guardrail_name: str,
+        hook_type: str,
+        data: dict,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+        call_type: CallTypesLiteral,
+        response: Optional[Any] = None,
+    ) -> Any:
+        """
+        Execute a guardrail via router.aguardrail() so retries and fallbacks apply.
+        """
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            raise ValueError("Router not initialized")
+
+        async def runner(**kwargs: Any) -> Any:
+            selected_guardrail = kwargs.get("selected_guardrail")
+            if selected_guardrail is None:
+                raise ValueError("selected_guardrail not in kwargs")
+            callback = selected_guardrail.get("callback")
+            if callback is None:
+                raise ValueError(
+                    f"No callback found for guardrail: {guardrail_name}"
+                )
+            return await self._execute_guardrail_hook(
+                callback=callback,
+                hook_type=hook_type,
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                response=response,
+            )
+
+        return await llm_router.aguardrail(
+            guardrail_name=guardrail_name,
+            original_function=runner,
+        )
+
     async def _execute_guardrail_hook(
         self,
         callback: "CustomGuardrail",
@@ -981,10 +1036,21 @@ class ProxyLogging:
         error_type = None
 
         try:
-            # Check if load balancing should be used
-            if guardrail_name and self._should_use_guardrail_load_balancing(
+            # Use router path when guardrail is in router (enables retries/fallbacks)
+            if guardrail_name and self._should_use_guardrail_via_router(
                 guardrail_name
             ):
+                response = await self._execute_guardrail_via_router(
+                    guardrail_name=guardrail_name,
+                    hook_type="pre_call",
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+            elif guardrail_name and self._should_use_guardrail_load_balancing(
+                guardrail_name
+            ):
+                # Fallback: guardrail not in router guardrail_list
                 response = await self._execute_guardrail_with_load_balancing(
                     guardrail_name=guardrail_name,
                     hook_type="pre_call",
@@ -1313,8 +1379,20 @@ class ProxyLogging:
                     )
                 else:
                     user_api_key_auth_dict = user_api_key_dict
-                # Add task to list for parallel execution
+                guardrail_name = getattr(callback, "guardrail_name", None)
+                # Use router path when guardrail is in router (enables retries/fallbacks)
                 if (
+                    guardrail_name
+                    and self._should_use_guardrail_via_router(guardrail_name)
+                ):
+                    guardrail_task = self._execute_guardrail_via_router(
+                        guardrail_name=guardrail_name,
+                        hook_type="during_call",
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=call_type,
+                    )
+                elif (
                     "apply_guardrail" in type(callback).__dict__
                     and user_api_key_dict is not None
                 ):
@@ -1775,8 +1853,22 @@ class ProxyLogging:
                     continue
 
                 guardrail_response: Optional[Any] = None
+                guardrail_name = getattr(callback, "guardrail_name", None)
 
-                if "apply_guardrail" in type(callback).__dict__:
+                # Use router path when guardrail is in router (enables retries/fallbacks)
+                if (
+                    guardrail_name
+                    and self._should_use_guardrail_via_router(guardrail_name)
+                ):
+                    guardrail_response = await self._execute_guardrail_via_router(
+                        guardrail_name=guardrail_name,
+                        hook_type="post_call",
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=CallTypes.acompletion.value,  # post_call hook doesn't use call_type
+                        response=response,
+                    )
+                elif "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = (
                         await unified_guardrail.async_post_call_success_hook(
