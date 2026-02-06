@@ -2226,6 +2226,13 @@ class MCPServerManager:
                 servers.append(server)
         return servers
 
+    def _get_general_settings(self) -> Dict[str, Any]:
+        """Get general_settings, importing lazily to avoid circular imports."""
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
+        return proxy_general_settings
+
     def _is_server_accessible_from_ip(
         self, server: MCPServer, client_ip: Optional[str]
     ) -> bool:
@@ -2236,10 +2243,6 @@ class MCPServerManager:
         - If the server has available_on_public_internet=True, it's always accessible.
         - Otherwise, only internal/private IPs can access it.
         """
-        from litellm.proxy.proxy_server import (
-            general_settings as proxy_general_settings,
-        )
-
         if client_ip is None:
             return True
         if server.available_on_public_internet:
@@ -2249,8 +2252,9 @@ class MCPServerManager:
         if server.server_id in public_ids:
             return True
         # Non-public server: only accessible from internal IPs
+        general_settings = self._get_general_settings()
         internal_networks = IPAddressUtils.parse_internal_networks(
-            proxy_general_settings.get("mcp_internal_ip_ranges")
+            general_settings.get("mcp_internal_ip_ranges")
         )
         return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
 
