@@ -4,13 +4,12 @@ Test the Bedrock guardrail apply_guardrail functionality
 
 import os
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -63,10 +62,11 @@ async def test_bedrock_apply_guardrail_blocked():
 
     # Mock the make_bedrock_api_request method to raise an exception for blocked content
     with patch.object(
-            guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api_request:
         # Mock the method to raise an HTTPException as it would for blocked content
         from fastapi import HTTPException
+
         mock_api_request.side_effect = HTTPException(
             status_code=400,
             detail={
@@ -226,7 +226,10 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api:
-        mock_api.return_value = {"action": "ALLOWED", "output": [{"text": "latest question"}]}
+        mock_api.return_value = {
+            "action": "ALLOWED",
+            "output": [{"text": "latest question"}],
+        }
 
         guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": ["latest question"]},
@@ -262,6 +265,7 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
     ) as mock_api:
         # Mock the method to raise an HTTPException as it would for blocked content
         from fastapi import HTTPException
+
         mock_api.side_effect = HTTPException(
             status_code=400,
             detail={
@@ -312,3 +316,35 @@ def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
         target_indices=filter_result.target_indices,
     )
     assert masked_messages[3]["content"] == "[MASKED]"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_top_level_action_blocked_raises():
+    """
+    Test fix for issue #20045: when Bedrock returns action=BLOCKED at top level,
+    apply_guardrail must raise, not pass through to LLM.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+    )
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        # Simulate Bedrock returning BLOCKED (top-level) - no exception from API
+        mock_api.return_value = {
+            "action": "BLOCKED",
+            "reason": "Prompt attack detected",
+        }
+
+        with pytest.raises(Exception) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["harmful prompt content"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert "Content blocked by Bedrock guardrail" in str(exc_info.value)
+        assert "Prompt attack detected" in str(exc_info.value)
