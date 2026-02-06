@@ -8531,8 +8531,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-<<<<<<< litellm_oss_staging_02_04_2026
-content-hash = "797603dcfef0a79781c7d3cba5dfe18f6aea4aa792220f47487ebc7bd04ae2e3"
-=======
-content-hash = "e5447e14dd37e324ac07a8fc6286d27e9a0d355ed93ebb24fc11e3f5df12fd3e"
->>>>>>> main
+content-hash = "b70033cb74265482e16caa7780858ac86e7b4110ffb69e35b01533a30eda8a34"
