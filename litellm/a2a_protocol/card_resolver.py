@@ -5,9 +5,10 @@ Extends the A2A SDK's card resolver to support multiple well-known paths
 and fixes agent card URL issues where the card contains internal/localhost URLs.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from litellm._logging import verbose_logger
+from litellm.constants import LOCALHOST_URL_PATTERNS
 
 if TYPE_CHECKING:
     from a2a.types import AgentCard
@@ -25,16 +26,6 @@ try:
     )
 except ImportError:
     pass
-
-# Patterns that indicate a localhost/internal URL that should be replaced
-# with the original base_url. This is a common misconfiguration where
-# developers deploy agents with development URLs in their agent cards.
-LOCALHOST_URL_PATTERNS: List[str] = [
-    "localhost",
-    "127.0.0.1",
-    "0.0.0.0",
-    "[::1]",  # IPv6 localhost
-]
 
 
 def is_localhost_or_internal_url(url: Optional[str]) -> bool:
