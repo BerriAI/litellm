@@ -323,9 +323,6 @@ from litellm.proxy.health_endpoints._health_endpoints import router as health_ro
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
-from litellm.proxy.hooks.prompt_injection_detection import (
-    _OPTIONAL_PromptInjectionDetection,
-)
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
@@ -820,8 +817,43 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         user_api_key_cache=user_api_key_cache,
     )
 
-    if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
-        prompt_injection_detection_obj.update_environment(router=llm_router)
+    if (
+        general_settings.get("prompt_injection_params", None) is not None
+        and IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.get(
+            "prompt_injection"
+        )
+        is None
+    ):
+        from litellm.proxy.guardrails.guardrail_hooks.prompt_injection import (
+            PromptInjectionGuardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        _prompt_injection_params = general_settings.get("prompt_injection_params")
+        prompt_injection_guardrail = PromptInjectionGuardrail(
+            guardrail_name="prompt_injection",
+            default_on=True,
+            event_hook="pre_call",
+            litellm_params=LitellmParams(
+                guardrail="prompt_injection",
+                mode="pre_call",
+                default_on=True,
+                **_prompt_injection_params,
+            ),
+        )
+
+        prompt_injection_guardrail.update_environment(router=llm_router)
+        IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS[
+            "prompt_injection"
+        ] = prompt_injection_guardrail  # type: ignore
+        IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail[
+            "prompt_injection"
+        ] = prompt_injection_guardrail
+
+        if isinstance(litellm.input_callback, list):
+            litellm.input_callback.append(prompt_injection_guardrail)
+        else:
+            litellm.input_callback = [prompt_injection_guardrail]
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
     if prisma_client is not None and litellm.max_budget > 0:
@@ -1315,7 +1347,6 @@ proxy_batch_write_at = PROXY_BATCH_WRITE_AT
 litellm_master_key_hash = None
 disable_spend_logs = False
 jwt_handler = JWTHandler()
-prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
 open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###

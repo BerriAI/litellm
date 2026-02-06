@@ -24,6 +24,9 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrail,
     initialize_guardrail as initialize_grayswan,
 )
+from litellm.proxy.guardrails.guardrail_hooks.prompt_injection import (
+    initialize_prompt_injection,
+)
 
 from .guardrail_initializers import (
     initialize_bedrock,
@@ -41,7 +44,9 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
+    SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
+    "prompt_injection": initialize_prompt_injection,
 }
 
 guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {
