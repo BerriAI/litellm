@@ -29,7 +29,9 @@ class ProductionGCSLogger(CustomLogger):
         self.gcs_base = GCSBucketBase(bucket_name=self.success_bucket_name)
 
         if not self.success_bucket_name or not self.error_bucket_name:
-            verbose_logger.warning("⚠️  GCS bucket names not set. GCS logging disabled.")
+            verbose_logger.warning(
+                "⚠️  GCS bucket names not set. GCS logging disabled."
+            )
         else:
             verbose_logger.info(
                 f"✅ GCS initialized: {self.success_bucket_name}, {self.error_bucket_name}"
@@ -100,8 +102,46 @@ class ProductionGCSLogger(CustomLogger):
             return str(kwargs.get("litellm_session_id"))
         return None
 
+    def _should_skip_logging(self, kwargs) -> bool:
+        """
+        Check if logging should be skipped based on x-litellm-disable-logging header.
+
+        Returns True if header is present and set to "true" (case-insensitive).
+        """
+        try:
+            from litellm.litellm_core_utils.llm_request_utils import (
+                get_proxy_server_request_headers,
+            )
+
+            litellm_params = kwargs.get("litellm_params", {})
+            request_headers = get_proxy_server_request_headers(litellm_params)
+
+            disable_logging_header = request_headers.get(
+                "x-litellm-disable-logging", ""
+            )
+
+            # Check if header value is "true" (case-insensitive)
+            if disable_logging_header.lower().strip() == "true":
+                verbose_logger.debug(
+                    "GCS Logger: Skipping logging due to x-litellm-disable-logging header"
+                )
+                return True
+
+            return False
+        except Exception as e:
+            # Don't fail logging if header check fails
+            verbose_logger.debug(
+                f"GCS Logger: Error checking disable-logging header: {e}"
+            )
+            return False
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log successful requests for LLM training history"""
+        # Check if logging should be skipped via header
+        if self._should_skip_logging(kwargs):
+            print("[GCS Logger] Skipping logging due to x-litellm-disable-logging header", flush=True)
+            return
+
         try:
             correlation_id = getattr(response_obj, "id", None) or str(uuid.uuid4())
             litellm_params = kwargs.get("litellm_params", {})
@@ -209,6 +249,10 @@ class ProductionGCSLogger(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Log failed requests for debugging"""
+        # Check if logging should be skipped via header
+        if self._should_skip_logging(kwargs):
+            return
+
         try:
             correlation_id = getattr(response_obj, "id", None) or str(uuid.uuid4())
             litellm_params = kwargs.get("litellm_params", {})
