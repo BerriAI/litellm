@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 # Runtime imports with availability check
 _A2ACardResolver: Any = None
+_A2A_AVAILABLE: bool = False
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 
@@ -22,76 +23,90 @@ try:
         AGENT_CARD_WELL_KNOWN_PATH,
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
     )
+    _A2A_AVAILABLE = True
 except ImportError:
     pass
 
 
-class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
-    """
-    Custom A2A card resolver that supports multiple well-known paths.
-    
-    Extends the base A2ACardResolver to try both:
-    - /.well-known/agent-card.json (standard)
-    - /.well-known/agent.json (previous/alternative)
-    """
-    
-    async def get_agent_card(
-        self,
-        relative_card_path: Optional[str] = None,
-        http_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> "AgentCard":
+# Only define the class if a2a is available, otherwise provide a placeholder
+if _A2A_AVAILABLE and _A2ACardResolver is not None:
+    class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
         """
-        Fetch the agent card, trying multiple well-known paths.
+        Custom A2A card resolver that supports multiple well-known paths.
         
-        First tries the standard path, then falls back to the previous path.
-        
-        Args:
-            relative_card_path: Optional path to the agent card endpoint.
-                If None, tries both well-known paths.
-            http_kwargs: Optional dictionary of keyword arguments to pass to httpx.get
-            
-        Returns:
-            AgentCard from the A2A agent
-            
-        Raises:
-            A2AClientHTTPError or A2AClientJSONError if both paths fail
+        Extends the base A2ACardResolver to try both:
+        - /.well-known/agent-card.json (standard)
+        - /.well-known/agent.json (previous/alternative)
         """
-        # If a specific path is provided, use the parent implementation
-        if relative_card_path is not None:
-            return await super().get_agent_card(
-                relative_card_path=relative_card_path,
-                http_kwargs=http_kwargs,
-            )
         
-        # Try both well-known paths
-        paths = [
-            AGENT_CARD_WELL_KNOWN_PATH,
-            PREV_AGENT_CARD_WELL_KNOWN_PATH,
-        ]
-        
-        last_error = None
-        for path in paths:
-            try:
-                verbose_logger.debug(
-                    f"Attempting to fetch agent card from {self.base_url}{path}"
-                )
+        async def get_agent_card(
+            self,
+            relative_card_path: Optional[str] = None,
+            http_kwargs: Optional[Dict[str, Any]] = None,
+        ) -> "AgentCard":
+            """
+            Fetch the agent card, trying multiple well-known paths.
+            
+            First tries the standard path, then falls back to the previous path.
+            
+            Args:
+                relative_card_path: Optional path to the agent card endpoint.
+                    If None, tries both well-known paths.
+                http_kwargs: Optional dictionary of keyword arguments to pass to httpx.get
+                
+            Returns:
+                AgentCard from the A2A agent
+                
+            Raises:
+                A2AClientHTTPError or A2AClientJSONError if both paths fail
+            """
+            # If a specific path is provided, use the parent implementation
+            if relative_card_path is not None:
                 return await super().get_agent_card(
-                    relative_card_path=path,
+                    relative_card_path=relative_card_path,
                     http_kwargs=http_kwargs,
                 )
-            except Exception as e:
-                verbose_logger.debug(
-                    f"Failed to fetch agent card from {self.base_url}{path}: {e}"
-                )
-                last_error = e
-                continue
-        
-        # If we get here, all paths failed - re-raise the last error
-        if last_error is not None:
-            raise last_error
-        
-        # This shouldn't happen, but just in case
-        raise Exception(
-            f"Failed to fetch agent card from {self.base_url}. "
-            f"Tried paths: {', '.join(paths)}"
-        )
+            
+            # Try both well-known paths
+            paths = [
+                AGENT_CARD_WELL_KNOWN_PATH,
+                PREV_AGENT_CARD_WELL_KNOWN_PATH,
+            ]
+            
+            last_error = None
+            for path in paths:
+                try:
+                    verbose_logger.debug(
+                        f"Attempting to fetch agent card from {self.base_url}{path}"
+                    )
+                    return await super().get_agent_card(
+                        relative_card_path=path,
+                        http_kwargs=http_kwargs,
+                    )
+                except Exception as e:
+                    verbose_logger.debug(
+                        f"Failed to fetch agent card from {self.base_url}{path}: {e}"
+                    )
+                    last_error = e
+                    continue
+            
+            # If we get here, all paths failed - re-raise the last error
+            if last_error is not None:
+                raise last_error
+            
+            # This shouldn't happen, but just in case
+            raise Exception(
+                f"Failed to fetch agent card from {self.base_url}. "
+                f"Tried paths: {', '.join(paths)}"
+            )
+else:
+    # Provide a placeholder class that raises ImportError when instantiated
+    class LiteLLMA2ACardResolver:  # type: ignore[no-redef]
+        """
+        Placeholder class when a2a SDK is not installed.
+        """
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "The 'a2a' package is required to use LiteLLMA2ACardResolver. "
+                "Install it with: pip install a2a-sdk"
+            )

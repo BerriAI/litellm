@@ -303,12 +303,9 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     """
     from litellm.utils import CustomStreamWrapper
     from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
-    from litellm.litellm_core_utils.litellm_logging import Logging
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
-    tool_calls = [{"id": "call-1", "type": "function", "function": {"name": "local_search", "arguments": "{}"}}]
-    tool_results = [{"tool_call_id": "call-1", "result": "executed"}]
 
     # Create mock streaming chunks
     def create_chunk(content, finish_reason=None):
@@ -577,7 +574,7 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeypatch):
+async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeypatch):  # noqa: PLR0915
     """
     Test that MCP metadata is added to the correct chunks:
     - mcp_list_tools should be in the first chunk
@@ -751,6 +748,8 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     )
 
     # Patch litellm.acompletion at module level to catch function-level imports
+    # NOTE: The stream consumption must be inside the patch context because
+    # the _MCPAutoExecStreamWrapper makes follow-up acompletion calls when consuming
     with patch("litellm.acompletion", mock_acompletion_func), \
          patch.object(chat_completions_handler, "litellm_acompletion", side_effect=mock_acompletion, create=True):
         result = await acompletion_with_mcp(
@@ -760,13 +759,16 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             stream=True,
         )
 
-    # Verify result is CustomStreamWrapper
-    assert isinstance(result, CustomStreamWrapper)
+        # Verify result is CustomStreamWrapper
+        assert isinstance(result, CustomStreamWrapper)
 
-    # Consume the stream and verify metadata placement
-    all_chunks = []
-    async for chunk in result:
-        all_chunks.append(chunk)
+        # Consume the stream and verify metadata placement
+        # This MUST be inside the patch context because consuming the stream
+        # triggers follow-up acompletion calls
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
     assert len(all_chunks) > 0
 
     # Find first chunk and final chunk from initial response
@@ -860,7 +862,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     user_api_key_auth.api_key = "test_key"
     
     # Call _execute_tool_calls
-    result = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
         user_api_key_auth=user_api_key_auth,
