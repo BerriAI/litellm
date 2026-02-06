@@ -17,6 +17,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
     Union,
     cast,
     overload,
@@ -328,6 +329,10 @@ class ProxyLogging:
         # Guard flags to prevent duplicate background tasks
         self.daily_report_started: bool = False
         self.hanging_requests_check_started: bool = False
+
+        # Cache guardrail names for router path (avoids repeated linear scans per request)
+        self._guardrail_names_via_router_cache: Optional[Set[str]] = None
+        self._guardrail_names_via_router_cache_router_id: Optional[int] = None
 
     def startup_event(
         self,
@@ -846,15 +851,24 @@ class ProxyLogging:
         Check if this guardrail should be executed via the router (for retries/fallbacks).
 
         Returns True when the router exists and has this guardrail in its guardrail_list.
+        Uses a cache keyed by router id to avoid repeated linear scans of guardrail_list per request.
         """
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is None or not hasattr(llm_router, "guardrail_list"):
             return False
-        return any(
-            g.get("guardrail_name") == guardrail_name
-            for g in llm_router.guardrail_list
-        )
+        router_id = id(llm_router)
+        if (
+            self._guardrail_names_via_router_cache_router_id != router_id
+            or self._guardrail_names_via_router_cache is None
+        ):
+            self._guardrail_names_via_router_cache = {
+                g.get("guardrail_name")
+                for g in llm_router.guardrail_list
+                if g.get("guardrail_name")
+            }
+            self._guardrail_names_via_router_cache_router_id = router_id
+        return guardrail_name in self._guardrail_names_via_router_cache
 
     async def _execute_guardrail_via_router(
         self,

@@ -1872,18 +1872,8 @@ async def test_aguardrail_retry_succeeds_after_retries():
             raise ValueError("guardrail API temporarily failed")
         return {"result": "success", "attempt": call_count}
 
-    # Allow retries: router's should_retry_this_error requires healthy_deployments > 0
-    # for non-RateLimit errors; guardrail "model" has no LLM deployments so we patch.
-    with patch.object(
-        router,
-        "_async_get_healthy_deployments",
-        new_callable=AsyncMock,
-        return_value=([{"litellm_params": {}}], []),
-    ), patch.object(
-        router,
-        "_time_to_sleep_before_retry",
-        return_value=0,
-    ):
+    # Skip sleep so test stays fast; guardrail retries use guardrail_list for healthy_deployments (no patch needed)
+    with patch.object(router, "_time_to_sleep_before_retry", return_value=0):
         result = await router.aguardrail(
             guardrail_name="flaky-guardrail",
             original_function=mock_fail_twice_then_succeed,
@@ -1927,16 +1917,8 @@ async def test_aguardrail_retry_exhausted_raises():
         call_count += 1
         raise ValueError("guardrail API always fails")
 
-    with patch.object(
-        router,
-        "_async_get_healthy_deployments",
-        new_callable=AsyncMock,
-        return_value=([{"litellm_params": {}}], []),
-    ), patch.object(
-        router,
-        "_time_to_sleep_before_retry",
-        return_value=0,
-    ):
+    # Skip sleep so test stays fast; guardrail retries use guardrail_list for healthy_deployments (no patch needed)
+    with patch.object(router, "_time_to_sleep_before_retry", return_value=0):
         with pytest.raises(ValueError, match="guardrail API always fails"):
             await router.aguardrail(
                 guardrail_name="failing-guardrail",

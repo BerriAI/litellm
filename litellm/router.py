@@ -4954,13 +4954,12 @@ class Router:
             Retry Logic
             """
             # For guardrail calls, use guardrail_list so should_retry_this_error allows retries
-            if kwargs.get("selected_guardrail") is not None:
-                _guardrail_name = kwargs.get("model") or ""
-                _healthy_deployments = [
-                    g
-                    for g in self.guardrail_list
-                    if g.get("guardrail_name") == _guardrail_name
-                ]
+            _model = kwargs.get("model") or ""
+            _guardrail_deployments = [
+                g for g in self.guardrail_list if g.get("guardrail_name") == _model
+            ]
+            if kwargs.get("selected_guardrail") is not None or _guardrail_deployments:
+                _healthy_deployments = _guardrail_deployments
                 _all_deployments = _healthy_deployments
             else:
                 (
@@ -5044,7 +5043,14 @@ class Router:
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt - 1
                     _model = kwargs.get("model")  # type: ignore
-                    if kwargs.get("selected_guardrail") is not None and _model:
+                    _is_guardrail = (
+                        kwargs.get("selected_guardrail") is not None
+                        or any(
+                            g.get("guardrail_name") == _model
+                            for g in self.guardrail_list
+                        )
+                    )
+                    if _is_guardrail and _model:
                         _healthy_deployments = [
                             g
                             for g in self.guardrail_list
