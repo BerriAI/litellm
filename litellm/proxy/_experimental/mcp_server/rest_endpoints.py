@@ -10,6 +10,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
 )
 from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
 
@@ -28,6 +29,7 @@ router = APIRouter(
 
 if MCP_AVAILABLE:
     from mcp.types import Tool as MCPTool
+
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -142,14 +144,18 @@ if MCP_AVAILABLE:
 
             auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
+            _rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
             allowed_server_ids_set = set()
             for auth_context in auth_contexts:
                 servers = await global_mcp_server_manager.get_allowed_mcp_servers(
-                    user_api_key_auth=auth_context
+                    user_api_key_auth=auth_context,
                 )
                 allowed_server_ids_set.update(servers)
 
-            allowed_server_ids = list(allowed_server_ids_set)
+            allowed_server_ids = global_mcp_server_manager.filter_server_ids_by_ip(
+                list(allowed_server_ids_set), _rest_client_ip
+            )
 
             list_tools_result = []
             error_message = None
@@ -164,7 +170,9 @@ if MCP_AVAILABLE:
                             "message": f"The key is not allowed to access server {server_id}",
                         },
                     )
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                server = global_mcp_server_manager.get_mcp_server_by_id(
+                    server_id
+                )
                 if server is None:
                     return {
                         "tools": [],
@@ -325,13 +333,20 @@ if MCP_AVAILABLE:
             # Get all auth contexts
             auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
-            # Collect allowed server IDs from all contexts
+            # Collect allowed server IDs from all contexts, then apply IP filtering
+            _rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
             allowed_server_ids_set = set()
             for auth_context in auth_contexts:
                 servers = await global_mcp_server_manager.get_allowed_mcp_servers(
-                    user_api_key_auth=auth_context
+                    user_api_key_auth=auth_context,
                 )
                 allowed_server_ids_set.update(servers)
+
+            allowed_server_ids_set = set(
+                global_mcp_server_manager.filter_server_ids_by_ip(
+                    list(allowed_server_ids_set), _rest_client_ip
+                )
+            )
 
             # Check if the specified server_id is allowed
             if server_id not in allowed_server_ids_set:
