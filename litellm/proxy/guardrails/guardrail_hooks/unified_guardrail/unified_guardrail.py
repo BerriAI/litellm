@@ -66,6 +66,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type == CallTypes.call_mcp_tool.value:
             event_type = GuardrailEventHooks.pre_mcp_call
 
+
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
             is not True
@@ -85,7 +86,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
                 return data
         except ValueError:
-
             return data  # handle unmapped call types
 
         endpoint_translation = endpoint_guardrail_translation_mappings[

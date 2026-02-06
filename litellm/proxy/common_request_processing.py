@@ -520,6 +520,7 @@ class ProxyBaseLLMRequestProcessing:
             "adelete_interaction",
             "acancel_interaction",
             "asend_message",
+            "call_mcp_tool",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
