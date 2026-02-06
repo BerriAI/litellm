@@ -11,6 +11,9 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import (
+    filter_and_transform_beta_headers,
+)
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
@@ -1031,7 +1034,28 @@ class AmazonConverseConfig(BaseConfig):
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
-                anthropic_beta_list.append("computer-use-2024-10-22")
+                # Determine the correct computer-use beta header based on model
+                # "computer-use-2025-11-24" for Claude Opus 4.6, Claude Opus 4.5
+                # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
+                # "computer-use-2024-10-22" for older models
+                model_lower = model.lower()
+                if "opus-4.6" in model_lower or "opus_4.6" in model_lower or "opus-4-6" in model_lower or "opus_4_6" in model_lower:
+                    computer_use_header = "computer-use-2025-11-24"
+                elif "opus-4.5" in model_lower or "opus_4.5" in model_lower or "opus-4-5" in model_lower or "opus_4_5" in model_lower:
+                    computer_use_header = "computer-use-2025-11-24"
+                elif any(pattern in model_lower for pattern in [
+                    "sonnet-4.5", "sonnet_4.5", "sonnet-4-5", "sonnet_4_5",
+                    "haiku-4.5", "haiku_4.5", "haiku-4-5", "haiku_4_5",
+                    "opus-4.1", "opus_4.1", "opus-4-1", "opus_4_1",
+                    "sonnet-4", "sonnet_4",
+                    "opus-4", "opus_4",
+                    "sonnet-3.7", "sonnet_3.7", "sonnet-3-7", "sonnet_3_7"
+                ]):
+                    computer_use_header = "computer-use-2025-01-24"
+                else:
+                    computer_use_header = "computer-use-2024-10-22"
+                
+                anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools = self._transform_computer_use_tools(
                     computer_use_tools
@@ -1053,7 +1077,14 @@ class AmazonConverseConfig(BaseConfig):
                 if beta not in seen:
                     unique_betas.append(beta)
                     seen.add(beta)
-            additional_request_params["anthropic_beta"] = unique_betas
+
+            filtered_betas = filter_and_transform_beta_headers(
+                beta_headers=unique_betas,
+                provider="bedrock_converse",
+            )
+            
+            if filtered_betas:
+                additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 
