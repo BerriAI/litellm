@@ -3298,8 +3298,6 @@ class Router:
             )
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
-
-            return response
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
@@ -4955,13 +4953,23 @@ class Router:
             """
             Retry Logic
             """
-            (
-                _healthy_deployments,
-                _all_deployments,
-            ) = await self._async_get_healthy_deployments(
-                model=kwargs.get("model") or "",
-                parent_otel_span=parent_otel_span,
-            )
+            # For guardrail calls, use guardrail_list so should_retry_this_error allows retries
+            if kwargs.get("selected_guardrail") is not None:
+                _guardrail_name = kwargs.get("model") or ""
+                _healthy_deployments = [
+                    g
+                    for g in self.guardrail_list
+                    if g.get("guardrail_name") == _guardrail_name
+                ]
+                _all_deployments = _healthy_deployments
+            else:
+                (
+                    _healthy_deployments,
+                    _all_deployments,
+                ) = await self._async_get_healthy_deployments(
+                    model=kwargs.get("model") or "",
+                    parent_otel_span=parent_otel_span,
+                )
 
             # Check retry policy FIRST, before should_retry_this_error
             # This allows retry policies to override the healthy deployments check
@@ -5035,8 +5043,15 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt - 1
-                    _model: Optional[str] = kwargs.get("model")  # type: ignore
-                    if _model is not None:
+                    _model = kwargs.get("model")  # type: ignore
+                    if kwargs.get("selected_guardrail") is not None and _model:
+                        _healthy_deployments = [
+                            g
+                            for g in self.guardrail_list
+                            if g.get("guardrail_name") == _model
+                        ]
+                        _all_deployments = _healthy_deployments
+                    elif _model is not None:
                         (
                             _healthy_deployments,
                             _,
