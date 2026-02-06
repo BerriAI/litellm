@@ -6,6 +6,7 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { getProxyBaseUrl } from "@/components/networking";
 import { getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
+import { consumeReturnUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Alert, Button, Card, Form, Input, Space, Typography } from "antd";
@@ -33,12 +34,24 @@ function LoginPageContent() {
 
     const rawToken = getCookie("token");
     if (rawToken && !isJwtExpired(rawToken)) {
-      router.replace(`${getProxyBaseUrl()}/ui`);
+      // User already logged in - redirect to return URL or default
+      const returnUrl = consumeReturnUrl();
+      if (returnUrl) {
+        router.replace(returnUrl);
+      } else {
+        router.replace(`${getProxyBaseUrl()}/ui`);
+      }
       return;
     }
 
     if (uiConfig && uiConfig.auto_redirect_to_sso) {
-      router.push(`${getProxyBaseUrl()}/sso/key/generate`);
+      // For SSO, pass the return URL to the SSO endpoint
+      const returnUrl = getReturnUrl();
+      let ssoUrl = `${getProxyBaseUrl()}/sso/key/generate`;
+      if (returnUrl && isValidReturnUrl(returnUrl)) {
+        ssoUrl += `?redirect_to=${encodeURIComponent(returnUrl)}`;
+      }
+      router.push(ssoUrl);
       return;
     }
 
@@ -50,7 +63,13 @@ function LoginPageContent() {
       { username, password },
       {
         onSuccess: (data) => {
-          router.push(data.redirect_url);
+          // Check if we have a return URL to use instead of the default redirect
+          const returnUrl = consumeReturnUrl();
+          if (returnUrl) {
+            router.push(returnUrl);
+          } else {
+            router.push(data.redirect_url);
+          }
         },
       },
     );

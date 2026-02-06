@@ -5,12 +5,13 @@ import { vi, describe, it, beforeEach, afterEach, expect } from "vitest";
 /** ----------------------------
  * Hoisted helpers for mocks (required by Vitest)
  * --------------------------- */
-const { stub, jwtDecodeMock } = vi.hoisted(() => {
+const { stub, jwtDecodeMock, consumeReturnUrlMock } = vi.hoisted(() => {
   const React = require("react");
   const stub = (name: string) => () => React.createElement("div", { "data-testid": name });
   return {
     stub,
     jwtDecodeMock: vi.fn(),
+    consumeReturnUrlMock: vi.fn(),
   };
 });
 
@@ -84,6 +85,14 @@ vi.mock("jwt-decode", () => ({
   jwtDecode: (token: string) => jwtDecodeMock(token),
 }));
 
+vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/returnUrlUtils")>();
+  return {
+    ...actual,
+    consumeReturnUrl: consumeReturnUrlMock,
+  };
+});
+
 // Super-light stubs for all heavy components so rendering doesn't explode
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
 vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
@@ -152,6 +161,7 @@ beforeEach(() => {
   // Fresh module state & DOM
   vi.clearAllMocks();
   clearAllCookies();
+  consumeReturnUrlMock.mockReturnValue(null);
 
   // Make location.replace spy-able to validate redirect
   delete (window as any).location;
@@ -191,9 +201,11 @@ describe("CreateKeyPage auth behavior", () => {
     // Act
     render(<CreateKeyPage />);
 
-    // Assert: we eventually redirect to SSO login (single replace, not assign/href)
+    // Assert: we eventually redirect to SSO login with return URL (single replace, not assign/href)
     await waitFor(() => {
-      expect(window.location.replace).toHaveBeenCalledWith("https://example.com/ui/login");
+      expect(window.location.replace).toHaveBeenCalledWith(
+        expect.stringContaining("https://example.com/ui/login?redirect_to=")
+      );
     });
 
     // And we attempted to clear the cookie (defensive deletion)
@@ -233,6 +245,43 @@ describe("CreateKeyPage auth behavior", () => {
     // And some top-level UI appears (Navbar stub)
     await waitFor(() => {
       expect(screen.getByTestId("navbar")).toBeInTheDocument();
+    });
+  });
+
+  it("should not redirect when return URL only differs by query order", async () => {
+    setCookie("token=validtoken");
+
+    jwtDecodeMock.mockImplementation((tok: string) => {
+      expect(tok).toBe("validtoken");
+      return {
+        exp: Math.floor(Date.now() / 1000) + 60 * 60,
+        key: "accessKey-123",
+        user_role: "app_user",
+        user_email: "user@example.com",
+        login_method: "username_password",
+        premium_user: false,
+        auth_header_name: "x-litellm-auth",
+        user_id: "u_123",
+      };
+    });
+
+    // Current URL has params in a different order
+    delete (window as any).location;
+    (window as any).location = {
+      ...originalLocation,
+      href: "http://localhost/ui?b=2&a=1",
+      origin: "http://localhost",
+      assign: vi.fn(),
+      replace: vi.fn(),
+    };
+
+    // Return URL has the same params in a different order
+    consumeReturnUrlMock.mockReturnValue("http://localhost/ui?a=1&b=2");
+
+    render(<CreateKeyPage />);
+
+    await waitFor(() => {
+      expect(window.location.replace).not.toHaveBeenCalled();
     });
   });
 });

@@ -16,7 +16,7 @@ import {
   Organization,
   userInfoCall,
 } from "./networking";
-import CreateKey from "./organisms/create_key_button";
+import CreateKey, { CreateKeyPrefillData } from "./organisms/create_key_button";
 import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
 export interface ProxySettings {
@@ -55,6 +55,8 @@ interface UserDashboardProps {
   organizations: Organization[] | null;
   addKey: (data: any) => void;
   createClicked: boolean;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 type TeamInterface = {
@@ -77,6 +79,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   organizations,
   addKey,
   createClicked,
+  autoOpenCreate,
+  prefillData,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
@@ -350,6 +354,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             teams={teams as Team[]}
             data={keys}
             addKey={addKey}
+            autoOpenCreate={autoOpenCreate}
+            prefillData={prefillData}
           />
           <VirtualKeysTable teams={teams} organizations={organizations} />
         </Col>
