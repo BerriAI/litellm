@@ -348,6 +348,31 @@ Compaction blocks are also supported in streaming mode. You'll receive:
 - The accumulated `compaction_blocks` in `provider_specific_fields`
 
 
-## More Features Coming Soon
+## Effort Levels
 
-We're actively working on supporting new features for Claude Opus 4.6. Stay tuned for updates!
+Four effort levels available: `low`, `medium`, `high` (default), and `max`. Pass directly via the `effort` parameter:
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain quantum computing"
+    }
+  ],
+  "effort": "max"
+}'
+```
+
+## 1M Token Context (Beta)
+
+Opus 4.6 supports 1M token context. Premium pricing applies for prompts exceeding 200k tokens ($10/$37.50 per million input/output tokens). LiteLLM supports cost calculations for 1M token contexts.
+
+## US-Only Inference
+
+Available at 1.1× token pricing. LiteLLM supports this pricing model.
+
