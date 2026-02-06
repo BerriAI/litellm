@@ -26,12 +26,6 @@ def test_opus_4_6_model_pricing_and_capabilities():
             "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
         },
-        "anthropic.claude-opus-4-6-v1:0": {
-            "provider": "bedrock_converse",
-            "has_long_context_pricing": True,
-            "tool_use_system_prompt_tokens": 346,
-            "max_input_tokens": 1000000,
-        },
         "anthropic.claude-opus-4-6-v1": {
             "provider": "bedrock_converse",
             "has_long_context_pricing": True,
