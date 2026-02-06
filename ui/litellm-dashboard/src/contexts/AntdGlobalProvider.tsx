@@ -1,15 +1,19 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { App } from "antd";
 import { setNotificationInstance } from "@/components/molecules/notifications_manager";
 
 // Inner component to use the hook
 const AntdAppInit = () => {
   const { notification } = App.useApp();
+  const initialized = useRef(false);
 
   useEffect(() => {
-    setNotificationInstance(notification);
+    if (!initialized.current) {
+      setNotificationInstance(notification);
+      initialized.current = true;
+    }
   }, [notification]);
 
   return null;
