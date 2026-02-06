@@ -3284,6 +3284,11 @@ class Router:
             kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
             if use_guardrail_list:
                 kwargs["use_guardrail_list"] = True
+                # Set selected_guardrail before retries so per-guardrail num_retries is always available
+                if kwargs.get("selected_guardrail") is None:
+                    kwargs["selected_guardrail"] = self.get_available_guardrail(
+                        guardrail_name=model,
+                    )
                 if kwargs.get("num_retries") is None:
                     kwargs["num_retries"] = (
                         self.guardrail_num_retries
@@ -3350,10 +3355,10 @@ class Router:
 
         use_guardrail_list = kwargs.pop("use_guardrail_list", False)
         if use_guardrail_list:
-            selected_guardrail = self.get_available_guardrail(
-                guardrail_name=model,
-            )
-            kwargs["selected_guardrail"] = selected_guardrail
+            if kwargs.get("selected_guardrail") is None:
+                kwargs["selected_guardrail"] = self.get_available_guardrail(
+                    guardrail_name=model,
+                )
             return await original_generic_function(**kwargs)
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
