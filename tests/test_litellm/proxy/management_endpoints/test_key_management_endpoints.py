@@ -368,6 +368,12 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     # Allow for some variance due to test execution time (subtract 1 second buffer for timing)
     expected_expires_min = now + timedelta(days=28, seconds=-1)
     expected_expires_max = now + timedelta(days=32)
+
+    # Remove ms precision as it can cause issues with the assertion due to small differences in execution time
+    expires = expires.replace(microsecond=0)
+    expected_expires_min = expected_expires_min.replace(microsecond=0)
+    expected_expires_max = expected_expires_max.replace(microsecond=0)
+
     assert (
         expected_expires_min <= expires <= expected_expires_max
     ), f"Expected expires to be approximately 1 month from now, got {expires}"
