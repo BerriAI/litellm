@@ -2465,6 +2465,15 @@ async def _team_soft_budget_check(
                     else:
                         alert_emails = None
 
+            # Only send team soft budget alerts if alert_emails are configured
+            # Team soft budget alerts are sent via metadata.soft_budget_alerting_emails, not global alerting
+            if alert_emails is None or len(alert_emails) == 0:
+                verbose_proxy_logger.debug(
+                    "Skipping team soft budget alert for team %s: no alert_emails configured in metadata.soft_budget_alerting_emails",
+                    team_object.team_id,
+                )
+                return
+
             call_info = CallInfo(
                 token=valid_token.token,
                 spend=team_object.spend,

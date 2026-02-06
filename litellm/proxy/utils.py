@@ -1385,10 +1385,11 @@ class ProxyLogging:
             return
 
         if self.alerting is not None and "slack" in self.alerting:
-            await self.slack_alerting_instance.budget_alerts(
-                type=type,
-                user_info=user_info,
-            )
+            if self.slack_alerting_instance is not None:
+                await self.slack_alerting_instance.budget_alerts(
+                    type=type,
+                    user_info=user_info,
+                )
 
         # Call email_logging_instance if:
         # 1. "email" is in alerting config, OR

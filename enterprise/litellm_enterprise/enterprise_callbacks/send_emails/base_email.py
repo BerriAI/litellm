@@ -245,15 +245,25 @@ class BaseEmailLogger(CustomLogger):
             )
             return
 
+        # Validate that we have at least one valid email address
+        first_recipient_email = recipient_emails[0]
+        if not first_recipient_email or not first_recipient_email.strip():
+            verbose_proxy_logger.warning(
+                f"Invalid recipient email found for team soft budget alert. event={event.model_dump(exclude_none=True)}"
+            )
+            return
+
         verbose_proxy_logger.debug(
             f"send_team_soft_budget_alert_email_event: {json.dumps(event.model_dump(exclude_none=True), indent=4, default=str)}"
         )
 
         # Get email params using the first recipient email (for template formatting)
+        # For team alerts with alert_emails, we don't need user_id lookup since we already have email addresses
+        # Pass user_id=None to prevent _get_email_params from trying to look up email from a potentially None user_id
         email_params = await self._get_email_params(
             email_event=EmailEvent.soft_budget_crossed,
-            user_id=event.user_id,
-            user_email=recipient_emails[0],
+            user_id=None,  # Team alerts don't require user_id when alert_emails are provided
+            user_email=first_recipient_email,
             event_message=event.event_message,
         )
 
@@ -360,6 +370,13 @@ class BaseEmailLogger(CustomLogger):
             # For other entity types, we need either max_budget or soft_budget
             if user_info.event_group == Litellm_EntityType.TEAM:
                 if user_info.soft_budget is None:
+                    return
+                # For team soft budget alerts, require alert_emails to be configured
+                # Team soft budget alerts are sent via metadata.soft_budget_alerting_emails
+                if user_info.alert_emails is None or len(user_info.alert_emails) == 0:
+                    verbose_proxy_logger.debug(
+                        "Skipping team soft budget email alert: no alert_emails configured",
+                    )
                     return
             else:
                 # For non-team alerts, require either max_budget or soft_budget
