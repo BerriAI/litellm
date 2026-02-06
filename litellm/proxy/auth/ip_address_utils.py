@@ -6,7 +6,7 @@ External callers (public IPs) only see servers with available_on_public_internet
 """
 
 import ipaddress
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Request
 
@@ -73,16 +73,25 @@ class IPAddressUtils:
         return any(addr in network for network in networks)
 
     @staticmethod
-    def get_mcp_client_ip(request: Request) -> Optional[str]:
+    def get_mcp_client_ip(
+        request: Request,
+        general_settings: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """
         Extract client IP from a FastAPI request for MCP access control.
 
         Uses the proxy's use_x_forwarded_for setting to determine whether
         to trust X-Forwarded-For headers.
-        """
-        from litellm.proxy.proxy_server import (
-            general_settings as proxy_general_settings,
-        )
 
-        use_xff = proxy_general_settings.get("use_x_forwarded_for", False)
+        Args:
+            request: FastAPI request object
+            general_settings: Optional settings dict. If not provided, imports from proxy_server.
+        """
+        if general_settings is None:
+            from litellm.proxy.proxy_server import (
+                general_settings as proxy_general_settings,
+            )
+            general_settings = proxy_general_settings
+
+        use_xff = general_settings.get("use_x_forwarded_for", False)
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
