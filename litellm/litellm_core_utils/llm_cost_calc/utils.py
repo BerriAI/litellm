@@ -688,18 +688,11 @@ def generic_cost_per_token(  # noqa: PLR0915
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
-    _output_cost_per_audio_token = _get_cost_per_unit(
-        model_info, "output_cost_per_audio_token", None
-    )
-    _output_cost_per_reasoning_token = _get_cost_per_unit(
-        model_info, "output_cost_per_reasoning_token", None
-    )
-    _output_cost_per_image_token = _get_cost_per_unit(
-        model_info, "output_cost_per_image_token", None
-    )
-
     ## AUDIO COST
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
+        _output_cost_per_audio_token = _get_cost_per_unit(
+            model_info, "output_cost_per_audio_token", None
+        )
         _output_cost_per_audio_token = (
             _output_cost_per_audio_token
             if _output_cost_per_audio_token is not None
@@ -709,6 +702,9 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     ## REASONING COST
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
+        _output_cost_per_reasoning_token = _get_cost_per_unit(
+            model_info, "output_cost_per_reasoning_token", None
+        )
         _output_cost_per_reasoning_token = (
             _output_cost_per_reasoning_token
             if _output_cost_per_reasoning_token is not None
@@ -718,6 +714,9 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     ## IMAGE COST
     if not is_text_tokens_total and image_tokens and image_tokens > 0:
+        _output_cost_per_image_token = _get_cost_per_unit(
+            model_info, "output_cost_per_image_token", None
+        )
         _output_cost_per_image_token = (
             _output_cost_per_image_token
             if _output_cost_per_image_token is not None
