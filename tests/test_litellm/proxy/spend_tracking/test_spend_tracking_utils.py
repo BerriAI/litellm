@@ -960,7 +960,6 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
 
 
 
-import threading
 from pydantic import BaseModel as PydanticBaseModel
 
 
