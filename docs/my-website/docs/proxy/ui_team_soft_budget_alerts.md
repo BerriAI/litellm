@@ -31,6 +31,12 @@ On every API request made with a key belonging to a team, the proxy checks:
 
 If all three conditions are met, an email alert is sent to the configured recipients. Alerts are **deduplicated** so the same alert is only sent once within a 24-hour window.
 
+## Prerequisites
+
+:::warning Email integration required
+Team soft budget alerts are sent via email. You must have an active email integration (SendGrid, Resend, or SMTP) configured on your proxy for alerts to be delivered. See [Email Notifications](./email.md) for setup instructions.
+:::
+
 ## How to Set Up Team Soft Budget Alerts
 
 ### 1. Navigate to the Admin UI
