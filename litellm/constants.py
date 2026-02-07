@@ -67,6 +67,25 @@ DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
 )
 
+# MCP Semantic Tool Filter Defaults
+DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_MCP_SEMANTIC_FILTER_TOP_K = int(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_TOP_K", 10)
+)
+DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
+)
+MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
+    os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
+LITELLM_UI_ALLOW_HEADERS = [
+    "x-litellm-semantic-filter",
+    "x-litellm-semantic-filter-tools",
+]
+
 # Gemini model-specific minimal thinking budget constants
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", 1)
@@ -84,6 +103,9 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
 )
+
+# Provider-specific API base URLs
+XAI_API_BASE = "https://api.x.ai/v1"
 
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
@@ -284,6 +306,22 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+# Patterns that indicate a localhost/internal URL in A2A agent cards that should be
+# replaced with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
@@ -948,6 +986,8 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-6-v1:0",
+    "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",

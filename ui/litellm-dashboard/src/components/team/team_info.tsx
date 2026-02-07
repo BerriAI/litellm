@@ -85,6 +85,7 @@ export interface TeamData {
     tpm_limit: number | null;
     rpm_limit: number | null;
     max_budget: number | null;
+    soft_budget?: number | null;
     budget_duration: string | null;
     models: string[];
     blocked: boolean;
@@ -424,7 +425,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       let parsedMetadata = {};
       try {
-        parsedMetadata = values.metadata ? JSON.parse(values.metadata) : {};
+        const rawMetadata = values.metadata ? JSON.parse(values.metadata) : {};
+        // Exclude soft_budget_alerting_emails from parsed metadata since it's handled separately
+        const { soft_budget_alerting_emails, ...rest } = rawMetadata;
+        parsedMetadata = rest;
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in metadata field");
         return;
@@ -457,11 +461,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         max_budget: values.max_budget,
+        soft_budget: sanitizeNumeric(values.soft_budget),
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
           guardrails: values.guardrails || [],
           logging: values.logging_settings || [],
+          disable_global_guardrails: values.disable_global_guardrails || false,
+          soft_budget_alerting_emails:
+            typeof values.soft_budget_alerting_emails === "string"
+              ? values.soft_budget_alerting_emails
+                .split(",")
+                .map((email: string) => email.trim())
+                .filter((email: string) => email.length > 0)
+              : values.soft_budget_alerting_emails || [],
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         policies: values.policies || [],
@@ -572,11 +585,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               size="small"
               icon={copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(info.team_id, "team-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["team-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["team-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
           </div>
         </div>
@@ -588,10 +600,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <Tab key="overview">Overview</Tab>,
             ...(canEditTeam
               ? [
-                  <Tab key="members">Members</Tab>,
-                  <Tab key="member-permissions">Member Permissions</Tab>,
-                  <Tab key="settings">Settings</Tab>,
-                ]
+                <Tab key="members">Members</Tab>,
+                <Tab key="member-permissions">Member Permissions</Tab>,
+                <Tab key="settings">Settings</Tab>,
+              ]
               : []),
           ]}
         </TabList>
@@ -754,6 +766,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     tpm_limit: info.tpm_limit,
                     rpm_limit: info.rpm_limit,
                     max_budget: info.max_budget,
+                    soft_budget: info.soft_budget,
                     budget_duration: info.budget_duration,
                     team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
                     team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
@@ -762,12 +775,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     guardrails: info.metadata?.guardrails || [],
                     policies: info.policies || [],
                     disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
+                    soft_budget_alerting_emails:
+                      Array.isArray(info.metadata?.soft_budget_alerting_emails)
+                        ? info.metadata.soft_budget_alerting_emails.join(", ")
+                        : "",
                     metadata: info.metadata
                       ? JSON.stringify(
-                          (({ logging, secret_manager_settings, ...rest }) => rest)(info.metadata),
-                          null,
-                          2,
-                        )
+                        (({ logging, secret_manager_settings, soft_budget_alerting_emails, ...rest }) => rest)(info.metadata),
+                        null,
+                        2,
+                      )
                       : "",
                     logging_settings: info.metadata?.logging || [],
                     secret_manager_settings: info.metadata?.secret_manager_settings
@@ -819,6 +836,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Soft Budget (USD)" name="soft_budget">
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Soft Budget Alerting Emails"
+                    name="soft_budget_alerting_emails"
+                    tooltip="Comma-separated email addresses to receive alerts when the soft budget is reached"
+                  >
+                    <Input placeholder="example1@test.com, example2@test.com" />
                   </Form.Item>
 
                   <Form.Item
@@ -905,7 +934,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form.Item
                     label={
                       <span>
-                        Disable Global Guardrails{" "}
+                        Disable Global Guardrails
                         <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
@@ -1096,7 +1125,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       Max Budget:{" "}
                       {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "No Limit"}
                     </div>
+                    <div>
+                      Soft Budget:{" "}
+                      {info.soft_budget !== null && info.soft_budget !== undefined
+                        ? `$${formatNumberWithCommas(info.soft_budget, 4)}`
+                        : "No Limit"}
+                    </div>
                     <div>Budget Reset: {info.budget_duration || "Never"}</div>
+                    {info.metadata?.soft_budget_alerting_emails &&
+                      Array.isArray(info.metadata.soft_budget_alerting_emails) &&
+                      info.metadata.soft_budget_alerting_emails.length > 0 && (
+                        <div>
+                          Soft Budget Alerting Emails: {info.metadata.soft_budget_alerting_emails.join(", ")}
+                        </div>
+                      )}
                   </div>
                   <div>
                     <Text className="font-medium">

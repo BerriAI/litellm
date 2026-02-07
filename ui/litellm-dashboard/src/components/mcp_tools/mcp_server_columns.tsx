@@ -142,6 +142,18 @@ export const mcpServerColumns = (
     },
   },
   {
+    id: "available_on_public_internet",
+    header: "Network Access",
+    cell: ({ row }) => {
+      const isPublic = row.original.available_on_public_internet;
+      return isPublic ? (
+        <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">Public</span>
+      ) : (
+        <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs font-medium">Internal</span>
+      );
+    },
+  },
+  {
     header: "Created At",
     accessorKey: "created_at",
     sortingFn: "datetime",

@@ -160,7 +160,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         </Button>,
       ]}
       width={1000}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="space-y-6">
         <Text className="text-gray-600">

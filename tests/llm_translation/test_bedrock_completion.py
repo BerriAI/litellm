@@ -2356,9 +2356,8 @@ def test_bedrock_no_default_message():
     assistant_messages = [
         msg for msg in formatted_messages if msg["role"] == "assistant"
     ]
-    assert len(assistant_messages) == 2
-    assert assistant_messages[0]["content"][0]["text"] == "."
-    assert assistant_messages[1]["content"][0]["text"] == "Valid response"
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0]["content"][0]["text"] == "Valid response"
 
 
 @pytest.mark.parametrize("top_k_param", ["top_k", "topK"])

@@ -4,16 +4,15 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import {
-  GithubOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
-  SlackOutlined,
   SunOutlined,
 } from "@ant-design/icons";
-import { Button, Switch, Tag } from "antd";
+import { Switch, Tag } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
+import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 
 interface NavbarProps {
@@ -129,24 +128,7 @@ const Navbar: React.FC<NavbarProps> = ({
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
-            <Button
-              href="https://www.litellm.ai/support"
-              target="_blank"
-              rel="noopener noreferrer"
-              icon={<SlackOutlined />}
-              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
-            >
-              Join Slack
-            </Button>
-            <Button
-              href="https://github.com/BerriAI/litellm"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
-              icon={<GithubOutlined />}
-            >
-              Star us on GitHub
-            </Button>
+            <CommunityEngagementButtons />
             {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
             Do not set this to true by default until all components are confirmed to support dark mode styles. */}
             {false && <Switch

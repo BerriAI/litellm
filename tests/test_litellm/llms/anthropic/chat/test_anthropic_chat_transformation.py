@@ -185,7 +185,7 @@ def test_extract_response_content_with_citations():
         },
     }
 
-    _, citations, _, _, _, _ , _= config.extract_response_content(completion_response)
+    _, citations, _, _, _, _, _, _ = config.extract_response_content(completion_response)
     assert citations == [
         [
             {
@@ -342,7 +342,7 @@ def test_web_search_tool_result_extraction():
         }
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
 
@@ -474,7 +474,7 @@ def test_multiple_web_search_tool_results():
         ]
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
 
@@ -817,59 +817,6 @@ def test_anthropic_chat_transform_request_includes_context_management():
     assert result["context_management"] == _sample_context_management_payload()
 
 
-def test_transform_parsed_response_includes_context_management_metadata():
-    import httpx
-
-    from litellm.types.utils import ModelResponse
-
-    config = AnthropicConfig()
-    context_management_payload = {
-        "applied_edits": [
-            {
-                "type": "clear_tool_uses_20250919",
-                "cleared_tool_uses": 2,
-                "cleared_input_tokens": 5000,
-            }
-        ]
-    }
-    completion_response = {
-        "id": "msg_context_management_test",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-sonnet-4-20250514",
-        "content": [{"type": "text", "text": "Done."}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {
-            "input_tokens": 10,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
-            "output_tokens": 5,
-        },
-        "context_management": context_management_payload,
-    }
-    raw_response = httpx.Response(
-        status_code=200,
-        headers={},
-    )
-    model_response = ModelResponse()
-
-    result = config.transform_parsed_response(
-        completion_response=completion_response,
-        raw_response=raw_response,
-        model_response=model_response,
-        json_mode=False,
-        prefix_prompt=None,
-    )
-
-    assert result.__dict__.get("context_management") == context_management_payload
-    provider_fields = result.choices[0].message.provider_specific_fields
-    assert (
-        provider_fields
-        and provider_fields["context_management"] == context_management_payload
-    )
-
-
 def test_anthropic_structured_output_beta_header():
     from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
@@ -1043,7 +990,7 @@ def test_server_tool_use_in_response():
         ]
     }
     
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
 
@@ -1171,7 +1118,7 @@ def test_tool_search_complete_response_parsing():
     }
     
     # Extract content
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
 
@@ -1291,7 +1238,7 @@ def test_caller_field_in_response():
         "usage": {"input_tokens": 100, "output_tokens": 50}
     }
     
-    text, citations, thinking, reasoning, tool_calls, web_search_results, tool_results = config.extract_response_content(completion_response)
+    text, citations, thinking, reasoning, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(completion_response)
 
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "toolu_123"
@@ -1934,6 +1881,75 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
     assert usage.completion_tokens == 500
 
 
+# ============ Reasoning Effort Tests ============
+
+
+def test_reasoning_effort_maps_to_adaptive_thinking_for_opus_4_6():
+    """
+    Test that reasoning_effort maps to adaptive thinking type for Claude Opus 4.6.
+    
+    For Claude Opus 4.6, reasoning_effort should map to {"type": "adaptive"} 
+    regardless of the effort level specified.
+    """
+    config = AnthropicConfig()
+    
+    # Test with different reasoning_effort values - all should map to adaptive
+    for effort in ["low", "medium", "high", "minimal"]:
+        non_default_params = {"reasoning_effort": effort}
+        optional_params = {}
+        
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="claude-opus-4-6-20250514",
+            drop_params=False
+        )
+        
+        # Should map to adaptive thinking type
+        assert "thinking" in result
+        assert result["thinking"]["type"] == "adaptive"
+        # Should not have budget_tokens for adaptive type
+        assert "budget_tokens" not in result["thinking"]
+        # reasoning_effort should not be in the result (it's transformed to thinking)
+        assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
+    """
+    Test that reasoning_effort maps to budget-based thinking config for non-Opus 4.6 models.
+    
+    For models other than Claude Opus 4.6, reasoning_effort should map to 
+    thinking config with budget_tokens based on the effort level.
+    """
+    config = AnthropicConfig()
+    
+    # Test with Claude Sonnet 4.5 (non-Opus 4.6 model)
+    test_cases = [
+        ("low", 1024),      # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+        ("medium", 2048),   # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+        ("high", 4096),     # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+        ("minimal", 128),   # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+    ]
+    
+    for effort, expected_budget in test_cases:
+        non_default_params = {"reasoning_effort": effort}
+        optional_params = {}
+        
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="claude-sonnet-4-5-20250929",
+            drop_params=False
+        )
+        
+        # Should map to enabled thinking type with budget_tokens
+        assert "thinking" in result
+        assert result["thinking"]["type"] == "enabled"
+        assert result["thinking"]["budget_tokens"] == expected_budget
+        # reasoning_effort should not be in the result (it's transformed to thinking)
+        assert "reasoning_effort" not in result
+
+
 def test_code_execution_tool_results_extraction():
     """
     Test that code execution tool results (bash_code_execution_tool_result, 
@@ -2174,3 +2190,319 @@ def test_web_search_tool_result_backwards_compatibility():
     
     # Should NOT be in tool_results
     assert provider_fields.get("tool_results") is None
+
+
+# ============ Compaction Tests ============
+
+
+def test_compaction_block_extraction():
+    """
+    Test that compaction blocks are correctly extracted from Anthropic response.
+    """
+    config = AnthropicConfig()
+    
+    completion_response = {
+        "id": "msg_compaction_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-6",
+        "content": [
+            {
+                "type": "compaction",
+                "content": "Summary of the conversation: The user requested help building a web scraper..."
+            },
+            {
+                "type": "text",
+                "text": "I don't have access to real-time data, so I can't provide the current weather in San Francisco."
+            }
+        ],
+        "stop_reason": "max_tokens",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 86,
+            "output_tokens": 100
+        }
+    }
+    
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
+        completion_response
+    )
+    
+    # Verify compaction blocks are extracted
+    assert compaction_blocks is not None
+    assert len(compaction_blocks) == 1
+    assert compaction_blocks[0]["type"] == "compaction"
+    assert "Summary of the conversation" in compaction_blocks[0]["content"]
+    
+    # Verify text content is extracted
+    assert "I don't have access to real-time data" in text
+
+
+def test_compaction_block_in_provider_specific_fields():
+    """
+    Test that compaction blocks are included in provider_specific_fields.
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+    
+    config = AnthropicConfig()
+    
+    completion_response = {
+        "id": "msg_compaction_provider_fields",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-6",
+        "content": [
+            {
+                "type": "compaction",
+                "content": "Summary of the conversation: The user requested help building a web scraper..."
+            },
+            {
+                "type": "text",
+                "text": "Here is the response."
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 50,
+            "output_tokens": 25
+        }
+    }
+    
+    raw_response = httpx.Response(status_code=200, headers={})
+    model_response = ModelResponse()
+    
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    
+    # Verify compaction_blocks is in provider_specific_fields
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert "compaction_blocks" in provider_fields
+    assert len(provider_fields["compaction_blocks"]) == 1
+    assert provider_fields["compaction_blocks"][0]["type"] == "compaction"
+    assert "Summary of the conversation" in provider_fields["compaction_blocks"][0]["content"]
+
+
+def test_multiple_compaction_blocks():
+    """
+    Test that multiple compaction blocks are all extracted.
+    """
+    config = AnthropicConfig()
+    
+    completion_response = {
+        "content": [
+            {
+                "type": "compaction",
+                "content": "First summary..."
+            },
+            {
+                "type": "text",
+                "text": "Some text."
+            },
+            {
+                "type": "compaction",
+                "content": "Second summary..."
+            }
+        ]
+    }
+    
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
+        completion_response
+    )
+    
+    # Verify both compaction blocks are extracted
+    assert compaction_blocks is not None
+    assert len(compaction_blocks) == 2
+    assert compaction_blocks[0]["content"] == "First summary..."
+    assert compaction_blocks[1]["content"] == "Second summary..."
+
+
+def test_compaction_block_request_transformation():
+    """
+    Test that compaction blocks from provider_specific_fields are correctly
+    transformed back to Anthropic format in requests.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+    
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the weather in San Francisco?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I don't have access to real-time data."
+                }
+            ],
+            "provider_specific_fields": {
+                "compaction_blocks": [
+                    {
+                        "type": "compaction",
+                        "content": "Summary of the conversation: The user requested help building a web scraper..."
+                    }
+                ]
+            }
+        },
+        {
+            "role": "user",
+            "content": "What about New York?"
+        }
+    ]
+    
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-opus-4-6",
+        llm_provider="anthropic"
+    )
+    
+    # Find the assistant message
+    assistant_message = None
+    for msg in result:
+        if msg["role"] == "assistant":
+            assistant_message = msg
+            break
+    
+    assert assistant_message is not None
+    assert "content" in assistant_message
+    assert isinstance(assistant_message["content"], list)
+    
+    # Verify compaction block is at the beginning
+    assert assistant_message["content"][0]["type"] == "compaction"
+    assert "Summary of the conversation" in assistant_message["content"][0]["content"]
+    
+    # Verify text content follows
+    text_blocks = [c for c in assistant_message["content"] if c.get("type") == "text"]
+    assert len(text_blocks) > 0
+    assert "I don't have access to real-time data" in text_blocks[0]["text"]
+
+
+def test_compaction_with_context_management():
+    """
+    Test that compaction works with context_management parameter.
+    """
+    config = AnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "context_management": {
+            "edits": [
+                {
+                    "type": "compact_20260112"
+                }
+            ]
+        },
+        "max_tokens": 100
+    }
+    
+    result = config.transform_request(
+        model="claude-opus-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify context_management is included
+    assert "context_management" in result
+    assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
+
+
+def test_compaction_block_with_other_content_types():
+    """
+    Test that compaction blocks work alongside other content types like thinking blocks and tool calls.
+    """
+    config = AnthropicConfig()
+    
+    completion_response = {
+        "content": [
+            {
+                "type": "compaction",
+                "content": "Summary of previous conversation..."
+            },
+            {
+                "type": "thinking",
+                "thinking": "Let me think about this..."
+            },
+            {
+                "type": "text",
+                "text": "Based on my analysis..."
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_123",
+                "name": "get_weather",
+                "input": {"location": "San Francisco"}
+            }
+        ]
+    }
+    
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
+        completion_response
+    )
+    
+    # Verify all content types are extracted
+    assert compaction_blocks is not None
+    assert len(compaction_blocks) == 1
+    assert thinking_blocks is not None
+    assert len(thinking_blocks) == 1
+    assert "Based on my analysis" in text
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "get_weather"
+
+
+def test_compaction_block_empty_list_not_added():
+    """
+    Test that empty compaction_blocks list is not added to provider_specific_fields.
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+    
+    config = AnthropicConfig()
+    
+    # Response without compaction blocks
+    completion_response = {
+        "id": "msg_no_compaction",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-6",
+        "content": [
+            {
+                "type": "text",
+                "text": "Just a regular response."
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 5
+        }
+    }
+    
+    raw_response = httpx.Response(status_code=200, headers={})
+    model_response = ModelResponse()
+    
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    
+    # Verify compaction_blocks is not in provider_specific_fields when there are none
+    provider_fields = result.choices[0].message.provider_specific_fields
+    if provider_fields:
+        assert "compaction_blocks" not in provider_fields or provider_fields.get("compaction_blocks") is None

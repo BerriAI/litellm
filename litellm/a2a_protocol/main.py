@@ -44,6 +44,11 @@ except ImportError:
 
 # Import our custom card resolver that supports multiple well-known paths
 from litellm.a2a_protocol.card_resolver import LiteLLMA2ACardResolver
+from litellm.a2a_protocol.exception_mapping_utils import (
+    handle_a2a_localhost_retry,
+    map_a2a_exception,
+)
+from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
 
 # Use our custom resolver instead of the default A2A SDK resolver
 A2ACardResolver = LiteLLMA2ACardResolver
@@ -244,9 +249,49 @@ async def asend_message(
 
     verbose_logger.info(f"A2A send_message request_id={request.id}, agent={agent_name}")
 
-    a2a_response = await a2a_client.send_message(request)
+    # Get agent card URL for localhost retry logic
+    agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(
+        a2a_client, "agent_card", None
+    )
+    card_url = getattr(agent_card, "url", None) if agent_card else None
+
+    # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
+    a2a_response = None
+    for _ in range(2):  # max 2 attempts: original + 1 retry
+        try:
+            a2a_response = await a2a_client.send_message(request)
+            break  # success, exit retry loop
+        except A2ALocalhostURLError as e:
+            # Localhost URL error - fix and retry
+            a2a_client = handle_a2a_localhost_retry(
+                error=e,
+                agent_card=agent_card,
+                a2a_client=a2a_client,
+                is_streaming=False,
+            )
+            card_url = agent_card.url if agent_card else None
+        except Exception as e:
+            # Map exception - will raise A2ALocalhostURLError if applicable
+            try:
+                map_a2a_exception(e, card_url, api_base, model=agent_name)
+            except A2ALocalhostURLError as localhost_err:
+                # Localhost URL error - fix and retry
+                a2a_client = handle_a2a_localhost_retry(
+                    error=localhost_err,
+                    agent_card=agent_card,
+                    a2a_client=a2a_client,
+                    is_streaming=False,
+                )
+                card_url = agent_card.url if agent_card else None
+                continue
+            except Exception:
+                # Re-raise the mapped exception
+                raise
 
     verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
+
+    # a2a_response is guaranteed to be set if we reach here (loop breaks on success or raises)
+    assert a2a_response is not None
 
     # Wrap in LiteLLM response type for _hidden_params support
     response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response)
@@ -305,6 +350,48 @@ def send_message(
         return asyncio.run(
             asend_message(a2a_client=a2a_client, request=request, **kwargs)
         )
+
+
+def _build_streaming_logging_obj(
+    request: "SendStreamingMessageRequest",
+    agent_name: str,
+    agent_id: Optional[str],
+    litellm_params: Optional[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]],
+    proxy_server_request: Optional[Dict[str, Any]],
+) -> Logging:
+    """Build logging object for streaming A2A requests."""
+    start_time = datetime.datetime.now()
+    model = f"a2a_agent/{agent_name}"
+
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "streaming-request"}],
+        stream=False,
+        call_type="asend_message_streaming",
+        start_time=start_time,
+        litellm_call_id=str(request.id),
+        function_id=str(request.id),
+    )
+    logging_obj.model = model
+    logging_obj.custom_llm_provider = "a2a_agent"
+    logging_obj.model_call_details["model"] = model
+    logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
+    if agent_id:
+        logging_obj.model_call_details["agent_id"] = agent_id
+
+    _litellm_params = litellm_params.copy() if litellm_params else {}
+    if metadata:
+        _litellm_params["metadata"] = metadata
+    if proxy_server_request:
+        _litellm_params["proxy_server_request"] = proxy_server_request
+
+    logging_obj.litellm_params = _litellm_params
+    logging_obj.optional_params = _litellm_params
+    logging_obj.model_call_details["litellm_params"] = _litellm_params
+    logging_obj.model_call_details["metadata"] = metadata or {}
+
+    return logging_obj
 
 
 async def asend_message_streaming(
@@ -403,55 +490,72 @@ async def asend_message_streaming(
 
     verbose_logger.info(f"A2A send_message_streaming request_id={request.id}")
 
-    # Track for logging
-    start_time = datetime.datetime.now()
-    stream = a2a_client.send_message_streaming(request)
-
     # Build logging object for streaming completion callbacks
     agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(
         a2a_client, "agent_card", None
     )
+    card_url = getattr(agent_card, "url", None) if agent_card else None
     agent_name = getattr(agent_card, "name", "unknown") if agent_card else "unknown"
-    model = f"a2a_agent/{agent_name}"
 
-    logging_obj = Logging(
-        model=model,
-        messages=[{"role": "user", "content": "streaming-request"}],
-        stream=False,  # complete response logging after stream ends
-        call_type="asend_message_streaming",
-        start_time=start_time,
-        litellm_call_id=str(request.id),
-        function_id=str(request.id),
-    )
-    logging_obj.model = model
-    logging_obj.custom_llm_provider = "a2a_agent"
-    logging_obj.model_call_details["model"] = model
-    logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
-    if agent_id:
-        logging_obj.model_call_details["agent_id"] = agent_id
-
-    # Propagate litellm_params for spend logging (includes cost_per_query, etc.)
-    _litellm_params = litellm_params.copy() if litellm_params else {}
-    # Merge metadata into litellm_params.metadata (required for proxy cost tracking)
-    if metadata:
-        _litellm_params["metadata"] = metadata
-    if proxy_server_request:
-        _litellm_params["proxy_server_request"] = proxy_server_request
-
-    logging_obj.litellm_params = _litellm_params
-    logging_obj.optional_params = _litellm_params  # used by cost calc
-    logging_obj.model_call_details["litellm_params"] = _litellm_params
-    logging_obj.model_call_details["metadata"] = metadata or {}
-
-    iterator = A2AStreamingIterator(
-        stream=stream,
+    logging_obj = _build_streaming_logging_obj(
         request=request,
-        logging_obj=logging_obj,
         agent_name=agent_name,
+        agent_id=agent_id,
+        litellm_params=litellm_params,
+        metadata=metadata,
+        proxy_server_request=proxy_server_request,
     )
 
-    async for chunk in iterator:
-        yield chunk
+    # Retry loop: if connection fails due to localhost URL in agent card, retry with fixed URL
+    # Connection errors in streaming typically occur on first chunk iteration
+    first_chunk = True
+    for attempt in range(2):  # max 2 attempts: original + 1 retry
+        stream = a2a_client.send_message_streaming(request)
+        iterator = A2AStreamingIterator(
+            stream=stream,
+            request=request,
+            logging_obj=logging_obj,
+            agent_name=agent_name,
+        )
+
+        try:
+            first_chunk = True
+            async for chunk in iterator:
+                if first_chunk:
+                    first_chunk = False  # connection succeeded
+                yield chunk
+            return  # stream completed successfully
+        except A2ALocalhostURLError as e:
+            # Only retry on first chunk, not mid-stream
+            if first_chunk and attempt == 0:
+                a2a_client = handle_a2a_localhost_retry(
+                    error=e,
+                    agent_card=agent_card,
+                    a2a_client=a2a_client,
+                    is_streaming=True,
+                )
+                card_url = agent_card.url if agent_card else None
+            else:
+                raise
+        except Exception as e:
+            # Only map exception on first chunk
+            if first_chunk and attempt == 0:
+                try:
+                    map_a2a_exception(e, card_url, api_base, model=agent_name)
+                except A2ALocalhostURLError as localhost_err:
+                    # Localhost URL error - fix and retry
+                    a2a_client = handle_a2a_localhost_retry(
+                        error=localhost_err,
+                        agent_card=agent_card,
+                        a2a_client=a2a_client,
+                        is_streaming=True,
+                    )
+                    card_url = agent_card.url if agent_card else None
+                    continue
+                except Exception:
+                    # Re-raise the mapped exception
+                    raise
+            raise
 
 
 async def create_a2a_client(

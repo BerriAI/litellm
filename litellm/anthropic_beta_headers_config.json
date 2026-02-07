@@ -1,0 +1,30 @@
+{
+  "description": "Unsupported Anthropic beta headers for each provider. Headers listed here will be dropped. Headers not listed are passed through as-is.",
+  "anthropic": [],
+  "azure_ai": [],
+  "bedrock_converse": [
+    "prompt-caching-scope-2026-01-05",
+    "bash_20250124",
+    "bash_20241022",
+    "text_editor_20250124",
+    "text_editor_20241022",
+    "compact-2026-01-12",
+    "advanced-tool-use-2025-11-20",
+    "web-fetch-2025-09-10",
+    "code-execution-2025-08-25",
+    "skills-2025-10-02",
+    "files-api-2025-04-14"
+  ],
+  "bedrock": [
+    "advanced-tool-use-2025-11-20",
+    "prompt-caching-scope-2026-01-05",
+    "structured-outputs-2025-11-13",
+    "web-fetch-2025-09-10",
+    "code-execution-2025-08-25",
+    "skills-2025-10-02",
+    "files-api-2025-04-14"
+  ],
+  "vertex_ai": [
+    "prompt-caching-scope-2026-01-05"
+  ]
+}

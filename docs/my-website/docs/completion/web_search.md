@@ -18,11 +18,28 @@ Each provider uses their own search backend:
 
 | Provider | Search Engine | Notes |
 |----------|---------------|-------|
-| **OpenAI** (`gpt-4o-search-preview`) | OpenAI's internal search | Real-time web data |
+| **OpenAI** (`gpt-4o-search-preview`, `gpt-4o-mini-search-preview`, `gpt-5-search-api`) | OpenAI's internal search | Real-time web data |
 | **xAI** (`grok-3`) | xAI's search + X/Twitter | Real-time social media data |
 | **Google AI/Vertex** (`gemini-2.0-flash`) | **Google Search** | Uses actual Google search results |
 | **Anthropic** (`claude-3-5-sonnet`) | Anthropic's web search | Real-time web data |
 | **Perplexity** | Perplexity's search engine | AI-powered search and reasoning |
+
+:::warning Important: Only Search Models Support `web_search_options`
+For OpenAI, only dedicated search models support the `web_search_options` parameter:
+- `gpt-4o-search-preview`
+- `gpt-4o-mini-search-preview`
+- `gpt-5-search-api`
+
+**Regular models like `gpt-5`, `gpt-4.1`, `gpt-4o` do not support `web_search_options`**
+:::
+
+:::tip The `web_search_options` parameter is optional
+Search models (like `gpt-4o-search-preview`) **automatically search the web** even without the `web_search_options` parameter.
+
+Use `web_search_options` when you need to:
+- Adjust `search_context_size` (`"low"`, `"medium"`, `"high"`)
+- Specify `user_location` for localized results
+:::
 
 :::info
 **Anthropic Web Search Models**: Claude models that support web search: `claude-3-5-sonnet-latest`, `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-latest`, `claude-3-5-haiku-20241022`, `claude-3-7-sonnet-20250219`

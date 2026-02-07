@@ -1,0 +1,21 @@
+model_list:
+  - model_name: grok-voice-agent
+    litellm_params:
+      model: xai/grok-2-vision-1212
+      api_key: os.environ/XAI_API_KEY
+    model_info:
+      mode: realtime
+
+  - model_name: openai-voice-agent
+    litellm_params:
+      model: gpt-4o-realtime-preview
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
+
+litellm_settings:
+  drop_params: True
+  telemetry: False
+
+general_settings:
+  master_key: sk-1234  # Change this to a secure key

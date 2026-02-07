@@ -251,6 +251,43 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
             ) : null;
           }}
         </Form.Item>
+
+        <Form.Item
+          noStyle
+          shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
+        >
+          {({ getFieldValue }) => {
+            const provider = getFieldValue("sso_provider");
+            return provider === "okta" || provider === "generic" ? (
+              <Form.Item label="Use Team Mappings" name="use_team_mappings" valuePropName="checked">
+                <Checkbox />
+              </Form.Item>
+            ) : null;
+          }}
+        </Form.Item>
+
+        <Form.Item
+          noStyle
+          shouldUpdate={(prevValues, currentValues) =>
+            prevValues.use_team_mappings !== currentValues.use_team_mappings ||
+            prevValues.sso_provider !== currentValues.sso_provider
+          }
+        >
+          {({ getFieldValue }) => {
+            const useTeamMappings = getFieldValue("use_team_mappings");
+            const provider = getFieldValue("sso_provider");
+            const supportsTeamMappings = provider === "okta" || provider === "generic";
+            return useTeamMappings && supportsTeamMappings ? (
+              <Form.Item
+                label="Team IDs JWT Field"
+                name="team_ids_jwt_field"
+                rules={[{ required: true, message: "Please enter the team IDs JWT field" }]}
+              >
+                <TextInput />
+              </Form.Item>
+            ) : null;
+          }}
+        </Form.Item>
       </Form>
     </div>
   );

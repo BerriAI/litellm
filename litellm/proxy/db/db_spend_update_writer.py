@@ -1187,119 +1187,130 @@ class DBSpendUpdateWriter:
                         )
                         break
 
-                    async with prisma_client.db.batch_() as batcher:
-                        for _, transaction in transactions_to_process.items():
-                            entity_id = transaction.get(entity_id_field)
+                    try:
+                        async with prisma_client.db.batch_() as batcher:
+                            for _, transaction in transactions_to_process.items():
+                                entity_id = transaction.get(entity_id_field)
 
-                            # Construct the where clause dynamically
-                            where_clause = {
-                                unique_constraint_name: {
+                                # Construct the where clause dynamically
+                                where_clause = {
+                                    unique_constraint_name: {
+                                        entity_id_field: entity_id,
+                                        "date": transaction["date"],
+                                        "api_key": transaction["api_key"],
+                                        "model": transaction["model"],
+                                        "custom_llm_provider": transaction.get(
+                                            "custom_llm_provider"
+                                        )
+                                        or "",
+                                        "mcp_namespaced_tool_name": transaction.get(
+                                            "mcp_namespaced_tool_name"
+                                        )
+                                        or "",
+                                        "endpoint": transaction.get("endpoint") or "",
+                                    }
+                                }
+
+                                # Get the table dynamically
+                                table = getattr(batcher, table_name)
+
+                                # Common data structure for both create and update
+                                common_data = {
                                     entity_id_field: entity_id,
                                     "date": transaction["date"],
                                     "api_key": transaction["api_key"],
-                                    "model": transaction["model"],
-                                    "custom_llm_provider": transaction.get(
-                                        "custom_llm_provider"
-                                    )
-                                    or "",
+                                    "model": transaction.get("model"),
+                                    "model_group": transaction.get("model_group"),
                                     "mcp_namespaced_tool_name": transaction.get(
                                         "mcp_namespaced_tool_name"
                                     )
                                     or "",
+                                    "custom_llm_provider": transaction.get(
+                                        "custom_llm_provider"
+                                    ),
                                     "endpoint": transaction.get("endpoint") or "",
+                                    "prompt_tokens": transaction["prompt_tokens"],
+                                    "completion_tokens": transaction["completion_tokens"],
+                                    "spend": transaction["spend"],
+                                    "api_requests": transaction["api_requests"],
+                                    "successful_requests": transaction[
+                                        "successful_requests"
+                                    ],
+                                    "failed_requests": transaction["failed_requests"],
                                 }
-                            }
 
-                            # Get the table dynamically
-                            table = getattr(batcher, table_name)
-
-                            # Common data structure for both create and update
-                            common_data = {
-                                entity_id_field: entity_id,
-                                "date": transaction["date"],
-                                "api_key": transaction["api_key"],
-                                "model": transaction.get("model"),
-                                "model_group": transaction.get("model_group"),
-                                "mcp_namespaced_tool_name": transaction.get(
-                                    "mcp_namespaced_tool_name"
-                                )
-                                or "",
-                                "custom_llm_provider": transaction.get(
-                                    "custom_llm_provider"
-                                ),
-                                "endpoint": transaction.get("endpoint"),
-                                "prompt_tokens": transaction["prompt_tokens"],
-                                "completion_tokens": transaction["completion_tokens"],
-                                "spend": transaction["spend"],
-                                "api_requests": transaction["api_requests"],
-                                "successful_requests": transaction[
-                                    "successful_requests"
-                                ],
-                                "failed_requests": transaction["failed_requests"],
-                            }
-
-                            # Add cache-related fields if they exist
-                            if "cache_read_input_tokens" in transaction:
-                                common_data["cache_read_input_tokens"] = (
-                                    transaction.get("cache_read_input_tokens", 0)
-                                )
-                            if "cache_creation_input_tokens" in transaction:
-                                common_data["cache_creation_input_tokens"] = (
-                                    transaction.get("cache_creation_input_tokens", 0)
-                                )
-
-                            if entity_type == "tag" and "request_id" in transaction:
-                                common_data["request_id"] = transaction.get(
-                                    "request_id"
-                                )
-
-                            # Create update data structure
-                            update_data = {
-                                "prompt_tokens": {
-                                    "increment": transaction["prompt_tokens"]
-                                },
-                                "completion_tokens": {
-                                    "increment": transaction["completion_tokens"]
-                                },
-                                "spend": {"increment": transaction["spend"]},
-                                "api_requests": {
-                                    "increment": transaction["api_requests"]
-                                },
-                                "successful_requests": {
-                                    "increment": transaction["successful_requests"]
-                                },
-                                "failed_requests": {
-                                    "increment": transaction["failed_requests"]
-                                },
-                            }
-
-                            # Add cache-related fields to update if they exist
-                            if "cache_read_input_tokens" in transaction:
-                                update_data["cache_read_input_tokens"] = {
-                                    "increment": transaction.get(
-                                        "cache_read_input_tokens", 0
+                                # Add cache-related fields if they exist
+                                if "cache_read_input_tokens" in transaction:
+                                    common_data["cache_read_input_tokens"] = (
+                                        transaction.get("cache_read_input_tokens", 0)
                                     )
-                                }
-                            if "cache_creation_input_tokens" in transaction:
-                                update_data["cache_creation_input_tokens"] = {
-                                    "increment": transaction.get(
-                                        "cache_creation_input_tokens", 0
+                                if "cache_creation_input_tokens" in transaction:
+                                    common_data["cache_creation_input_tokens"] = (
+                                        transaction.get("cache_creation_input_tokens", 0)
                                     )
+
+                                if entity_type == "tag" and "request_id" in transaction:
+                                    common_data["request_id"] = transaction.get(
+                                        "request_id"
+                                    )
+
+                                # Create update data structure
+                                update_data = {
+                                    "prompt_tokens": {
+                                        "increment": transaction["prompt_tokens"]
+                                    },
+                                    "completion_tokens": {
+                                        "increment": transaction["completion_tokens"]
+                                    },
+                                    "spend": {"increment": transaction["spend"]},
+                                    "api_requests": {
+                                        "increment": transaction["api_requests"]
+                                    },
+                                    "successful_requests": {
+                                        "increment": transaction["successful_requests"]
+                                    },
+                                    "failed_requests": {
+                                        "increment": transaction["failed_requests"]
+                                    },
                                 }
 
-                            if entity_type == "tag" and "request_id" in transaction:
-                                update_data["request_id"] = transaction.get("request_id")
+                                # Add cache-related fields to update if they exist
+                                if "cache_read_input_tokens" in transaction:
+                                    update_data["cache_read_input_tokens"] = {
+                                        "increment": transaction.get(
+                                            "cache_read_input_tokens", 0
+                                        )
+                                    }
+                                if "cache_creation_input_tokens" in transaction:
+                                    update_data["cache_creation_input_tokens"] = {
+                                        "increment": transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        )
+                                    }
 
-                            # Add endpoint to update_data so existing rows get their endpoint field updated
-                            update_data["endpoint"] = transaction.get("endpoint") or ""
+                                if entity_type == "tag" and "request_id" in transaction:
+                                    update_data["request_id"] = transaction.get("request_id")
 
-                            table.upsert(
-                                where=where_clause,
-                                data={
-                                    "create": common_data,
-                                    "update": update_data,
-                                },
-                            )
+                                # Add endpoint to update_data so existing rows get their endpoint field updated
+                                update_data["endpoint"] = transaction.get("endpoint") or ""
+
+                                table.upsert(
+                                    where=where_clause,
+                                    data={
+                                        "create": common_data,
+                                        "update": update_data,
+                                    },
+                                )
+                    except Exception as batch_error:
+                        # Log detailed error information for debugging batch upsert failures
+                        # This helps diagnose issues like unique constraint violations
+                        verbose_proxy_logger.exception(
+                            f"Daily {entity_type} spend batch upsert failed. "
+                            f"Table: {table_name}, Constraint: {unique_constraint_name}, "
+                            f"Batch size: {len(transactions_to_process)}, "
+                            f"Error: {str(batch_error)}"
+                        )
+                        raise
 
                     verbose_proxy_logger.debug(
                         f"Processed {len(transactions_to_process)} daily {entity_type} transactions in {time.time() - start_time:.2f}s"

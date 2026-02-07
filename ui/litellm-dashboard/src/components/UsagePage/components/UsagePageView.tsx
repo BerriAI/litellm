@@ -6,28 +6,22 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
+import { InfoCircleOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
   Col,
   DateRangePickerValue,
-  DonutChart,
   Grid,
   Tab,
   TabGroup,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
   TabList,
   TabPanel,
   TabPanels,
   Text,
-  Title,
+  Title
 } from "@tremor/react";
-import { Alert, Segmented } from "antd";
+import { Alert, Segmented, Tooltip } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
@@ -42,7 +36,6 @@ import CloudZeroExportModal from "../../cloudzero_export_modal";
 import EntityUsageExportModal from "../../EntityUsageExport";
 import { Team } from "../../key_team_helpers/key_list";
 import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
-import { getProviderLogoAndName } from "../../provider_info_helpers";
 import AdvancedDatePicker from "../../shared/advanced_date_picker";
 import { ChartLoader } from "../../shared/chart_loader";
 import { Tag } from "../../tag_management/types";
@@ -52,6 +45,7 @@ import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
+import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
@@ -509,7 +503,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </Text>
                           </Card>
                           <Card>
-                            <Title>Failed Requests</Title>
+                            <div className="flex items-center gap-2">
+                              <Title>Failed Requests</Title>
+                              <Tooltip title="Includes requests that failed to route to a provider, tool usage failures, and other request errors where the provider cannot be determined.">
+                                <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+                              </Tooltip>
+                            </div>
                             <Text className="text-2xl font-bold mt-2 text-red-600">
                               {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
                             </Text>
@@ -669,79 +668,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
                     {/* Spend by Provider */}
                     <Col numColSpan={2}>
-                      <Card className="h-full">
-                        <div className="flex justify-between items-center mb-4">
-                          <Title>Spend by Provider</Title>
-                        </div>
-                        {loading ? (
-                          <ChartLoader isDateChanging={isDateChanging} />
-                        ) : (
-                          <Grid numItems={2}>
-                            <Col numColSpan={1}>
-                              <DonutChart
-                                className="mt-4 h-40"
-                                data={getProviderSpend()}
-                                index="provider"
-                                category="spend"
-                                valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                                colors={["cyan"]}
-                              />
-                            </Col>
-                            <Col numColSpan={1}>
-                              <Table>
-                                <TableHead>
-                                  <TableRow>
-                                    <TableHeaderCell>Provider</TableHeaderCell>
-                                    <TableHeaderCell>Spend</TableHeaderCell>
-                                    <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                                    <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                                    <TableHeaderCell>Tokens</TableHeaderCell>
-                                  </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                  {getProviderSpend()
-                                    .filter((provider) => provider.spend > 0)
-                                    .map((provider) => (
-                                      <TableRow key={provider.provider}>
-                                        <TableCell>
-                                          <div className="flex items-center space-x-2">
-                                            {provider.provider && (
-                                              <img
-                                                src={getProviderLogoAndName(provider.provider).logo}
-                                                alt={`${provider.provider} logo`}
-                                                className="w-4 h-4"
-                                                onError={(e) => {
-                                                  const target = e.target as HTMLImageElement;
-                                                  const parent = target.parentElement;
-                                                  if (parent) {
-                                                    const fallbackDiv = document.createElement("div");
-                                                    fallbackDiv.className =
-                                                      "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                                    fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
-                                                    parent.replaceChild(fallbackDiv, target);
-                                                  }
-                                                }}
-                                              />
-                                            )}
-                                            <span>{provider.provider}</span>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
-                                        <TableCell className="text-green-600">
-                                          {provider.successful_requests.toLocaleString()}
-                                        </TableCell>
-                                        <TableCell className="text-red-600">
-                                          {provider.failed_requests.toLocaleString()}
-                                        </TableCell>
-                                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                                      </TableRow>
-                                    ))}
-                                </TableBody>
-                              </Table>
-                            </Col>
-                          </Grid>
-                        )}
-                      </Card>
+                      <SpendByProvider
+                        loading={loading}
+                        isDateChanging={isDateChanging}
+                        providerSpend={getProviderSpend()}
+                      />
                     </Col>
 
                     {/* Usage Metrics */}

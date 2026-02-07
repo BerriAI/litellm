@@ -88,7 +88,6 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
-    filter_deployments_by_access_groups,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -3670,7 +3669,7 @@ class Router:
             )
             raise e
 
-    async def _acreate_file(
+    async def _acreate_file( # noqa: PLR0915
         self,
         model: str,
         **kwargs,
@@ -3731,7 +3730,8 @@ class Router:
                     )
 
                     kwargs_copy["file"] = file
-
+                if "gcs_bucket_name" in data:  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
+                    kwargs_copy.setdefault("litellm_metadata", {})["gcs_bucket_name"] = data["gcs_bucket_name"]
                 response = litellm.acreate_file(
                     **{
                         **data,
@@ -4893,6 +4893,10 @@ class Router:
         content_policy_fallbacks = kwargs.pop(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
+        # Support per-request model_group_retry_policy override (from key/team settings)
+        model_group_retry_policy = kwargs.pop(
+            "model_group_retry_policy", self.model_group_retry_policy
+        )
         model_group: Optional[str] = kwargs.get("model")
         num_retries = kwargs.pop("num_retries")
 
@@ -4941,7 +4945,7 @@ class Router:
             _retry_policy_applies = False
             if (
                 self.retry_policy is not None
-                or self.model_group_retry_policy is not None
+                or model_group_retry_policy is not None
             ):
                 # get num_retries from retry policy
                 # Use the model_group captured at the start of the function, or get it from metadata
@@ -4949,9 +4953,12 @@ class Router:
                 _model_group_for_retry_policy = (
                     model_group or _metadata.get("model_group") or kwargs.get("model")
                 )
-                _retry_policy_retries = self.get_num_retries_from_retry_policy(
+                # Use per-request model_group_retry_policy if provided, otherwise use self
+                _retry_policy_retries = _get_num_retries_from_retry_policy(
                     exception=original_exception,
                     model_group=_model_group_for_retry_policy,
+                    model_group_retry_policy=model_group_retry_policy,
+                    retry_policy=self.retry_policy,
                 )
                 if _retry_policy_retries is not None:
                     num_retries = _retry_policy_retries
@@ -8088,16 +8095,9 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
-
-        # Filter by allowed access groups (GitHub issue #18333)
-        # This prevents cross-team load balancing when teams have models with same name in different access groups
-        healthy_deployments = filter_deployments_by_access_groups(
-            healthy_deployments=healthy_deployments,
-            request_kwargs=request_kwargs,
+        verbose_router_logger.debug(
+            f"healthy_deployments after web search filter: {healthy_deployments}"
         )
-
-        verbose_router_logger.debug(f"healthy_deployments after access group filter: {healthy_deployments}")
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments

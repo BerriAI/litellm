@@ -226,7 +226,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
   ];
 
   return (
-    <Modal title="Export Data" open={isOpen} onCancel={handleModalClose} footer={null} width={600} destroyOnClose>
+    <Modal title="Export Data" open={isOpen} onCancel={handleModalClose} footer={null} width={600} destroyOnHidden>
       <div className="space-y-4">
         {/* Export Type Selection */}
         <div>

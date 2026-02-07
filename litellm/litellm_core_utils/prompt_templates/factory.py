@@ -2190,6 +2190,16 @@ def anthropic_messages_pt(  # noqa: PLR0915
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
 
+            # Extract compaction_blocks from provider_specific_fields and add them first
+            _provider_specific_fields_raw = assistant_content_block.get(
+                "provider_specific_fields"
+            )
+            if isinstance(_provider_specific_fields_raw, dict):
+                _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
+                if _compaction_blocks and isinstance(_compaction_blocks, list):
+                    # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
+                    assistant_content.extend(_compaction_blocks)  # type: ignore
+
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             if (
                 thinking_blocks is not None
@@ -3987,10 +3997,12 @@ class BedrockConverseMessagesProcessor:
                                     assistant_parts=assistants_parts,
                                 )
                             elif element["type"] == "text":
-                                assistants_part = BedrockContentBlock(
-                                    text=element["text"]
-                                )
-                                assistants_parts.append(assistants_part)
+                                # Skip completely empty strings to avoid blank content blocks
+                                if element.get("text", "").strip():
+                                    assistants_part = BedrockContentBlock(
+                                        text=element["text"]
+                                    )
+                                    assistants_parts.append(assistants_part)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
@@ -4015,9 +4027,12 @@ class BedrockConverseMessagesProcessor:
                 elif _assistant_content is not None and isinstance(
                     _assistant_content, str
                 ):
-                    assistant_content.append(
-                        BedrockContentBlock(text=_assistant_content)
-                    )
+                    # Skip completely empty strings to avoid blank content blocks
+                    if _assistant_content.strip():
+                        assistant_content.append(
+                            BedrockContentBlock(text=_assistant_content)
+                        )
+                    # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
                     _cache_point_block = (
                         litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -4348,12 +4363,11 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 assistant_parts=assistants_parts,
                             )
                         elif element["type"] == "text":
-                            # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                            text_content = (
-                                element["text"] if element["text"].strip() else "."
-                            )
-                            assistants_part = BedrockContentBlock(text=text_content)
-                            assistants_parts.append(assistants_part)
+                            # AWS Bedrock doesn't allow empty or whitespace-only text content
+                            # Skip completely empty strings to avoid blank content blocks
+                            if element.get("text", "").strip():
+                                assistants_part = BedrockContentBlock(text=element["text"])
+                                assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -4376,9 +4390,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
-                # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                text_content = _assistant_content if _assistant_content.strip() else "."
-                assistant_content.append(BedrockContentBlock(text=text_content))
+                # Skip completely empty strings to avoid blank content blocks
+                if _assistant_content.strip():
+                    assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(

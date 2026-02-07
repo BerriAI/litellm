@@ -9,13 +9,14 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.proxy.utils import get_server_root_path
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 router = APIRouter(
     tags=["mcp"],
@@ -300,7 +301,10 @@ async def authorize(
     )
 
     lookup_name = mcp_server_name or client_id
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        lookup_name, client_ip=client_ip
+    )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await authorize_with_server(
@@ -342,7 +346,10 @@ async def token_endpoint(
     )
 
     lookup_name = mcp_server_name or client_id
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        lookup_name, client_ip=client_ip
+    )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await exchange_token_with_server(
@@ -425,7 +432,10 @@ def _build_oauth_protected_resource_response(
     request_base_url = get_request_base_url(request)
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
 
     # Build resource URL based on the pattern
     if mcp_server_name:
@@ -538,7 +548,10 @@ def _build_oauth_authorization_server_response(
 
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
 
     return {
         "issuer": request_base_url,  # point to your proxy
@@ -629,7 +642,10 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     if not mcp_server_name:
         return dummy_return
 
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        mcp_server_name, client_ip=client_ip
+    )
     if mcp_server is None:
         return dummy_return
     return await register_client_with_server(

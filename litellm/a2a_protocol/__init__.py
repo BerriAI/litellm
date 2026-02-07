@@ -39,6 +39,12 @@ Example usage (class-based):
 """
 
 from litellm.a2a_protocol.client import A2AClient
+from litellm.a2a_protocol.exceptions import (
+    A2AAgentCardError,
+    A2AConnectionError,
+    A2AError,
+    A2ALocalhostURLError,
+)
 from litellm.a2a_protocol.main import (
     aget_agent_card,
     asend_message,
@@ -49,11 +55,19 @@ from litellm.a2a_protocol.main import (
 from litellm.types.agents import LiteLLMSendMessageResponse
 
 __all__ = [
+    # Client
     "A2AClient",
+    # Functions
     "asend_message",
     "send_message",
     "asend_message_streaming",
     "aget_agent_card",
     "create_a2a_client",
+    # Response types
     "LiteLLMSendMessageResponse",
+    # Exceptions
+    "A2AError",
+    "A2AConnectionError",
+    "A2AAgentCardError",
+    "A2ALocalhostURLError",
 ]

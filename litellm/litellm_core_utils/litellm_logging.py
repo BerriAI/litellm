@@ -3917,18 +3917,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             return langfuse_logger  # type: ignore
         elif logging_integration == "langfuse_otel":
             from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
-            from litellm.integrations.opentelemetry import (
-                OpenTelemetry,
-                OpenTelemetryConfig,
-            )
-
-            langfuse_otel_config = LangfuseOtelLogger.get_langfuse_otel_config()
-
-            # The endpoint and headers are now set as environment variables by get_langfuse_otel_config()
-            otel_config = OpenTelemetryConfig(
-                exporter=langfuse_otel_config.protocol,
-                headers=langfuse_otel_config.otlp_auth_headers,
-            )
 
             for callback in _in_memory_loggers:
                 if (
@@ -3936,8 +3924,10 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     and callback.callback_name == "langfuse_otel"
                 ):
                     return callback  # type: ignore
+            # Allow LangfuseOtelLogger to initialize its own config safely
+            # This prevents startup crashes if LANGFUSE keys are not in env (e.g. for dynamic usage)
             _otel_logger = LangfuseOtelLogger(
-                config=otel_config, callback_name="langfuse_otel"
+                config=None, callback_name="langfuse_otel"
             )
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
