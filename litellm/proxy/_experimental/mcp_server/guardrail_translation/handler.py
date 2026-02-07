@@ -11,6 +11,8 @@ when you have a full MCP Tool from list_tools. Here we only have the call
 payload (name + arguments) so we just build the tool_call.
 """
 
+import json
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from mcp.types import Tool as MCPTool
@@ -19,6 +21,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.experimental_mcp_client.tools import transform_mcp_tool_to_openai_tool
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
@@ -93,7 +97,32 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
     ) -> Any:
-        verbose_proxy_logger.debug(
-            "MCP Guardrail: Output processing not implemented for MCP tools",
+
+        tool_call = ChatCompletionToolCallChunk(
+            id=str(uuid.uuid4()),
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="mcp_tool_call",
+                arguments=json.dumps(response.structuredContent),
+            ),
+            index=0,
         )
+        inputs: GenericGuardrailAPIInputs = GenericGuardrailAPIInputs(
+            tool_calls=[tool_call],
+        )
+        request_data: Dict[str, Any] = {"response": response}
+        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        if user_metadata:
+            request_data["litellm_metadata"] = user_metadata
+
+        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+
+        guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
+        if guardrailed_tool_calls and len(guardrailed_tool_calls) > 0:
+            return guardrailed_tool_calls[0]
         return response

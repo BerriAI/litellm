@@ -9,7 +9,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
@@ -137,7 +137,10 @@ if MCP_AVAILABLE:
         )
 
         # Check if the specified server_id is allowed
-        if server_id not in allowed_server_ids_set:
+        if (
+            server_id not in allowed_server_ids_set
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -197,9 +200,7 @@ if MCP_AVAILABLE:
             )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_server_id in allowed_server_ids_set:
-            server = global_mcp_server_manager.get_mcp_server_by_id(
-                allowed_server_id
-            )
+            server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
             if server is not None:
                 allowed_mcp_servers.append(server)
         return allowed_mcp_servers
@@ -276,9 +277,7 @@ if MCP_AVAILABLE:
                             "message": f"The key is not allowed to access server {server_id}",
                         },
                     )
-                server = global_mcp_server_manager.get_mcp_server_by_id(
-                    server_id
-                )
+                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
                 if server is None:
                     return {
                         "tools": [],
@@ -454,6 +453,12 @@ if MCP_AVAILABLE:
                 oauth2_headers=data.get("oauth2_headers"),
                 raw_headers=data.get("raw_headers"),
                 litellm_logging_obj=data.get("litellm_logging_obj"),
+            )
+
+            result = await proxy_logging_obj.post_call_success_hook(
+                data=data,
+                response=result,  # type: ignore
+                user_api_key_dict=user_api_key_dict,
             )
             return result
         except BlockedPiiEntityError as e:

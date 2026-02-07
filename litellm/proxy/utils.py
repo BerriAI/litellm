@@ -1375,11 +1375,11 @@ class ProxyLogging:
         # Note: user_info is a CallInfo that can represent user/team/org level info. For team budgets,
         # alert_emails is populated from team_object.metadata.soft_budget_alerting_emails (see auth_checks.py)
         is_soft_budget_with_alert_emails = (
-            type == "soft_budget" 
-            and user_info.alert_emails is not None 
+            type == "soft_budget"
+            and user_info.alert_emails is not None
             and len(user_info.alert_emails) > 0
         )
-        
+
         if self.alerting is None and not is_soft_budget_with_alert_emails:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
@@ -1395,10 +1395,9 @@ class ProxyLogging:
         # 1. "email" is in alerting config, OR
         # 2. It's a soft_budget alert with team-specific alert_emails (bypasses global alerting config)
         should_send_email = (
-            (self.alerting is not None and "email" in self.alerting) 
-            or is_soft_budget_with_alert_emails
-        )
-        
+            self.alerting is not None and "email" in self.alerting
+        ) or is_soft_budget_with_alert_emails
+
         if should_send_email and self.email_logging_instance is not None:
             await self.email_logging_instance.budget_alerts(
                 type=type,

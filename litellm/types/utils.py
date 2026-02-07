@@ -775,6 +775,7 @@ API_ROUTE_TO_CALL_TYPES = {
     ],
     # MCP (Model Context Protocol)
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
+    "/mcp-rest/tools/call": [CallTypes.call_mcp_tool],
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
@@ -2139,7 +2140,14 @@ class ImageObject(OpenAIImage):
     revised_prompt: Optional[str] = None
     provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    def __init__(self, b64_json=None, url=None, revised_prompt=None, provider_specific_fields=None, **kwargs):
+    def __init__(
+        self,
+        b64_json=None,
+        url=None,
+        revised_prompt=None,
+        provider_specific_fields=None,
+        **kwargs,
+    ):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
         if provider_specific_fields:
             self.provider_specific_fields = provider_specific_fields
@@ -2641,7 +2649,9 @@ class CostBreakdown(TypedDict, total=False):
     )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    additional_costs: Dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
+    additional_costs: Dict[
+        str, float
+    ]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
     discount_amount: float  # Discount amount in USD (optional)
