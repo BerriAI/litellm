@@ -85,7 +85,7 @@ def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
 
 ##### Image Generation #######################
 @client
-async def aimage_generation(*args, **kwargs) -> ImageResponse:
+async def aimage_generation(*args, **kwargs):
     """
     Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
 
@@ -115,6 +115,13 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
+
+        # Check if streaming is enabled
+        if kwargs.get("stream", False):
+            # For streaming, return the stream object directly
+            if asyncio.iscoroutine(init_response):
+                return await init_response  # type: ignore
+            return init_response
 
         response: Optional[ImageResponse] = None
         if isinstance(init_response, dict):
@@ -159,6 +166,8 @@ def image_generation(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     custom_llm_provider=None,
+    stream: Optional[bool] = False,
+    partial_images: Optional[bool] = None,
     *,
     aimg_generation: Literal[True],
     **kwargs,
@@ -183,6 +192,8 @@ def image_generation(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     custom_llm_provider=None,
+    stream: Optional[bool] = False,
+    partial_images: Optional[bool] = None,
     *,
     aimg_generation: Literal[False] = False,
     **kwargs,
@@ -207,6 +218,8 @@ def image_generation(  # noqa: PLR0915
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     custom_llm_provider=None,
+    stream: Optional[bool] = False,
+    partial_images: Optional[bool] = None,
     **kwargs,
 ) -> Union[
     ImageResponse,
@@ -262,6 +275,8 @@ def image_generation(  # noqa: PLR0915
             "quality",
             "size",
             "style",
+            "stream",
+            "partial_images",
         ]
         litellm_params = all_litellm_params
         default_params = openai_params + litellm_params
@@ -426,6 +441,7 @@ def image_generation(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 client=client,
+                stream=stream,
             )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
@@ -471,7 +487,7 @@ def image_generation(  # noqa: PLR0915
         ):
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Optional[str] = kwargs.get("organization", None)
-            model_response = openai_chat_completions.image_generation(
+            response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
@@ -483,7 +499,15 @@ def image_generation(  # noqa: PLR0915
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
+                stream=stream,
+                partial_images=partial_images
             )
+            
+            # If streaming is enabled, return the stream directly
+            if stream:
+                return response
+            
+            model_response = response
         elif custom_llm_provider == "bedrock":
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
@@ -755,6 +779,8 @@ def image_edit(  # noqa: PLR0915
                 "size",
                 "style",
                 "async_call",
+                "stream",
+                "partial_images",
             ]
         litellm_params_list = all_litellm_params
         default_params = openai_params + litellm_params_list
@@ -912,6 +938,7 @@ def image_edit(  # noqa: PLR0915
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            stream=image_edit_request_params.get("stream", False),
         )
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
@@ -928,6 +955,7 @@ def image_edit(  # noqa: PLR0915
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            stream=image_edit_request_params.get("stream", False),
         )
 
     except Exception as e:
