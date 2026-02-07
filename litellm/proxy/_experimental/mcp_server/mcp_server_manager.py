@@ -2290,7 +2290,10 @@ class MCPServerManager:
         """
         Get the MCP Server from the server name.
 
-        Matches against alias (highest priority), server_name, or name fields.
+        Uses priority-based matching to avoid collisions:
+        1. First pass: exact alias match (highest priority)
+        2. Second pass: exact server_name match
+        3. Third pass: exact name match (lowest priority)
 
         Args:
             server_name: The server name to look up.
@@ -2298,16 +2301,28 @@ class MCPServerManager:
                        non-public servers are hidden from external IPs.
         """
         registry = self.get_registry()
+        
+        # Pass 1: Match by alias (highest priority)
         for server in registry.values():
-            # Match against alias, server_name, or name
-            if (
-                server.alias == server_name
-                or server.server_name == server_name
-                or server.name == server_name
-            ):
+            if server.alias == server_name:
                 if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
+        
+        # Pass 2: Match by server_name
+        for server in registry.values():
+            if server.server_name == server_name:
+                if not self._is_server_accessible_from_ip(server, client_ip):
+                    return None
+                return server
+        
+        # Pass 3: Match by name (lowest priority)
+        for server in registry.values():
+            if server.name == server_name:
+                if not self._is_server_accessible_from_ip(server, client_ip):
+                    return None
+                return server
+        
         return None
 
     def get_filtered_registry(
