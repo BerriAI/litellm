@@ -63,19 +63,15 @@ def filter_deployments_by_id(
     return filtered_deployments
 
 
-async def run_with_timeout(task, timeout):
+async def run_with_timeout(coro, timeout):
+    task = asyncio.create_task(coro)
     try:
         return await asyncio.wait_for(task, timeout)
     except asyncio.TimeoutError:
         task.cancel()
-        # Only cancel child tasks of the current task
-        current_task = asyncio.current_task()
-        for t in asyncio.all_tasks():
-            if t != current_task:
-                t.cancel()
         try:
-            await asyncio.wait_for(task, 0.1)  # Give 100ms for cleanup
-        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            await task
+        except asyncio.CancelledError:
             pass
         return {"error": "Timeout exceeded"}
 
