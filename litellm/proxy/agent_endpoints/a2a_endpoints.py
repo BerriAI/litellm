@@ -323,8 +323,18 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
+
+            response = await proxy_logging_obj.post_call_success_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=data,
+                response=response,
+            )
             return JSONResponse(
-                content=response.model_dump(mode="json", exclude_none=True)
+                content=(
+                    response.model_dump(mode="json", exclude_none=True)  # type: ignore
+                    if hasattr(response, "model_dump")
+                    else response
+                )
             )
 
         elif method == "message/stream":
