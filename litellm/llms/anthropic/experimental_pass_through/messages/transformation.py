@@ -2,6 +2,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -17,7 +20,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
-from ...common_utils import AnthropicError, AnthropicModelInfo
+from ...common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    optionally_handle_anthropic_oauth,
+)
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -38,6 +45,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tool_choice",
             "thinking",
             "context_management",
+            "output_format",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
@@ -68,8 +76,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     ) -> Tuple[dict, Optional[str]]:
         import os
 
+        # Check for Anthropic OAuth token in Authorization header
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         if api_key is None:
             api_key = os.getenv("ANTHROPIC_API_KEY")
+
         if "x-api-key" not in headers and api_key:
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
@@ -80,6 +91,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+        )
+
+        headers = update_headers_with_filtered_beta(
+            headers=headers,
+            provider="anthropic",
         )
 
         return headers, api_base
@@ -162,27 +178,51 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
-        
+
         Handles:
         - context_management: adds 'context-management-2025-06-27'
         - tool_search: adds provider-specific tool search header
-        
+        - output_format: adds 'structured-outputs-2025-11-13'
+
         Args:
             headers: Request headers dict
-            optional_params: Optional parameters including tools, context_management
+            optional_params: Optional parameters including tools, context_management, output_format
             custom_llm_provider: Provider name for looking up correct tool search header
         """
         beta_values: set = set()
-        
+
         # Get existing beta headers if any
         existing_beta = headers.get("anthropic-beta")
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
-        
+
         # Check for context management
-        if optional_params.get("context_management") is not None:
-            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
-        
+        context_management_param = optional_params.get("context_management")
+        if context_management_param is not None:
+            # Check edits array for compact_20260112 type
+            edits = context_management_param.get("edits", [])
+            has_compact = False
+            has_other = False
+            
+            for edit in edits:
+                edit_type = edit.get("type", "")
+                if edit_type == "compact_20260112":
+                    has_compact = True
+                else:
+                    has_other = True
+            
+            # Add compact header if any compact edits exist
+            if has_compact:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+            
+            # Add context management header if any other edits exist
+            if has_other:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+
+        # Check for structured outputs
+        if optional_params.get("output_format") is not None:
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value)
+
         # Check for tool search tools
         tools = optional_params.get("tools")
         if tools:
@@ -191,8 +231,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 # Use provider-specific tool search header
                 tool_search_header = get_tool_search_beta_header(custom_llm_provider)
                 beta_values.add(tool_search_header)
-        
+
         if beta_values:
             headers["anthropic-beta"] = ",".join(sorted(beta_values))
-        
+
         return headers

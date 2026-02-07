@@ -35,7 +35,7 @@ export interface TeamListCallOptions {
   status?: string | null;
 }
 
-const teamListCall = async (
+export const teamListCall = async (
   accessToken: string,
   page: number,
   pageSize: number,
@@ -152,7 +152,7 @@ const deletedTeamListCall = async (
         .map(([key, value]) => [key, String(value)]),
     );
 
-    const url = `${baseUrl ? `${baseUrl}/team/list` : "/team/list"}?${params}`;
+    const url = `${baseUrl ? `${baseUrl}/v2/team/list` : "/v2/team/list"}?${params}`;
 
     const response = await fetch(url, {
       method: "GET",

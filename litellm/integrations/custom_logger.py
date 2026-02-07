@@ -143,6 +143,34 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_pre_api_call(self, model, messages, kwargs):
         pass
 
+    async def async_pre_request_hook(
+        self, model: str, messages: List, kwargs: Dict
+    ) -> Optional[Dict]:
+        """
+        Hook called before making the API request to allow modifying request parameters.
+
+        This is specifically designed for modifying the request before it's sent to the provider.
+        Unlike async_log_pre_api_call (which is for logging), this hook is meant for transformations.
+
+        Args:
+            model: The model name
+            messages: The messages list
+            kwargs: The request parameters (tools, stream, temperature, etc.)
+
+        Returns:
+            Optional[Dict]: Modified kwargs to use for the request, or None if no modifications
+
+        Example:
+            ```python
+            async def async_pre_request_hook(self, model, messages, kwargs):
+                # Convert native tools to standard format
+                if kwargs.get("tools"):
+                    kwargs["tools"] = convert_tools(kwargs["tools"])
+                return kwargs
+            ```
+        """
+        pass
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
@@ -342,6 +370,28 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         pass
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Called after an LLM API call (success or failure) to allow injecting custom HTTP response headers.
+
+        Args:
+            - data: dict - The request data.
+            - user_api_key_dict: UserAPIKeyAuth - The user API key dictionary.
+            - response: Any - The response object (None for failure cases).
+            - request_headers: Optional[Dict[str, str]] - The original request headers.
+
+        Returns:
+            - Optional[Dict[str, str]]: A dictionary of headers to inject into the HTTP response.
+                                        Return None to not inject any headers.
+        """
+        return None
 
     async def async_post_call_failure_hook(
         self,

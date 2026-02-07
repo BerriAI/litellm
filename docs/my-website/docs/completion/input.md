@@ -199,6 +199,8 @@ messages=[{"role": "user", "content": [
     - `include_usage` *boolean (optional)* - If set, an additional chunk will be streamed before the data: [DONE] message. The usage field on this chunk shows the token usage statistics for the entire request, and the choices field will always be an empty array. All other chunks will also include a usage field, but with a null value. 
 
 - `stop`: *string/ array/ null (optional)* - Up to 4 sequences where the API will stop generating further tokens.
+  
+  **Note**: OpenAI supports a maximum of 4 stop sequences. If you provide more than 4, LiteLLM will automatically truncate the list to the first 4 elements. To disable this automatic truncation, set `litellm.disable_stop_sequence_limit = True`.
 
 - `max_completion_tokens`: *integer (optional)* -  An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
 

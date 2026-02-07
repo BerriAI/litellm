@@ -108,7 +108,7 @@
     {
       "name": "ipv6",
       "display_name": "IP Address (IPv6)",
-      "pattern": "\\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\\b",
+      "pattern": "(?<![0-9a-fA-F:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|::|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6})(?![0-9a-fA-F:])",
       "category": "Network Patterns",
       "description": "Detects IPv6 addresses"
     },
@@ -122,9 +122,9 @@
     {
       "name": "passport_us",
       "display_name": "Passport (US)",
-      "pattern": "\\b[0-9]{9}\\b",
+      "pattern": "\\b([A-Z][0-9]{8}|[0-9]{9})\\b",
       "category": "PII Patterns",
-      "description": "US passport numbers (9 digits)"
+      "description": "US passport numbers (9 digits or alphanumeric letter + 8 digits)"
     },
     {
       "name": "passport_uk",
@@ -157,9 +157,9 @@
     {
       "name": "passport_canada",
       "display_name": "Passport (Canada)",
-      "pattern": "\\b[A-Z]{2}[0-9]{6}\\b",
+      "pattern": "\\b([A-Z]{2}[0-9]{6}|[A-Z][0-9]{6}[A-Z]{2})\\b",
       "category": "PII Patterns",
-      "description": "Canadian passport numbers (2 letters + 6 digits)"
+      "description": "Canadian passport numbers (old: 2 letters + 6 digits; new: 1 letter + 6 digits + 2 letters)"
     },
     {
       "name": "passport_india",

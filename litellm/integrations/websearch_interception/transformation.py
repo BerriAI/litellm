@@ -7,6 +7,7 @@ Transforms between Anthropic tool_use format and LiteLLM search format.
 from typing import Any, Dict, List, Tuple
 
 from litellm._logging import verbose_logger
+from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.llms.base_llm.search.transformation import SearchResponse
 
 
@@ -94,17 +95,21 @@ class WebSearchTransformation:
                 block_id = getattr(block, "id", None)
                 block_input = getattr(block, "input", {})
 
-            if block_type == "tool_use" and block_name == "WebSearch":
+            # Check for LiteLLM standard or legacy web search tools
+            # Handles: litellm_web_search, WebSearch, web_search
+            if block_type == "tool_use" and block_name in (
+                LITELLM_WEB_SEARCH_TOOL_NAME, "WebSearch", "web_search"
+            ):
                 # Convert to dict for easier handling
                 tool_call = {
                     "id": block_id,
                     "type": "tool_use",
-                    "name": "WebSearch",
+                    "name": block_name,  # Preserve original name
                     "input": block_input,
                 }
                 tool_calls.append(tool_call)
                 verbose_logger.debug(
-                    f"WebSearchInterception: Found WebSearch tool_use with id={tool_call['id']}"
+                    f"WebSearchInterception: Found {block_name} tool_use with id={tool_call['id']}"
                 )
 
         return len(tool_calls) > 0, tool_calls

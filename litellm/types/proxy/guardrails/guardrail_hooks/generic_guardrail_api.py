@@ -51,19 +51,20 @@ class GenericGuardrailAPIRequest(BaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]
-    litellm_call_id: Optional[str]  # the call id of the individual LLM call
+    litellm_call_id: Optional[str] = None  # the call id of the individual LLM call
     litellm_trace_id: Optional[
         str
-    ]  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
-    structured_messages: Optional[List[AllMessageValues]]
-    images: Optional[List[str]]
-    tools: Optional[List[ChatCompletionToolParam]]
-    texts: Optional[List[str]]
+    ] = None  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
+    structured_messages: Optional[List[AllMessageValues]] = None
+    images: Optional[List[str]] = None
+    tools: Optional[List[ChatCompletionToolParam]] = None
+    texts: Optional[List[str]] = None
     request_data: GenericGuardrailAPIMetadata
-    additional_provider_specific_params: Optional[Dict[str, Any]]
+    additional_provider_specific_params: Optional[Dict[str, Any]] = None
     tool_calls: Optional[
         Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]
-    ]
+    ] = None
+    model: Optional[str] = None  # the model being used for the LLM call
 
 
 class GenericGuardrailAPIResponse:

@@ -12,6 +12,8 @@ describe("processSSOSettingsPayload", () => {
         default_role: "proxy_admin",
         group_claim: "groups",
         use_role_mappings: false,
+        use_team_mappings: false,
+        team_ids_jwt_field: "teams",
         other_field: "value",
         another_field: 123,
       };
@@ -23,6 +25,7 @@ describe("processSSOSettingsPayload", () => {
         another_field: 123,
       });
       expect(result.role_mappings).toBeUndefined();
+      expect(result.team_mappings).toBeUndefined();
     });
 
     it("should return all fields except role mapping fields when use_role_mappings is not present", () => {
@@ -33,6 +36,8 @@ describe("processSSOSettingsPayload", () => {
         internal_viewer_teams: "viewer1",
         default_role: "proxy_admin",
         group_claim: "groups",
+        use_team_mappings: false,
+        team_ids_jwt_field: "teams",
         other_field: "value",
       };
 
@@ -42,6 +47,7 @@ describe("processSSOSettingsPayload", () => {
         other_field: "value",
       });
       expect(result.role_mappings).toBeUndefined();
+      expect(result.team_mappings).toBeUndefined();
     });
   });
 
@@ -253,6 +259,143 @@ describe("processSSOSettingsPayload", () => {
     });
   });
 
+  describe("without team mappings", () => {
+    it("should return all fields except team mapping fields when use_team_mappings is false", () => {
+      const formValues = {
+        use_team_mappings: false,
+        team_ids_jwt_field: "teams",
+        sso_provider: "okta",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result).toEqual({
+        sso_provider: "okta",
+        other_field: "value",
+      });
+      expect(result.team_mappings).toBeUndefined();
+    });
+
+    it("should return all fields except team mapping fields when use_team_mappings is not present", () => {
+      const formValues = {
+        team_ids_jwt_field: "teams",
+        sso_provider: "generic",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result).toEqual({
+        sso_provider: "generic",
+        other_field: "value",
+      });
+      expect(result.team_mappings).toBeUndefined();
+    });
+
+    it("should not include team mappings for unsupported providers even when use_team_mappings is true", () => {
+      const formValues = {
+        use_team_mappings: true,
+        team_ids_jwt_field: "teams",
+        sso_provider: "google",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result).toEqual({
+        sso_provider: "google",
+        other_field: "value",
+      });
+      expect(result.team_mappings).toBeUndefined();
+    });
+
+    it("should not include team mappings for microsoft provider even when use_team_mappings is true", () => {
+      const formValues = {
+        use_team_mappings: true,
+        team_ids_jwt_field: "teams",
+        sso_provider: "microsoft",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result).toEqual({
+        sso_provider: "microsoft",
+        other_field: "value",
+      });
+      expect(result.team_mappings).toBeUndefined();
+    });
+  });
+
+  describe("with team mappings enabled", () => {
+    it("should create team mappings for okta provider when use_team_mappings is true", () => {
+      const formValues = {
+        use_team_mappings: true,
+        team_ids_jwt_field: "teams",
+        sso_provider: "okta",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result.other_field).toBe("value");
+      expect(result.team_mappings).toEqual({
+        team_ids_jwt_field: "teams",
+      });
+    });
+
+    it("should create team mappings for generic provider when use_team_mappings is true", () => {
+      const formValues = {
+        use_team_mappings: true,
+        team_ids_jwt_field: "custom_teams",
+        sso_provider: "generic",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result.other_field).toBe("value");
+      expect(result.team_mappings).toEqual({
+        team_ids_jwt_field: "custom_teams",
+      });
+    });
+
+    it("should exclude team mapping fields from payload when team mappings are included", () => {
+      const formValues = {
+        use_team_mappings: true,
+        team_ids_jwt_field: "teams",
+        sso_provider: "okta",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result.use_team_mappings).toBeUndefined();
+      expect(result.team_ids_jwt_field).toBeUndefined();
+    });
+
+    it("should handle team mappings and role mappings together", () => {
+      const formValues = {
+        use_team_mappings: true,
+        team_ids_jwt_field: "teams",
+        use_role_mappings: true,
+        group_claim: "groups",
+        default_role: "internal_user",
+        sso_provider: "okta",
+        other_field: "value",
+      };
+
+      const result = processSSOSettingsPayload(formValues);
+
+      expect(result.team_mappings).toEqual({
+        team_ids_jwt_field: "teams",
+      });
+      expect(result.role_mappings).toBeDefined();
+      expect(result.role_mappings.group_claim).toBe("groups");
+    });
+  });
+
   describe("edge cases", () => {
     it("should handle empty form values", () => {
       const result = processSSOSettingsPayload({});
@@ -263,6 +406,7 @@ describe("processSSOSettingsPayload", () => {
     it("should preserve other fields in the payload", () => {
       const formValues = {
         use_role_mappings: false,
+        use_team_mappings: false,
         sso_provider: "google",
         client_id: "123",
         client_secret: "secret",

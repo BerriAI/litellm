@@ -3080,10 +3080,8 @@ class BaseLLMHTTPHandler:
             transformed_request, bytes
         ):
             # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
+            # Note: transformed_request can be bytes (for binary files like PDFs)
+            # or str (for text files like JSONL). httpx handles both correctly.
             # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
             if http_method == "PUT":
@@ -4418,6 +4416,41 @@ class BaseLLMHTTPHandler:
                     f"LiteLLM.AgenticHookError: Exception in agentic completion hooks: {str(e)}"
                 )
 
+        # Check if we need to convert response to fake stream
+        # This happens when:
+        # 1. Stream was originally True but converted to False for WebSearch interception
+        # 2. No agentic loop ran (LLM didn't use the tool)
+        # 3. We have a non-streaming response that needs to be converted to streaming
+        websearch_converted_stream = (
+            logging_obj.model_call_details.get("websearch_interception_converted_stream", False)
+            if logging_obj is not None
+            else False
+        )
+        
+        if websearch_converted_stream:
+            from typing import cast
+
+            from litellm._logging import verbose_logger
+            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                FakeAnthropicMessagesStreamIterator,
+            )
+            from litellm.types.llms.anthropic_messages.anthropic_response import (
+                AnthropicMessagesResponse,
+            )
+            
+            verbose_logger.debug(
+                "WebSearchInterception: No tool call made, converting non-streaming response to fake stream"
+            )
+            
+            # Convert the non-streaming response to a fake stream
+            # The response should be an AnthropicMessagesResponse (dict)
+            if isinstance(response, dict):
+                # Create a fake streaming iterator
+                fake_stream = FakeAnthropicMessagesStreamIterator(
+                    response=cast(AnthropicMessagesResponse, response)
+                )
+                return fake_stream
+        
         return None
 
     def _handle_error(
@@ -7000,17 +7033,31 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        (
-            url,
-            request_body,
-        ) = vector_store_provider_config.transform_search_vector_store_request(
-            vector_store_id=vector_store_id,
-            query=query,
-            vector_store_search_optional_params=vector_store_search_optional_params,
-            api_base=api_base,
-            litellm_logging_obj=logging_obj,
-            litellm_params=dict(litellm_params),
-        )
+        # Check if provider has async transform method
+        if hasattr(vector_store_provider_config, "atransform_search_vector_store_request"):
+            (
+                url,
+                request_body,
+            ) = await vector_store_provider_config.atransform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+            )
+        else:
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+            )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
         headers, signed_json_body = vector_store_provider_config.sign_request(

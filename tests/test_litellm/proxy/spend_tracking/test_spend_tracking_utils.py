@@ -23,6 +23,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_response_for_spend_logs_payload,
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
+    _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
 )
 from litellm.types.utils import (
@@ -910,4 +911,49 @@ def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_e
     # perform_redaction returns {"text": "redacted-by-litellm"}
     parsed_response = json.loads(response_result)
     assert parsed_response == {"text": "redacted-by-litellm"}
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_string(
+    mock_get_secret_bool,
+):
+    """
+    Test that _should_store_prompts_and_responses_in_spend_logs handles
+    case-insensitive string values for store_prompts_in_spend_logs in general_settings.
+    """
+    # Test case-insensitive string "true" variations
+    for true_value in ["true", "TRUE", "True", "TrUe"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": true_value}):
+            mock_get_secret_bool.return_value = False  # Ensure env var is False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True for '{true_value}', got {result}"
+    
+    # Test boolean True
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}):
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, f"Expected True for boolean True, got {result}"
+    
+    # Test that non-true values fall back to environment variable
+    for false_value in [False, None, "false", "FALSE", "False", "anything"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": false_value}):
+            # When env var is True, should return True
+            mock_get_secret_bool.return_value = True
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
+            
+            # When env var is False, should return False
+            mock_get_secret_bool.return_value = False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
+    
+    # Test when general_settings doesn't have the key at all
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        mock_get_secret_bool.return_value = True
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, "Expected True (from env var) when key missing, got False"
+        
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is False, "Expected False (from env var) when key missing, got True"
 

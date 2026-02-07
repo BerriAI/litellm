@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Tooltip, Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";
+import { Team } from "@/components/key_team_helpers/key_list";
 
 interface HealthCheckData {
   model_name: string;
@@ -42,6 +43,7 @@ export const healthCheckColumns = (
   showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
   showSuccessModal?: (modelName: string, response: any) => void,
   setSelectedModelId?: (modelId: string) => void,
+  teams?: Team[] | null,
 ): ColumnDef<HealthCheckData>[] => [
   {
     header: () => (
@@ -95,6 +97,31 @@ export const healthCheckColumns = (
         <div className="font-medium text-sm">
           <Tooltip title={displayName}>
             <div className="truncate max-w-[200px]">{displayName}</div>
+          </Tooltip>
+        </div>
+      );
+    },
+  },
+  {
+    header: "Team Alias",
+    accessorKey: "model_info.team_id",
+    enableSorting: true,
+    sortingFn: "alphanumeric",
+    cell: ({ row }) => {
+      const model = row.original;
+      const teamId = model.model_info?.team_id;
+
+      if (!teamId) {
+        return <span className="text-gray-400 text-sm">-</span>;
+      }
+
+      const team = teams?.find((t) => t.team_id === teamId);
+      const teamAlias = team?.team_alias || teamId;
+
+      return (
+        <div className="text-sm">
+          <Tooltip title={teamAlias}>
+            <div className="truncate max-w-[150px]">{teamAlias}</div>
           </Tooltip>
         </div>
       );
