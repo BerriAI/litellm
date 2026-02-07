@@ -535,7 +535,7 @@ def _calculate_input_cost(
         )
 
     ### CACHE WRITING COST - Now uses tiered pricing
-    if prompt_tokens_details["cache_creation_tokens"]:
+    if prompt_tokens_details["cache_creation_tokens"] or prompt_tokens_details["cache_creation_token_details"] is not None:
         prompt_cost += calculate_cache_writing_cost(
             cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
             cache_creation_token_details=prompt_tokens_details[
