@@ -30,7 +30,7 @@ def inference(message, history):
             yield partial_message
     except Exception as e:
         print("Exception encountered:", str(e))
-        yield f"An Error occured please 'Clear' the error and try your question again"
+        yield f"An Error occurred please 'Clear' the error and try your question again"
 ```
 
 ### Define Chat Interface

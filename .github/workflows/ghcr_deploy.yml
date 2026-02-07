@@ -5,8 +5,9 @@ on:
     inputs:
       tag:
         description: "The tag version you want to build"
+        required: true
       release_type:
-        description: "The release type you want to build. Can be 'latest', 'stable', 'dev'"
+        description: "The release type you want to build. Can be 'latest', 'stable', 'dev', 'rc'"
         type: string
         default: "latest"
       commit_hash:
@@ -21,10 +22,23 @@ env:
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
+  # print commit hash, tag, and release type
+  print:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Commit hash: ${{ github.event.inputs.commit_hash }}"
+          echo "Tag: ${{ github.event.inputs.tag }}"
+          echo "Release type: ${{ github.event.inputs.release_type }}"
   docker-hub-deploy:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
       -
         name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -41,33 +55,44 @@ jobs:
         name: Build and push
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
           tags: litellm/litellm:${{ github.event.inputs.tag || 'latest' }} 
       -
         name: Build and push litellm-database image
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
-          file: Dockerfile.database
+          file: ./docker/Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
       -
         name: Build and push litellm-spend-logs image
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
           file: ./litellm-js/spend-logs/Dockerfile
           tags: litellm/litellm-spend_logs:${{ github.event.inputs.tag || 'latest' }}
-      
+      -
+        name: Build and push litellm-non_root image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          file: ./docker/Dockerfile.non_root
+          tags: litellm/litellm-non_root:${{ github.event.inputs.tag || 'latest' }}
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
     permissions:
       contents: read
       packages: write
-      #
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
       # Uses the `docker/login-action` action to log in to the Container registry registry using the account and password that will publish the packages. Once published, the packages are scoped to the account defined here.
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -92,12 +117,60 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
         with:
-          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
+          context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: |
+            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-stable', env.REGISTRY) || '' }},
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm:{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
-          
+  
+  build-and-push-image-ee:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for EE Dockerfile
+        id: meta-ee
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-ee
+      # Configure multi platform Docker builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
+
+      - name: Build and push EE Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-ee:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-ee:main-stable', env.REGISTRY) || '' }}
+          labels: ${{ steps.meta-ee.outputs.labels }}
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+   
   build-and-push-image-database:
     runs-on: ubuntu-latest
     permissions:
@@ -106,6 +179,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -128,11 +203,58 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
-          file: Dockerfile.database
+          context: .
+          file: ./docker/Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
-          labels: ${{ steps.meta-database.outputs.labels }} 
+          tags: |
+            ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-database:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-database:main-stable', env.REGISTRY) || '' }}
+          labels: ${{ steps.meta-database.outputs.labels }}
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+            
+  build-and-push-image-non_root:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for non_root Dockerfile
+        id: meta-non_root
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-non_root
+      # Configure multi platform Docker builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
+
+      - name: Build and push non_root Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: ./docker/Dockerfile.non_root
+          push: true
+          tags: |
+            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-non_root:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-non_root:main-stable', env.REGISTRY) || '' }}
+          labels: ${{ steps.meta-non_root.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
   build-and-push-image-spend-logs:
@@ -143,6 +265,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -165,17 +289,25 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
+          context: .
           file: ./litellm-js/spend-logs/Dockerfile
           push: true
-          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
+          tags: |
+            ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-spend_logs:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-stable', env.REGISTRY) || '' }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:
+    if: github.event.inputs.release_type  != 'dev'
+    needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -187,37 +319,38 @@ jobs:
       - name: lowercase github.repository_owner
         run: |
           echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
-      - name: Get LiteLLM Latest Tag
-        id: current_app_tag
-        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
-
-      - name: Get last published chart version
-        id: current_version
+    
+      # Sync Helm chart version with LiteLLM release version (1-1 versioning)
+      # This allows users to easily map Helm chart versions to LiteLLM versions
+      # See: https://codefresh.io/docs/docs/ci-cd-guides/helm-best-practices/
+      - name: Calculate chart and app versions
+        id: chart_version
         shell: bash
         run: |
-          CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} 2>/dev/null || true)
-          if [ -z "${CHART_LIST}" ]; then
-            echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
-          else
-            printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
-          fi
-        env:
-          HELM_EXPERIMENTAL_OCI: '1'
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
 
-      # Automatically update the helm chart version one "patch" level
-      - name: Bump release version
-        id: bump_version
-        uses: christian-draeger/increment-semantic-version@1.1.0
-        with:
-          current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
-          version-fragment: 'bug'
+          # Chart version = LiteLLM version without 'v' prefix (Helm semver convention)
+          # v1.81.0 -> 1.81.0, v1.81.0.rc.1 -> 1.81.0.rc.1
+          CHART_VERSION="${INPUT_TAG#v}"
+
+          # Add suffix for 'latest' releases (rc already has suffix in tag)
+          if [ "$RELEASE_TYPE" = "latest" ]; then
+            CHART_VERSION="${CHART_VERSION}-latest"
+          fi
+
+          # App version = Docker tag (keeps 'v' prefix to match Docker image tags)
+          APP_VERSION="${INPUT_TAG}"
+
+          echo "version=${CHART_VERSION}" | tee -a $GITHUB_OUTPUT
+          echo "app_version=${APP_VERSION}" | tee -a $GITHUB_OUTPUT
 
       - uses: ./.github/actions/helm-oci-chart-releaser
         with:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
-          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
-          app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
+          tag: ${{ steps.chart_version.outputs.version }}
+          app_version: ${{ steps.chart_version.outputs.app_version }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}
           registry_username: ${{ github.actor }}
@@ -273,7 +406,8 @@ jobs:
                 repo: context.repo.repo,
                 release_id: process.env.RELEASE_ID,
               });
-              return response.data.body;
+              const formattedBody = JSON.stringify(response.data.body).slice(1, -1);
+              return formattedBody;
             } catch (error) {
               core.setFailed(error.message);
             }
@@ -286,14 +420,15 @@ jobs:
           RELEASE_NOTES: ${{ steps.release-notes.outputs.result }}
         run: |
           curl -H "Content-Type: application/json" -X POST -d '{
-            "content": "New LiteLLM release ${{ env.RELEASE_TAG }}",
+            "content": "New LiteLLM release '"${RELEASE_TAG}"'",
             "username": "Release Changelog",
             "avatar_url": "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png",
             "embeds": [
               {
-                "title": "Changelog for LiteLLM ${{ env.RELEASE_TAG }}",
-                "description": "${{ env.RELEASE_NOTES }}",
+                "title": "Changelog for LiteLLM '"${RELEASE_TAG}"'",
+                "description": "'"${RELEASE_NOTES}"'",
                 "color": 2105893
               }
             ]
           }' $WEBHOOK_URL
+

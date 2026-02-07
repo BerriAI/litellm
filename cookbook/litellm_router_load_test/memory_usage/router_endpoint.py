@@ -1,16 +1,11 @@
 from fastapi import FastAPI
 import uvicorn
-from memory_profiler import profile, memory_usage
+from memory_profiler import profile
 import os
-import traceback
-import asyncio
-import pytest
 import litellm
 from litellm import Router
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
 from dotenv import load_dotenv
-import uuid
+from litellm._uuid import uuid
 
 load_dotenv()
 

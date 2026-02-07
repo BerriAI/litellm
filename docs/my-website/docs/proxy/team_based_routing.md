@@ -1,4 +1,11 @@
-# 👥 Team-based Routing + Logging
+# [DEPRECATED] Team-based Routing
+
+:::info
+
+This is deprecated, please use [Tag Based Routing](./tag_routing.md) instead
+
+:::
+
 
 ## Routing
 Route calls to different model groups based on the team-id
@@ -71,35 +78,3 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 }'
 ```
 
-
-## Logging / Caching
-
-Turn on/off logging and caching for a specific team id. 
-
-**Example:**
-
-This config would send langfuse logs to 2 different langfuse projects, based on the team id 
-
-```yaml
-litellm_settings:
-  default_team_settings: 
-    - team_id: my-secret-project
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
-      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
-    - team_id: ishaans-secret-project
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
-      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
-```
-
-Now, when you [generate keys](./virtual_keys.md) for this team-id 
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{"team_id": "ishaans-secret-project"}'
-```
-
-All requests made with these keys will log data to their team-specific logging.

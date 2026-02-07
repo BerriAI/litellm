@@ -1,24 +1,45 @@
 #### What this does ####
 #    On success, logs events to Helicone
-import dotenv, os
-import requests
-import litellm
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import os
 import traceback
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.integrations.helicone_mock_client import (
+    should_use_helicone_mock,
+    create_mock_helicone_client,
+)
 
 
 class HeliconeLogger:
     # Class variables or attributes
-    helicone_model_list = ["gpt", "claude"]
+    helicone_model_list = [
+        "gpt",
+        "claude",
+        "command-r",
+        "command-r-plus",
+        "command-light",
+        "command-medium",
+        "command-medium-beta",
+        "command-xlarge-nightly",
+        "command-nightly",
+    ]
 
     def __init__(self):
         # Instance variables
+        self.is_mock_mode = should_use_helicone_mock()
+        if self.is_mock_mode:
+            create_mock_helicone_client()
+            verbose_logger.info("[HELICONE MOCK] Helicone logger initialized in mock mode")
+        
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
+        self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
+        if self.api_base.endswith("/"):
+            self.api_base = self.api_base[:-1]
 
     def claude_mapping(self, model, messages, response_obj):
-        from anthropic import HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT
 
         prompt = f"{HUMAN_PROMPT}"
         for message in messages:
@@ -30,24 +51,85 @@ class HeliconeLogger:
             else:
                 prompt += f"{HUMAN_PROMPT}{message['content']}"
         prompt += f"{AI_PROMPT}"
-        claude_provider_request = {"model": model, "prompt": prompt}
+
+        choice = response_obj["choices"][0]
+        message = choice["message"]
+
+        content = []
+        if "tool_calls" in message and message["tool_calls"]:
+            for tool_call in message["tool_calls"]:
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_call["id"],
+                        "name": tool_call["function"]["name"],
+                        "input": tool_call["function"]["arguments"],
+                    }
+                )
+        elif "content" in message and message["content"]:
+            content = [{"type": "text", "text": message["content"]}]
 
         claude_response_obj = {
-            "completion": response_obj["choices"][0]["message"]["content"],
+            "id": response_obj["id"],
+            "type": "message",
+            "role": "assistant",
             "model": model,
-            "stop_reason": "stop_sequence",
+            "content": content,
+            "stop_reason": choice["finish_reason"],
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": response_obj["usage"]["prompt_tokens"],
+                "output_tokens": response_obj["usage"]["completion_tokens"],
+            },
         }
 
-        return claude_provider_request, claude_response_obj
+        return claude_response_obj
+
+    @staticmethod
+    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
+        """
+        Adds metadata from proxy request headers to Helicone logging if keys start with "helicone_"
+        and overwrites litellm_params.metadata if already included.
+
+        For example if you want to add custom property to your request, send
+        `headers: { ..., helicone-property-something: 1234 }` via proxy request.
+        """
+        if litellm_params is None:
+            return metadata
+
+        if litellm_params.get("proxy_server_request") is None:
+            return metadata
+
+        if metadata is None:
+            metadata = {}
+
+        proxy_headers = (
+            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
+        )
+
+        for header_key in proxy_headers:
+            if header_key.startswith("helicone_"):
+                metadata[header_key] = proxy_headers.get(header_key)
+        
+        # Remove OpenTelemetry span from metadata as it's not JSON serializable
+        # The span is used internally for tracing but shouldn't be logged to external services
+        if "litellm_parent_otel_span" in metadata:
+            metadata.pop("litellm_parent_otel_span")
+
+        return metadata
 
     def log_success(
-        self, model, messages, response_obj, start_time, end_time, print_verbose
+        self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs
     ):
         # Method definition
         try:
             print_verbose(
                 f"Helicone Logging - Enters logging function for model {model}"
             )
+            litellm_params = kwargs.get("litellm_params", {})
+            kwargs.get("litellm_call_id", None)
+            metadata = litellm_params.get("metadata", {}) or {}
+            metadata = self.add_metadata_from_header(litellm_params, metadata)
             model = (
                 model
                 if any(
@@ -63,7 +145,7 @@ class HeliconeLogger:
                 response_obj = response_obj.json()
 
             if "claude" in model:
-                provider_request, response_obj = self.claude_mapping(
+                response_obj = self.claude_mapping(
                     model=model, messages=messages, response_obj=response_obj
                 )
 
@@ -74,7 +156,11 @@ class HeliconeLogger:
             }
 
             # Code to be executed
-            url = "https://api.hconeai.com/oai/v1/log"
+            provider_url = self.provider_url
+            url = f"{self.api_base}/oai/v1/log"
+            if "claude" in model:
+                url = f"{self.api_base}/anthropic/v1/log"
+                provider_url = "https://api.anthropic.com/v1/messages"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
@@ -87,11 +173,13 @@ class HeliconeLogger:
             end_time_milliseconds = int(
                 (end_time.timestamp() - end_time_seconds) * 1000
             )
+            meta = {"Helicone-Auth": f"Bearer {self.key}"}
+            meta.update(metadata)
             data = {
                 "providerRequest": {
-                    "url": self.provider_url,
+                    "url": provider_url,
                     "json": provider_request,
-                    "meta": {"Helicone-Auth": f"Bearer {self.key}"},
+                    "meta": meta,
                 },
                 "providerResponse": providerResponse,
                 "timing": {
@@ -105,15 +193,17 @@ class HeliconeLogger:
                     },
                 },  # {"seconds": .., "milliseconds": ..}
             }
-            response = requests.post(url, headers=headers, json=data)
+            response = litellm.module_level_client.post(url, headers=headers, json=data)
             if response.status_code == 200:
-                print_verbose("Helicone Logging - Success!")
+                if self.is_mock_mode:
+                    print_verbose("[HELICONE MOCK] Helicone Logging - Successfully mocked!")
+                else:
+                    print_verbose("Helicone Logging - Success!")
             else:
                 print_verbose(
                     f"Helicone Logging - Error Request was not successful. Status Code: {response.status_code}"
                 )
                 print_verbose(f"Helicone Logging - Error {response.text}")
-        except:
-            # traceback.print_exc()
+        except Exception:
             print_verbose(f"Helicone Logging Error - {traceback.format_exc()}")
             pass

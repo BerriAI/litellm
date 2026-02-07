@@ -117,7 +117,7 @@ response = completion("command-nightly", messages)
 """
 
 
-# qustions/logs you want to run the LLM on
+# questions/logs you want to run the LLM on
 questions = [
     "what is litellm?",
     "why should I use LiteLLM",

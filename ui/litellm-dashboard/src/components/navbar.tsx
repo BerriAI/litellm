@@ -1,108 +1,158 @@
-"use client";
-
-import Link from "next/link";
-import Image from "next/image";
-import React, { useState } from "react";
-import type { MenuProps } from 'antd';
-import { Dropdown, Space } from 'antd';
-import { useSearchParams } from "next/navigation";
+import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
 import {
-  Button,
-  Text,
-  Metric,
-  Title,
-  TextInput,
-  Grid,
-  Col,
-  Card,
-} from "@tremor/react";
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  MoonOutlined,
+  SunOutlined,
+} from "@ant-design/icons";
+import { Switch, Tag } from "antd";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
+import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
+import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 
-// Define the props type
 interface NavbarProps {
   userID: string | null;
-  userRole: string | null;
   userEmail: string | null;
-  showSSOBanner: boolean;
+  userRole: string | null;
+  premiumUser: boolean;
+  proxySettings: any;
+  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
+  accessToken: string | null;
+  isPublicPage: boolean;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
+
 const Navbar: React.FC<NavbarProps> = ({
   userID,
-  userRole,
   userEmail,
-  showSSOBanner,
+  userRole,
+  premiumUser,
+  proxySettings,
+  setProxySettings,
+  accessToken,
+  isPublicPage = false,
+  sidebarCollapsed = false,
+  onToggleSidebar,
+  isDarkMode,
+  toggleDarkMode
 }) => {
-  console.log("User ID:", userID);
-  console.log("userEmail:", userEmail);
-  console.log("showSSOBanner:", showSSOBanner);
+  const baseUrl = getProxyBaseUrl();
+  const [logoutUrl, setLogoutUrl] = useState("");
+  const { logoUrl } = useTheme();
+  const { data: healthData } = useHealthReadiness();
+  const version = healthData?.litellm_version;
 
-  // const userColors = require('./ui_colors.json') || {};
-  const isLocal = process.env.NODE_ENV === "development";
-  const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
+  // Simple logo URL: use custom logo if available, otherwise default
+  const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
-  const items: MenuProps['items'] = [
-    {
-      key: '1',
-      label: (
-        <>
-          <p>Role: {userRole}</p>
-          <p>ID: {userID}</p>
-        </>
-      ),
-    },
-  ];
+  useEffect(() => {
+    const initializeProxySettings = async () => {
+      if (accessToken) {
+        const settings = await fetchProxySettings(accessToken);
+        console.log("response from fetchProxySettings", settings);
+        if (settings) {
+          setProxySettings(settings);
+        }
+      }
+    };
+
+    initializeProxySettings();
+  }, [accessToken]);
+
+  useEffect(() => {
+    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
+  }, [proxySettings]);
+
+  const handleLogout = () => {
+    clearTokenCookies();
+    window.location.href = logoutUrl;
+  };
 
   return (
-    <nav className="left-0 right-0 top-0 flex justify-between items-center h-12 mb-4">
-      <div className="text-left my-2 absolute top-0 left-0">
-        <div className="flex flex-col items-center">
-          <Link href="/">
-            <button className="text-gray-800 text-2xl py-1 rounded text-center">
-              <img
-                src={imageUrl}
-                width={200}
-                height={200}
-                alt="LiteLLM Brand"
-                className="mr-2"
-              />
-            </button>
-          </Link>
+    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <div className="w-full">
+        <div className="flex items-center h-14 px-4">
+          <div className="flex items-center flex-shrink-0">
+            {onToggleSidebar && (
+              <button
+                onClick={onToggleSidebar}
+                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
+              </button>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+                <div className="relative">
+                  <div className="h-10 max-w-48 flex items-center justify-center overflow-hidden">
+                    <img
+                      src={imageUrl}
+                      alt="LiteLLM Brand"
+                      className="max-w-full max-h-full w-auto h-auto object-contain"
+                    />
+                  </div>
+                </div>
+              </Link>
+              {version && (
+                <div className="relative">
+                  <span
+                    className="absolute -top-1 -left-2 text-lg animate-bounce"
+                    style={{ animationDuration: "2s" }}
+                    title="Thanks for using LiteLLM!"
+                  >
+                    ❄️
+                  </span>
+                  <Tag className="relative text-xs font-medium cursor-pointer z-10">
+                    <a
+                      href="https://docs.litellm.ai/release_notes"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-shrink-0"
+                    >
+                      v{version}
+                    </a>
+                  </Tag>
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Right side nav items */}
+          <div className="flex items-center space-x-5 ml-auto">
+            <CommunityEngagementButtons />
+            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
+            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
+            {false && <Switch
+              data-testid="dark-mode-toggle"
+              checked={isDarkMode}
+              onChange={toggleDarkMode}
+              checkedChildren={<MoonOutlined />}
+              unCheckedChildren={<SunOutlined />}
+            />}
+            <a
+              href="https://docs.litellm.ai/docs/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              Docs
+            </a>
+
+            {!isPublicPage && (
+              <UserDropdown onLogout={handleLogout} />
+            )}
+          </div>
         </div>
       </div>
-      <div className="text-right mx-4 my-2 absolute top-0 right-0 flex items-center justify-end space-x-2">
-      {showSSOBanner ? (
-          
-        <div style={{
-          // border: '1px solid #391085',
-          padding: '6px',
-          borderRadius: '8px', // Added border-radius property
-        }}
-      >
-          <a
-            href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
-            target="_blank"
-            style={{
-              "fontSize": "14px",
-              "textDecoration": "underline"
-            }}
-          >
-            Request hosted proxy
-          </a>
-          </div>
-        ) : null}
-
-        <div style={{
-            border: '1px solid #391085',
-            padding: '6px',
-            borderRadius: '8px', // Added border-radius property
-          }}
-        >
-       <Dropdown menu={{ items }} >
-            <Space>
-              {userEmail}
-            </Space>
-        </Dropdown>
-        </div>
-        </div>
-
     </nav>
   );
 };

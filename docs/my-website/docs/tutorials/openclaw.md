@@ -138,4 +138,4 @@ curl http://localhost:4000/v1/models
 
 - [OpenClaw Documentation](https://docs.openclaw.ai)
 - [OpenClaw GitHub](https://github.com/openclaw/openclaw)
-- [LiteLLM /v1/messages docs](/docs/anthropic_unified/)
+- [LiteLLM /v1/messages docs](/docs/providers/anthropic)

@@ -2,21 +2,16 @@
 import json
 import boto3
 
-import sys, os
-import traceback
+import sys
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
-import litellm
-
-import io
-import json
 
 
 class TokenIterator:
@@ -48,7 +43,6 @@ payload = {
     "stream": True,
 }
 
-import boto3
 
 client = boto3.client("sagemaker-runtime", region_name="us-west-2")
 response = client.invoke_endpoint_with_response_stream(

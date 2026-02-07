@@ -1,7 +1,6 @@
-import sys, os
-import traceback
+import sys
+import os
 from dotenv import load_dotenv
-import copy
 
 load_dotenv()
 sys.path.insert(
@@ -10,7 +9,7 @@ sys.path.insert(
 import asyncio
 from litellm import Router, Timeout
 import time
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 import litellm
 
 litellm.cache = Cache(

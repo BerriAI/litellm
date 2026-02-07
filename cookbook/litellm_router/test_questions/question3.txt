@@ -1,4 +1,4 @@
-What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 100+ LLMs Huggingface/Bedrock/TogetherAI/etc. in the OpenAI ChatCompletions & Completions format

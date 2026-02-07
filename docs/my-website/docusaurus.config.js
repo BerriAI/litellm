@@ -1,8 +1,46 @@
 // @ts-check
 // Note: type annotations allow type checking and IDEs autocompletion
 
+// @ts-ignore
 const lightCodeTheme = require('prism-react-renderer/themes/github');
+// @ts-ignore
 const darkCodeTheme = require('prism-react-renderer/themes/dracula');
+
+const inkeepConfig = {
+  baseSettings: {
+    apiKey: "0cb9c9916ec71bfe0e53c9d7f83ff046daee3fa9ef318f6a",
+    organizationDisplayName: 'liteLLM',
+    primaryBrandColor: '#4965f5',
+    theme: {
+      styles: [
+        {
+          key: "custom-theme",
+          type: "style",
+          value: `
+            .ikp-chat-button__button {
+              margin-right: 80px !important;
+            }
+          `,
+        },
+      ],
+      syntaxHighlighter: {
+        lightTheme: lightCodeTheme,
+        darkTheme: darkCodeTheme,
+      },
+    },
+  },
+  searchSettings: {
+    searchBarPlaceholder: 'Search docs...',
+  },
+  aiChatSettings: {
+    quickQuestions: [
+      'How do I use the proxy?',
+      'How do I cache responses?',
+      'How do I stream responses?',
+    ],
+    aiAssistantAvatar: '/img/favicon.ico',
+  },
+};
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
@@ -11,7 +49,7 @@ const config = {
   favicon: '/img/favicon.ico', 
 
   // Set the production url of your site here
-  url: 'https://litellm.vercel.app/',
+  url: 'https://docs.litellm.ai/',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
@@ -26,8 +64,18 @@ const config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
-
   plugins: [
+    [
+      '@inkeep/cxkit-docusaurus',
+      {
+        SearchBar: {
+          ...inkeepConfig,
+        },
+        ChatButton: {
+          ...inkeepConfig,
+        },
+      },
+    ],
     [
       '@docusaurus/plugin-ideal-image',
       {
@@ -38,9 +86,37 @@ const config = {
         disableInDev: false,
       },
     ],
-    [ require.resolve('docusaurus-lunr-search'), {
-      languages: ['en'] // language codes
-    }],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'release_notes',
+        path: './release_notes',
+        routeBasePath: 'release_notes',
+        blogTitle: 'Release Notes',
+        blogSidebarTitle: 'Releases',
+        blogSidebarCount: 'ALL',
+        postsPerPage: 'ALL',
+        showReadingTime: false,
+        sortPosts: 'descending',
+        include: ['**/*.{md,mdx}'],
+      },
+    ],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'blog',
+        path: './blog',
+        routeBasePath: 'blog',
+        blogTitle: 'Blog',
+        blogSidebarTitle: 'All Posts',
+        blogSidebarCount: 'ALL',
+        postsPerPage: 10,
+        showReadingTime: false,
+        sortPosts: 'descending',
+        include: ['**/index.{md,mdx}'],
+      },
+    ],
+
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -68,13 +144,18 @@ const config = {
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
-        blog: false, // Optional: disable the blog plugin
+        blog: false, // Disable the default blog plugin from preset-classic
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
       }),
     ],
   ],
+
+  themes: ['@docusaurus/theme-mermaid'],
+  markdown: {
+    mermaid: true,
+  },
 
   scripts: [
     {
@@ -100,10 +181,23 @@ const config = {
             label: 'Docs',
           },
           {
+            sidebarId: 'integrationsSidebar',
+            position: 'left',
+            label: 'Integrations',
+            to: "docs/integrations"
+          },
+          {
             sidebarId: 'tutorialSidebar',
             position: 'left',
             label: 'Enterprise',
             to: "docs/enterprise"
+          },
+          { to: '/release_notes', label: 'Release Notes', position: 'left' },
+          { to: '/blog', label: 'Blog', position: 'left' },
+          {
+            href: 'https://models.litellm.ai/',
+            label: '💸 LLM Model Cost Map',
+            position: 'right',
           },
           {
             href: 'https://github.com/BerriAI/litellm',
@@ -111,18 +205,10 @@ const config = {
             position: 'right',
           },
           {
-            href: 'https://discord.com/invite/wuPM9dRgDw',
-            label: 'Discord',
+            href: 'https://www.litellm.ai/support',
+            label: 'Slack/Discord',
             position: 'right',
-          },
-          {
-            type: 'html',
-            position: 'right',
-            value:
-              `<a href=# class=navbar__link data-fr-widget>
-                I'm Confused
-              </a>`
-          },
+          }
         ],
       },
       footer: {
@@ -132,8 +218,8 @@ const config = {
             title: 'Docs',
             items: [
               {
-                label: 'Tutorial',
-                to: '/docs/index',
+                label: 'Getting Started',
+                to: 'https://docs.litellm.ai/docs/',
               },
             ],
           },
@@ -161,6 +247,11 @@ const config = {
           },
         ],
         copyright: `Copyright © ${new Date().getFullYear()} liteLLM`,
+      },
+      colorMode: {
+        defaultMode: 'light',
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
       },
       prism: {
         theme: lightCodeTheme,

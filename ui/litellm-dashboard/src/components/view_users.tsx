@@ -1,30 +1,35 @@
-import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Title,
-  Subtitle,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  TableCell,
-  TableBody,
-  Tab,
-  Text,
-  TabGroup,
-  TabList,
-  TabPanels,
-  Metric,
-  Grid,
-  TabPanel,
-  Select,
-  SelectItem,
-} from "@tremor/react";
-import { userInfoCall, adminTopEndUsersCall } from "./networking";
-import { Badge, BadgeDelta, Button } from "@tremor/react";
-import RequestAccess from "./request_model_access";
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import React, { useEffect, useState } from "react";
+
+import { Button } from "@tremor/react";
+import BulkEditUserModal from "./BulkEditUsers";
 import CreateUser from "./create_user_button";
-import Paragraph from "antd/es/skeleton/Paragraph";
+import EditUserModal from "./edit_user";
+import {
+  getPossibleUserRoles,
+  getProxyBaseUrl,
+  invitationCreateCall,
+  userListCall,
+  UserListResponse,
+  userUpdateUserCall,
+} from "./networking";
+import OnboardingModal, { InvitationLink } from "./onboarding_link";
+
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { isAdminRole } from "@/utils/roles";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Typography } from "antd";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import NotificationsManager from "./molecules/notifications_manager";
+import { modelAvailableCall, userDeleteCall } from "./networking";
+import DefaultUserSettings from "./DefaultUserSettings";
+import { columns } from "./view_users/columns";
+import { UserDataTable } from "./view_users/table";
+import { UserInfo } from "./view_users/types";
+import { Skeleton } from "antd";
+
+const { Text, Title } = Typography;
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -32,212 +37,395 @@ interface ViewUserDashboardProps {
   keys: any[] | null;
   userRole: string | null;
   userID: string | null;
-  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  teams: any[] | null;
+  setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
 }
 
-const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
-  accessToken,
-  token,
-  keys,
-  userRole,
-  userID,
-  setKeys,
-}) => {
-  const [userData, setUserData] = useState<null | any[]>(null);
-  const [endUsers, setEndUsers] = useState<null | any[]>(null);
+interface FilterState {
+  email: string;
+  user_id: string;
+  user_role: string;
+  sso_user_id: string;
+  team: string;
+  model: string;
+  min_spend: number | null;
+  max_spend: number | null;
+  sort_by: string;
+  sort_order: "asc" | "desc";
+}
+
+const DEFAULT_PAGE_SIZE = 25;
+
+const initialFilters: FilterState = {
+  email: "",
+  user_id: "",
+  user_role: "",
+  sso_user_id: "",
+  team: "",
+  model: "",
+  min_spend: null,
+  max_spend: null,
+  sort_by: "created_at",
+  sort_order: "desc",
+};
+
+const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams }) => {
+  const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
-  const defaultPageSize = 25;
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
+  const [activeTab, setActiveTab] = useState("users");
+  const [filters, setFilters] = useState<FilterState>(initialFilters);
+  const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 });
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const [selectedUsers, setSelectedUsers] = useState<UserInfo[]>([]);
+  const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [userModels, setUserModels] = useState<string[]>([]);
+
+  const handleDelete = (user: UserInfo) => {
+    setUserToDelete(user);
+    setIsDeleteModalOpen(true);
+  };
 
   useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
+    return () => {
+      debouncer.cancel();
+    };
+  }, [debouncer]);
+
+  useEffect(() => {
+    setBaseUrl(getProxyBaseUrl());
+  }, []);
+
+  // Fetch available models for bulk edit
+  useEffect(() => {
+    const fetchUserModels = async () => {
+      try {
+        if (!userID || !userRole || !accessToken) {
+          return;
+        }
+
+        const model_available = await modelAvailableCall(accessToken, userID, userRole);
+        let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
+        console.log("available_model_names:", available_model_names);
+        setUserModels(available_model_names);
+      } catch (error) {
+        console.error("Error fetching user models:", error);
+      }
+    };
+
+    fetchUserModels();
+  }, [accessToken, userID, userRole]);
+
+  const updateFilters = (update: Partial<FilterState>) => {
+    setFilters((previousFilters) => {
+      const newFilters = { ...previousFilters, ...update };
+      setDebouncedFilters(newFilters);
+      return newFilters;
+    });
+  };
+
+  const handleSortChange = (sortBy: string, sortOrder: "asc" | "desc") => {
+    updateFilters({ sort_by: sortBy, sort_order: sortOrder });
+  };
+
+  const handleResetPassword = async (userId: string) => {
+    if (!accessToken) {
+      NotificationsManager.fromBackend("Access token not found");
       return;
     }
-    const fetchData = async () => {
-      try {
-        // Replace with your actual API call for model data
-        const userDataResponse = await userInfoCall(
-          accessToken,
-          null,
-          userRole,
-          true,
-          currentPage,
-          defaultPageSize
-        );
-        console.log("user data response:", userDataResponse);
-        setUserData(userDataResponse);
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-
-    if (accessToken && token && userRole && userID) {
-      fetchData();
-    }
-
-    const fetchEndUserSpend = async () => {
-      try {
-        const topEndUsers = await adminTopEndUsersCall(accessToken, null);
-        console.log("user data response:", topEndUsers);
-        setEndUsers(topEndUsers);
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-    if (
-      userRole &&
-      (userRole == "Admin" || userRole == "Admin Viewer") &&
-      !endUsers
-    ) {
-      fetchEndUserSpend();
-    }
-  }, [accessToken, token, userRole, userID, currentPage]);
-
-  if (!userData) {
-    return <div>Loading...</div>;
-  }
-
-  if (!accessToken || !token || !userRole || !userID) {
-    return <div>Loading...</div>;
-  }
-
-  const onKeyClick = async (keyToken: String) => {
     try {
-      const topEndUsers = await adminTopEndUsersCall(accessToken, keyToken);
-      console.log("user data response:", topEndUsers);
-      setEndUsers(topEndUsers);
+      NotificationsManager.success("Generating password reset link...");
+      const data = await invitationCreateCall(accessToken, userId);
+      setInvitationLinkData(data);
+      setIsInvitationLinkModalVisible(true);
     } catch (error) {
-      console.error("There was an error fetching the model data", error);
+      NotificationsManager.fromBackend("Failed to generate password reset link");
     }
   };
 
-  function renderPagination() {
-    if (!userData) return null;
+  const confirmDelete = async () => {
+    if (userToDelete && accessToken) {
+      try {
+        setIsDeletingUser(true);
+        await userDeleteCall(accessToken, [userToDelete.user_id]);
 
-    // const totalPages = Math.ceil(userData.length / defaultPageSize);
-    const startItem = (currentPage - 1) * defaultPageSize + 1;
-    const endItem = Math.min(currentPage * defaultPageSize, userData.length);
+        // Update the user list after deletion
+        queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
+          if (previousData === undefined) return previousData;
+          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete.user_id);
+          return { ...previousData, users: updatedUsers };
+        });
 
-    return (
-      <div className="flex justify-between items-center">
-        <div>
-          Showing {startItem} – {endItem} of {userData.length}
-        </div>
-        <div className="flex">
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage(currentPage - 1)}
-          >
-            &larr; Prev
-          </button>
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            // disabled={currentPage === totalPages}
-            onClick={() => {
-              setCurrentPage(currentPage + 1);
-            }}
-          >
-            Next &rarr;
-          </button>
-        </div>
-      </div>
-    );
-  }
+        NotificationsManager.success("User deleted successfully");
+      } catch (error) {
+        console.error("Error deleting user:", error);
+        NotificationsManager.fromBackend("Failed to delete user");
+      } finally {
+        setIsDeleteModalOpen(false);
+        setUserToDelete(null);
+        setIsDeletingUser(false);
+      }
+    }
+  };
+
+  const cancelDelete = () => {
+    setIsDeleteModalOpen(false);
+    setUserToDelete(null);
+  };
+
+  const handleEditCancel = async () => {
+    setSelectedUser(null);
+    setEditModalVisible(false);
+  };
+
+  const handleEditSubmit = async (editedUser: any) => {
+    console.log("inside handleEditSubmit:", editedUser);
+
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+
+    try {
+      const response = await userUpdateUserCall(accessToken, editedUser, null);
+      queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
+        if (previousData === undefined) return previousData;
+        const updatedUsers = previousData.users.map((user) => {
+          if (user.user_id === response.data.user_id) {
+            return updateExistingKeys(user, response.data);
+          }
+          return user;
+        });
+
+        return { ...previousData, users: updatedUsers };
+      });
+
+      NotificationsManager.success(`User ${editedUser.user_id} updated successfully`);
+    } catch (error) {
+      console.error("There was an error updating the user", error);
+    }
+    setSelectedUser(null);
+    setEditModalVisible(false);
+    // Close the modal
+  };
+
+  const handlePageChange = async (newPage: number) => {
+    setCurrentPage(newPage);
+  };
+
+  const handleToggleSelectionMode = () => {
+    setSelectionMode(!selectionMode);
+    setSelectedUsers([]);
+  };
+
+  const handleSelectionChange = (users: UserInfo[]) => {
+    setSelectedUsers(users);
+  };
+
+  const handleBulkEdit = () => {
+    if (selectedUsers.length === 0) {
+      NotificationsManager.fromBackend("Please select users to edit");
+      return;
+    }
+
+    setIsBulkEditModalVisible(true);
+  };
+
+  const handleBulkEditSuccess = () => {
+    // Refresh the user list
+    queryClient.invalidateQueries({ queryKey: ["userList"] });
+    setSelectedUsers([]);
+    setSelectionMode(false);
+  };
+
+  const userListQuery = useQuery({
+    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage }],
+    queryFn: async () => {
+      if (!accessToken) throw new Error("Access token required");
+
+      return await userListCall(
+        accessToken,
+        debouncedFilters.user_id ? [debouncedFilters.user_id] : null,
+        currentPage,
+        DEFAULT_PAGE_SIZE,
+        debouncedFilters.email || null,
+        debouncedFilters.user_role || null,
+        debouncedFilters.team || null,
+        debouncedFilters.sso_user_id || null,
+        debouncedFilters.sort_by,
+        debouncedFilters.sort_order,
+      );
+    },
+    enabled: Boolean(accessToken && token && userRole && userID),
+    placeholderData: (previousData) => previousData,
+  });
+  const userListResponse = userListQuery.data;
+
+  const userRolesQuery = useQuery<Record<string, Record<string, string>>>({
+    queryKey: ["userRoles"],
+    initialData: () => ({}),
+    queryFn: async () => {
+      if (!accessToken) throw new Error("Access token required");
+      return await getPossibleUserRoles(accessToken);
+    },
+    enabled: Boolean(accessToken && token && userRole && userID),
+  });
+  const possibleUIRoles = userRolesQuery.data;
+
+  const tableColumns = columns(
+    possibleUIRoles,
+    (user) => {
+      setSelectedUser(user);
+      setEditModalVisible(true);
+    },
+    handleDelete,
+    handleResetPassword,
+    () => { }, // placeholder function, will be overridden in UserDataTable
+  );
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
-        <CreateUser userID={userID} accessToken={accessToken} />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
-          <TabGroup>
-            <TabList variant="line" defaultValue="1">
-              <Tab value="1">Key Owners</Tab>
-              <Tab value="2">End-Users</Tab>
-            </TabList>
-            <TabPanels>
-              <TabPanel>
-                <Table className="mt-5">
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Role</TableHeaderCell>
-                      <TableHeaderCell>User Models</TableHeaderCell>
-                      <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {userData.map((user: any) => (
-                      <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id}</TableCell>
-                        <TableCell>
-                          {user.user_role ? user.user_role : "app_owner"}
-                        </TableCell>
-                        <TableCell>
-                          {user.models && user.models.length > 0
-                            ? user.models
-                            : "All Models"}
-                        </TableCell>
-                        <TableCell>{user.spend ? user.spend : 0}</TableCell>
-                        <TableCell>
-                          {user.max_budget ? user.max_budget : "Unlimited"}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TabPanel>
-              <TabPanel>
-                <div className="flex items-center">
-                  <div className="flex-1"></div>
-                  <div className="flex-1 flex justify-between items-center">
-                    <Text className="w-1/4 mr-2 text-right">Key</Text>
-                    <Select defaultValue="1" className="w-3/4">
-                      {keys?.map((key: any, index: number) => {
-                        if (
-                          key &&
-                          key["key_name"] !== null &&
-                          key["key_name"].length > 0
-                        ) {
-                          return (
-                            <SelectItem
-                              key={index}
-                              value={String(index)}
-                              onClick={() => onKeyClick(key["token"])}
-                            >
-                              {key["key_name"]}
-                            </SelectItem>
-                          );
-                        }
-                      })}
-                    </Select>
-                  </div>
-                </div>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>End User</TableHeaderCell>
-                      <TableHeaderCell>Spend</TableHeaderCell>
-                      <TableHeaderCell>Total Events</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
+    <div className="w-full p-8 overflow-hidden">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex space-x-3">
+          {userListQuery.isLoading ? (
+            <>
+              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+              <Skeleton.Button active size="default" shape="default" style={{ width: 145, height: 36 }} />
+              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+            </>
+          ) : userID && accessToken ? (
+            <>
+              <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
 
-                  <TableBody>
-                    {endUsers?.map((user: any, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>{user.end_user}</TableCell>
-                        <TableCell>{user.total_spend}</TableCell>
-                        <TableCell>{user.total_events}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TabPanel>
-            </TabPanels>
-          </TabGroup>
-        </Card>
-        {renderPagination()}
-      </Grid>
+              <Button
+                onClick={handleToggleSelectionMode}
+                variant={selectionMode ? "primary" : "secondary"}
+                className="flex items-center"
+              >
+                {selectionMode ? "Cancel Selection" : "Select Users"}
+              </Button>
+
+              {selectionMode && (
+                <Button onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
+                  Bulk Edit ({selectedUsers.length} selected)
+                </Button>
+              )}
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
+        <TabList className="mb-4">
+          <Tab>Users</Tab>
+          <Tab>Default User Settings</Tab>
+        </TabList>
+
+        <TabPanels>
+          <TabPanel>
+            <UserDataTable
+              data={userListQuery.data?.users || []}
+              columns={tableColumns}
+              isLoading={userListQuery.isLoading}
+              accessToken={accessToken}
+              userRole={userRole}
+              onSortChange={handleSortChange}
+              currentSort={{
+                sortBy: filters.sort_by,
+                sortOrder: filters.sort_order,
+              }}
+              possibleUIRoles={possibleUIRoles}
+              handleEdit={(user) => {
+                setSelectedUser(user);
+                setEditModalVisible(true);
+              }}
+              handleDelete={handleDelete}
+              handleResetPassword={handleResetPassword}
+              enableSelection={selectionMode}
+              selectedUsers={selectedUsers}
+              onSelectionChange={handleSelectionChange}
+              filters={filters}
+              updateFilters={updateFilters}
+              initialFilters={initialFilters}
+              teams={teams}
+              userListResponse={userListResponse}
+              currentPage={currentPage}
+              handlePageChange={handlePageChange}
+            />
+          </TabPanel>
+
+          <TabPanel>
+            {!userID || !userRole || !accessToken ? (
+              <div className="flex justify-center items-center h-64">
+                <Skeleton active paragraph={{ rows: 4 }} />
+              </div>
+            ) : (
+              <DefaultUserSettings
+                accessToken={accessToken}
+                possibleUIRoles={possibleUIRoles}
+                userID={userID}
+                userRole={userRole}
+              />
+            )}
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
+
+      {/* Existing Modals */}
+      <EditUserModal
+        visible={editModalVisible}
+        possibleUIRoles={possibleUIRoles}
+        onCancel={handleEditCancel}
+        user={selectedUser}
+        onSubmit={handleEditSubmit}
+      />
+
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete User?"
+        message="Are you sure you want to delete this user? This action cannot be undone."
+        resourceInformationTitle="User Information"
+        resourceInformation={[
+          { label: "Email", value: userToDelete?.user_email },
+          { label: "User ID", value: userToDelete?.user_id, code: true },
+          {
+            label: "Global Proxy Role",
+            value:
+              (userToDelete && possibleUIRoles?.[userToDelete.user_role]?.ui_label) || userToDelete?.user_role || "-",
+          },
+          { label: "Total Spend (USD)", value: userToDelete?.spend?.toFixed(2) },
+        ]}
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeletingUser}
+      />
+
+      <OnboardingModal
+        isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+        setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+        baseUrl={baseUrl || ""}
+        invitationLinkData={invitationLinkData}
+        modalType="resetPassword"
+      />
+
+      <BulkEditUserModal
+        open={isBulkEditModalVisible}
+        onCancel={() => setIsBulkEditModalVisible(false)}
+        selectedUsers={selectedUsers}
+        possibleUIRoles={possibleUIRoles}
+        accessToken={accessToken}
+        onSuccess={handleBulkEditSuccess}
+        teams={teams}
+        userRole={userRole}
+        userModels={userModels}
+        allowAllUsers={userRole ? isAdminRole(userRole) : false}
+      />
     </div>
   );
 };

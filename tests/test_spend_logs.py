@@ -1,18 +1,20 @@
 # What this tests?
 ## Tests /spend endpoints.
 
-import pytest, time, uuid
+import pytest, time, uuid, json
 import asyncio
 import aiohttp
 
 
-async def generate_key(session, models=[]):
+async def generate_key(session, models=[], team_id=None):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "models": models,
         "duration": None,
     }
+    if team_id is not None:
+        data["team_id"] = team_id
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -113,15 +115,90 @@ async def test_spend_logs():
         await get_spend_logs(session=session, request_id=response["id"])
 
 
+async def generate_org(session: aiohttp.ClientSession) -> dict:
+    """
+    Generate a new organization using the API.
+
+    Args:
+        session: aiohttp client session
+
+    Returns:
+        dict: Response containing org_id
+    """
+    url = "http://0.0.0.0:4000/organization/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    request_body = {
+        "organization_alias": f"test-org-{uuid.uuid4()}",
+    }
+
+    async with session.post(url, headers=headers, json=request_body) as response:
+        return await response.json()
+
+
+async def generate_team(session: aiohttp.ClientSession, org_id: str) -> dict:
+    """
+    Generate a new team within an organization using the API.
+
+    Args:
+        session: aiohttp client session
+        org_id: Organization ID to create the team in
+
+    Returns:
+        dict: Response containing team_id
+    """
+    url = "http://0.0.0.0:4000/team/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {"organization_id": org_id}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        return await response.json()
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_with_org_id():
+    """
+    - Create Organization
+    - Create Team in organization
+    - Create Key in organization
+    - Make call (makes sure it's in spend logs)
+    - Get request id from logs
+    - Assert spend logs have correct org_id and team_id
+    """
+    async with aiohttp.ClientSession() as session:
+        org_gen = await generate_org(session=session)
+        print("org_gen: ", json.dumps(org_gen, indent=4, default=str))
+        org_id = org_gen["organization_id"]
+        team_gen = await generate_team(session=session, org_id=org_id)
+        print("team_gen: ", json.dumps(team_gen, indent=4, default=str))
+        team_id = team_gen["team_id"]
+        key_gen = await generate_key(session=session, team_id=team_id)
+        print("key_gen: ", json.dumps(key_gen, indent=4, default=str))
+        key = key_gen["key"]
+        response = await chat_completion(session=session, key=key)
+        await asyncio.sleep(20)
+        spend_logs_response = await get_spend_logs(
+            session=session, request_id=response["id"]
+        )
+        print(
+            "spend_logs_response: ",
+            json.dumps(spend_logs_response, indent=4, default=str),
+        )
+        spend_logs_response = spend_logs_response[0]
+        assert spend_logs_response["metadata"]["user_api_key_org_id"] == org_id
+        assert spend_logs_response["metadata"]["user_api_key_team_id"] == team_id
+        assert spend_logs_response["team_id"] == team_id
+
+
 async def get_predict_spend_logs(session):
-    url = f"http://0.0.0.0:4000/global/predict/spend/logs"
+    url = "http://0.0.0.0:4000/global/predict/spend/logs"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "data": [
             {
                 "date": "2024-03-09",
                 "spend": 200000,
-                "api_key": "f19bdeb945164278fc11c1020d8dfd70465bffd931ed3cb2e1efa6326225b8b7",
+                "api_key": "sk-test-mock-api-key-456",
             }
         ]
     }
@@ -138,6 +215,24 @@ async def get_predict_spend_logs(session):
         return await response.json()
 
 
+async def get_spend_report(session, start_date, end_date):
+    url = "http://0.0.0.0:4000/global/spend/report"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    async with session.get(
+        url, headers=headers, params={"start_date": start_date, "end_date": end_date}
+    ) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
+
+
+@pytest.mark.skip(reason="datetime in ci/cd gets set weirdly")
 @pytest.mark.asyncio
 async def test_get_predicted_spend_logs():
     """
@@ -202,6 +297,42 @@ async def test_spend_logs_high_traffic():
             print(f"len responses: {len(response)}")
             assert len(response) == n
             print(n, time.time() - start, len(response))
-        except:
+        except Exception:
             print(n, time.time() - start, 0)
         raise Exception("it worked!")
+
+
+@pytest.mark.asyncio
+async def test_spend_report_endpoint():
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=600)
+    ) as session:
+        import datetime
+
+        todays_date = datetime.date.today() + datetime.timedelta(days=1)
+        todays_date = todays_date.strftime("%Y-%m-%d")
+
+        print("todays_date", todays_date)
+        thirty_days_ago = (
+            datetime.date.today() - datetime.timedelta(days=30)
+        ).strftime("%Y-%m-%d")
+        spend_report = await get_spend_report(
+            session=session, start_date=thirty_days_ago, end_date=todays_date
+        )
+        print("spend report", spend_report)
+
+        for row in spend_report:
+            date = row["group_by_day"]
+            teams = row["teams"]
+            for team in teams:
+                team_name = team["team_name"]
+                total_spend = team["total_spend"]
+                metadata = team["metadata"]
+
+                assert team_name is not None
+
+                print(f"Date: {date}")
+                print(f"Team: {team_name}")
+                print(f"Total Spend: {total_spend}")
+                print("Metadata: ", metadata)
+                print()

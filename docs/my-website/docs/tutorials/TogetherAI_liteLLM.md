@@ -25,7 +25,11 @@ response = completion(model=model_name, messages=messages)
 print(response)
 ```
 
+
+```
+
     {'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'role': 'assistant', 'content': "\n\nI'm not able to provide real-time weather information. However, I can suggest"}}], 'created': 1691629657.9288375, 'model': 'togethercomputer/llama-2-70b-chat', 'usage': {'prompt_tokens': 9, 'completion_tokens': 17, 'total_tokens': 26}}
+```
 
 
 LiteLLM handles the prompt formatting for Together AI's Llama2 models as well, converting your message to the 

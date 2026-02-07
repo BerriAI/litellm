@@ -1,19 +1,103 @@
+import json
 import logging
+import os
+import sys
+from datetime import datetime
+from logging import Formatter
 
 set_verbose = False
 
+if set_verbose is True:
+    logging.warning(
+        "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
+    )
+json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
+log_level = os.getenv("LITELLM_LOG", "DEBUG")
+numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
-handler.setLevel(logging.DEBUG)
+handler.setLevel(numeric_level)
+
+
+class JsonFormatter(Formatter):
+    def __init__(self):
+        super(JsonFormatter, self).__init__()
+
+    def formatTime(self, record, datefmt=None):
+        # Use datetime to format the timestamp in ISO 8601 format
+        dt = datetime.fromtimestamp(record.created)
+        return dt.isoformat()
+
+    def format(self, record):
+        json_record = {
+            "message": record.getMessage(),
+            "level": record.levelname,
+            "timestamp": self.formatTime(record),
+        }
+
+        if record.exc_info:
+            json_record["stacktrace"] = self.formatException(record.exc_info)
+
+        return json.dumps(json_record)
+
+
+# Function to set up exception handlers for JSON logging
+def _setup_json_exception_handlers(formatter):
+    # Create a handler with JSON formatting for exceptions
+    error_handler = logging.StreamHandler()
+    error_handler.setFormatter(formatter)
+
+    # Setup excepthook for uncaught exceptions
+    def json_excepthook(exc_type, exc_value, exc_traceback):
+        record = logging.LogRecord(
+            name="LiteLLM",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg=str(exc_value),
+            args=(),
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+        error_handler.handle(record)
+
+    sys.excepthook = json_excepthook
+
+    # Configure asyncio exception handler if possible
+    try:
+        import asyncio
+
+        def async_json_exception_handler(loop, context):
+            exception = context.get("exception")
+            if exception:
+                record = logging.LogRecord(
+                    name="LiteLLM",
+                    level=logging.ERROR,
+                    pathname="",
+                    lineno=0,
+                    msg=str(exception),
+                    args=(),
+                    exc_info=None,
+                )
+                error_handler.handle(record)
+            else:
+                loop.default_exception_handler(context)
+
+        asyncio.get_event_loop().set_exception_handler(async_json_exception_handler)
+    except Exception:
+        pass
+
 
 # Create a formatter and set it for the handler
-formatter = logging.Formatter(
-    "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
-    datefmt="%H:%M:%S",
-)
+if json_logs:
+    handler.setFormatter(JsonFormatter())
+    _setup_json_exception_handlers(JsonFormatter())
+else:
+    formatter = logging.Formatter(
+        "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
-
-handler.setFormatter(formatter)
+    handler.setFormatter(formatter)
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
@@ -23,6 +107,136 @@ verbose_logger = logging.getLogger("LiteLLM")
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
+
+
+def _suppress_loggers():
+    """Suppress noisy loggers at INFO level"""
+    # Suppress httpx request logging at INFO level
+    httpx_logger = logging.getLogger("httpx")
+    httpx_logger.setLevel(logging.WARNING)
+
+    # Suppress APScheduler logging at INFO level
+    apscheduler_executors_logger = logging.getLogger("apscheduler.executors.default")
+    apscheduler_executors_logger.setLevel(logging.WARNING)
+    apscheduler_scheduler_logger = logging.getLogger("apscheduler.scheduler")
+    apscheduler_scheduler_logger.setLevel(logging.WARNING)
+
+
+# Call the suppression function
+_suppress_loggers()
+
+ALL_LOGGERS = [
+    logging.getLogger(),
+    verbose_logger,
+    verbose_router_logger,
+    verbose_proxy_logger,
+]
+
+
+def _get_loggers_to_initialize():
+    """
+    Get all loggers that should be initialized with the JSON handler.
+
+    Includes third-party integration loggers (like langfuse) if they are
+    configured as callbacks.
+    """
+    import litellm
+
+    loggers = list(ALL_LOGGERS)
+
+    # Add langfuse logger if langfuse is being used as a callback
+    langfuse_callbacks = {"langfuse", "langfuse_otel"}
+    all_callbacks = set(litellm.success_callback + litellm.failure_callback)
+    if langfuse_callbacks & all_callbacks:
+        loggers.append(logging.getLogger("langfuse"))
+
+    return loggers
+
+
+def _initialize_loggers_with_handler(handler: logging.Handler):
+    """
+    Initialize all loggers with a handler
+
+    - Adds a handler to each logger
+    - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
+    """
+    for lg in _get_loggers_to_initialize():
+        lg.handlers.clear()  # remove any existing handlers
+        lg.addHandler(handler)  # add JSON formatter handler
+        lg.propagate = False  # prevent bubbling to parent/root
+
+
+def _get_uvicorn_json_log_config():
+    """
+    Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
+    
+    This ensures that uvicorn's access logs, error logs, and all application logs
+    are formatted as JSON when json_logs is enabled.
+    """
+    json_formatter_class = "litellm._logging.JsonFormatter"
+    
+    # Use the module-level log_level variable for consistency
+    uvicorn_log_level = log_level.upper()
+    
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "json": {
+                "()": json_formatter_class,
+            },
+            "default": {
+                "()": json_formatter_class,
+            },
+            "access": {
+                "()": json_formatter_class,
+            },
+        },
+        "handlers": {
+            "default": {
+                "formatter": "json",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+            "access": {
+                "formatter": "access",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "uvicorn": {
+                "handlers": ["default"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["default"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["access"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+        },
+    }
+    
+    return log_config
+
+
+def _turn_on_json():
+    """
+    Turn on JSON logging
+
+    - Adds a JSON formatter to all loggers
+    """
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonFormatter())
+    _initialize_loggers_with_handler(handler)
+    # Set up exception handlers
+    _setup_json_exception_handlers(JsonFormatter())
 
 
 def _turn_on_debug():
@@ -47,5 +261,12 @@ def print_verbose(print_statement):
     try:
         if set_verbose:
             print(print_statement)  # noqa
-    except:
+    except Exception:
         pass
+
+
+def _is_debugging_on() -> bool:
+    """
+    Returns True if debugging is on
+    """
+    return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True

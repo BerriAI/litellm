@@ -1,27 +1,27 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.11.8-slim
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.11.8-slim
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
 # Builder stage
-FROM $LITELLM_BUILD_IMAGE as builder
+FROM $LITELLM_BUILD_IMAGE AS builder
 
 # Set the working directory to /app
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+USER root
 
-RUN pip install --upgrade pip && \
-    pip install build
+# Install build dependencies
+RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
+
+RUN python -m pip install build
 
 # Copy the current directory contents into the container at /app
 COPY . .
 
 # Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+# Convert Windows line endings to Unix and make executable
+RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -35,19 +35,20 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
-RUN pip install redisvl==0.0.7 --no-deps
-
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
-RUN pip install PyJWT --no-cache-dir
-
-# Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+RUN pip install PyJWT==2.9.0 --no-cache-dir
 
 # Runtime stage
-FROM $LITELLM_RUNTIME_IMAGE as runtime
+FROM $LITELLM_RUNTIME_IMAGE AS runtime
+
+# Ensure runtime stage runs as root
+USER root
+
+# Install runtime dependencies (libsndfile needed for audio processing on ARM64)
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+    npm install -g npm@latest tar@latest
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -61,13 +62,26 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
-# Generate prisma client
-RUN prisma generate
-RUN chmod +x entrypoint.sh
+# Remove test files and keys from dependencies
+RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
+    find /usr/lib -type d -path "*/tornado/test" -delete
+
+# Install semantic_router and aurelio-sdk using script
+# Convert Windows line endings to Unix and make executable
+RUN sed -i 's/\r$//' docker/install_auto_router.sh && chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
+
+# Generate prisma client using the correct schema
+RUN prisma generate --schema=./litellm/proxy/schema.prisma
+# Convert Windows line endings to Unix for entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
+RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["litellm"]
+RUN apk add --no-cache supervisor
+COPY docker/supervisord.conf /etc/supervisord.conf
 
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
+ENTRYPOINT ["docker/prod_entrypoint.sh"]
+
+# Append "--detailed_debug" to the end of CMD to view detailed debug logs
 CMD ["--port", "4000"]

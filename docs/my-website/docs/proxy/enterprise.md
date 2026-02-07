@@ -1,27 +1,383 @@
+import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ✨ Enterprise Features - Content Mod, SSO
+# ✨ Enterprise Features
+:::tip
 
-Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
-
-:::info
-
-[Get Started with Enterprise here](https://github.com/BerriAI/litellm/tree/main/enterprise)
+To get a license, get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
 
 Features: 
-- ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
-- ✅ Content Moderation with LLM Guard
-- ✅ Content Moderation with LlamaGuard 
-- ✅ Content Moderation with Google Text Moderations 
-- ✅ Reject calls from Blocked User list 
-- ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
-- ✅ Don't log/store specific requests to Langfuse, Sentry, etc. (eg confidential LLM requests)
-- ✅ Tracking Spend for Custom Tags
+
+- **Security**
+    - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
+    - ✅ [Audit Logs with retention policy](#audit-logs)
+    - ✅ [JWT-Auth](./token_auth.md)
+    - ✅ [Control available public, private routes](./public_routes.md)
+    - ✅ [Secret Managers - AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](../secret)
+    - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
+    - ✅ IP address‑based access control lists
+    - ✅ Track Request IP Address
+    - ✅ [Set Max Request Size / File Size on Requests](#set-max-request--response-size-on-litellm-proxy)
+    - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
+    - ✅ [Key Rotations](./virtual_keys.md#-key-rotations)
+- **Customize Logging, Guardrails, Caching per project**
+    - ✅ [Team Based Logging](./team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
+    - ✅ [Disable Logging for a Team](./team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
+- **Spend Tracking & Data Exports**
+    - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
+    - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
+    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](../observability/gcs_bucket_integration)
+    - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
+- **Control Guardrails per API Key/Team**
+- **Custom Branding**
+    - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
+    - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
 
+### Blocking web crawlers
+
+To block web crawlers from indexing the proxy server endpoints, set the `block_robots` setting to `true` in your `litellm_config.yaml` file.
+
+```yaml showLineNumbers title="litellm_config.yaml"
+general_settings:
+  block_robots: true
+```
+
+#### How it works
+
+When this is enabled, the `/robots.txt` endpoint will return a 200 status code with the following content:
+
+```shell showLineNumbers title="robots.txt"
+User-agent: *
+Disallow: /
+```
+
+
+
+### Required Params for LLM Requests
+Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
+
+
+<Tabs>
+
+<TabItem value="config" label="Set on Config">
+
+**Step 1** Define all Params you want to enforce on config.yaml
+
+This means `["user"]` and `["metadata]["generation_name"]` are required in all LLM Requests to LiteLLM
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enforced_params:  
+    - user
+    - metadata.generation_name
+```
+</TabItem>
+
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "enforced_params": ["user", "metadata.generation_name"]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Step 2 Verify if this works**
+
+<Tabs>
+
+<TabItem value="bad" label="Invalid Request (No `user` passed)">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ]
+}'
+```
+
+Expected Response 
+
+```shell
+{"error":{"message":"Authentication Error, BadRequest please pass param=user in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
+```
+
+</TabItem>
+
+<TabItem value="bad2" label="Invalid Request (No `metadata` passed)">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "user": "gm",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ],
+   "metadata": {}
+}'
+```
+
+Expected Response 
+
+```shell
+{"error":{"message":"Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
+```
+
+
+</TabItem>
+<TabItem value="good" label="Valid Request">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "user": "gm",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ],
+   "metadata": {"generation_name": "prod-app"}
+}'
+```
+
+Expected Response
+
+```shell
+{"id":"chatcmpl-9XALnHqkCBMBKrOx7Abg0hURHqYtY","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"}}],"created":1717691639,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":9,"prompt_tokens":8,"total_tokens":17}}%  
+```
+
+</TabItem>
+</Tabs>
+
+
+
+### Control available public, private routes
+
+See [Control Public & Private Routes](./public_routes.md) for detailed documentation on configuring public routes, admin-only routes, allowed routes, and wildcard patterns.
+
+## Spend Tracking
+
+#### Viewing Spend per tag
+
+#### `/spend/tags` Request Format 
+```shell
+curl -X GET "http://0.0.0.0:4000/spend/tags" \
+-H "Authorization: Bearer sk-1234"
+```
+
+#### `/spend/tags`Response Format
+```shell
+[
+  {
+    "individual_request_tag": "model-anthropic-claude-v2.1",
+    "log_count": 6,
+    "total_spend": 0.000672
+  },
+  {
+    "individual_request_tag": "app-ishaan-local",
+    "log_count": 4,
+    "total_spend": 0.000448
+  },
+  {
+    "individual_request_tag": "app-ishaan-prod",
+    "log_count": 2,
+    "total_spend": 0.000224
+  }
+]
+```
+
+:::tip
+For comprehensive spend tracking features including budgets, alerts, and detailed analytics, check out [Spend Tracking](https://docs.litellm.ai/docs/proxy/cost_tracking).
+
+:::
+
+
+## Guardrails - Secret Detection/Redaction
+❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 
+
+Example if you want to redact the value of `OPENAI_API_KEY` in the following request
+
+#### Incoming Request 
+
+```json
+{
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef'",
+        }
+    ]
+}
+```
+
+#### Request after Moderation
+
+```json
+{
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how's it going, API_KEY = '[REDACTED]'",
+        }
+    ]
+}
+```
+
+**Usage**
+
+**Step 1** Add this to your config.yaml 
+
+```yaml
+litellm_settings:
+  callbacks: ["hide_secrets"]
+```
+
+**Step 2** Run litellm proxy with `--detailed_debug` to see the server logs
+
+```
+litellm --config config.yaml --detailed_debug
+```
+
+**Step 3** Test it with request
+
+Send this request
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what is the value of my open ai key? openai_api_key=sk-1234998222"
+        }
+    ]
+}'
+```
+
+
+Expect to see the following warning on your litellm server logs
+
+```shell
+LiteLLM Proxy:WARNING: secret_detection.py:88 - Detected and redacted secrets in message: ['Secret Keyword']
+```
+
+
+You can also see the raw request sent from litellm to the API Provider
+```json
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.groq.com/openai/v1/ \
+-H 'Authorization: Bearer gsk_mySVchjY********************************************' \
+-d {
+  "model": "llama3-8b-8192",
+  "messages": [
+    {
+      "role": "user",
+      "content": "what is the time today, openai_api_key=[REDACTED]"
+    }
+  ],
+  "stream": false,
+  "extra_body": {}
+}
+```
+
+### Secret Detection On/Off per API Key
+
+❓ Use this when you need to switch guardrails on/off per API Key
+
+**Step 1** Create Key with `hide_secrets` Off 
+
+👉 Set `"permissions": {"hide_secrets": false}` with either `/key/generate` or `/key/update`
+
+This means the `hide_secrets` guardrail is off for all requests from this API Key
+
+<Tabs>
+<TabItem value="/key/generate" label="/key/generate">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "permissions": {"hide_secrets": false}
+}'
+```
+
+```shell
+# {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
+```
+
+</TabItem>
+<TabItem value="/key/update" label="/key/update">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
+        "permissions": {"hide_secrets": false}
+}'
+```
+
+```shell
+# {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
+```
+
+</TabItem>
+</Tabs>
+
+**Step 2** Test it with new key
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-jNm1Zar7XfNdZXp49Z1kSQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "does my openai key look well formatted OpenAI_API_KEY=sk-1234777"
+        }
+    ]
+}'
+```
+
+Expect to see `sk-1234777` in your server logs on your callback. 
+
+:::info
+The `hide_secrets` guardrail check did not run on this request because api key=sk-jNm1Zar7XfNdZXp49Z1kSQ has `"permissions": {"hide_secrets": false}`
+:::
 
 
 ## Content Moderation
@@ -249,32 +605,40 @@ Here are the category specific values:
 | "legal" | legal_threshold: 0.1 |
 
 
-## Incognito Requests - Don't log anything
+## Swagger Docs - Custom Routes + Branding 
 
-When `no-log=True`, the request will **not be logged on any callbacks** and there will be **no server logs on litellm**
+:::info 
 
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",            # proxy api-key
-    base_url="http://0.0.0.0:4000" # litellm proxy 
-)
+Requires a LiteLLM Enterprise key to use. Get a free 2-week license [here](https://forms.gle/sTDVprBs18M4V8Le8)
 
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "no-log": True
-    }
-)
+:::
 
-print(response)
+Set LiteLLM Key in your environment
+
+```bash
+LITELLM_LICENSE=""
 ```
+
+#### Customize Title + Description
+
+In your environment, set: 
+
+```bash
+DOCS_TITLE="TotalGPT"
+DOCS_DESCRIPTION="Sample Company Description"
+```
+
+#### Customize Routes
+
+Hide admin routes from users. 
+
+In your environment, set: 
+
+```bash
+DOCS_FILTERED="True" # only shows openai routes to user
+```
+
+<Image img={require('../../img/custom_swagger.png')}  style={{ width: '900px', height: 'auto' }} />
 
 
 ## Enable Blocked User Lists 
@@ -348,10 +712,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ### Using via API
 
 
-**Block all calls for a user id**
+**Block all calls for a customer id**
 
 ```
-curl -X POST "http://0.0.0.0:4000/user/block" \
+curl -X POST "http://0.0.0.0:4000/customer/block" \
 -H "Authorization: Bearer sk-1234" \ 
 -D '{
 "user_ids": [<user_id>, ...] 
@@ -367,6 +731,8 @@ curl -X POST "http://0.0.0.0:4000/user/unblock" \
 "user_ids": [<user_id>, ...] 
 }'
 ```
+
+
 
 ## Enable Banned Keywords List
 
@@ -392,138 +758,93 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 '
 ```
-## Tracking Spend for Custom Tags
 
-Requirements: 
+## Public AI Hub 
 
-- Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
+Share a public page of available models and agents for users
 
-### Usage - /chat/completions requests with request tags 
+[Learn more](./ai_hub.md)
 
-
-<Tabs>
+<Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>
 
 
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
+## [BETA] AWS Key Manager - Key Decryption
 
-Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+This is a beta feature, and subject to changes.
 
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
 
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
-        }
-    }
-)
+**Step 1.** Add `USE_AWS_KMS` to env
 
-print(response)
+```env
+USE_AWS_KMS="True"
 ```
-</TabItem>
 
-<TabItem value="Curl" label="Curl Request">
+**Step 2.** Add `LITELLM_SECRET_AWS_KMS_` to encrypted keys in env 
 
-Pass `metadata` as part of the request body
+```env
+LITELLM_SECRET_AWS_KMS_DATABASE_URL="AQICAH.."
+```
+
+LiteLLM will find this and use the decrypted `DATABASE_URL="postgres://.."` value in runtime.
+
+**Step 3.** Start proxy 
+
+```
+$ litellm
+```
+
+How it works? 
+- Key Decryption runs before server starts up. [**Code**](https://github.com/BerriAI/litellm/blob/8571cb45e80cc561dc34bc6aa89611eb96b9fe3e/litellm/proxy/proxy_cli.py#L445)
+- It adds the decrypted value to the `os.environ` for the python process. 
+
+**Note:** Setting an environment variable within a Python script using os.environ will not make that variable accessible via SSH sessions or any other new processes that are started independently of the Python script. Environment variables set this way only affect the current process and its child processes.
+
+
+## Set Max Request / Response Size on LiteLLM Proxy
+
+Use this if you want to set a maximum request / response size for your proxy server. If a request size is above the size it gets rejected + slack alert triggered
+
+#### Usage 
+**Step 1.** Set `max_request_size_mb` and `max_response_size_mb`
+
+For this example we set a very low limit on `max_request_size_mb` and expect it to get rejected 
+
+:::info
+In production we recommend setting a `max_request_size_mb` /  `max_response_size_mb` around `32 MB`
+
+:::
+
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+general_settings: 
+  master_key: sk-1234
+
+  # Security controls
+  max_request_size_mb: 0.000000001 # 👈 Key Change - Max Request Size in MB. Set this very low for testing 
+  max_response_size_mb: 100 # 👈 Key Change - Max Response Size in MB
+```
+
+**Step 2.** Test it with `/chat/completions` request
 
 ```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
     "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ],
-    "metadata": {"tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]}
-}'
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
-    temperature=0.1,
-    extra_body={
-        "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
-        }
-    }
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
 ```
 
-</TabItem>
-</Tabs>
-
-
-### Viewing Spend per tag
-
-#### `/spend/tags` Request Format 
+**Expected Response from request**
+We expect this to fail since the request size is over `max_request_size_mb`
 ```shell
-curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+{"error":{"message":"Request size is too large. Request size is 0.0001125335693359375 MB. Max size is 1e-09 MB","type":"bad_request_error","param":"content-length","code":400}}
 ```
-
-#### `/spend/tags`Response Format
-```shell
-[
-  {
-    "individual_request_tag": "model-anthropic-claude-v2.1",
-    "log_count": 6,
-    "total_spend": 0.000672
-  },
-  {
-    "individual_request_tag": "app-ishaan-local",
-    "log_count": 4,
-    "total_spend": 0.000448
-  },
-  {
-    "individual_request_tag": "app-ishaan-prod",
-    "log_count": 2,
-    "total_spend": 0.000224
-  }
-]
-
-```
-
-
-<!-- ## Tracking Spend per Key
-
-## Tracking Spend per User -->

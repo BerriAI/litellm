@@ -22,14 +22,23 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install PyGithub
+      - name: re-deploy proxy
+        run: |
+          echo "Current working directory: $PWD"
+          ls
+          python ".github/workflows/redeploy_proxy.py"
+        env:
+          LOAD_TEST_REDEPLOY_URL1: ${{ secrets.LOAD_TEST_REDEPLOY_URL1 }}
+          LOAD_TEST_REDEPLOY_URL2: ${{ secrets.LOAD_TEST_REDEPLOY_URL2 }}
+        working-directory: ${{ github.workspace }}
       - name: Run Load Test
         id: locust_run
         uses: BerriAI/locust-github-action@master
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
-          URL:  "https://litellm-database-docker-build-production.up.railway.app/"
-          USERS: "100"
-          RATE: "10"
+          URL:  "https://post-release-load-test-proxy.onrender.com/"
+          USERS: "20"
+          RATE: "20"
           RUNTIME: "300s"
       - name: Process Load Test Stats
         run: |

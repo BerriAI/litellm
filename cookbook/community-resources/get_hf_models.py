@@ -1,5 +1,4 @@
 import requests
-from urllib.parse import urlparse, parse_qs
 
 
 def get_next_url(response):

@@ -1,14 +1,15 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
-# 🔑 Virtual Keys
+# Virtual Keys
 Track Spend, and control model access via virtual keys for the proxy
 
 :::info
 
 - 🔑 [UI to Generate, Edit, Delete Keys (with SSO)](https://docs.litellm.ai/docs/proxy/ui)
 - [Deploy LiteLLM Proxy with Key Management](https://docs.litellm.ai/docs/proxy/deploy#deploy-with-database)
-- [Dockerfile.database for LiteLLM Proxy + Key Management](https://github.com/BerriAI/litellm/blob/main/Dockerfile.database)
+- [Dockerfile.database for LiteLLM Proxy + Key Management](https://github.com/BerriAI/litellm/blob/main/docker/Dockerfile.database)
 
 
 :::
@@ -23,7 +24,7 @@ Requirements:
   - ** Set on config.yaml** set your master key under `general_settings:master_key`, example below
   - ** Set env variable** set `LITELLM_MASTER_KEY`
 
-(the proxy Dockerfile checks if the `DATABASE_URL` is set and then intializes the DB connection)
+(the proxy Dockerfile checks if the `DATABASE_URL` is set and then initializes the DB connection)
 
 ```shell
 export DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>
@@ -34,6 +35,7 @@ You can then generate keys by hitting the `/key/generate` endpoint.
 
 [**See code**](https://github.com/BerriAI/litellm/blob/7a669a36d2689c7f7890bc9c93e04ff3c2641299/litellm/proxy/proxy_server.py#L672)
 
+## **Quick Start - Generate a Key**
 **Step 1: Save postgres db url**
 
 ```yaml
@@ -65,7 +67,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
 ```
 
-## Advanced - Spend Tracking 
+## Spend Tracking 
 
 Get spend per:
 - key - via `/key/info` [Swagger](https://litellm-api.up.railway.app/#/key%20management/info_key_fn_key_info_get)
@@ -223,60 +225,13 @@ Expected Response
 </TabItem>
 </Tabs>
 
-## Advanced - Model Access
 
-### Restrict models by `team_id`
-`litellm-dev` can only access `azure-gpt-3.5`
-
-**1. Create a team via `/team/new`**
-```shell
-curl --location 'http://localhost:4000/team/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "team_alias": "litellm-dev",
-  "models": ["azure-gpt-3.5"]
-}' 
-
-# returns {...,"team_id": "my-unique-id"}
-```
-
-**2. Create a key for team**
-```shell
-curl --location 'http://localhost:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
---header 'Content-Type: application/json' \
---data-raw '{"team_id": "my-unique-id"}'
-```
-
-**3. Test it**
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-qo992IjKOC2CHKZGRoJIGA' \
-    --data '{
-        "model": "BEDROCK_GROUP",
-        "messages": [
-            {
-                "role": "user",
-                "content": "hi"
-            }
-        ]
-    }'
-```
-
-```shell
-{"error":{"message":"Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n\nTraceback (most recent call last):\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/proxy_server.py\", line 2298, in chat_completion\n    _is_valid_team_configs(\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/utils.py\", line 1296, in _is_valid_team_configs\n    raise Exception(\nException: Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n","type":"None","param":"None","code":500}}%            
-```         
-
-### Model Aliases
+## Model Aliases
 
 If a user is expected to use a given model (i.e. gpt3-5), and you want to:
 
 - try to upgrade the request (i.e. GPT4)
 - or downgrade it (i.e. Mistral)
-- OR rotate the API KEY (i.e. open AI)
-- OR access the same model through different end points (i.e. openAI vs openrouter vs Azure)
 
 Here's how you can do that: 
 
@@ -296,13 +251,13 @@ model_list:
     litellm_params:
         model: huggingface/HuggingFaceH4/zephyr-7b-beta
         api_base: http://0.0.0.0:8003
-	- model_name: my-paid-tier
+  - model_name: my-paid-tier
     litellm_params:
         model: gpt-4
         api_key: my-api-key
 ```
 
-**Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
+**Step 2: Generate a key**
 
 ```bash
 curl -X POST "https://0.0.0.0:4000/key/generate" \
@@ -310,91 +265,134 @@ curl -X POST "https://0.0.0.0:4000/key/generate" \
 -H "Content-Type: application/json" \
 -d '{
 	"models": ["my-free-tier"], 
-	"aliases": {"gpt-3.5-turbo": "my-free-tier"}, 
+	"aliases": {"gpt-3.5-turbo": "my-free-tier"}, # 👈 KEY CHANGE
 	"duration": "30min"
 }'
 ```
 
 - **How to upgrade / downgrade request?** Change the alias mapping
-- **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+
+**Step 3: Test the key**
+
+```bash
+curl -X POST "https://0.0.0.0:4000/key/generate" \
+-H "Authorization: Bearer <user-key>" \
+-H "Content-Type: application/json" \
+-d '{
+    "model": "gpt-3.5-turbo", 
+    "messages": [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ]
+}'
+```
 
 
-### Grant Access to new model 
+## Advanced
 
-Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
+### Pass LiteLLM Key in custom header
 
-**Step 1. Assign model, access group in config.yaml**
+Use this to make LiteLLM proxy look for the virtual key in a custom header instead of the default `"Authorization"` header
+
+**Step 1** Define `litellm_key_header_name` name on litellm config.yaml
 
 ```yaml
 model_list:
-  - model_name: text-embedding-ada-002
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: azure/azure-embedding-model
-      api_base: "os.environ/AZURE_API_BASE"
-      api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2023-07-01-preview"
-    model_info:
-      access_groups: ["beta-models"] # 👈 Model Access Group
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings: 
+  master_key: sk-1234 
+  litellm_key_header_name: "X-Litellm-Key" # 👈 Key Change
+
 ```
 
-**Step 2. Create key with access group**
+**Step 2** Test it
 
-```bash
-curl --location 'http://localhost:4000/key/generate' \
--H 'Authorization: Bearer <your-master-key>' \
--H 'Content-Type: application/json' \
--d '{"models": ["beta-models"], # 👈 Model Access Group
-			"max_budget": 0,}'
+In this request, litellm will use the Virtual key in the `X-Litellm-Key` header
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Litellm-Key: Bearer sk-1234" \
+  -H "Authorization: Bearer bad-key" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ]
+  }'
 ```
 
-## Advanced - Custom Auth 
+**Expected Response**
 
-You can now override the default api key auth.
+Expect to see a successful response from the litellm proxy since the key passed in `X-Litellm-Key` is valid
+```shell
+{"id":"chatcmpl-f9b2b79a7c30477ab93cd0e717d1773e","choices":[{"finish_reason":"stop","index":0,"message":{"content":"\n\nHello there, how may I assist you today?","role":"assistant","tool_calls":null,"function_call":null}}],"created":1677652288,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":"fp_44709d6fcb","usage":{"completion_tokens":12,"prompt_tokens":9,"total_tokens":21}
+```
 
-Here's how: 
+</TabItem>
 
-#### 1. Create a custom auth file. 
-
-Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
+<TabItem value="python" label="OpenAI Python SDK">
 
 ```python
-from litellm.proxy._types import UserAPIKeyAuth
+client = openai.OpenAI(
+    api_key="not-used",
+    base_url="https://api-gateway-url.com/llmservc/api/litellmp",
+    default_headers={
+        "Authorization": f"Bearer {API_GATEWAY_TOKEN}", # (optional) For your API Gateway
+        "X-Litellm-Key": f"Bearer sk-1234"              # For LiteLLM Proxy
+    }
+)
+```
+</TabItem>
+</Tabs>
 
-async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth: 
-    try: 
-        modified_master_key = "sk-my-master-key"
-        if api_key == modified_master_key:
-            return UserAPIKeyAuth(api_key=api_key)
-        raise Exception
-    except: 
-        raise Exception
+### Enable/Disable Virtual Keys
+
+**Disable Keys**
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/block' \
+-H 'Authorization: Bearer LITELLM_MASTER_KEY' \
+-H 'Content-Type: application/json' \
+-d '{"key": "KEY-TO-BLOCK"}'
 ```
 
-#### 2. Pass the filepath (relative to the config.yaml)
+Expected Response: 
 
-Pass the filepath to the config.yaml 
-
-e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, this is what it looks like:
-```yaml 
-model_list: 
-  - model_name: "openai-model"
-    litellm_params: 
-      model: "gpt-3.5-turbo"
-
-litellm_settings:
-  drop_params: True
-  set_verbose: True
-
-general_settings:
-  custom_auth: custom_auth.user_api_key_auth
+```bash
+{
+  ...
+  "blocked": true
+}
 ```
 
-[**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
+**Enable Keys**
 
-#### 3. Start the proxy
-```shell
-$ litellm --config /path/to/config.yaml 
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/unblock' \
+-H 'Authorization: Bearer LITELLM_MASTER_KEY' \
+-H 'Content-Type: application/json' \
+-d '{"key": "KEY-TO-UNBLOCK"}'
 ```
+
+
+```bash
+{
+  ...
+  "blocked": false
+}
+```
+
 
 ### Custom /key/generate
 
@@ -486,15 +484,19 @@ general_settings:
 ```
 
 
-## Upperbound /key/generate params
+### Upperbound /key/generate params
 Use this, if you need to set default upperbounds for `max_budget`, `budget_duration` or any `key/generate` param per key. 
 
 Set `litellm_settings:upperbound_key_generate_params`:
 ```yaml
 litellm_settings:
   upperbound_key_generate_params:
-    max_budget: 100 # upperbound of $100, for all /key/generate requests
-    duration: "30d" # upperbound of 30 days for all /key/generate requests
+    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
+    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
+    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
+    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
+    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
 ```
 
 ** Expected Behavior **
@@ -502,7 +504,7 @@ litellm_settings:
 - Send a `/key/generate` request with `max_budget=200`
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
-## Default /key/generate params
+### Default /key/generate params
 Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
 
 When a `/key/generate` request does not specify `max_budget`, it will use the `max_budget` specified in `default_key_generate_params`
@@ -518,7 +520,231 @@ litellm_settings:
     team_id: "core-infra"
 ```
 
-## Endpoints
+### ✨ Key Rotations 
+
+:::info
+
+This is an Enterprise feature.
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
+
+
+:::
+
+Rotate an existing API Key, while optionally updating its parameters.
+
+```bash
+
+curl 'http://localhost:4000/key/sk-1234/regenerate' \
+  -X POST \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "max_budget": 100,
+    "metadata": {
+      "team": "core-infra"
+    },
+    "models": [
+      "gpt-4",
+      "gpt-3.5-turbo"
+    ]
+  }'
+
+```
+
+**Read More**
+
+- [Write rotated keys to secrets manager](https://docs.litellm.ai/docs/secret#aws-secret-manager)
+
+[**👉 API REFERENCE DOCS**](https://litellm-api.up.railway.app/#/key%20management/regenerate_key_fn_key__key__regenerate_post)
+
+
+### Scheduled Key Rotations
+
+LiteLLM can rotate **virtual keys automatically** based on time intervals you define.
+
+#### Prerequisites
+
+1. **Database connection required** - Key rotation requires a connected database to track rotation schedules
+2. **Enable the rotation worker** - Set environment variable `LITELLM_KEY_ROTATION_ENABLED=true`
+3. **Configure check interval** - Optionally set `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` (default: 86400 seconds / 24 hours)
+
+#### How it works
+
+1. When creating a virtual key, set `auto_rotate: true` and `rotation_interval` (duration string)
+2. LiteLLM calculates the next rotation time as `now + rotation_interval` and stores it in the database
+3. A background job periodically checks for keys where the rotation time has passed
+4. When a key is due for rotation, LiteLLM automatically regenerates it and invalidates the old key string
+5. The new rotation time is calculated and the cycle continues
+
+#### Create a key with auto rotation
+
+**API**
+```bash
+curl 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "models": ["gpt-4o"],
+        "auto_rotate": true,
+        "rotation_interval": "30d"
+      }'
+```
+
+**LiteLLM UI**
+
+On the LiteLLM UI, Navigate to the Keys page and click on `Generate Key` > `Key Lifecycle` > `Enable Auto Rotation`
+<Image 
+  img={require('../../img/key_r.png')}
+  style={{width: '30%', display: 'block', margin: '0'}}
+/>
+
+**Valid rotation_interval formats:**
+- `"30s"` - 30 seconds
+- `"30m"` - 30 minutes
+- `"30h"` - 30 hours
+- `"30d"` - 30 days
+- `"90d"` - 90 days
+
+#### Update existing key to enable rotation
+
+**API**
+
+```bash
+curl 'http://0.0.0.0:4000/key/update' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "key": "sk-existing-key",
+        "auto_rotate": true,
+        "rotation_interval": "90d"
+      }'
+```
+
+**LiteLLM UI**
+
+On the LiteLLM UI, Navigate to the Keys page. Select the key you want to update and click on `Edit Settings` > `Auto-Rotation Settings`
+
+<Image 
+  img={require('../../img/key_u.png')}
+  style={{width: '30%', display: 'block', margin: '0'}}
+/>
+
+#### Environment variables
+
+Set these environment variables when starting the proxy:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LITELLM_KEY_ROTATION_ENABLED` | Enable the rotation worker | `false` |
+| `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` | How often to scan for keys to rotate (in seconds) | `86400` (24 hours) |
+
+**Example:**
+```bash
+export LITELLM_KEY_ROTATION_ENABLED=true
+export LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS=3600  # Check every hour
+
+litellm --config config.yaml
+```
+
+### Temporary Budget Increase
+
+Use the `/key/update` endpoint to increase the budget of an existing key. 
+
+```bash
+curl -L -X POST 'http://localhost:4000/key/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"key": "sk-b3Z3Lqdb_detHXSUp4ol4Q", "temp_budget_increase": 100, "temp_budget_expiry": "10d"}'
+```
+
+[API Reference](https://litellm-api.up.railway.app/#/key%20management/update_key_fn_key_update_post)
+
+
+### Restricting Key Generation
+
+Use this to control who can generate keys. Useful when letting others create keys on the UI. 
+
+```yaml
+litellm_settings:
+  key_generation_settings:
+    team_key_generation:
+      allowed_team_member_roles: ["admin"]
+      required_params: ["tags"] # require team admins to set tags for cost-tracking when generating a team key
+    personal_key_generation: # maps to 'Default Team' on UI 
+      allowed_user_roles: ["proxy_admin"]
+```
+
+#### Spec 
+
+```python
+key_generation_settings: Optional[StandardKeyGenerationConfig] = None
+```
+
+#### Types
+
+```python
+class StandardKeyGenerationConfig(TypedDict, total=False):
+    team_key_generation: TeamUIKeyGenerationConfig
+    personal_key_generation: PersonalUIKeyGenerationConfig
+
+class TeamUIKeyGenerationConfig(TypedDict):
+    allowed_team_member_roles: List[str] # either 'user' or 'admin'
+    required_params: List[str] # require params on `/key/generate` to be set if a team key (team_id in request) is being generated
+
+
+class PersonalUIKeyGenerationConfig(TypedDict):
+    allowed_user_roles: List[LitellmUserRoles] 
+    required_params: List[str] # require params on `/key/generate` to be set if a personal key (no team_id in request) is being generated
+
+
+class LitellmUserRoles(str, enum.Enum):
+    """
+    Admin Roles:
+    PROXY_ADMIN: admin over the platform
+    PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
+    ORG_ADMIN: admin over a specific organization, can create teams, users only within their organization
+
+    Internal User Roles:
+    INTERNAL_USER: can login, view/create/delete their own keys, view their spend
+    INTERNAL_USER_VIEW_ONLY: can login, view their own keys, view their own spend
+
+
+    Team Roles:
+    TEAM: used for JWT auth
+
+
+    Customer Roles:
+    CUSTOMER: External users -> these are customers
+
+    """
+
+    # Admin Roles
+    PROXY_ADMIN = "proxy_admin"
+    PROXY_ADMIN_VIEW_ONLY = "proxy_admin_viewer"
+
+    # Organization admins
+    ORG_ADMIN = "org_admin"
+
+    # Internal User Roles
+    INTERNAL_USER = "internal_user"
+    INTERNAL_USER_VIEW_ONLY = "internal_user_viewer"
+
+    # Team Roles
+    TEAM = "team"
+
+    # Customer Roles - External users of proxy
+    CUSTOMER = "customer"
+```
+
+
+## **Next Steps - Set Budgets, Rate Limits per Virtual Key**
+
+[Follow this doc to set budgets, rate limiters per virtual key with LiteLLM](users)
+
+## Endpoint Reference (Spec)
 
 ### Keys 
 

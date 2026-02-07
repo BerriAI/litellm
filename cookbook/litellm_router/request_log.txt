@@ -20,7 +20,7 @@ Call all LLM APIs using the OpenAI format.
 Response ID: 52dbbd49-eedb-4c11-8382-3ca7deb1af35 Url: /queue/response/52dbbd49-eedb-4c11-8382-3ca7deb1af35
 Time: 3.50 seconds
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -35,7 +35,7 @@ Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. C
 Response ID: ae1e2b71-d711-456d-8df0-13ce0709eb04 Url: /queue/response/ae1e2b71-d711-456d-8df0-13ce0709eb04
 Time: 5.60 seconds
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10

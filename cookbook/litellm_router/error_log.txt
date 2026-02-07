@@ -1,10 +1,10 @@
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -21,13 +21,13 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -49,7 +49,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -61,7 +61,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -70,7 +70,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -79,7 +79,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -109,7 +109,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -128,7 +128,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -148,7 +148,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -162,7 +162,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -174,7 +174,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -184,7 +184,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -193,19 +193,19 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -214,7 +214,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -234,7 +234,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -244,7 +244,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -253,7 +253,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -267,31 +267,31 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -305,7 +305,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -330,7 +330,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -339,7 +339,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -360,7 +360,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -369,7 +369,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -378,7 +378,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -388,7 +388,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -409,7 +409,7 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -422,13 +422,13 @@ Exception: Expecting value: line 1 column 1 (char 0)
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -438,7 +438,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: Expecting value: line 1 column 1 (char 0)
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -462,7 +462,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -482,7 +482,7 @@ Exception: 'Response' object has no attribute 'get'
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -492,7 +492,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -516,7 +516,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -529,7 +529,7 @@ Exception: 'Response' object has no attribute 'get'
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -546,13 +546,13 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -580,13 +580,13 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -624,7 +624,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -638,13 +638,13 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -660,7 +660,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -681,7 +681,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -691,31 +691,31 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -771,7 +771,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -780,7 +780,7 @@ Exception: 'Response' object has no attribute 'get'
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -800,7 +800,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -820,7 +820,7 @@ Exception: 'Response' object has no attribute 'get'
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -830,7 +830,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -840,7 +840,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -850,7 +850,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -862,13 +862,13 @@ Exception: 'Response' object has no attribute 'get'
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -877,7 +877,7 @@ Exception: 'Response' object has no attribute 'get'
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -898,7 +898,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -919,7 +919,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -936,19 +936,19 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -961,25 +961,25 @@ Exception: 'Response' object has no attribute 'get'
 Question: Does litellm support ooobagooba llms? how can i call oobagooba llms. Call all LLM APIs using the Ope
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10
@@ -993,7 +993,7 @@ Question: Given this context, what is litellm? LiteLLM about: About
 Call all LLM APIs using the OpenAI format.
 Exception: 'Response' object has no attribute 'get'
 
-Question: What endpoints does the litellm proxy have 💥 OpenAI Proxy Server
+Question: What endpoints does the litellm proxy have 💥 LiteLLM Proxy Server
 LiteLLM Server manages:
 
 Calling 10

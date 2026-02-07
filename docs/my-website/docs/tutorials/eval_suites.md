@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Evaluate LLMs - ML Flow Evals, Auto Eval
+# Evaluate LLMs - MLflow Evals, Auto Eval
 
-## Using LiteLLM with ML Flow 
+## Using LiteLLM with MLflow
 MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
 
 ### Pre Requisites
@@ -153,7 +153,7 @@ $ litellm --model command-nightly
 </Tabs>
 
 
-### Step 2: Run ML Flow
+### Step 2: Run MLflow
 Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
 
 ```python
@@ -209,7 +209,7 @@ with mlflow.start_run() as run:
 
 ```
 
-### ML Flow Output
+### MLflow Output
 ```
 {'toxicity/v1/mean': 0.00014476531214313582, 'toxicity/v1/variance': 2.5759661361262862e-12, 'toxicity/v1/p90': 0.00014604929747292773, 'toxicity/v1/ratio': 0.0, 'exact_match/v1': 0.0}
 Downloading artifacts: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1890.18it/s]
