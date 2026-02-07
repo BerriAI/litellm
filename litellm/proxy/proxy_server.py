@@ -641,7 +641,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -655,6 +655,7 @@ def cleanup_router_config_variables():
     use_background_health_checks = None
     use_shared_health_check = None
     health_check_interval = None
+    health_check_concurrency = None
     prisma_client = None
 
 
@@ -1302,6 +1303,7 @@ use_background_health_checks = None
 use_shared_health_check = None
 use_queue = False
 health_check_interval = None
+health_check_concurrency = None
 health_check_details = None
 health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 queue: List = []
@@ -1755,7 +1757,7 @@ async def _run_background_health_check():
     Update health_check_results, based on this.
     Uses shared health check state when Redis is available to coordinate across pods.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache, prisma_client
+    global health_check_results, llm_model_list, health_check_interval, health_check_concurrency, health_check_details, use_shared_health_check, redis_usage_cache, prisma_client
 
     if (
         health_check_interval is None
@@ -1801,7 +1803,9 @@ async def _run_background_health_check():
                     healthy_endpoints,
                     unhealthy_endpoints,
                 ) = await shared_health_manager.perform_shared_health_check(
-                    model_list=_llm_model_list, details=details_bool
+                    model_list=_llm_model_list,
+                    details=details_bool,
+                    max_concurrency=health_check_concurrency,
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -1809,11 +1813,15 @@ async def _run_background_health_check():
                     str(e),
                 )
                 healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=_llm_model_list, details=health_check_details
+                    model_list=_llm_model_list,
+                    details=health_check_details,
+                    max_concurrency=health_check_concurrency,
                 )
         else:
             healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                model_list=_llm_model_list, details=health_check_details
+                model_list=_llm_model_list,
+                details=health_check_details,
+                max_concurrency=health_check_concurrency,
             )
 
         # Update the global variable with the health check results
@@ -2301,7 +2309,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2725,6 +2733,9 @@ class ProxyConfig:
             health_check_interval = general_settings.get(
                 "health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL
             )
+            health_check_concurrency = general_settings.get(
+                "health_check_concurrency", None
+            )
             health_check_details = general_settings.get("health_check_details", True)
 
             ### RBAC ###
@@ -2819,7 +2830,7 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
-                elif k == "health_check_interval":
+                elif k in {"health_check_interval", "health_check_concurrency"}:
                     raise ValueError(
                         f"'{k}' is NOT a valid router_settings parameter. Please move it to 'general_settings'."
                     )

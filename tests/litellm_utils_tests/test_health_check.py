@@ -563,6 +563,32 @@ async def test_health_check_bad_model():
 
 
 @pytest.mark.asyncio
+async def test_health_check_respects_concurrency_limit():
+    from litellm.proxy.health_check import _perform_health_check
+
+    model_list = [
+        {"litellm_params": {"model": f"openai/gpt-4o-mini-{i}", "api_key": "fake-key"}}
+        for i in range(6)
+    ]
+
+    active = 0
+    max_active = 0
+
+    async def mock_health_check(litellm_params, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        return {"status": "healthy"}
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        await _perform_health_check(model_list, max_concurrency=2)
+
+    assert max_active <= 2
+
+
+@pytest.mark.asyncio
 async def test_ahealth_check_ocr():
     litellm._turn_on_debug()
     response = await litellm.ahealth_check(
