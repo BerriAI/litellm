@@ -224,3 +224,23 @@ async def test_policy_id_from_init(mock_api_call):
 
     mock_api_call.assert_called_once()
     assert mock_api_call.call_args.kwargs["policy_id"] == 100
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_policy_id_zero_from_request_metadata(mock_api_call):
+    """
+    Test policy_id=0 is correctly picked. Make sure pick exact policy_id which users set
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test"]}
+    request_data = {
+        "metadata": {
+            "zguard_policy_id": 0,
+        }
+    }
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["policy_id"] == 0
