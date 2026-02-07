@@ -40,5 +40,8 @@ class LangfuseSpanAttributes(str, Enum):
     EXISTING_TRACE_ID = "langfuse.trace.existing_id"
     UPDATE_TRACE_KEYS = "langfuse.trace.update_keys"
 
+    # ---- Cost----
+    TOTAL_COST = "gen_ai.usage.cost"
+
     # ---- Misc / flags ----
     DEBUG_LANGFUSE = "langfuse.debug"
