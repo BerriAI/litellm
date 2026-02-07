@@ -88,10 +88,14 @@ class IPAddressUtils:
             general_settings: Optional settings dict. If not provided, imports from proxy_server.
         """
         if general_settings is None:
-            from litellm.proxy.proxy_server import (
-                general_settings as proxy_general_settings,
-            )
-            general_settings = proxy_general_settings
+            try:
+                from litellm.proxy.proxy_server import (
+                    general_settings as proxy_general_settings,
+                )
+                general_settings = proxy_general_settings
+            except ImportError:
+                # Fallback if proxy_server not available (e.g., MCP gated deployments)
+                general_settings = {}
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)

@@ -2228,10 +2228,14 @@ class MCPServerManager:
 
     def _get_general_settings(self) -> Dict[str, Any]:
         """Get general_settings, importing lazily to avoid circular imports."""
-        from litellm.proxy.proxy_server import (
-            general_settings as proxy_general_settings,
-        )
-        return proxy_general_settings
+        try:
+            from litellm.proxy.proxy_server import (
+                general_settings as proxy_general_settings,
+            )
+            return proxy_general_settings
+        except ImportError:
+            # Fallback if proxy_server not available
+            return {}
 
     def _is_server_accessible_from_ip(
         self, server: MCPServer, client_ip: Optional[str]

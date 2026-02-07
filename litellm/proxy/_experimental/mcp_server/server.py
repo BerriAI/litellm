@@ -1947,7 +1947,9 @@ if MCP_AVAILABLE:
             )
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             for server_name in mcp_servers or []:
-                server = global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name, client_ip=_client_ip
+                )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
                     request = StarletteRequest(scope)
                     base_url = str(request.base_url).rstrip("/")
