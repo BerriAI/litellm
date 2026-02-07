@@ -317,12 +317,14 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
     def __init__(
         self, original_error, message: Optional[str] = None, text: Optional[str] = None
     ):
+        from litellm.litellm_core_utils.redact_api_keys import redact_api_keys
+
         # Create a new error with the masked URL
         masked_url = mask_sensitive_info(str(original_error.request.url))
         # Create a new error that looks like the original, but with a masked URL
 
         super().__init__(
-            message=original_error.message,
+            message=redact_api_keys(original_error.message) or original_error.message,
             request=httpx.Request(
                 method=original_error.request.method,
                 url=masked_url,
@@ -335,8 +337,9 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
                 headers=original_error.response.headers,
             ),
         )
-        self.message = message
-        self.text = text
+        # Redact API keys from message and text fields
+        self.message = redact_api_keys(message) if message else message
+        self.text = redact_api_keys(text) if text else text
 
 
 class AsyncHTTPHandler:
