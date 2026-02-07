@@ -32,7 +32,7 @@ def get_api_base(
     # without constructing a full LiteLLM_Params Pydantic model.
     if isinstance(optional_params, dict):
         _api_base = optional_params.get("api_base")
-        if _api_base is not None:
+        if isinstance(_api_base, str):
             return _api_base
 
     try:
