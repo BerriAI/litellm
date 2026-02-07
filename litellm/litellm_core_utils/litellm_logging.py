@@ -767,8 +767,13 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         # First check if model starts with a known custom logger compatible callback
         # This takes precedence for backward compatibility
-        for callback_name in litellm._known_custom_logger_compatible_callbacks:
-            if model.startswith(callback_name):
+        # Need to check longer names first to avoid matching "langfuse" when model is "langfuse_otel/..."
+        callback_list = list(litellm._known_custom_logger_compatible_callbacks)
+        callback_list.sort(key=len, reverse=True)
+
+        for callback_name in callback_list:
+            # Match exact prefix with "/" or exact match
+            if model.startswith(callback_name + "/") or model == callback_name:
                 custom_logger = _init_custom_logger_compatible_class(
                     logging_integration=callback_name,
                     internal_usage_cache=None,
