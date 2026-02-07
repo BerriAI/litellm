@@ -27,13 +27,28 @@ class LoggingCallbackManager:
     # healthy maximum number of callbacks - unlikely someone needs more than 20
     MAX_CALLBACKS = 30
 
-    def add_litellm_input_callback(self, callback: Union[CustomLogger, str]):
+    def _is_async_callable(self, callback) -> bool:
+        """Check if a callback is async. Used to auto-route callbacks to the correct list."""
+        try:
+            from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+
+            return coroutine_checker.is_async_callable(callback)
+        except Exception:
+            return False
+
+    def add_litellm_input_callback(self, callback: Union[CustomLogger, str, Callable]):
         """
-        Add a input callback to litellm.input_callback
+        Add a input callback to litellm.input_callback.
+        Auto-routes async callbacks to litellm._async_input_callback.
         """
-        self._safe_add_callback_to_list(
-            callback=callback, parent_list=litellm.input_callback
-        )
+        if not isinstance(callback, str) and self._is_async_callable(callback):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_input_callback
+            )
+        else:
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm.input_callback
+            )
 
     def add_litellm_service_callback(
         self, callback: Union[CustomLogger, str, Callable]
@@ -59,21 +74,38 @@ class LoggingCallbackManager:
         self, callback: Union[CustomLogger, str, Callable]
     ):
         """
-        Add a success callback to `litellm.success_callback`
+        Add a success callback to `litellm.success_callback`.
+        Auto-routes async callbacks to litellm._async_success_callback.
+        Special-cases 'dynamodb' and 'openmeter' as async callbacks.
         """
-        self._safe_add_callback_to_list(
-            callback=callback, parent_list=litellm.success_callback
-        )
+        if isinstance(callback, str) and callback in ("dynamodb", "openmeter"):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_success_callback
+            )
+        elif not isinstance(callback, str) and self._is_async_callable(callback):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_success_callback
+            )
+        else:
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm.success_callback
+            )
 
     def add_litellm_failure_callback(
         self, callback: Union[CustomLogger, str, Callable]
     ):
         """
-        Add a failure callback to `litellm.failure_callback`
+        Add a failure callback to `litellm.failure_callback`.
+        Auto-routes async callbacks to litellm._async_failure_callback.
         """
-        self._safe_add_callback_to_list(
-            callback=callback, parent_list=litellm.failure_callback
-        )
+        if not isinstance(callback, str) and self._is_async_callable(callback):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_failure_callback
+            )
+        else:
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm.failure_callback
+            )
 
     def add_litellm_async_success_callback(
         self, callback: Union[CustomLogger, Callable, str]

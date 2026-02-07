@@ -3304,3 +3304,79 @@ class TestIsStreamingRequest:
 
     def test_stream_true_overrides_non_streaming_call_type(self):
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
+
+
+class TestCallbackAsyncSyncSeparation:
+    """Test that LoggingCallbackManager auto-routes async callbacks to async lists."""
+
+    def setup_method(self):
+        """Reset callback lists before each test."""
+        litellm.input_callback = []
+        litellm.success_callback = []
+        litellm.failure_callback = []
+        litellm._async_input_callback = []
+        litellm._async_success_callback = []
+        litellm._async_failure_callback = []
+
+    def test_async_success_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_success_callback(my_async_cb)
+        assert my_async_cb in litellm._async_success_callback
+        assert my_async_cb not in litellm.success_callback
+
+    def test_sync_success_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_success_callback(my_sync_cb)
+        assert my_sync_cb in litellm.success_callback
+        assert my_sync_cb not in litellm._async_success_callback
+
+    def test_string_callback_stays_in_sync_list(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("langfuse")
+        assert "langfuse" in litellm.success_callback
+        assert "langfuse" not in litellm._async_success_callback
+
+    def test_async_failure_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_failure_callback(my_async_cb)
+        assert my_async_cb in litellm._async_failure_callback
+        assert my_async_cb not in litellm.failure_callback
+
+    def test_sync_failure_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_failure_callback(my_sync_cb)
+        assert my_sync_cb in litellm.failure_callback
+        assert my_sync_cb not in litellm._async_failure_callback
+
+    def test_dynamodb_routed_to_async_success(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("dynamodb")
+        assert "dynamodb" in litellm._async_success_callback
+        assert "dynamodb" not in litellm.success_callback
+
+    def test_openmeter_routed_to_async_success(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("openmeter")
+        assert "openmeter" in litellm._async_success_callback
+        assert "openmeter" not in litellm.success_callback
+
+    def test_async_input_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_input_callback(my_async_cb)
+        assert my_async_cb in litellm._async_input_callback
+        assert my_async_cb not in litellm.input_callback
+
+    def test_sync_input_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_input_callback(my_sync_cb)
+        assert my_sync_cb in litellm.input_callback
+        assert my_sync_cb not in litellm._async_input_callback
