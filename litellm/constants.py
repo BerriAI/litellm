@@ -608,7 +608,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
-    "https://api.neosantara.xyz/v1",
+    "api.neosantara.xyz/v1",
 ]
 
 
