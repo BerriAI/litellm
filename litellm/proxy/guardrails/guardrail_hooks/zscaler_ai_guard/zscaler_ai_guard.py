@@ -108,9 +108,16 @@ class ZscalerAIGuard(CustomGuardrail):
             # 4. self.policy_id (from environment) # Global
             policy_id = (
                 metadata.get("zguard_policy_id")
-                or user_api_key_metadata.get("zguard_policy_id")
-                or team_metadata.get("zguard_policy_id")
-                or self.policy_id
+                if "zguard_policy_id" in metadata
+                else (
+                    user_api_key_metadata.get("zguard_policy_id")
+                    if "zguard_policy_id" in user_api_key_metadata
+                    else (
+                        team_metadata.get("zguard_policy_id")
+                        if "zguard_policy_id" in team_metadata
+                        else self.policy_id
+                    )
+                )
             )
             verbose_proxy_logger.info(f"policy_id applied: {policy_id}")
 
@@ -134,7 +141,7 @@ class ZscalerAIGuard(CustomGuardrail):
             verbose_proxy_logger.debug(f"direction: {direction}")
             # Concatenate all texts and send to Zscaler AI Guard
             if texts:
-                concatenated_text = "\n".join(texts)
+                concatenated_text = " ".join(texts)
                 zscaler_ai_guard_result = await self.make_zscaler_ai_guard_api_call(
                     zscaler_ai_guard_url=self.zscaler_ai_guard_url,
                     api_key=self.api_key,
