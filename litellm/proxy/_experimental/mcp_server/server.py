@@ -725,7 +725,6 @@ if MCP_AVAILABLE:
     def _get_client_ip_from_context() -> Optional[str]:
         """
         Extract client_ip from auth context.
-
         Returns None if context not set (caller should handle this as "no IP filtering").
         """
         try:
@@ -748,7 +747,6 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names to filter to.
             client_ip: Client IP for IP-based access control. If None, falls back to
                       auth context. Pass explicitly from request handlers for safety.
-
         Note: If client_ip is None and auth context is not set, IP filtering is skipped.
               This is intentional for internal callers but may indicate a bug if called
               from a request handler without proper context setup.

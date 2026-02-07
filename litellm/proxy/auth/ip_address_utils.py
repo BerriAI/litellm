@@ -49,7 +49,6 @@ class IPAddressUtils:
     ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
         """
         Parse trusted proxy CIDR ranges for XFF validation.
-
         Returns empty list if not configured (XFF will not be trusted).
         """
         if not configured_ranges:
@@ -153,5 +152,4 @@ class IPAddressUtils:
                         "XFF header from untrusted IP %s, ignoring", direct_ip
                     )
                     return direct_ip
-
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
