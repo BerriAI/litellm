@@ -23,6 +23,26 @@ sys.path.insert(
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
+MOCK_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mock_tool",
+            "description": "A mock tool used just to test tool plumbing. It echoes back the given value.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": "string",
+                        "description": "Any string to echo back.",
+                    }
+                },
+                "required": ["value"],
+            },
+        },
+    }
+]
+
 
 class ReceiveMock:
     def __init__(self, return_values, delay: float):
@@ -323,6 +343,60 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
     assert len(results) == length
     assert len(websocket_mock.send.mock_calls) == length + 1
     assert websocket_mock.send.mock_calls[-1] == call('{"done": true}')
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["pre_call", "during_call"])
+async def test_anonymize_callback__it_returns_tools(mode: str):
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": mode,
+                    "api_key": "hs-aim-key",
+                },
+            },
+        ],
+        config_file_path="",
+    )
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
+    assert len(aim_guardrails) == 1
+    aim_guardrail = aim_guardrails[0]
+
+    data = {
+        "messages": [
+            {"role": "user", "content": "Hi my name id Brian"},
+        ],
+        "tools": MOCK_TOOLS,
+    }
+
+    with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=response_with_detections,
+    ) as post_mock:
+        if mode == "pre_call":
+            await aim_guardrail.async_pre_call_hook(
+                data=data,
+                cache=DualCache(),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+        else:
+            await aim_guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+    post_mock.assert_called_once()
+    args, kwargs = post_mock.call_args
+
+    assert args[2] == {
+        "messages": data["messages"],
+        "tools": data["tools"],
+    }
 
 
 @pytest.mark.asyncio
