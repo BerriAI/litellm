@@ -826,6 +826,59 @@ def function_setup(  # noqa: PLR0915
             )
             get_set_callbacks = getattr(sys.modules[__name__], "get_set_callbacks")
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
+        ## ASYNC CALLBACKS - safety net for callbacks added via direct append
+        if len(litellm.input_callback) > 0:
+            removed_async_items = []
+            for index, callback in enumerate(litellm.input_callback):  # type: ignore
+                if coroutine_checker.is_async_callable(callback):
+                    litellm._async_input_callback.append(callback)
+                    removed_async_items.append(index)
+
+            # Pop the async items from input_callback in reverse order to avoid index issues
+            for index in reversed(removed_async_items):
+                litellm.input_callback.pop(index)
+        if len(litellm.success_callback) > 0:
+            removed_async_items = []
+            for index, callback in enumerate(litellm.success_callback):  # type: ignore
+                if coroutine_checker.is_async_callable(callback):
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(
+                        callback
+                    )
+                    removed_async_items.append(index)
+                elif callback == "dynamodb" or callback == "openmeter":
+                    # dynamo is an async callback, it's used for the proxy and needs to be async
+                    # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(
+                        callback
+                    )
+                    removed_async_items.append(index)
+                elif (
+                    callback in litellm._known_custom_logger_compatible_callbacks
+                    and isinstance(callback, str)
+                ):
+                    _add_custom_logger_callback_to_specific_event(callback, "success")
+
+            # Pop the async items from success_callback in reverse order to avoid index issues
+            for index in reversed(removed_async_items):
+                litellm.success_callback.pop(index)
+
+        if len(litellm.failure_callback) > 0:
+            removed_async_items = []
+            for index, callback in enumerate(litellm.failure_callback):  # type: ignore
+                if coroutine_checker.is_async_callable(callback):
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                        callback
+                    )
+                    removed_async_items.append(index)
+                elif (
+                    callback in litellm._known_custom_logger_compatible_callbacks
+                    and isinstance(callback, str)
+                ):
+                    _add_custom_logger_callback_to_specific_event(callback, "failure")
+
+            # Pop the async items from failure_callback in reverse order to avoid index issues
+            for index in reversed(removed_async_items):
+                litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks: Optional[
             List[Union[str, Callable, "CustomLogger"]]
