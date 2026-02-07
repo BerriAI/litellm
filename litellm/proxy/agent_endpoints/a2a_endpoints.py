@@ -56,7 +56,7 @@ async def _handle_stream_message(
     proxy_server_request: Optional[dict] = None,
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions."""
-    from litellm.a2a_protocol import asend_message_streaming
+    from litellm.a2a_protocol import asend_message_streaming, create_a2a_client
     from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
 
     # Check is handled in invoke_agent_a2a, but if called directly:
@@ -84,7 +84,11 @@ async def _handle_stream_message(
                 id=request_id,
                 params=MessageSendParams(**params),
             )
+            a2a_client = await create_a2a_client(base_url=api_base)
+            request_headers = proxy_server_request.get("headers", {}) if proxy_server_request else {}
+            a2a_client.httpx_client.headers.update(request_headers)
             async for chunk in asend_message_streaming(
+                a2a_client=a2a_client,
                 request=a2a_request,
                 api_base=api_base,
                 litellm_params=litellm_params,
@@ -315,13 +319,19 @@ async def invoke_agent_a2a(
                 id=request_id,
                 params=MessageSendParams(**params),
             )
+            proxy_server_request = data.get("proxy_server_request", {})
+            a2a_client = await create_a2a_client(base_url=api_base)
+            request_headers = proxy_server_request.get("headers", {})
+            a2a_client.httpx_client.headers.update(request_headers)
+
             response = await asend_message(
+                a2a_client=a2a_client,
                 request=a2a_request,
                 api_base=agent_url,
                 litellm_params=litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
-                proxy_server_request=data.get("proxy_server_request"),
+                proxy_server_request=proxy_server_request,
             )
             return JSONResponse(
                 content=response.model_dump(mode="json", exclude_none=True)
