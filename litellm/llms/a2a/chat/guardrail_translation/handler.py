@@ -10,6 +10,7 @@ A2A Protocol Format:
 - Output: JSON-RPC 2.0 with result containing message/artifact parts
 """
 
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -206,6 +207,132 @@ class A2AGuardrailHandler(BaseTranslation):
             response["result"] = result
             return response
 
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: List[Any],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+    ) -> List[Any]:
+        """
+        Process A2A streaming output by applying guardrails to accumulated text.
+
+        IN-PLACE MODIFICATION: This method mutates responses_so_far in place. Callers
+        must deep-copy the current chunk before calling if they intend to yield that
+        chunk, because we put the full guardrailed text in the first chunk and clear
+        all subsequent text parts to "".
+
+        Algorithm:
+        1. Parse each item (dict or NDJSON str) and collect text from result.artifact.parts,
+           result.message.parts, result.parts, etc.
+        2. Concatenate all texts in order, apply guardrail once to the combined string.
+        3. Write the full guardrailed text into the FIRST chunk's first text part.
+        4. Clear all other text parts in all chunks to "" (in-place).
+
+        responses_so_far: List of JSON-RPC 2.0 objects (dict or NDJSON str).
+        Returns: The same list (modified in place).
+        """
+        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+        # Parse each item; keep alignment with responses_so_far (None where unparseable)
+        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
+        for i, item in enumerate(responses_so_far):
+            if isinstance(item, dict):
+                obj = item
+            elif isinstance(item, str):
+                try:
+                    obj = json.loads(item.strip())
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            else:
+                continue
+            if isinstance(obj.get("result"), dict):
+                parsed[i] = obj
+
+        valid_parsed = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
+        if not valid_parsed:
+            return responses_so_far
+
+        # Collect text from each chunk in order (by original index in responses_so_far)
+        text_parts: List[str] = []
+        chunk_indices_with_text: List[int] = []  # indices into valid_parsed
+        for idx, (orig_i, obj) in enumerate(valid_parsed):
+            t = extract_text_from_a2a_response(obj)
+            if t:
+                text_parts.append(t)
+                chunk_indices_with_text.append(orig_i)
+
+        combined_text = "".join(text_parts)
+        if not combined_text:
+            return responses_so_far
+
+        request_data: dict = {"responses_so_far": responses_so_far}
+        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        if user_metadata:
+            request_data["litellm_metadata"] = user_metadata
+
+        inputs = GenericGuardrailAPIInputs(texts=[combined_text])
+        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        guardrailed_texts = guardrailed_inputs.get("texts", [])
+        if not guardrailed_texts or len(guardrailed_texts) != 1:
+            # Guardrail should return exactly one text for combined input
+            verbose_proxy_logger.warning(
+                "A2A streaming guardrail returned unexpected texts count: %s",
+                len(guardrailed_texts or []),
+            )
+            return responses_so_far
+        guardrailed_text = guardrailed_texts[0]
+
+        # Find first chunk (by original index) that has text; put full guardrailed text there and clear rest
+        first_chunk_with_text: Optional[int] = (
+            chunk_indices_with_text[0] if chunk_indices_with_text else None
+        )
+
+        for orig_i, obj in valid_parsed:
+            result = obj.get("result", {})
+            if not isinstance(result, dict):
+                continue
+            texts_in_chunk: List[str] = []
+            mappings: List[Tuple[Tuple[str, ...], int]] = []
+            self._extract_texts_from_result(
+                result=result,
+                texts_to_check=texts_in_chunk,
+                task_mappings=mappings,
+            )
+            if not mappings:
+                continue
+            if orig_i == first_chunk_with_text:
+                # Put full guardrailed text in first text part; clear others in this chunk
+                for task_idx, (path, part_idx) in enumerate(mappings):
+                    text = guardrailed_text if task_idx == 0 else ""
+                    self._apply_text_to_path(
+                        result=result,
+                        path=path,
+                        part_idx=part_idx,
+                        text=text,
+                    )
+            else:
+                # Clear all text parts in non-first chunks (in-place)
+                for path, part_idx in mappings:
+                    self._apply_text_to_path(
+                        result=result,
+                        path=path,
+                        part_idx=part_idx,
+                        text="",
+                    )
+
+        # Write back to responses_so_far where we had NDJSON strings
+        for i, item in enumerate(responses_so_far):
+            if isinstance(item, str) and parsed[i] is not None:
+                responses_so_far[i] = json.dumps(parsed[i]) + "\n"
+
+        return responses_so_far
+
     def _extract_texts_from_result(
         self,
         result: Dict[str, Any],
@@ -301,15 +428,21 @@ class A2AGuardrailHandler(BaseTranslation):
         part_idx: int,
         text: str,
     ) -> None:
-        """Apply guardrailed text back to the specified path in the result."""
-        # Navigate to the parts list
-        current = result
+        """Apply guardrailed text back to the specified path in the result (in-place)."""
+        current: Any = result
         for key in path:
             if key.isdigit():
-                # Array index
                 current = current[int(key)]
             else:
                 current = current[key]
 
-        # Update the text in the part
-        current[part_idx]["text"] = text
+        if not isinstance(current, list) or part_idx >= len(current):
+            verbose_proxy_logger.warning(
+                "A2A _apply_text_to_path: invalid path or index path=%s part_idx=%s",
+                path,
+                part_idx,
+            )
+            return
+        part = current[part_idx]
+        if isinstance(part, dict) and "text" in part:
+            part["text"] = text
