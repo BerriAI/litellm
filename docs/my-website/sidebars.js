@@ -543,6 +543,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",
