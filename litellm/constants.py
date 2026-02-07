@@ -67,6 +67,25 @@ DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
 )
 
+# MCP Semantic Tool Filter Defaults
+DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_MCP_SEMANTIC_FILTER_TOP_K = int(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_TOP_K", 10)
+)
+DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
+)
+MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
+    os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
+LITELLM_UI_ALLOW_HEADERS = [
+    "x-litellm-semantic-filter",
+    "x-litellm-semantic-filter-tools",
+]
+
 # Gemini model-specific minimal thinking budget constants
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", 1)
@@ -84,6 +103,9 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
 )
+
+# Provider-specific API base URLs
+XAI_API_BASE = "https://api.x.ai/v1"
 
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
@@ -284,6 +306,22 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+# Patterns that indicate a localhost/internal URL in A2A agent cards that should be
+# replaced with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
@@ -948,6 +986,8 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-6-v1:0",
+    "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -980,6 +1020,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-90b-instruct-v1:0",
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
+    "amazon.nova-2-pro-preview-20251202-v1:0",
     "amazon.nova-pro-v1:0",
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
@@ -1165,7 +1206,12 @@ LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
-CLI_JWT_EXPIRATION_HOURS = int(os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", 24))
+# Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
+CLI_JWT_EXPIRATION_HOURS = int(
+    os.getenv("CLI_JWT_EXPIRATION_HOURS") 
+    or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS") 
+    or 24
+)
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
@@ -1326,6 +1372,13 @@ COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
 ########################### RAG Text Splitter Constants ###########################
 DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+
+########################### S3 Vectors RAG Constants ###########################
+S3_VECTORS_DEFAULT_DIMENSION = int(os.getenv("S3_VECTORS_DEFAULT_DIMENSION", 1024))
+S3_VECTORS_DEFAULT_DISTANCE_METRIC = str(
+    os.getenv("S3_VECTORS_DEFAULT_DISTANCE_METRIC", "cosine")
+)
+S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS = ["source_text"]
 
 ########################### Microsoft SSO Constants ###########################
 MICROSOFT_USER_EMAIL_ATTRIBUTE = str(

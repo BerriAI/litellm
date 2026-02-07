@@ -11,7 +11,7 @@ import datetime
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast, Callable
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -30,7 +30,6 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.types.utils import CallTypes
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -63,7 +62,23 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
 )
-from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name
+from litellm.types.utils import CallTypes
+
+try:
+    from mcp.shared.tool_name_validation import (  # type: ignore
+        SEP_986_URL,
+        validate_tool_name,
+    )
+except ImportError:
+    from pydantic import BaseModel
+    SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
+
+    class ToolNameValidationResult(BaseModel):
+        is_valid: bool = True
+        warnings: list = []
+
+    def validate_tool_name(name: str) -> ToolNameValidationResult:  # type: ignore[misc]
+        return ToolNameValidationResult()
 
 
 # Probe includes characters on both sides of the separator to mimic real prefixed tool names.
@@ -90,7 +105,9 @@ def _warn_on_server_name_fields(
         if result.is_valid:
             return
 
-        warning_text = "; ".join(result.warnings) if result.warnings else "Validation failed"
+        warning_text = (
+            "; ".join(result.warnings) if result.warnings else "Validation failed"
+        )
         verbose_logger.warning(
             "MCP server '%s' has invalid %s '%s': %s",
             server_id,
@@ -101,7 +118,6 @@ def _warn_on_server_name_fields(
 
     _warn("alias", alias)
     _warn("server_name", server_name)
-
 
 
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
@@ -391,10 +407,13 @@ class MCPServerManager:
             # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
             # from the client request (not available in this OpenAPI tool generation step).
             # `static_headers` is a dict of concrete headers to always send.
-            headers = merge_mcp_headers(
-                extra_headers=headers,
-                static_headers=server.static_headers,
-            ) or {}
+            headers = (
+                merge_mcp_headers(
+                    extra_headers=headers,
+                    static_headers=server.static_headers,
+                )
+                or {}
+            )
 
             verbose_logger.debug(
                 f"Using headers for OpenAPI tools (excluding sensitive values): "

@@ -5,6 +5,7 @@ datasource client {
 
 generator client {
   provider = "prisma-client-py"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
 // Budget / Rate Limits for an org
@@ -112,6 +113,7 @@ model LiteLLM_TeamTable {
     members_with_roles Json @default("{}")
     metadata  Json  @default("{}")
     max_budget Float?
+    soft_budget Float?
     spend      Float    @default(0.0)
     models     String[]
     max_parallel_requests Int?
@@ -760,6 +762,11 @@ model LiteLLM_ManagedVectorStoresTable {
   updated_at DateTime @updatedAt
   litellm_credential_name String?
   litellm_params Json?
+  team_id String?
+  user_id String?
+  
+  @@index([team_id])
+  @@index([user_id])
 }
 
 // Guardrails table for storing guardrail configurations

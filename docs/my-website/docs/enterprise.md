@@ -74,6 +74,18 @@ You can find [supported data regions litellm here](../docs/data_security#support
 
 ## Frequently Asked Questions
 
+### How to set up and verify your Enterprise License
+
+1. Add your license key to the environment:
+
+```env
+LITELLM_LICENSE="eyJ..."
+```
+
+2. Restart LiteLLM Proxy.
+
+3. Open `http://<your-proxy-host>:<port>/` — the Swagger page should show **"Enterprise Edition"** in the description. If it doesn't, check that the key is correct, unexpired, and that the proxy was fully restarted.
+
 ### SLA's + Professional Support
 
 Professional Support can assist with LLM/Provider integrations, deployment, upgrade management, and LLM Provider troubleshooting.  We can’t solve your own infrastructure-related issues but we will guide you to fix them.

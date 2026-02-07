@@ -35,7 +35,6 @@ interface KeyEditViewProps {
 // Add this helper function
 const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
   // If no teams data is available, return empty array
-  console.log("getAvailableModelsForKey:", teams);
   if (!teams || !keyData.team_id) {
     return [];
   }
@@ -172,7 +171,9 @@ export function KeyEditView({
       : [],
     auto_rotate: keyData.auto_rotate || false,
     ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-    allowed_routes: keyData.allowed_routes,
+    allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+      ? keyData.allowed_routes.join(", ")
+      : "",
   };
 
   useEffect(() => {
@@ -197,7 +198,9 @@ export function KeyEditView({
         : [],
       auto_rotate: keyData.auto_rotate || false,
       ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-      allowed_routes: keyData.allowed_routes,
+      allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+        ? keyData.allowed_routes.join(", ")
+        : "",
     });
   }, [keyData, form]);
 
@@ -226,11 +229,24 @@ export function KeyEditView({
     fetchTags();
   }, [accessToken]);
 
-  console.log("premiumUser:", premiumUser);
-
   const handleSubmit = async (values: any) => {
     try {
       setIsKeySaving(true);
+
+      // Parse allowed_routes from comma-separated string to array
+      if (typeof values.allowed_routes === "string") {
+        const trimmedInput = values.allowed_routes.trim();
+        if (trimmedInput === "") {
+          values.allowed_routes = [];
+        } else {
+          values.allowed_routes = trimmedInput
+            .split(",")
+            .map((route: string) => route.trim())
+            .filter((route: string) => route.length > 0);
+        }
+      }
+      // If it's already an array (shouldn't happen, but handle it), keep as is
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -251,7 +267,11 @@ export function KeyEditView({
           }
         >
           {({ getFieldValue, setFieldValue }) => {
-            const allowedRoutes = getFieldValue("allowed_routes") || [];
+            const allowedRoutesValue = getFieldValue("allowed_routes") || "";
+            // Convert string to array for checking
+            const allowedRoutes = typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+              ? allowedRoutesValue.split(",").map((r: string) => r.trim()).filter((r: string) => r.length > 0)
+              : [];
             const isDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
             const models = getFieldValue("models") || [];
 
@@ -290,7 +310,11 @@ export function KeyEditView({
           shouldUpdate={(prevValues, currentValues) => prevValues.allowed_routes !== currentValues.allowed_routes}
         >
           {({ getFieldValue, setFieldValue }) => {
-            const allowedRoutes = getFieldValue("allowed_routes");
+            const allowedRoutesValue = getFieldValue("allowed_routes") || "";
+            // Convert string to array for getKeyTypeFromRoutes
+            const allowedRoutes = typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+              ? allowedRoutesValue.split(",").map((r: string) => r.trim()).filter((r: string) => r.length > 0)
+              : [];
             const keyTypeValue = getKeyTypeFromRoutes(allowedRoutes);
 
             return (
@@ -302,13 +326,13 @@ export function KeyEditView({
                 onChange={(value) => {
                   switch (value) {
                     case "default":
-                      setFieldValue("allowed_routes", []);
+                      setFieldValue("allowed_routes", "");
                       break;
                     case "llm_api":
-                      setFieldValue("allowed_routes", ["llm_api_routes"]);
+                      setFieldValue("allowed_routes", "llm_api_routes");
                       break;
                     case "management":
-                      setFieldValue("allowed_routes", ["management_routes"]);
+                      setFieldValue("allowed_routes", "management_routes");
                       setFieldValue("models", []);
                       break;
                   }
@@ -342,6 +366,22 @@ export function KeyEditView({
             );
           }}
         </Form.Item>
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Allowed Routes{" "}
+            <Tooltip title="List of allowed routes for the key (comma-separated). Can be specific routes (e.g., '/chat/completions') or route patterns (e.g., 'llm_api_routes', 'management_routes', '/keys/*'). Leave empty to allow all routes.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="allowed_routes"
+      >
+        <Input
+          placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes"
+        />
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -473,7 +513,7 @@ export function KeyEditView({
               !premiumUser
                 ? "Premium feature - Upgrade to set allowed pass through routes by key"
                 : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
-                    keyData.metadata.allowed_passthrough_routes.length > 0
+                  keyData.metadata.allowed_passthrough_routes.length > 0
                   ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
                   : "Select or enter allowed pass through routes"
             }
@@ -587,11 +627,6 @@ export function KeyEditView({
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
-        <Input />
-      </Form.Item>
-
-      {/* Hidden form field for allowed_routes */}
-      <Form.Item name="allowed_routes" hidden>
         <Input />
       </Form.Item>
 

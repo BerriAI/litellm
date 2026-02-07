@@ -1,3 +1,4 @@
+import hashlib
 import json
 from typing import (
     TYPE_CHECKING,
@@ -11,6 +12,54 @@ from typing import (
     Union,
     cast,
 )
+
+# OpenAI has a 64-character limit for function/tool names
+# Anthropic does not have this limit, so we need to truncate long names
+OPENAI_MAX_TOOL_NAME_LENGTH = 64
+TOOL_NAME_HASH_LENGTH = 8
+TOOL_NAME_PREFIX_LENGTH = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
+
+
+def truncate_tool_name(name: str) -> str:
+    """
+    Truncate tool names that exceed OpenAI's 64-character limit.
+
+    Uses format: {55-char-prefix}_{8-char-hash} to avoid collisions
+    when multiple tools have similar long names.
+
+    Args:
+        name: The original tool name
+
+    Returns:
+        The original name if <= 64 chars, otherwise truncated with hash
+    """
+    if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
+        return name
+
+    # Create deterministic hash from full name to avoid collisions
+    name_hash = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
+    return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
+
+
+def create_tool_name_mapping(
+    tools: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """
+    Create a mapping of truncated tool names to original names.
+
+    Args:
+        tools: List of tool definitions with 'name' field
+
+    Returns:
+        Dict mapping truncated names to original names (only for truncated tools)
+    """
+    mapping: Dict[str, str] = {}
+    for tool in tools:
+        original_name = tool.get("name", "")
+        truncated_name = truncate_tool_name(original_name)
+        if truncated_name != original_name:
+            mapping[truncated_name] = original_name
+    return mapping
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
@@ -77,8 +126,29 @@ class AnthropicAdapter:
         self, kwargs
     ) -> Optional[ChatCompletionRequest]:
         """
+        Translate Anthropic request params to OpenAI format.
+
         - translate params, where needed
         - pass rest, as is
+
+        Note: Use translate_completion_input_params_with_tool_mapping() if you need
+        the tool name mapping for restoring original names in responses.
+        """
+        result, _ = self.translate_completion_input_params_with_tool_mapping(kwargs)
+        return result
+
+    def translate_completion_input_params_with_tool_mapping(
+        self, kwargs
+    ) -> Tuple[Optional[ChatCompletionRequest], Dict[str, str]]:
+        """
+        Translate Anthropic request params to OpenAI format, returning tool name mapping.
+
+        This method handles truncation of tool names that exceed OpenAI's 64-character
+        limit. The mapping allows restoring original names when translating responses.
+
+        Returns:
+            Tuple of (openai_request, tool_name_mapping)
+            - tool_name_mapping maps truncated tool names back to original names
         """
 
         #########################################################
@@ -102,26 +172,51 @@ class AnthropicAdapter:
             model=model, messages=messages, **kwargs
         )
 
-        translated_body = (
+        translated_body, tool_name_mapping = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
                 anthropic_message_request=request_body
             )
         )
 
-        return translated_body
+        return translated_body, tool_name_mapping
 
     def translate_completion_output_params(
-        self, response: ModelResponse
+        self,
+        response: ModelResponse,
+        tool_name_mapping: Optional[Dict[str, str]] = None,
     ) -> Optional[AnthropicMessagesResponse]:
+        """
+        Translate OpenAI response to Anthropic format.
+
+        Args:
+            response: The OpenAI ModelResponse
+            tool_name_mapping: Optional mapping of truncated tool names to original names.
+                              Used to restore original names for tools that exceeded
+                              OpenAI's 64-char limit.
+        """
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
-            response=response
+            response=response,
+            tool_name_mapping=tool_name_mapping,
         )
 
     def translate_completion_output_params_streaming(
-        self, completion_stream: Any, model: str
+        self,
+        completion_stream: Any,
+        model: str,
+        tool_name_mapping: Optional[Dict[str, str]] = None,
     ) -> Union[AsyncIterator[bytes], None]:
+        """
+        Translate OpenAI streaming response to Anthropic format.
+
+        Args:
+            completion_stream: The OpenAI streaming response
+            model: The model name
+            tool_name_mapping: Optional mapping of truncated tool names to original names.
+        """
         anthropic_wrapper = AnthropicStreamWrapper(
-            completion_stream=completion_stream, model=model
+            completion_stream=completion_stream,
+            model=model,
+            tool_name_mapping=tool_name_mapping,
         )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
@@ -170,21 +265,33 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _add_cache_control_if_applicable(
         self,
-        source: Dict[str, Any],
-        target: Dict[str, Any],
+        source: Any,
+        target: Any,
         model: Optional[str],
     ) -> None:
         """
         Extract cache_control from source and add to target if it should be preserved.
 
+        This method accepts Any type to support both regular dicts and TypedDict objects.
+        TypedDict objects (like ChatCompletionTextObject, ChatCompletionImageObject, etc.)
+        are dicts at runtime but have specific types at type-check time. Using Any allows
+        this method to work with both while maintaining runtime correctness.
+
         Args:
-            source: Dict containing potential cache_control field
-            target: Dict to add cache_control to
+            source: Dict or TypedDict containing potential cache_control field
+            target: Dict or TypedDict to add cache_control to
             model: Model name to check if cache_control should be preserved
         """
-        cache_control = source.get("cache_control")
+        # TypedDict objects are dicts at runtime, so .get() works
+        cache_control = source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         if cache_control and model and self.is_anthropic_claude_model(model):
-            target["cache_control"] = cache_control
+            # TypedDict objects support dict operations at runtime
+            # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
+            if isinstance(target, dict):
+                target["cache_control"] = cache_control  # type: ignore[typeddict-item]
+            else:
+                # Fallback for non-dict objects (shouldn't happen in practice)
+                cast(Dict[str, Any], target)["cache_control"] = cache_control
 
     def translatable_anthropic_params(self) -> List:
         """
@@ -220,7 +327,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 elif message_content and isinstance(message_content, list):
                     for content in message_content:
                         if content.get("type") == "text":
-                            text_obj: Dict[str, Any] = ChatCompletionTextObject(
+                            text_obj = ChatCompletionTextObject(
                                 type="text", text=content.get("text", "")
                             )
                             self._add_cache_control_if_applicable(content, text_obj, model)
@@ -236,7 +343,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_url_obj = ChatCompletionImageUrlObject(
                                     url=openai_image_url
                                 )
-                                image_obj: Dict[str, Any] = ChatCompletionImageObject(
+                                image_obj = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
                                 self._add_cache_control_if_applicable(content, image_obj, model)
@@ -245,21 +352,21 @@ class LiteLLMAnthropicMessagesAdapter:
                             # Convert Anthropic document format (PDF, etc.) to OpenAI format
                             source = content.get("source", {})
                             openai_image_url = (
-                                self._translate_anthropic_image_to_openai(source)
+                                self._translate_anthropic_image_to_openai(cast(dict, source))
                             )
 
                             if openai_image_url:
                                 image_url_obj = ChatCompletionImageUrlObject(
                                     url=openai_image_url
                                 )
-                                doc_obj: Dict[str, Any] = ChatCompletionImageObject(
+                                doc_obj = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)  # type: ignore
                         elif content.get("type") == "tool_result":
                             if "content" not in content:
-                                tool_result: Dict[str, Any] = ChatCompletionToolMessage(
+                                tool_result = ChatCompletionToolMessage(
                                     role="tool",
                                     tool_call_id=content.get("tool_use_id", ""),
                                     content="",
@@ -383,7 +490,7 @@ class LiteLLMAnthropicMessagesAdapter:
             assistant_message_str: Optional[str] = None
             assistant_content_list: List[Dict[str, Any]] = []  # For content blocks with cache_control
             has_cache_control_in_text = False
-            tool_calls: List[Dict[str, Any]] = []
+            tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ] = []
@@ -405,8 +512,10 @@ class LiteLLMAnthropicMessagesAdapter:
                                     has_cache_control_in_text = True
                                 assistant_content_list.append(text_block)
                             elif content.get("type") == "tool_use":
+                                # Truncate tool name for OpenAI's 64-char limit
+                                tool_name = truncate_tool_name(content.get("name", ""))
                                 function_chunk: ChatCompletionToolCallFunctionChunk = {
-                                    "name": content.get("name", ""),
+                                    "name": tool_name,
                                     "arguments": json.dumps(content.get("input", {})),
                                 }
                                 signature = (
@@ -427,7 +536,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                         provider_specific_fields
                                     )
 
-                                tool_call: Dict[str, Any] = ChatCompletionAssistantToolCall(
+                                tool_call = ChatCompletionAssistantToolCall(
                                     id=content.get("id", ""),
                                     type="function",
                                     function=function_chunk,
@@ -575,8 +684,11 @@ class LiteLLMAnthropicMessagesAdapter:
         elif tool_choice["type"] == "auto":
             return "auto"
         elif tool_choice["type"] == "tool":
+            # Truncate tool name if it exceeds OpenAI's 64-char limit
+            original_name = tool_choice.get("name", "")
+            truncated_name = truncate_tool_name(original_name)
             tc_function_param = ChatCompletionToolChoiceFunctionParam(
-                name=tool_choice.get("name", "")
+                name=truncated_name
             )
             return ChatCompletionToolChoiceObjectParam(
                 type="function", function=tc_function_param
@@ -588,12 +700,28 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def translate_anthropic_tools_to_openai(
         self, tools: List[AllAnthropicToolsValues], model: Optional[str] = None
-    ) -> List[ChatCompletionToolParam]:
+    ) -> Tuple[List[ChatCompletionToolParam], Dict[str, str]]:
+        """
+        Translate Anthropic tools to OpenAI format.
+
+        Returns:
+            Tuple of (translated_tools, tool_name_mapping)
+            - tool_name_mapping maps truncated names back to original names
+              for tools that exceeded OpenAI's 64-char limit
+        """
         new_tools: List[ChatCompletionToolParam] = []
+        tool_name_mapping: Dict[str, str] = {}
         mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
         for tool in tools:
+            original_name = tool["name"]
+            truncated_name = truncate_tool_name(original_name)
+
+            # Store mapping if name was truncated
+            if truncated_name != original_name:
+                tool_name_mapping[truncated_name] = original_name
+
             function_chunk = ChatCompletionToolParamFunctionChunk(
-                name=tool["name"],
+                name=truncated_name,
             )
             if "input_schema" in tool:
                 function_chunk["parameters"] = tool["input_schema"]  # type: ignore
@@ -603,11 +731,11 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param: Dict[str, Any] = ChatCompletionToolParam(type="function", function=function_chunk)
+            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)  # type: ignore[arg-type]
 
-        return new_tools  # type: ignore[return-value]
+        return new_tools, tool_name_mapping  # type: ignore[return-value]
 
     def translate_anthropic_output_format_to_openai(
         self, output_format: Any
@@ -645,14 +773,55 @@ class LiteLLMAnthropicMessagesAdapter:
             },
         }
 
+    def _add_system_message_to_messages(
+        self,
+        new_messages: List[AllMessageValues],
+        anthropic_message_request: AnthropicMessagesRequest,
+    ) -> None:
+        """Add system message to messages list if present in request."""
+        if "system" not in anthropic_message_request:
+            return
+        system_content = anthropic_message_request["system"]
+        if not system_content:
+            return
+        # Handle system as string or array of content blocks
+        if isinstance(system_content, str):
+            new_messages.insert(
+                0,
+                ChatCompletionSystemMessage(role="system", content=system_content),
+            )
+        elif isinstance(system_content, list):
+            # Convert Anthropic system content blocks to OpenAI format
+            openai_system_content: List[Dict[str, Any]] = []
+            model_name = anthropic_message_request.get("model", "")
+            for block in system_content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_block: Dict[str, Any] = {
+                        "type": "text",
+                        "text": block.get("text", ""),
+                    }
+                    self._add_cache_control_if_applicable(block, text_block, model_name)
+                    openai_system_content.append(text_block)
+            if openai_system_content:
+                new_messages.insert(
+                    0,
+                    ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
+                )
+
     def translate_anthropic_to_openai(
         self, anthropic_message_request: AnthropicMessagesRequest
-    ) -> ChatCompletionRequest:
+    ) -> Tuple[ChatCompletionRequest, Dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
+
+        Returns:
+            Tuple of (openai_request, tool_name_mapping)
+            - tool_name_mapping maps truncated tool names back to original names
+              for tools that exceeded OpenAI's 64-char limit
         """
         # Debug: Processing Anthropic message request
         new_messages: List[AllMessageValues] = []
+        tool_name_mapping: Dict[str, str] = {}
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
         messages_list: List[
@@ -673,32 +842,7 @@ class LiteLLMAnthropicMessagesAdapter:
             model=anthropic_message_request.get("model"),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
-        if "system" in anthropic_message_request:
-            system_content = anthropic_message_request["system"]
-            if system_content:
-                # Handle system as string or array of content blocks
-                if isinstance(system_content, str):
-                    new_messages.insert(
-                        0,
-                        ChatCompletionSystemMessage(role="system", content=system_content),
-                    )
-                elif isinstance(system_content, list):
-                    # Convert Anthropic system content blocks to OpenAI format
-                    openai_system_content: List[Dict[str, Any]] = []
-                    model_name = anthropic_message_request.get("model", "")
-                    for block in system_content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            text_block: Dict[str, Any] = {
-                                "type": "text",
-                                "text": block.get("text", ""),
-                            }
-                            self._add_cache_control_if_applicable(block, text_block, model_name)
-                            openai_system_content.append(text_block)
-                    if openai_system_content:
-                        new_messages.insert(
-                            0,
-                            ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
-                        )
+        self._add_system_message_to_messages(new_messages, anthropic_message_request)
 
         new_kwargs: ChatCompletionRequest = {
             "model": anthropic_message_request["model"],
@@ -728,7 +872,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if "tools" in anthropic_message_request:
             tools = anthropic_message_request["tools"]
             if tools:
-                new_kwargs["tools"] = self.translate_anthropic_tools_to_openai(
+                new_kwargs["tools"], tool_name_mapping = self.translate_anthropic_tools_to_openai(
                     tools=cast(List[AllAnthropicToolsValues], tools),
                     model=new_kwargs.get("model"),
                 )
@@ -762,7 +906,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if k not in translatable_params:  # pass remaining params as is
                 new_kwargs[k] = v  # type: ignore
 
-        return new_kwargs
+        return new_kwargs, tool_name_mapping
 
     def _translate_anthropic_image_to_openai(self, image_source: dict) -> Optional[str]:
         """
@@ -791,22 +935,12 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return None
 
-    def _translate_openai_content_to_anthropic(self, choices: List[Choices]) -> List[
-        Union[
-            AnthropicResponseContentBlockText,
-            AnthropicResponseContentBlockToolUse,
-            AnthropicResponseContentBlockThinking,
-            AnthropicResponseContentBlockRedactedThinking,
-        ]
-    ]:
-        new_content: List[
-            Union[
-                AnthropicResponseContentBlockText,
-                AnthropicResponseContentBlockToolUse,
-                AnthropicResponseContentBlockThinking,
-                AnthropicResponseContentBlockRedactedThinking,
-            ]
-        ] = []
+    def _translate_openai_content_to_anthropic(
+        self,
+        choices: List[Choices],
+        tool_name_mapping: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, Any]]:
+        new_content: List[Dict[str, Any]] = []
         for choice in choices:
             # Handle thinking blocks first
             if (
@@ -830,7 +964,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                     if signature_value is not None
                                     else None
                                 ),
-                            )
+                            ).model_dump()
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
                         data_value = thinking_block.get("data", "")
@@ -838,15 +972,27 @@ class LiteLLMAnthropicMessagesAdapter:
                             AnthropicResponseContentBlockRedactedThinking(
                                 type="redacted_thinking",
                                 data=str(data_value) if data_value is not None else "",
-                            )
+                            ).model_dump()
                         )
+            # Handle reasoning_content when thinking_blocks is not present
+            elif (
+                hasattr(choice.message, "reasoning_content")
+                and choice.message.reasoning_content
+            ):
+                new_content.append(
+                    AnthropicResponseContentBlockThinking(
+                        type="thinking",
+                        thinking=str(choice.message.reasoning_content),
+                        signature=None,
+                    ).model_dump()
+                )
 
             # Handle text content
             if choice.message.content is not None:
                 new_content.append(
                     AnthropicResponseContentBlockText(
                         type="text", text=choice.message.content
-                    )
+                    ).model_dump()
                 )
             # Handle tool calls (in parallel to text content)
             if (
@@ -861,13 +1007,21 @@ class LiteLLMAnthropicMessagesAdapter:
                     if signature:
                         provider_specific_fields["signature"] = signature
 
+                    # Restore original tool name if it was truncated
+                    truncated_name = tool_call.function.name or ""
+                    original_name = (
+                        tool_name_mapping.get(truncated_name, truncated_name)
+                        if tool_name_mapping
+                        else truncated_name
+                    )
+
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
                         id=tool_call.id,
-                        name=tool_call.function.name or "",
+                        name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,
-                            tool_name=tool_call.function.name,
+                            tool_name=original_name,
                             context="Anthropic pass-through adapter",
                         ),
                     )
@@ -876,7 +1030,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_use_block.provider_specific_fields = (
                             provider_specific_fields
                         )
-                    new_content.append(tool_use_block)
+                    new_content.append(tool_use_block.model_dump())
 
         return new_content
 
@@ -892,17 +1046,31 @@ class LiteLLMAnthropicMessagesAdapter:
         return "end_turn"
 
     def translate_openai_response_to_anthropic(
-        self, response: ModelResponse
+        self,
+        response: ModelResponse,
+        tool_name_mapping: Optional[Dict[str, str]] = None,
     ) -> AnthropicMessagesResponse:
+        """
+        Translate OpenAI response to Anthropic format.
+
+        Args:
+            response: The OpenAI ModelResponse
+            tool_name_mapping: Optional mapping of truncated tool names to original names.
+                              Used to restore original names for tools that exceeded
+                              OpenAI's 64-char limit.
+        """
         ## translate content block
-        anthropic_content = self._translate_openai_content_to_anthropic(choices=response.choices)  # type: ignore
+        anthropic_content = self._translate_openai_content_to_anthropic(
+            choices=response.choices,  # type: ignore
+            tool_name_mapping=tool_name_mapping,
+        )
         ## extract finish reason
         anthropic_finish_reason = self._translate_openai_finish_reason_to_anthropic(
             openai_finish_reason=response.choices[0].finish_reason  # type: ignore
         )
         # extract usage
         usage: Usage = getattr(response, "usage")
-        anthropic_usage: Dict[str, Any] = AnthropicUsage(
+        anthropic_usage = AnthropicUsage(
             input_tokens=usage.prompt_tokens or 0,
             output_tokens=usage.completion_tokens or 0,
         )
@@ -1014,6 +1182,13 @@ class LiteLLMAnthropicMessagesAdapter:
 
                             reasoning_content += thinking
                             reasoning_signature += signature
+            # Handle reasoning_content when thinking_blocks is not present
+            # This handles providers like OpenRouter that return reasoning_content
+            elif isinstance(choice, StreamingChoices) and hasattr(
+                choice.delta, "reasoning_content"
+            ):
+                if choice.delta.reasoning_content is not None:
+                    reasoning_content += choice.delta.reasoning_content
 
         if reasoning_content and reasoning_signature:
             raise ValueError(
@@ -1055,7 +1230,7 @@ class LiteLLMAnthropicMessagesAdapter:
             else:
                 litellm_usage_chunk = None
             if litellm_usage_chunk is not None:
-                usage_delta: Dict[str, Any] = UsageDelta(
+                usage_delta = UsageDelta(
                     input_tokens=litellm_usage_chunk.prompt_tokens or 0,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
                 )

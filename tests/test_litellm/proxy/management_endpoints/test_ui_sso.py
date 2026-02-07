@@ -24,12 +24,17 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    normalize_email,
+    process_sso_jwt_access_token,
+    determine_role_from_groups,
+    _setup_team_mappings,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
+    TeamMappings,
 )
 
 
@@ -667,6 +672,85 @@ def test_build_sso_user_update_data_without_role():
     assert "user_role" not in update_data
 
 
+def test_normalize_email():
+    """
+    Test that normalize_email correctly lowercases email addresses and handles edge cases.
+    """
+    # Test with lowercase email
+    assert normalize_email("test@example.com") == "test@example.com"
+    
+    # Test with uppercase email
+    assert normalize_email("TEST@EXAMPLE.COM") == "test@example.com"
+    
+    # Test with mixed case email
+    assert normalize_email("Test.User@Example.COM") == "test.user@example.com"
+    
+    # Test with None
+    assert normalize_email(None) is None
+    
+    # Test with empty string
+    assert normalize_email("") == ""
+
+
+def test_build_sso_user_update_data_normalizes_email():
+    """
+    Test that _build_sso_user_update_data normalizes email addresses to lowercase.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="test-user-789",
+        email="Test.User@Example.COM",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="Test.User@Example.COM",
+        user_id="test-user-789",
+    )
+
+    # Email should be normalized to lowercase
+    assert update_data["user_email"] == "test.user@example.com"
+    assert "user_role" not in update_data
+
+
+def test_generic_response_convertor_normalizes_email():
+    """
+    Test that generic_response_convertor normalizes email addresses.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    mock_response = {
+        "preferred_username": "user123",
+        "email": "Test.User@Example.COM",
+        "sub": "Test User",
+        "first_name": "Test",
+        "last_name": "User",
+        "provider": "generic",
+    }
+
+    # Mock JWT handler
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+
+    # Email should be normalized to lowercase
+    assert result.email == "test.user@example.com"
+    assert result.id == "user123"
+    assert result.display_name == "Test User"
+
+
 @pytest.mark.asyncio
 async def test_upsert_sso_user_updates_role_for_existing_user():
     """
@@ -1216,6 +1300,7 @@ async def test_get_generic_sso_response_with_additional_headers():
     # Mock the SSO provider and its methods
     mock_sso_instance = MagicMock()
     mock_sso_instance.verify_and_process = AsyncMock(return_value=mock_sso_response)
+    mock_sso_instance.access_token = None  # Avoid triggering JWT decode in process_sso_jwt_access_token
 
     mock_sso_class = MagicMock(return_value=mock_sso_instance)
 
@@ -1277,6 +1362,7 @@ async def test_get_generic_sso_response_with_empty_headers():
     # Mock the SSO provider and its methods
     mock_sso_instance = MagicMock()
     mock_sso_instance.verify_and_process = AsyncMock(return_value=mock_sso_response)
+    mock_sso_instance.access_token = None  # Avoid triggering JWT decode in process_sso_jwt_access_token
 
     mock_sso_class = MagicMock(return_value=mock_sso_instance)
 
@@ -2464,22 +2550,25 @@ class TestProcessSSOJWTAccessToken:
             assert result.team_ids == []
 
     def test_process_sso_jwt_access_token_no_sso_jwt_handler(self, sample_jwt_token):
-        """Test that nothing happens when sso_jwt_handler is None"""
+        """Test that JWT is decoded for role extraction even when sso_jwt_handler is None,
+        but team_ids are not extracted (team extraction requires sso_jwt_handler)."""
         from litellm.proxy.management_endpoints.ui_sso import (
             process_sso_jwt_access_token,
         )
 
         result = CustomOpenID(id="test_user", email="test@example.com", team_ids=[])
 
-        with patch("jwt.decode") as mock_jwt_decode:
+        mock_payload = {"sub": "test_user", "email": "test@example.com"}
+        with patch("jwt.decode", return_value=mock_payload) as mock_jwt_decode:
             # Act
             process_sso_jwt_access_token(
                 access_token_str=sample_jwt_token, sso_jwt_handler=None, result=result
             )
 
-            # Assert nothing was processed
-            mock_jwt_decode.assert_not_called()
+            # JWT is decoded (for role extraction) but team_ids are not extracted
+            mock_jwt_decode.assert_called_once()
             assert result.team_ids == []
+            assert result.user_role is None
 
     def test_process_sso_jwt_access_token_no_result(
         self, mock_jwt_handler, sample_jwt_token
@@ -3735,3 +3824,250 @@ class TestCustomMicrosoftSSO:
         )
 
         assert isinstance(sso, MicrosoftSSO)
+
+
+@pytest.mark.asyncio
+async def test_setup_team_mappings():
+    """Test _setup_team_mappings function loads team mappings from database."""
+    # Arrange
+    mock_prisma = MagicMock()
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {
+        "team_mappings": {
+            "team_ids_jwt_field": "groups"
+        }
+    }
+    mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=mock_sso_config
+    )
+
+    with patch(
+        "litellm.proxy.utils.get_prisma_client_or_throw",
+        return_value=mock_prisma,
+    ):
+        # Act
+        result = await _setup_team_mappings()
+
+        # Assert
+        assert result is not None
+        assert isinstance(result, TeamMappings)
+        assert result.team_ids_jwt_field == "groups"
+        mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once_with(
+            where={"id": "sso_config"}
+        )
+
+
+# ============================================================================
+# Tests for get_litellm_user_role with list inputs (Keycloak returns lists)
+# ============================================================================
+
+
+def test_get_litellm_user_role_with_string():
+    """Test that get_litellm_user_role works with a plain string."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    result = get_litellm_user_role("proxy_admin")
+    assert result == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_get_litellm_user_role_with_list():
+    """
+    Test that get_litellm_user_role handles list inputs.
+    Keycloak returns roles as arrays like ["proxy_admin"] instead of strings.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    result = get_litellm_user_role(["proxy_admin"])
+    assert result == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_get_litellm_user_role_with_empty_list():
+    """Test that get_litellm_user_role returns None for empty lists."""
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    result = get_litellm_user_role([])
+    assert result is None
+
+
+def test_get_litellm_user_role_with_invalid_role():
+    """Test that get_litellm_user_role returns None for invalid roles."""
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    result = get_litellm_user_role("not_a_real_role")
+    assert result is None
+
+
+def test_get_litellm_user_role_with_list_multiple_roles():
+    """Test that get_litellm_user_role takes the first element from a multi-element list."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    result = get_litellm_user_role(["proxy_admin", "internal_user"])
+    assert result == LitellmUserRoles.PROXY_ADMIN
+
+
+# ============================================================================
+# Tests for process_sso_jwt_access_token role extraction
+# ============================================================================
+
+
+def test_process_sso_jwt_access_token_extracts_role_from_access_token():
+    """
+    Test that process_sso_jwt_access_token extracts user role from the JWT
+    access token when the UserInfo response did not include it.
+
+    This is the core fix for the Keycloak SSO role mapping bug: Keycloak's
+    UserInfo endpoint does not return role claims, but the JWT access token
+    contains them.
+    """
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+
+    # Create a JWT access token with role claims (as Keycloak would)
+    access_token_payload = {
+        "sub": "user-123",
+        "email": "admin@test.com",
+        "litellm_role": ["proxy_admin"],
+    }
+    access_token_str = pyjwt.encode(access_token_payload, "secret", algorithm="HS256")
+
+    # Result object with no role set (simulating UserInfo response without roles)
+    result = CustomOpenID(
+        id="user-123",
+        email="admin@test.com",
+        display_name="Admin User",
+        team_ids=[],
+        user_role=None,
+    )
+
+    # Call with GENERIC_USER_ROLE_ATTRIBUTE pointing to litellm_role
+    with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "litellm_role"}):
+        process_sso_jwt_access_token(
+            access_token_str=access_token_str,
+            sso_jwt_handler=None,
+            result=result,
+            role_mappings=None,
+        )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_process_sso_jwt_access_token_does_not_override_existing_role():
+    """
+    Test that process_sso_jwt_access_token does NOT override a role that was
+    already extracted from the UserInfo response.
+    """
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+
+    access_token_payload = {
+        "sub": "user-123",
+        "litellm_role": ["internal_user"],
+    }
+    access_token_str = pyjwt.encode(access_token_payload, "secret", algorithm="HS256")
+
+    # Result already has a role (e.g., set from UserInfo)
+    result = CustomOpenID(
+        id="user-123",
+        email="admin@test.com",
+        display_name="Admin User",
+        team_ids=[],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "litellm_role"}):
+        process_sso_jwt_access_token(
+            access_token_str=access_token_str,
+            sso_jwt_handler=None,
+            result=result,
+            role_mappings=None,
+        )
+
+    # Should keep the original role
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_process_sso_jwt_access_token_extracts_role_from_nested_field():
+    """
+    Test role extraction from a nested JWT field like resource_access.client.roles.
+    """
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+
+    access_token_payload = {
+        "sub": "user-123",
+        "resource_access": {
+            "my-client": {
+                "roles": ["proxy_admin"]
+            }
+        },
+    }
+    access_token_str = pyjwt.encode(access_token_payload, "secret", algorithm="HS256")
+
+    result = CustomOpenID(
+        id="user-123",
+        email="admin@test.com",
+        display_name="Admin User",
+        team_ids=[],
+        user_role=None,
+    )
+
+    with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "resource_access.my-client.roles"}):
+        process_sso_jwt_access_token(
+            access_token_str=access_token_str,
+            sso_jwt_handler=None,
+            result=result,
+            role_mappings=None,
+        )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_process_sso_jwt_access_token_with_role_mappings():
+    """
+    Test role extraction using role_mappings (group-based role determination)
+    from the JWT access token.
+    """
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
+
+    access_token_payload = {
+        "sub": "user-123",
+        "groups": ["keycloak-admins", "developers"],
+    }
+    access_token_str = pyjwt.encode(access_token_payload, "secret", algorithm="HS256")
+
+    result = CustomOpenID(
+        id="user-123",
+        email="admin@test.com",
+        display_name="Admin User",
+        team_ids=[],
+        user_role=None,
+    )
+
+    role_mappings = RoleMappings(
+        provider="generic",
+        group_claim="groups",
+        default_role=LitellmUserRoles.INTERNAL_USER,
+        roles={
+            LitellmUserRoles.PROXY_ADMIN: ["keycloak-admins"],
+            LitellmUserRoles.INTERNAL_USER: ["developers"],
+        },
+    )
+
+    process_sso_jwt_access_token(
+        access_token_str=access_token_str,
+        sso_jwt_handler=None,
+        result=result,
+        role_mappings=role_mappings,
+    )
+
+    # Should get highest privilege role
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN

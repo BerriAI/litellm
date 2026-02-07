@@ -3,7 +3,7 @@ Response Polling Handler for Background Responses with Cache
 """
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
@@ -257,6 +257,7 @@ def should_use_polling_for_request(
     redis_cache,  # RedisCache or None
     model: str,
     llm_router,  # Router instance or None
+    native_background_mode: Optional[List[str]] = None,  # List of models that should use native background mode
 ) -> bool:
     """
     Determine if polling via cache should be used for a request.
@@ -267,12 +268,21 @@ def should_use_polling_for_request(
         redis_cache: Redis cache instance (required for polling)
         model: Model name from the request (e.g., "gpt-5" or "openai/gpt-4o")
         llm_router: LiteLLM router instance for looking up model deployments
+        native_background_mode: List of model names that should use native provider 
+            background mode instead of polling via cache
     
     Returns:
         True if polling should be used, False otherwise
     """
     # All conditions must be met
     if not (background_mode and polling_via_cache_enabled and redis_cache):
+        return False
+    
+    # Check if model is in native_background_mode list - these use native provider background mode
+    if native_background_mode and model in native_background_mode:
+        verbose_proxy_logger.debug(
+            f"Model {model} is in native_background_mode list, skipping polling via cache"
+        )
         return False
     
     # "all" enables polling for all providers
