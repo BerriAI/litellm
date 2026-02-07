@@ -34,8 +34,8 @@ def _is_azure_claude_model(model: str) -> bool:
 
 
 def handle_cohere_chat_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: Optional[str], custom_llm_provider: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     if user sets model = "cohere/command-r" -> use custom_llm_provider = "cohere_chat"
 
@@ -48,10 +48,10 @@ def handle_cohere_chat_model_custom_llm_provider(
     """
 
     if custom_llm_provider:
-        if custom_llm_provider == "cohere" and model in litellm.cohere_chat_models:
+        if custom_llm_provider == "cohere" and model and model in litellm.cohere_chat_models:
             return model, "cohere_chat"
 
-    if "/" in model:
+    if model and "/" in model:
         _custom_llm_provider, _model = model.split("/", 1)
         if (
             _custom_llm_provider
@@ -64,8 +64,8 @@ def handle_cohere_chat_model_custom_llm_provider(
 
 
 def handle_anthropic_text_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: Optional[str], custom_llm_provider: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     if user sets model = "anthropic/claude-2" -> use custom_llm_provider = "anthropic_text"
 
@@ -80,11 +80,12 @@ def handle_anthropic_text_model_custom_llm_provider(
     if custom_llm_provider:
         if (
             custom_llm_provider == "anthropic"
+            and model
             and litellm.AnthropicTextConfig._is_anthropic_text_model(model)
         ):
             return model, "anthropic_text"
 
-    if "/" in model:
+    if model and "/" in model:
         _custom_llm_provider, _model = model.split("/", 1)
         if (
             _custom_llm_provider
@@ -113,6 +114,12 @@ def get_llm_provider(  # noqa: PLR0915
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
     try:
+        # Early validation - model is required
+        if model is None:
+            raise ValueError(
+                "model parameter is required but was None. Please provide a valid model name."
+            )
+
         if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
             litellm_params=litellm_params
         ):
