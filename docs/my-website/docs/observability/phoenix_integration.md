@@ -4,6 +4,8 @@ import Image from '@theme/IdealImage';
 
 Open source tracing and evaluation platform
 
+[Top LLM Evaluation Platforms](https://arize.com/llm-evaluation-platforms-top-frameworks)
+
 :::tip
 
 This is community maintained. Please make an issue if you run into a bug:
