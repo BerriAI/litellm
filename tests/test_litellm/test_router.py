@@ -925,6 +925,73 @@ def test_router_get_model_access_groups_team_only_models():
     assert list(access_groups.keys()) == ["default-models"]
 
 
+def test_cached_get_model_group_info():
+    """
+    Test that _cached_get_model_group_info caches results and
+    invalidates on deployment changes.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"tpm": 1000, "rpm": 100},
+            },
+        ]
+    )
+
+    # First call should compute and cache
+    result1 = router._cached_get_model_group_info("gpt-4")
+    assert result1 is not None
+    assert result1.tpm == 1000
+
+    # Second call should hit cache (same object)
+    result2 = router._cached_get_model_group_info("gpt-4")
+    assert result1 is result2
+
+    # Add a deployment — cache should be invalidated
+    router.add_deployment(
+        Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="gpt-4", api_key="fake2"),
+            model_info={"tpm": 2000, "rpm": 200},
+        )
+    )
+    result3 = router._cached_get_model_group_info("gpt-4")
+    assert result3 is not result2
+    assert result3 is not None
+    assert result3.tpm == 3000  # 1000 + 2000
+
+    # Delete a deployment — cache should be invalidated
+    deployment_id = router.model_list[-1]["model_info"]["id"]
+    router.delete_deployment(id=deployment_id)
+    result4 = router._cached_get_model_group_info("gpt-4")
+    assert result4 is not result3
+    assert result4 is not None
+    assert result4.tpm == 1000
+
+    # set_model_list — cache should be invalidated
+    router.set_model_list(
+        [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"tpm": 5000},
+            },
+        ]
+    )
+    result5 = router._cached_get_model_group_info("gpt-4")
+    assert result5 is not result4
+    assert result5 is not None
+    assert result5.tpm == 5000
+
+    # Verify cache still works after invalidation
+    result6 = router._cached_get_model_group_info("gpt-4")
+    assert result5 is result6
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator():
     """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
