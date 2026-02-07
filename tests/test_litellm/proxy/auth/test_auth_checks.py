@@ -31,6 +31,7 @@ from litellm.proxy.auth.auth_checks import (
     _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
+    _virtual_key_max_budget_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_soft_budget_check,
     get_user_object,
@@ -122,6 +123,26 @@ def test_get_experimental_ui_login_jwt_auth_token_invalid(
         )
 
     assert str(exc_info.value) == "User role is required for experimental UI login"
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_zero_skips_check():
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    valid_token = UserAPIKeyAuth(
+        token="sk-test",
+        spend=76.16,
+        max_budget=0,
+        user_id="test-user",
+    )
+
+    await _virtual_key_max_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=None,
+    )
+
+    proxy_logging_obj.budget_alerts.assert_not_called()
 
 
 def test_get_key_object_from_ui_hash_key_valid(
