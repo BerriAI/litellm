@@ -2065,6 +2065,14 @@ def _is_async_request(
     return False
 
 
+_STREAMING_CALL_TYPES = frozenset({
+    CallTypes.generate_content_stream,
+    CallTypes.agenerate_content_stream,
+    CallTypes.generate_content_stream.value,
+    CallTypes.agenerate_content_stream.value,
+})
+
+
 def _is_streaming_request(
     kwargs: Dict[str, Any],
     call_type: Union[CallTypes, str],
@@ -2077,23 +2085,7 @@ def _is_streaming_request(
     """
     if "stream" in kwargs and kwargs["stream"] is True:
         return True
-
-    #########################################################
-    # Check if it's a google genai streaming request
-    if isinstance(call_type, str):
-        # check if it can be casted to CallTypes
-        try:
-            call_type = CallTypes(call_type)
-        except ValueError:
-            return False
-
-    if (
-        call_type == CallTypes.generate_content_stream
-        or call_type == CallTypes.agenerate_content_stream
-    ):
-        return True
-    #########################################################
-    return False
+    return call_type in _STREAMING_CALL_TYPES
 
 
 def _select_tokenizer(

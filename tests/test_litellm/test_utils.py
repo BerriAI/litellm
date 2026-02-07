@@ -18,10 +18,12 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
+from litellm.types.utils import CallTypes
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _is_streaming_request,
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
@@ -2283,18 +2285,14 @@ def test_register_model_with_scientific_notation():
     """
     Test that the register_model function can handle scientific notation in the model name.
     """
-    # Use a unique model name to avoid conflicts with other tests
-    test_model_name = "test-scientific-notation-model-unique-12345"
+    import uuid
     
-    # Clean up any pre-existing entry and clear caches
-    if test_model_name in litellm.model_cost:
-        del litellm.model_cost[test_model_name]
+    # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
+    test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
     
     # Clear LRU caches that might have stale data
     from litellm.utils import (
-        _cached_get_model_info_helper,
         _invalidate_model_cost_lowercase_map,
-        get_model_info,
     )
     _invalidate_model_cost_lowercase_map()
     
@@ -3274,3 +3272,35 @@ class TestDropParamsWithPromptCacheKey:
         assert "prompt_cache_key" not in result
         # temperature should remain (it's supported by Bedrock)
         assert result.get("temperature") == 0.7
+
+
+class TestIsStreamingRequest:
+    def test_stream_true_in_kwargs(self):
+        assert _is_streaming_request(kwargs={"stream": True}, call_type="acompletion") is True
+
+    def test_stream_false_in_kwargs(self):
+        assert _is_streaming_request(kwargs={"stream": False}, call_type="acompletion") is False
+
+    def test_no_stream_in_kwargs(self):
+        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
+
+    def test_generate_content_stream_string(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.generate_content_stream.value) is True
+
+    def test_agenerate_content_stream_string(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.agenerate_content_stream.value) is True
+
+    def test_generate_content_stream_enum(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.generate_content_stream) is True
+
+    def test_agenerate_content_stream_enum(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.agenerate_content_stream) is True
+
+    def test_non_streaming_call_type_string(self):
+        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
+
+    def test_non_streaming_call_type_enum(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.acompletion) is False
+
+    def test_stream_true_overrides_non_streaming_call_type(self):
+        assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True

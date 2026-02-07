@@ -1418,37 +1418,47 @@ def completion_cost(  # noqa: PLR0915
 
                 # Apply discount from module-level config if configured
                 original_cost = _final_cost
-                _final_cost, discount_percent, discount_amount = _apply_cost_discount(
-                    base_cost=_final_cost,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if litellm.cost_discount_config:
+                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                else:
+                    discount_percent = 0.0
+                    discount_amount = 0.0
 
                 # Apply margin from module-level config if configured
-                (
-                    _final_cost,
-                    margin_percent,
-                    margin_fixed_amount,
-                    margin_total_amount,
-                ) = _apply_cost_margin(
-                    base_cost=_final_cost,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if litellm.cost_margin_config:
+                    (
+                        _final_cost,
+                        margin_percent,
+                        margin_fixed_amount,
+                        margin_total_amount,
+                    ) = _apply_cost_margin(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                else:
+                    margin_percent = 0.0
+                    margin_fixed_amount = 0.0
+                    margin_total_amount = 0.0
 
                 # Store cost breakdown in logging object if available
-                _store_cost_breakdown_in_logging_obj(
-                    litellm_logging_obj=litellm_logging_obj,
-                    prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
-                    completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
-                    cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
-                    total_cost_usd_dollar=_final_cost,
-                    additional_costs=additional_costs,
-                    original_cost=original_cost,
-                    discount_percent=discount_percent,
-                    discount_amount=discount_amount,
-                    margin_percent=margin_percent,
-                    margin_fixed_amount=margin_fixed_amount,
-                    margin_total_amount=margin_total_amount,
-                )
+                if litellm_logging_obj is not None:
+                    _store_cost_breakdown_in_logging_obj(
+                        litellm_logging_obj=litellm_logging_obj,
+                        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+                        completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+                        cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
+                        total_cost_usd_dollar=_final_cost,
+                        original_cost=original_cost,
+                        additional_costs=additional_costs,
+                        discount_percent=discount_percent,
+                        discount_amount=discount_amount,
+                        margin_percent=margin_percent,
+                        margin_fixed_amount=margin_fixed_amount,
+                        margin_total_amount=margin_total_amount,
+                    )
 
                 return _final_cost
             except Exception as e:
