@@ -12,18 +12,20 @@ vi.mock("../../provider_info_helpers");
 vi.mock("@tremor/react", async (importOriginal) => {
   const React = await import("react");
   const actual = await importOriginal<typeof import("@tremor/react")>();
+  const IconComponent = React.forwardRef<HTMLButtonElement, any>(({ icon: IconComp, onClick, className, ...props }, ref) => {
+    const ariaLabel = className?.includes("cursor-not-allowed")
+      ? "Config model cannot be deleted on the dashboard. Please delete it from the config file."
+      : "Delete model";
+    return React.createElement(
+      "button",
+      { ...props, onClick, className, ref, "aria-label": ariaLabel },
+      IconComp && React.createElement(IconComp, { className: "w-4 h-4" }),
+    );
+  });
+  IconComponent.displayName = "Icon";
   return {
     ...actual,
-    Icon: React.forwardRef<HTMLButtonElement, any>(({ icon: IconComponent, onClick, className, ...props }, ref) => {
-      const ariaLabel = className?.includes("cursor-not-allowed")
-        ? "Config model cannot be deleted on the dashboard. Please delete it from the config file."
-        : "Delete model";
-      return React.createElement(
-        "button",
-        { ...props, onClick, className, ref, "aria-label": ariaLabel },
-        IconComponent && React.createElement(IconComponent, { className: "w-4 h-4" }),
-      );
-    }),
+    Icon: IconComponent,
   };
 });
 

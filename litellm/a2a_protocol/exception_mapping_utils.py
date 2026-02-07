@@ -30,7 +30,7 @@ try:
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
-    _A2AClient = None  # type: ignore[misc]
+    _A2AClient = None  # type: ignore[assignment, misc]
 
 
 class A2AExceptionCheckers:
