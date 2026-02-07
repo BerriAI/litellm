@@ -123,6 +123,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ):
                 completion_kwargs[key] = value
 
+        # Reconstruct fully-qualified model name (provider/model) before
+        # delegating to litellm.completion/acompletion, which calls
+        # get_llm_provider internally. Without this, models whose ID on
+        # the provider contains a prefix matching a known provider name
+        # (e.g. "openrouter/free" on OpenRouter) get double-stripped.
+        # See: https://github.com/BerriAI/litellm/issues/16353
+        _custom_provider = completion_kwargs.get("custom_llm_provider")
+        if _custom_provider and "model" in completion_kwargs:
+            completion_kwargs["model"] = (
+                f"{_custom_provider}/{completion_kwargs['model']}"
+            )
+
         return completion_kwargs, tool_name_mapping
 
     @staticmethod
