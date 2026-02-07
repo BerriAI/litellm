@@ -217,12 +217,20 @@ class A2AGuardrailHandler(BaseTranslation):
         """
         Process A2A streaming output by applying guardrails to accumulated text.
 
-        responses_so_far can be a list of JSON-RPC 2.0 objects (dict or NDJSON str), e.g.:
-        - task with history, status-update, artifact-update (with result.artifact.parts),
-        - then status-update (final). Text is extracted from result.artifact.parts,
-        result.message.parts, result.parts, etc., concatenated in order, guardrailed once,
-        then the combined guardrailed text is written into the first chunk that had text
-        and all other text parts in other chunks are cleared (in-place).
+        IN-PLACE MODIFICATION: This method mutates responses_so_far in place. Callers
+        must deep-copy the current chunk before calling if they intend to yield that
+        chunk, because we put the full guardrailed text in the first chunk and clear
+        all subsequent text parts to "".
+
+        Algorithm:
+        1. Parse each item (dict or NDJSON str) and collect text from result.artifact.parts,
+           result.message.parts, result.parts, etc.
+        2. Concatenate all texts in order, apply guardrail once to the combined string.
+        3. Write the full guardrailed text into the FIRST chunk's first text part.
+        4. Clear all other text parts in all chunks to "" (in-place).
+
+        responses_so_far: List of JSON-RPC 2.0 objects (dict or NDJSON str).
+        Returns: The same list (modified in place).
         """
         from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 
@@ -271,7 +279,12 @@ class A2AGuardrailHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         guardrailed_texts = guardrailed_inputs.get("texts", [])
-        if not guardrailed_texts:
+        if not guardrailed_texts or len(guardrailed_texts) != 1:
+            # Guardrail should return exactly one text for combined input
+            verbose_proxy_logger.warning(
+                "A2A streaming guardrail returned unexpected texts count: %s",
+                len(guardrailed_texts or []),
+            )
             return responses_so_far
         guardrailed_text = guardrailed_texts[0]
 
@@ -294,7 +307,7 @@ class A2AGuardrailHandler(BaseTranslation):
             if not mappings:
                 continue
             if orig_i == first_chunk_with_text:
-                # Put full guardrailed text in first text part; clear others
+                # Put full guardrailed text in first text part; clear others in this chunk
                 for task_idx, (path, part_idx) in enumerate(mappings):
                     text = guardrailed_text if task_idx == 0 else ""
                     self._apply_text_to_path(
@@ -304,6 +317,7 @@ class A2AGuardrailHandler(BaseTranslation):
                         text=text,
                     )
             else:
+                # Clear all text parts in non-first chunks (in-place)
                 for path, part_idx in mappings:
                     self._apply_text_to_path(
                         result=result,
@@ -414,15 +428,21 @@ class A2AGuardrailHandler(BaseTranslation):
         part_idx: int,
         text: str,
     ) -> None:
-        """Apply guardrailed text back to the specified path in the result."""
-        # Navigate to the parts list
-        current = result
+        """Apply guardrailed text back to the specified path in the result (in-place)."""
+        current: Any = result
         for key in path:
             if key.isdigit():
-                # Array index
                 current = current[int(key)]
             else:
                 current = current[key]
 
-        # Update the text in the part
-        current[part_idx]["text"] = text
+        if not isinstance(current, list) or part_idx >= len(current):
+            verbose_proxy_logger.warning(
+                "A2A _apply_text_to_path: invalid path or index path=%s part_idx=%s",
+                path,
+                part_idx,
+            )
+            return
+        part = current[part_idx]
+        if isinstance(part, dict) and "text" in part:
+            part["text"] = text
