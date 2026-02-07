@@ -2,6 +2,7 @@ import sys, os
 import pytest
 import litellm
 import httpx
+import json
 
 def test_neosantara_provider_info():
     """
@@ -23,6 +24,15 @@ def test_neosantara_completion_formatting():
     # We mock the actual call to avoid network requests
     with pytest.MonkeyPatch().context() as m:
         def mock_send(self, request, **kwargs):
+            # Verify request URL and headers
+            assert "api.neosantara.xyz" in str(request.url)
+            assert request.headers["Authorization"] == "Bearer sk-1234"
+            
+            # Verify request body is OpenAI format
+            body = json.loads(request.read())
+            assert "messages" in body
+            assert body["model"] == "claude-3-haiku"
+
             return httpx.Response(
                 200,
                 content='{"choices": [{"message": {"content": "Hello world"}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}, "object": "chat.completion"}'.encode(),
@@ -51,6 +61,10 @@ def test_neosantara_embedding_formatting():
     # We mock the actual call to avoid network requests
     with pytest.MonkeyPatch().context() as m:
         def mock_send(self, request, **kwargs):
+            # Verify request URL
+            assert "api.neosantara.xyz" in str(request.url)
+            assert "/v1/embeddings" in str(request.url)
+            
             return httpx.Response(
                 200,
                 content='{"data": [{"embedding": [0.1, 0.2, 0.3], "index": 0, "object": "embedding"}], "model": "nusa-embedding-0001", "object": "list", "usage": {"prompt_tokens": 10, "total_tokens": 10}}'.encode(),
@@ -90,9 +104,15 @@ def test_neosantara_responses_api_bridge():
     
     with pytest.MonkeyPatch().context() as m:
         def mock_send(self, request, **kwargs):
+            # Verify the bridge transformed 'input' into OpenAI 'messages'
+            body = json.loads(request.read())
+            assert "messages" in body
+            assert body["messages"][0]["content"] == "hi from responses"
+            assert "/v1/chat/completions" in str(request.url)
+
             return httpx.Response(
                 200,
-                content='{"choices": [{"message": {"content": "Hello from responses API"}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}, "object": "chat.completion", "id": "resp-123", "created": 123456789}'.encode(),
+                content='{"choices": [{"message": {"content": "Hello from bridge"}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}, "object": "chat.completion", "id": "chatcmpl-123", "created": 1677610602}'.encode(),
                 request=request
             )
 
@@ -100,12 +120,14 @@ def test_neosantara_responses_api_bridge():
 
         response = litellm.responses(
             model="neosantara/claude-3-haiku",
-            input="hi",
+            input="hi from responses",
             api_key="sk-1234"
         )
         
+        # Verify result is transformed to Responses API schema
         assert response.model == "neosantara/claude-3-haiku"
-        assert response.output[0].content[0].text == "Hello from responses API"
+        assert response.output[0].content[0].text == "Hello from bridge"
+        assert hasattr(response, "created_at")
 
 @pytest.mark.asyncio
 async def test_neosantara_anthropic_messages_bridge():
@@ -116,9 +138,15 @@ async def test_neosantara_anthropic_messages_bridge():
     
     with pytest.MonkeyPatch().context() as m:
         async def mock_async_send(self, request, **kwargs):
+            # Verify the bridge transformed Anthropic messages to OpenAI messages
+            body = json.loads(request.read())
+            assert "messages" in body
+            assert body["messages"][0]["role"] == "user"
+            assert "/v1/chat/completions" in str(request.url)
+
             return httpx.Response(
                 200,
-                content='{"choices": [{"message": {"content": "Hello from messages API"}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}, "object": "chat.completion", "id": "msg-123", "created": 123456789}'.encode(),
+                content='{"choices": [{"message": {"content": "Hello from anthropic bridge"}, "finish_reason": "stop", "index": 0}], "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}, "object": "chat.completion", "id": "chatcmpl-123", "created": 1677610602}'.encode(),
                 request=request
             )
 
@@ -126,15 +154,17 @@ async def test_neosantara_anthropic_messages_bridge():
 
         response = await litellm.anthropic_messages(
             model="neosantara/claude-3-haiku",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[{"role": "user", "content": "hi from anthropic"}],
             api_key="sk-1234",
             max_tokens=100
         )
         
-        # Check both dict and object access to be robust
+        # Check both dict and object access to be robust for Anthropic bridge
         if isinstance(response, dict):
-            assert response["content"][0].text == "Hello from messages API"
             assert response["role"] == "assistant"
+            assert response["content"][0].text == "Hello from anthropic bridge"
+            assert response["type"] == "message"
         else:
-            assert response.content[0].text == "Hello from messages API"
             assert response.role == "assistant"
+            assert response.content[0].text == "Hello from anthropic bridge"
+            assert response.type == "message"
