@@ -142,9 +142,16 @@ user_api_key_metadata = metadata.get("user_api_key_metadata", {}) or {}
 team_metadata = metadata.get("team_metadata", {}) or {}
 policy_id = (
                 metadata.get("zguard_policy_id")
-                or user_api_key_metadata.get("zguard_policy_id")
-                or team_metadata.get("zguard_policy_id")
-                or self.policy_id
+                if "zguard_policy_id" in metadata
+                else (
+                    user_api_key_metadata.get("zguard_policy_id")
+                    if "zguard_policy_id" in user_api_key_metadata
+                    else (
+                        team_metadata.get("zguard_policy_id")
+                        if "zguard_policy_id" in team_metadata
+                        else self.policy_id
+                    )
+                )
             )
 ```
 You can leverage this feature to apply multiple policies configured on the Zscaler AI Guard (ZGuard) to traffic from different applications. (Note: It is recommended to map policies using either Team or Key metadata, but not a mix of both.)
