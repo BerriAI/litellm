@@ -50,10 +50,19 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
         if api_key is None:
             api_key = get_secret_str("SAMBANOVA_API_KEY")
 
+        # Add X-Integration-Source header with priority handling
+        # Priority: User parameter > Env var > Default value ("litellm")
+        integration_source = (
+            optional_params.get("extra_body", {}).pop("integration_source", None)
+            or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE")
+            or "litellm"
+        )
+
         default_headers = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "Content-Type": "application/json",
+            "X-Integration-Source": integration_source,
         }
 
         # If 'Authorization' is provided in headers, it overrides the default.
