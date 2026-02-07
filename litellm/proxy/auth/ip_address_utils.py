@@ -44,6 +44,41 @@ class IPAddressUtils:
         return networks if networks else IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
 
     @staticmethod
+    def parse_trusted_proxy_networks(
+        configured_ranges: Optional[List[str]],
+    ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+        """
+        Parse trusted proxy CIDR ranges for XFF validation.
+        
+        Returns empty list if not configured (XFF will not be trusted).
+        """
+        if not configured_ranges:
+            return []
+        networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
+        for cidr in configured_ranges:
+            try:
+                networks.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                verbose_proxy_logger.warning(
+                    "Invalid CIDR in mcp_trusted_proxy_ranges: %s, skipping", cidr
+                )
+        return networks
+
+    @staticmethod
+    def is_trusted_proxy(
+        proxy_ip: Optional[str],
+        trusted_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]],
+    ) -> bool:
+        """Check if the direct connection IP is from a trusted proxy."""
+        if not proxy_ip or not trusted_networks:
+            return False
+        try:
+            addr = ipaddress.ip_address(proxy_ip.strip())
+            return any(addr in network for network in trusted_networks)
+        except ValueError:
+            return False
+
+    @staticmethod
     def is_internal_ip(
         client_ip: Optional[str],
         internal_networks: Optional[
@@ -80,22 +115,32 @@ class IPAddressUtils:
         """
         Extract client IP from a FastAPI request for MCP access control.
 
-        Uses the proxy's use_x_forwarded_for setting to determine whether
-        to trust X-Forwarded-For headers.
+        Security: Only trusts X-Forwarded-For if:
+        1. use_x_forwarded_for is enabled in settings
+        2. The direct connection is from a trusted proxy (if mcp_trusted_proxy_ranges configured)
 
         Args:
             request: FastAPI request object
-            general_settings: Optional settings dict. If not provided, imports from proxy_server.
+            general_settings: Optional settings dict. If not provided, uses cached reference.
         """
-        if general_settings is None:
-            try:
-                from litellm.proxy.proxy_server import (
-                    general_settings as proxy_general_settings,
-                )
-                general_settings = proxy_general_settings
-            except ImportError:
-                # Fallback if proxy_server not available (e.g., MCP gated deployments)
-                general_settings = {}
+        from litellm.proxy.proxy_server import general_settings
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
+        
+        # If XFF is enabled, validate the request comes from a trusted proxy
+        if use_xff and "x-forwarded-for" in request.headers:
+            trusted_ranges = general_settings.get("mcp_trusted_proxy_ranges")
+            if trusted_ranges:
+                # Validate direct connection is from trusted proxy
+                direct_ip = request.client.host if request.client else None
+                trusted_networks = IPAddressUtils.parse_trusted_proxy_networks(
+                    trusted_ranges
+                )
+                if not IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks):
+                    # Untrusted source trying to set XFF - ignore XFF, use direct IP
+                    verbose_proxy_logger.warning(
+                        "XFF header from untrusted IP %s, ignoring", direct_ip
+                    )
+                    return direct_ip
+        
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)

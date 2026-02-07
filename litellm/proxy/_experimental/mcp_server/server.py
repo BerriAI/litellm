@@ -1985,11 +1985,13 @@ if MCP_AVAILABLE:
             _strip_stale_mcp_session_header(scope, session_manager)
 
             await session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            # Re-raise HTTP exceptions to preserve status codes and details
+            raise
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Instead of re-raising, try to send a graceful error response
+            # Try to send a graceful error response for non-HTTP exceptions
             try:
-                # Send a proper HTTP error response instead of letting the exception bubble up
                 from starlette.responses import JSONResponse
                 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
