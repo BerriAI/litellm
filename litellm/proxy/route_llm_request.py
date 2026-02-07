@@ -210,6 +210,19 @@ async def route_request(
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
 
+    elif "user_config" in data:
+        router_config = data.pop("user_config")
+
+        # Filter router_config to only include valid Router.__init__ arguments
+        # This prevents TypeError when invalid parameters are stored in the database
+        valid_args = litellm.Router.get_valid_args()
+        filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+
+        user_router = litellm.Router(**filtered_config)
+        ret_val = getattr(user_router, f"{route_type}")(**data)
+        user_router.discard()
+        return ret_val
+
     elif "router_settings_override" in data:
         # Apply per-request router settings overrides from key/team config
         # Instead of creating a new Router (expensive), merge settings into kwargs
