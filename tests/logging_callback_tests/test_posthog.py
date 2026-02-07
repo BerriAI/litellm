@@ -417,7 +417,9 @@ async def test_sync_callback_not_affected_by_atexit():
             assert callback_invoked_immediately, "Sync callback should be invoked immediately"
 
 
-        mock_response = Mock()
+@pytest.mark.asyncio
+async def test_json_serialization_with_non_serializable_objects():
+    """
     Test that PostHog logger handles non-JSON-serializable objects correctly
     using safe_dumps for serialization.
     
