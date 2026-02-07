@@ -4942,13 +4942,17 @@ class ProxyStartupEvent:
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
         
-        verbose_proxy_logger.info(
-            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
-            f"litellm_settings keys={list(litellm_settings.keys())}"
-        )
-        
         mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
-        verbose_proxy_logger.debug(f"Semantic filter config: {mcp_semantic_filter_config}")
+        
+        # Only proceed if the feature is configured and enabled
+        if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get("enabled", False):
+            verbose_proxy_logger.debug("Semantic tool filter not configured or not enabled, skipping initialization")
+            return
+        
+        verbose_proxy_logger.debug(
+            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
+            f"config={mcp_semantic_filter_config}"
+        )
         
         hook = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
@@ -4956,10 +4960,11 @@ class ProxyStartupEvent:
         )
         
         if hook:
-            verbose_proxy_logger.debug("✅ Semantic tool filter hook registered")
+            verbose_proxy_logger.debug("Semantic tool filter hook registered")
             litellm.logging_callback_manager.add_litellm_callback(hook)
         else:
-            verbose_proxy_logger.warning("❌ Semantic tool filter hook not initialized")
+            # Only warn if the feature was configured but failed to initialize
+            verbose_proxy_logger.warning("Semantic tool filter hook was configured but failed to initialize")
 
     @classmethod
     def _initialize_jwt_auth(
