@@ -129,10 +129,8 @@ if MCP_AVAILABLE:
         Args:
             user_api_key_dict: The user's API key auth context
             server_id: The server ID to validate access for
-            client_ip: Optional client IP for IP-based filtering. When None or empty,
-                IP filtering is skipped and access is determined by auth alone.
-                This matches the behavior of filter_server_ids_by_ip which returns
-                all servers unchanged when client_ip is None.
+            client_ip: Optional client IP for IP-based filtering. When None,
+                filter_server_ids_by_ip returns all servers unchanged (no filtering).
 
         Returns:
             List of allowed MCP servers
@@ -148,13 +146,12 @@ if MCP_AVAILABLE:
             )
             allowed_server_ids_set.update(servers)
 
-        # Apply IP filtering if client_ip is provided
-        if client_ip:
-            allowed_server_ids_set = set(
-                global_mcp_server_manager.filter_server_ids_by_ip(
-                    list(allowed_server_ids_set), client_ip
-                )
+        # Apply IP filtering (filter_server_ids_by_ip handles None by returning all servers)
+        allowed_server_ids_set = set(
+            global_mcp_server_manager.filter_server_ids_by_ip(
+                list(allowed_server_ids_set), client_ip
             )
+        )
 
         if server_id not in allowed_server_ids_set:
             raise HTTPException(
