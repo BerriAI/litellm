@@ -348,9 +348,29 @@ Compaction blocks are also supported in streaming mode. You'll receive:
 - The accumulated `compaction_blocks` in `provider_specific_fields`
 
 
+## Adaptive Thinking
+
+LiteLLM supports adaptive thinking through the `reasoning_effort` parameter:
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Solve this complex problem: What is the optimal strategy for..."
+    }
+  ],
+  "reasoning_effort": "high"
+}'
+```
+
 ## Effort Levels
 
-Four effort levels available: `low`, `medium`, `high` (default), and `max`. Pass directly via the `effort` parameter:
+Four effort levels available: `low`, `medium`, `high` (default), and `max`. Pass directly via the `output_config` parameter:
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -364,9 +384,14 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
       "content": "Explain quantum computing"
     }
   ],
-  "effort": "max"
+  "output_config": {
+        "effort": "medium"
+    }
+
 }'
 ```
+
+You can use reasoning effort plus output_config to have more control on the model.
 
 ## 1M Token Context (Beta)
 
