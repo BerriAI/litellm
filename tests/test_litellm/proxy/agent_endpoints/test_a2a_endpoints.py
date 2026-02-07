@@ -1,7 +1,8 @@
 """
 Mock tests for A2A endpoints.
 
-Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request.
+Tests that invoke_agent_a2a properly integrates with ProxyBaseLLMRequestProcessing
+for adding litellm data to requests.
 """
 
 import sys
@@ -13,16 +14,26 @@ import pytest
 @pytest.mark.asyncio
 async def test_invoke_agent_a2a_adds_litellm_data():
     """
-    Test that invoke_agent_a2a calls add_litellm_data_to_request
+    Test that invoke_agent_a2a calls common_processing_pre_call_logic
     and the resulting data includes proxy_server_request.
     """
     from litellm.proxy._types import UserAPIKeyAuth
 
-    # Track the data passed to add_litellm_data_to_request
+    # Track the data passed to common_processing_pre_call_logic
     captured_data = {}
 
-    async def mock_add_litellm_data(data, **kwargs):
-        # Simulate what add_litellm_data_to_request does
+    async def mock_common_processing(
+        request,
+        general_settings,
+        user_api_key_dict,
+        proxy_logging_obj,
+        proxy_config,
+        route_type,
+        version,
+    ):
+        # Get the data from the processor instance via closure
+        data = mock_processor_instance.data
+        # Simulate what common_processing_pre_call_logic does
         data["proxy_server_request"] = {
             "url": "http://localhost:4000/a2a/test-agent",
             "method": "POST",
@@ -30,7 +41,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
             "body": dict(data),
         }
         captured_data.update(data)
-        return data
+        return data, MagicMock()  # Returns (data, logging_obj)
 
     # Mock response from asend_message
     mock_response = MagicMock()
@@ -46,6 +57,8 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         "url": "http://backend-agent:10001",
         "name": "Test Agent",
     }
+    mock_agent.litellm_params = {}
+    mock_agent.agent_id = "test-agent-id"
 
     # Mock request
     mock_request = MagicMock()
@@ -71,32 +84,22 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     )
 
     # Try to use real a2a.types if available, otherwise create realistic mocks
-    # This test focuses on LiteLLM integration, not A2A protocol correctness,
-    # but we want mocks that behave like the real types to catch usage issues
     try:
         from a2a.types import (
             MessageSendParams,
             SendMessageRequest,
             SendStreamingMessageRequest,
         )
-
-        # Real types available - use them
-        pass
     except ImportError:
-        # Real types not available - create realistic mocks
-        pass
-
         def make_mock_pydantic_class(name):
             """Create a mock class that behaves like a Pydantic model."""
 
             class MockPydanticClass:
                 def __init__(self, **kwargs):
                     self.__dict__.update(kwargs)
-                    # Store kwargs for model_dump() if needed
                     self._kwargs = kwargs
 
                 def model_dump(self, mode="json", exclude_none=False):
-                    """Mock model_dump method."""
                     result = dict(self._kwargs)
                     if exclude_none:
                         result = {k: v for k, v in result.items() if v is not None}
@@ -117,14 +120,28 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     mock_a2a_types.SendMessageRequest = SendMessageRequest
     mock_a2a_types.SendStreamingMessageRequest = SendStreamingMessageRequest
 
+    # Create mock processor instance to capture data
+    mock_processor_instance = MagicMock()
+    mock_processor_instance.common_processing_pre_call_logic = AsyncMock(
+        side_effect=mock_common_processing
+    )
+
+    def mock_processor_init(data):
+        mock_processor_instance.data = data
+        return mock_processor_instance
+
     # Patch at the source modules
     with patch(
         "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
         return_value=mock_agent,
     ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
-        side_effect=mock_add_litellm_data,
-    ) as mock_add_data, patch(
+        "litellm.proxy.agent_endpoints.a2a_endpoints.AgentRequestHandler.is_agent_allowed",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        side_effect=mock_processor_init,
+    ) as mock_processor_class, patch(
         "litellm.a2a_protocol.create_a2a_client",
         new_callable=AsyncMock,
     ), patch(
@@ -136,6 +153,9 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         {},
     ), patch(
         "litellm.proxy.proxy_server.proxy_config",
+        MagicMock(),
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
         MagicMock(),
     ), patch(
         "litellm.proxy.proxy_server.version",
@@ -158,8 +178,11 @@ async def test_invoke_agent_a2a_adds_litellm_data():
             user_api_key_dict=mock_user_api_key_dict,
         )
 
-        # Verify add_litellm_data_to_request was called
-        mock_add_data.assert_called_once()
+        # Verify ProxyBaseLLMRequestProcessing was instantiated
+        mock_processor_class.assert_called_once()
+
+        # Verify common_processing_pre_call_logic was called
+        mock_processor_instance.common_processing_pre_call_logic.assert_called_once()
 
         # Verify model and custom_llm_provider were set
         assert captured_data.get("model") == "a2a_agent/Test Agent"
