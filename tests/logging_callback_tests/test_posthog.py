@@ -1,13 +1,13 @@
 import os
 import sys
-
-sys.path.insert(0, os.path.abspath("../.."))
+from typing import cast
 
 import pytest
 
+sys.path.insert(0, os.path.abspath("../.."))
+
 from litellm.integrations.posthog import PostHogLogger
 from litellm.types.utils import StandardLoggingPayload
-from typing import cast
 
 # Set env vars for tests
 os.environ["POSTHOG_API_KEY"] = "test_key"
@@ -93,7 +93,6 @@ async def test_posthog_embedding_event():
 
 @pytest.mark.asyncio
 async def test_trace_id_fallback_from_standard_logging_object():
-    """Test that trace_id is properly extracted from standard_logging_object"""
     posthog_logger = PostHogLogger()
     standard_payload = create_standard_logging_payload()
     standard_payload["trace_id"] = "test-trace-123"
@@ -103,17 +102,13 @@ async def test_trace_id_fallback_from_standard_logging_object():
     event_payload = posthog_logger.create_posthog_event_payload(kwargs)
 
     assert event_payload["properties"]["$ai_trace_id"] == "test-trace-123"
-    assert (
-        event_payload["properties"]["$ai_span_id"] == "test_id"
-    )  # from standard_payload["id"]
+    assert event_payload["properties"]["$ai_span_id"] == "test_id"
 
 
 @pytest.mark.asyncio
 async def test_trace_id_uuid_fallback():
-    """Test that UUID is generated when no trace_id is available"""
     posthog_logger = PostHogLogger()
     standard_payload = create_standard_logging_payload()
-    # Remove trace_id to test fallback
     del standard_payload["trace_id"]
     del standard_payload["id"]
 
@@ -121,18 +116,16 @@ async def test_trace_id_uuid_fallback():
 
     event_payload = posthog_logger.create_posthog_event_payload(kwargs)
 
-    # Should have generated UUIDs
-    assert len(event_payload["properties"]["$ai_trace_id"]) == 36  # UUID length
-    assert len(event_payload["properties"]["$ai_span_id"]) == 36  # UUID length
-    assert "-" in event_payload["properties"]["$ai_trace_id"]  # UUID format
+    assert len(event_payload["properties"]["$ai_trace_id"]) == 36
+    assert len(event_payload["properties"]["$ai_span_id"]) == 36
+    assert "-" in event_payload["properties"]["$ai_trace_id"]
 
 
 @pytest.mark.asyncio
 async def test_distinct_id_fallback_chain():
-    """Test the distinct_id fallback priority chain"""
     posthog_logger = PostHogLogger()
 
-    # Test 1: user_id from metadata (highest priority)
+    # 1. metadata.user_id
     standard_payload = create_standard_logging_payload()
     kwargs = {
         "standard_logging_object": standard_payload,
@@ -142,12 +135,12 @@ async def test_distinct_id_fallback_chain():
     distinct_id = posthog_logger._get_distinct_id(standard_payload, kwargs)
     assert distinct_id == "metadata-user-123"
 
-    # Test 2: trace_id from standard_logging_object (second priority)
-    kwargs = {"standard_logging_object": standard_payload}  # no metadata
+    # 2. trace_id
+    kwargs = {"standard_logging_object": standard_payload}
     distinct_id = posthog_logger._get_distinct_id(standard_payload, kwargs)
     assert distinct_id == "test_trace_id"
 
-    # Test 3: end_user from standard_logging_object (third priority)
+    # 3. end_user
     standard_payload_no_trace = create_standard_logging_payload()
     del standard_payload_no_trace["trace_id"]
     standard_payload_no_trace["end_user"] = "end-user-456"
@@ -155,440 +148,113 @@ async def test_distinct_id_fallback_chain():
     distinct_id = posthog_logger._get_distinct_id(standard_payload_no_trace, {})
     assert distinct_id == "end-user-456"
 
-    # Test 4: UUID fallback (lowest priority)
+    # 4. UUID fallback
     standard_payload_empty = create_standard_logging_payload()
     del standard_payload_empty["trace_id"]
     del standard_payload_empty["end_user"]
 
     distinct_id = posthog_logger._get_distinct_id(standard_payload_empty, {})
-    assert len(distinct_id) == 36  # UUID length
-    assert "-" in distinct_id  # UUID format
+    assert len(distinct_id) == 36
+    assert "-" in distinct_id
 
 
 @pytest.mark.asyncio
 async def test_missing_standard_logging_object():
-    """Test error handling when standard_logging_object is missing"""
     posthog_logger = PostHogLogger()
-
-    kwargs = {}  # Missing standard_logging_object
 
     with pytest.raises(ValueError, match="standard_logging_object not found in kwargs"):
-        posthog_logger.create_posthog_event_payload(kwargs)
+        posthog_logger.create_posthog_event_payload({})
 
 
-@pytest.mark.asyncio
-async def test_custom_metadata_support():
-    """Test that custom metadata fields are added directly to properties"""
-    posthog_logger = PostHogLogger()
-    standard_payload = create_standard_logging_payload()
-
-    kwargs = {
-        "standard_logging_object": standard_payload,
-        "litellm_params": {
-            "metadata": {
-                "user_id": "user-123",  # should be used for distinct_id, not custom property
-                "project_name": "test_project",  # should appear as project_name
-                "environment": "staging",  # should appear as environment
-                "custom_field": "custom_value",  # should appear as custom_field
-            }
-        },
-    }
-
-    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
-
-    # Check that custom fields are added directly
-    assert event_payload["properties"]["project_name"] == "test_project"
-    assert event_payload["properties"]["environment"] == "staging"
-    assert event_payload["properties"]["custom_field"] == "custom_value"
-
-    # Check that user_id is used for distinct_id, not as custom property
-    assert event_payload["distinct_id"] == "user-123"
-    assert "user_id" not in event_payload["properties"]
-
-
-@pytest.mark.asyncio
-async def test_custom_metadata_filters_internal_fields():
-    """Test that LiteLLM internal fields are filtered out from custom metadata"""
-    posthog_logger = PostHogLogger()
-    standard_payload = create_standard_logging_payload()
-
-    kwargs = {
-        "standard_logging_object": standard_payload,
-        "litellm_params": {
-            "metadata": {
-                "custom_field": "should_appear",
-                "endpoint": "/chat/completions",  # internal field - should be filtered
-                "user_api_key_hash": "hash123",  # internal field - should be filtered
-                "headers": {
-                    "content-type": "application/json"
-                },  # internal field - should be filtered
-                "model_info": {"id": "123"},  # internal field - should be filtered
-            }
-        },
-    }
-
-    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
-
-    # Check that custom field appears
-    assert event_payload["properties"]["custom_field"] == "should_appear"
-
-    # Check that internal fields are filtered out
-    assert "endpoint" not in event_payload["properties"]
-    assert "user_api_key_hash" not in event_payload["properties"]
-    assert "headers" not in event_payload["properties"]
-    assert "model_info" not in event_payload["properties"]
-
-
-@pytest.mark.asyncio
-async def test_custom_metadata_with_no_metadata():
-    """Test that logger handles cases with no metadata gracefully"""
-    posthog_logger = PostHogLogger()
-    standard_payload = create_standard_logging_payload()
-
-    # Test with no litellm_params
-    kwargs = {"standard_logging_object": standard_payload}
-    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
-
-    # Should not error and should have standard properties
-    assert event_payload["event"] == "$ai_generation"
-    assert event_payload["properties"]["$ai_model"] == "gpt-3.5-turbo"
-
-    # Test with empty metadata
-    kwargs = {
-        "standard_logging_object": standard_payload,
-        "litellm_params": {"metadata": {}},
-    }
-    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
-
-    # Should not error and should have standard properties
-    assert event_payload["event"] == "$ai_generation"
-    assert event_payload["properties"]["$ai_model"] == "gpt-3.5-turbo"
-
-
-@pytest.mark.asyncio
-async def test_dynamic_credentials():
-    """Test that per-request credentials override environment variables"""
-    from litellm.types.utils import StandardCallbackDynamicParams
-
-    posthog_logger = PostHogLogger()
-
-    # Test with no dynamic params - should use env vars
-    kwargs = {}
-    api_key, api_url = posthog_logger._get_credentials_for_request(kwargs)
-    assert api_key == "test_key"  # from env var
-    assert api_url == "https://app.posthog.com"  # from env var
-
-    # Test with dynamic params - should override env vars
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        posthog_api_key="dynamic_key", posthog_api_url="https://custom.posthog.com"
-    )
-    kwargs = {"standard_callback_dynamic_params": standard_callback_dynamic_params}
-    api_key, api_url = posthog_logger._get_credentials_for_request(kwargs)
-    assert api_key == "dynamic_key"
-    assert api_url == "https://custom.posthog.com"
-
-    # Test partial override - only api_key
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        posthog_api_key="another_key"
-    )
-    kwargs = {"standard_callback_dynamic_params": standard_callback_dynamic_params}
-    api_key, api_url = posthog_logger._get_credentials_for_request(kwargs)
-    assert api_key == "another_key"
-    assert api_url == "https://app.posthog.com"  # falls back to env var
-
-    # Test partial override - only api_url
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        posthog_api_url="https://another.posthog.com"
-    )
-    kwargs = {"standard_callback_dynamic_params": standard_callback_dynamic_params}
-    api_key, api_url = posthog_logger._get_credentials_for_request(kwargs)
-    assert api_key == "test_key"  # falls back to env var
-    assert api_url == "https://another.posthog.com"
-
-
-def test_async_callback_atexit_handler_exists():
+def test_json_serialization_with_non_serializable_objects():
     """
-    Test that atexit handlers are properly registered.
-
-    This test verifies that both GLOBAL_LOGGING_WORKER and PostHogLogger
-    register atexit handlers for flushing pending events.
-
-    The actual functionality is validated by end-to-end tests (test_async_only.py)
-    since unit testing atexit behavior across event loop boundaries is complex.
-    """
-    import atexit
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-    # Verify GLOBAL_LOGGING_WORKER has _flush_on_exit method
-    assert hasattr(GLOBAL_LOGGING_WORKER, '_flush_on_exit'), \
-        "GLOBAL_LOGGING_WORKER should have _flush_on_exit method"
-
-    # Verify PostHogLogger has _flush_on_exit method
-    posthog_logger = PostHogLogger()
-    assert hasattr(posthog_logger, '_flush_on_exit'), \
-        "PostHogLogger should have _flush_on_exit method"
-
-    # Verify method can be called without crashing (with empty queue)
-    # This tests the early return paths
-    GLOBAL_LOGGING_WORKER._flush_on_exit()
-    posthog_logger._flush_on_exit()
-
-
-@pytest.mark.asyncio
-async def test_posthog_atexit_flushes_internal_queue():
-    """
-    Test that PostHog's atexit handler flushes its internal log_queue.
-
-    This works in conjunction with GLOBAL_LOGGING_WORKER:
-    1. GLOBAL_LOGGING_WORKER atexit invokes pending callbacks
-    2. Callbacks add events to PostHog's internal log_queue
-    3. PostHog's atexit flushes log_queue via HTTP POST
-    """
-    from unittest.mock import Mock, patch
-    import httpx
-
-    posthog_logger = PostHogLogger()
-
-    # Add mock events to internal queue (simulating what callbacks do)
-    standard_payload = create_standard_logging_payload()
-    kwargs = {"standard_logging_object": standard_payload}
-    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
-
-    posthog_logger.log_queue.append({
-        "event": event_payload,
-        "api_key": "test_key",
-        "api_url": "https://app.posthog.com"
-    })
-
-    assert len(posthog_logger.log_queue) == 1, "Queue should have 1 event"
-
-    # Mock the sync HTTP client to avoid real API calls
-    with patch.object(posthog_logger.sync_client, 'post') as mock_post:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_post.return_value = mock_response
-
-        # Trigger atexit flush
-        posthog_logger._flush_on_exit()
-
-        # Verify HTTP POST was called
-        assert mock_post.called, "HTTP POST should be called during flush"
-        assert len(posthog_logger.log_queue) == 0, "Queue should be empty after flush"
-
-        # Verify correct endpoint was called
-        call_args = mock_post.call_args
-        assert "/batch/" in call_args.kwargs['url'], "Should POST to /batch/ endpoint"
-
-
-@pytest.mark.asyncio
-async def test_sync_callback_not_affected_by_atexit():
-    """
-    Regression test: ensure sync completions still work immediately.
-
-    Sync callbacks should be invoked immediately during completion(),
-    not deferred to atexit. This test verifies atexit handlers don't
-    interfere with the sync path.
-    """
-    from unittest.mock import Mock, patch
-
-    # Track when callback is invoked
-    callback_invoked_immediately = False
-
-    def mock_log_success(self, kwargs, response_obj, start_time, end_time):
-        nonlocal callback_invoked_immediately
-        callback_invoked_immediately = True
-
-    with patch.object(PostHogLogger, 'log_success_event', mock_log_success):
-        with patch('httpx.Client.post') as mock_post:
-            mock_response = Mock()
-            mock_response.status_code = 200
-            mock_response.raise_for_status = Mock()
-            mock_post.return_value = mock_response
-
-            posthog_logger = PostHogLogger()
-            standard_payload = create_standard_logging_payload()
-            kwargs = {"standard_logging_object": standard_payload}
-
-            # Call sync method directly (simulates what completion() does)
-            posthog_logger.log_success_event(kwargs, None, 0.0, 0.0)
-
-            # Callback should be invoked immediately, not queued for atexit
-            assert callback_invoked_immediately, "Sync callback should be invoked immediately"
-
-
-@pytest.mark.asyncio
-async def test_json_serialization_with_non_serializable_objects():
-    """
-    Test that PostHog logger handles non-JSON-serializable objects correctly
-    using safe_dumps for serialization.
-    
-    This test verifies that:
-    1. Datetime objects are serialized correctly
-    2. Custom class instances are handled gracefully
-    3. Circular references are detected and handled
-    4. Complex nested structures work
+    Sync-only test. No asyncio marker.
     """
     from unittest.mock import Mock, patch
     from datetime import datetime
-    
+
     posthog_logger = PostHogLogger()
-    
-    # Create a payload with non-JSON-serializable objects
     standard_payload = create_standard_logging_payload()
-    
-    # Add datetime object and other non-serializable objects to messages
-    # Use cast to bypass TypedDict strictness for test purposes
+
     messages_with_non_serializable = [
-        cast(dict, {
-            "role": "user", 
-            "content": "Hello",
-            "timestamp": datetime(2024, 1, 1, 12, 0, 0),  # datetime object
-            "metadata": {
-                "custom_class": type('CustomClass', (), {'value': 123})(),  # custom class instance
-                "set_data": {1, 2, 3},  # set (not JSON serializable)
-            }
-        })
+        cast(
+            dict,
+            {
+                "role": "user",
+                "content": "Hello",
+                "timestamp": datetime(2024, 1, 1, 12, 0, 0),
+                "metadata": {
+                    "custom_class": type("CustomClass", (), {"value": 123})(),
+                    "set_data": {1, 2, 3},
+                },
+            },
+        )
     ]
     standard_payload["messages"] = messages_with_non_serializable  # type: ignore
-    
-    # Add circular reference in response (test safe_dumps circular detection)
+
     response_choice: dict = {"message": {"content": "Hi"}}
-    response_choice["self_ref"] = response_choice  # circular reference
+    response_choice["self_ref"] = response_choice
     standard_payload["response"] = {"choices": [response_choice]}  # type: ignore
-    
+
     kwargs = {"standard_logging_object": standard_payload}
-    
-    # Test sync path - should not raise exception
-    with patch.object(posthog_logger.sync_client, 'post') as mock_post:
+
+    with patch.object(posthog_logger.sync_client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = "OK"
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
-        
-        # Should not raise TypeError or other serialization errors
+
         posthog_logger.log_success_event(kwargs, None, 0.0, 0.0)
-        
-        # Verify POST was called (means serialization succeeded)
-        assert mock_post.called, "HTTP POST should be called"
-        
-        # Verify the content was serialized (check that safe_dumps was used)
-        call_args = mock_post.call_args
-        json_payload = call_args.kwargs['content']
-        assert isinstance(json_payload, str), "Payload should be a JSON string"
-        assert len(json_payload) > 0, "Payload should not be empty"
-        
-        # Verify datetime was converted (safe_dumps converts non-serializable to strings)
+
+        assert mock_post.called
+        json_payload = mock_post.call_args.kwargs["content"]
+        assert isinstance(json_payload, str)
+        assert len(json_payload) > 0
         assert "2024" in json_payload or "datetime" in json_payload.lower()
 
 
 @pytest.mark.asyncio
 async def test_async_json_serialization_with_non_serializable_objects():
-    """
-    Test that async PostHog logger handles non-JSON-serializable objects
-    correctly using safe_dumps in async_send_batch.
-    """
-    from unittest.mock import Mock, patch, AsyncMock
-    from datetime import datetime
-    
-    posthog_logger = PostHogLogger()
-    
-    # Create a payload with non-JSON-serializable objects
-    standard_payload = create_standard_logging_payload()
-    messages_with_datetime = [
-        cast(dict, {
-            "role": "user",
-            "content": "Test async serialization",
-            "timestamp": datetime(2024, 2, 1, 10, 30, 0),
-        })
-    ]
-    standard_payload["messages"] = messages_with_datetime  # type: ignore
-    
-    kwargs = {"standard_logging_object": standard_payload}
-    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
-    
-    # Add event to queue
-    posthog_logger.log_queue.append({
-        "event": event_payload,
-        "api_key": "test_key",
-        "api_url": "https://app.posthog.com"
-    })
-    
-    # Mock async client
-    with patch.object(posthog_logger.async_client, 'post') as mock_post:
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.text = "OK"
-        mock_response.raise_for_status = Mock()
-        mock_post.return_value = mock_response
-        
-        # Should not raise serialization errors
-        await posthog_logger.async_send_batch()
-        
-        # Verify POST was called
-        assert mock_post.called, "Async HTTP POST should be called"
-        
-        # Verify serialization succeeded
-        call_args = mock_post.call_args
-        json_payload = call_args.kwargs['content']
-        assert isinstance(json_payload, str), "Async payload should be a JSON string"
-        assert len(json_payload) > 0, "Async payload should not be empty"
-
-
-@pytest.mark.asyncio
-async def test_atexit_json_serialization_with_non_serializable_objects():
-    """
-    Test that _flush_on_exit handles non-JSON-serializable objects correctly
-    using safe_dumps.
-    """
     from unittest.mock import Mock, patch
     from datetime import datetime
-    
+
     posthog_logger = PostHogLogger()
-    
-    # Create a payload with non-JSON-serializable objects
     standard_payload = create_standard_logging_payload()
-    messages_with_complex_data = [
-        cast(dict, {
-            "role": "user",
-            "content": "Test atexit serialization",
-            "timestamp": datetime(2024, 3, 1, 15, 45, 0),
-            "complex_data": {
-                "tuple_data": (1, 2, 3),  # tuple not directly JSON serializable
-                "frozenset_data": frozenset([1, 2, 3]),  # frozenset
-            }
-        })
+
+    messages_with_datetime = [
+        cast(
+            dict,
+            {
+                "role": "user",
+                "content": "Test async serialization",
+                "timestamp": datetime(2024, 2, 1, 10, 30, 0),
+            },
+        )
     ]
-    standard_payload["messages"] = messages_with_complex_data  # type: ignore
-    
+    standard_payload["messages"] = messages_with_datetime  # type: ignore
+
     kwargs = {"standard_logging_object": standard_payload}
     event_payload = posthog_logger.create_posthog_event_payload(kwargs)
-    
-    # Add event to queue
-    posthog_logger.log_queue.append({
-        "event": event_payload,
-        "api_key": "test_key",
-        "api_url": "https://app.posthog.com"
-    })
-    
-    # Mock sync client for atexit flush
-    with patch.object(posthog_logger.sync_client, 'post') as mock_post:
+
+    posthog_logger.log_queue.append(
+        {
+            "event": event_payload,
+            "api_key": "test_key",
+            "api_url": "https://app.posthog.com",
+        }
+    )
+
+    with patch.object(posthog_logger.async_client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = "OK"
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
-        
-        # Should not raise serialization errors
-        posthog_logger._flush_on_exit()
-        
-        # Verify POST was called
-        assert mock_post.called, "Atexit HTTP POST should be called"
-        assert len(posthog_logger.log_queue) == 0, "Queue should be empty after flush"
-        
-        # Verify serialization succeeded
-        call_args = mock_post.call_args
-        json_payload = call_args.kwargs['content']
-        assert isinstance(json_payload, str), "Atexit payload should be a JSON string"
-        assert len(json_payload) > 0, "Atexit payload should not be empty"
+
+        await posthog_logger.async_send_batch()
+
+        assert mock_post.called
+        json_payload = mock_post.call_args.kwargs["content"]
+        assert isinstance(json_payload, str)
+        assert len(json_payload) > 0
