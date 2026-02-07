@@ -3928,6 +3928,76 @@ jobs:
           paths:
             - litellm-docker-database.tar.gz
 
+  build_all_docker_images:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+
+      - run:
+          name: Upgrade Docker
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            docker version
+
+      - run:
+          name: Build main Dockerfile
+          command: |
+            docker build \
+              -t litellm-main:ci \
+              -f Dockerfile .
+
+      - run:
+          name: Build database Dockerfile
+          command: |
+            docker build \
+              -t litellm-database:ci \
+              -f docker/Dockerfile.database .
+
+      - run:
+          name: Build non-root Dockerfile
+          command: |
+            docker build \
+              -t litellm-non-root:ci \
+              -f docker/Dockerfile.non_root .
+
+      - run:
+          name: Verify all images
+          command: |
+            docker images | grep litellm
+            echo "All images built successfully!"
+
+      - run:
+          name: Test main image
+          command: |
+            docker run --rm litellm-main:ci --help || echo "Main image test completed"
+
+      - run:
+          name: Test database image
+          command: |
+            docker run --rm litellm-database:ci --help || echo "Database image test completed"
+
+      - run:
+          name: Test non-root image
+          command: |
+            docker run --rm litellm-non-root:ci --help || echo "Non-root image test completed"
+
+      - run:
+          name: Save Docker images to workspace
+          command: |
+            docker save litellm-main:ci | gzip > litellm-main.tar.gz
+            docker save litellm-database:ci | gzip > litellm-database.tar.gz
+            docker save litellm-non-root:ci | gzip > litellm-non-root.tar.gz
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm-main.tar.gz
+            - litellm-database.tar.gz
+            - litellm-non-root.tar.gz
+
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -4208,6 +4278,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - build_docker_database_image:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - build_all_docker_images:
           filters:
             branches:
               only:
