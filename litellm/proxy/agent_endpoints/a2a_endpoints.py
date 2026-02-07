@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.utils import all_litellm_params
 
 router = APIRouter()
 
@@ -75,10 +76,7 @@ async def _handle_stream_message(
 
         return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
 
-    from a2a.types import (
-        MessageSendParams,
-        SendStreamingMessageRequest,
-    )
+    from a2a.types import MessageSendParams, SendStreamingMessageRequest
 
     async def stream_response():
         try:
@@ -208,16 +206,17 @@ async def invoke_agent_a2a(
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
     )
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import (
         general_settings,
         proxy_config,
+        proxy_logging_obj,
         version,
     )
 
     body = {}
     try:
         body = await request.json()
+
         verbose_proxy_logger.debug(f"A2A request for agent '{agent_id}': {body}")
 
         # Validate JSON-RPC format
@@ -229,6 +228,16 @@ async def invoke_agent_a2a(
         request_id = body.get("id")
         method = body.get("method")
         params = body.get("params", {})
+
+        if params:
+            # extract any litellm params from the params - eg. 'guardrails'
+            params_to_remove = []
+            for key, value in params.items():
+                if key in all_litellm_params:
+                    params_to_remove.append(key)
+                    body[key] = value
+            for key in params_to_remove:
+                params.pop(key)
 
         if not A2A_SDK_AVAILABLE:
             return _jsonrpc_error(
@@ -283,12 +292,18 @@ async def invoke_agent_a2a(
         )
 
         # Add litellm data (user_api_key, user_id, team_id, etc.)
-        data = await add_litellm_data_to_request(
-            data=body,
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        processor = ProxyBaseLLMRequestProcessing(data=body)
+        data, logging_obj = await processor.common_processing_pre_call_logic(
             request=request,
-            user_api_key_dict=user_api_key_dict,
-            proxy_config=proxy_config,
             general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="asend_message",
             version=version,
         )
 
