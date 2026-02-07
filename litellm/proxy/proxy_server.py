@@ -804,7 +804,9 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         verbose_proxy_logger.debug("About to initialize semantic tool filter")
         _config = proxy_config.get_config_state()
         _litellm_settings = _config.get("litellm_settings", {})
-        verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
+        verbose_proxy_logger.debug(
+            f"litellm_settings keys = {list(_litellm_settings.keys())}"
+        )
         await ProxyStartupEvent._initialize_semantic_tool_filter(
             llm_router=llm_router,
             litellm_settings=_litellm_settings,
@@ -1292,7 +1294,9 @@ redis_usage_cache: Optional[
     RedisCache
 ] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[str] = []  # Models that should use native provider background mode instead of polling
+native_background_mode: List[
+    str
+] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -3924,9 +3928,7 @@ class ProxyConfig:
             )
 
         if self._should_load_db_object(object_type="semantic_filter_settings"):
-            await self._init_semantic_filter_settings_in_db(
-                prisma_client=prisma_client
-            )
+            await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -4859,20 +4861,24 @@ class ProxyStartupEvent:
     ):
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
-        
+
         verbose_proxy_logger.info(
             f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
             f"litellm_settings keys={list(litellm_settings.keys())}"
         )
-        
-        mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
-        verbose_proxy_logger.debug(f"Semantic filter config: {mcp_semantic_filter_config}")
-        
+
+        mcp_semantic_filter_config = litellm_settings.get(
+            "mcp_semantic_tool_filter", None
+        )
+        verbose_proxy_logger.debug(
+            f"Semantic filter config: {mcp_semantic_filter_config}"
+        )
+
         hook = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
             llm_router=llm_router,
         )
-        
+
         if hook:
             verbose_proxy_logger.debug("✅ Semantic tool filter hook registered")
             litellm.logging_callback_manager.add_litellm_callback(hook)
@@ -6413,6 +6419,13 @@ async def audio_speech(
                     "audio/wav"  # Gemini TTS returns WAV format after conversion
                 )
 
+        # Proxy-level success hook (e.g. Prometheus litellm_proxy_total_requests_metric)
+        await proxy_logging_obj.post_call_success_hook(
+            data=data,
+            response=response,  # type: ignore[arg-type]
+            user_api_key_dict=user_api_key_dict,
+        )
+
         return StreamingResponse(
             _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
             media_type=media_type,
@@ -6420,6 +6433,11 @@ async def audio_speech(
         )
 
     except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(
                 str(e)
@@ -8208,7 +8226,8 @@ async def _apply_search_filter_to_models(
                 # Fetch database models if we need more for the current page
                 if router_models_count < models_needed_for_page:
                     models_to_fetch = min(
-                        models_needed_for_page - router_models_count, db_models_total_count
+                        models_needed_for_page - router_models_count,
+                        db_models_total_count,
                     )
 
                     if models_to_fetch > 0:
@@ -8244,21 +8263,21 @@ async def _apply_search_filter_to_models(
 def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
     """
     Normalize a datetime value to a timezone-aware UTC datetime for sorting.
-    
+
     This function handles:
     - None values: returns None
     - String values: parses ISO format strings and converts to UTC-aware datetime
     - Datetime objects: converts naive datetimes to UTC-aware, and aware datetimes to UTC
-    
+
     Args:
         dt: Datetime value (None, str, or datetime object)
-        
+
     Returns:
         UTC-aware datetime object, or None if input is None or cannot be parsed
     """
     if dt is None:
         return None
-    
+
     if isinstance(dt, str):
         try:
             # Handle ISO format strings, including 'Z' suffix
@@ -8272,14 +8291,14 @@ def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
             return parsed_dt
         except (ValueError, AttributeError):
             return None
-    
+
     if isinstance(dt, datetime):
         # If naive, assume UTC and make it aware
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         # If aware, convert to UTC
         return dt.astimezone(timezone.utc)
-    
+
     return None
 
 
@@ -8299,46 +8318,60 @@ def _sort_models(
     Returns:
         Sorted list of models
     """
-    if not sort_by or sort_by not in ["model_name", "created_at", "updated_at", "costs", "status"]:
+    if not sort_by or sort_by not in [
+        "model_name",
+        "created_at",
+        "updated_at",
+        "costs",
+        "status",
+    ]:
         return all_models
 
     reverse = sort_order.lower() == "desc"
 
     def get_sort_key(model: Dict[str, Any]) -> Any:
         model_info = model.get("model_info", {})
-        
+
         if sort_by == "model_name":
             return model.get("model_name", "").lower()
-        
+
         elif sort_by == "created_at":
             created_at = model_info.get("created_at")
             normalized_dt = _normalize_datetime_for_sorting(created_at)
             if normalized_dt is None:
                 # Put None values at the end for asc, at the start for desc
-                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+                return (
+                    datetime.max.replace(tzinfo=timezone.utc)
+                    if not reverse
+                    else datetime.min.replace(tzinfo=timezone.utc)
+                )
             return normalized_dt
-        
+
         elif sort_by == "updated_at":
             updated_at = model_info.get("updated_at")
             normalized_dt = _normalize_datetime_for_sorting(updated_at)
             if normalized_dt is None:
-                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+                return (
+                    datetime.max.replace(tzinfo=timezone.utc)
+                    if not reverse
+                    else datetime.min.replace(tzinfo=timezone.utc)
+                )
             return normalized_dt
-        
+
         elif sort_by == "costs":
             input_cost = model_info.get("input_cost_per_token", 0) or 0
             output_cost = model_info.get("output_cost_per_token", 0) or 0
             total_cost = input_cost + output_cost
             # Put 0 or None costs at the end for asc, at the start for desc
             if total_cost == 0:
-                return (float("inf") if not reverse else float("-inf"))
+                return float("inf") if not reverse else float("-inf")
             return total_cost
-        
+
         elif sort_by == "status":
             # False (config) comes before True (db) for asc
             db_model = model_info.get("db_model", False)
             return db_model
-        
+
         return None
 
     try:
@@ -8534,9 +8567,7 @@ async def _find_model_by_id(
             )
             if db_model:
                 # Convert database model to router format
-                decrypted_models = proxy_config.decrypt_model_list_from_db(
-                    [db_model]
-                )
+                decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
                 if decrypted_models:
                     found_model = decrypted_models[0]
         except Exception as e:
@@ -8710,13 +8741,13 @@ async def model_info_v2(
         )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
-    
+
     # Append A2A agents to models list
     all_models = await append_agents_to_model_info(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
     )
-    
+
     # Update total count to include agents
     search_total_count = len(all_models)
 
@@ -9559,7 +9590,7 @@ async def model_group_info(
     model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
-    
+
     # Append A2A agents to model groups
     model_groups = await append_agents_to_model_group(
         model_groups=model_groups,
