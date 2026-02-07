@@ -573,6 +573,11 @@ class BaseLitellmParams(
         default=None, description="Base URL for the guardrail service API"
     )
 
+    num_retries: Optional[int] = Field(
+        default=None,
+        description="Number of retries for this guardrail's API calls; overrides router guardrail_num_retries when set",
+    )
+
     experimental_use_latest_role_message_only: Optional[bool] = Field(
         default=False,
         description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",

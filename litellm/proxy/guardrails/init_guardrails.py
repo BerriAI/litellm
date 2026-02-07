@@ -78,14 +78,17 @@ def _populate_router_guardrail_list(guardrail_list: List[Guardrail]) -> None:
             else dict(litellm_params)
         )
 
+        router_guardrail_litellm_params: Dict[str, Any] = {
+            "guardrail": params_dict.get("guardrail", ""),
+            "mode": params_dict.get("mode", ""),
+            "api_key": params_dict.get("api_key"),
+            "api_base": params_dict.get("api_base"),
+        }
+        if params_dict.get("num_retries") is not None:
+            router_guardrail_litellm_params["num_retries"] = params_dict["num_retries"]
         router_guardrail: GuardrailTypedDict = GuardrailTypedDict(
             guardrail_name=guardrail_name or "",
-            litellm_params={
-                "guardrail": params_dict.get("guardrail", ""),
-                "mode": params_dict.get("mode", ""),
-                "api_key": params_dict.get("api_key"),
-                "api_base": params_dict.get("api_base"),
-            },
+            litellm_params=router_guardrail_litellm_params,
             callback=callback,
             id=guardrail_id,
         )

@@ -656,6 +656,7 @@ class GuardrailLiteLLMParams(TypedDict, total=False):
     api_key: Optional[str]
     api_base: Optional[str]
     weight: Optional[int]  # For load balancing
+    num_retries: Optional[int]  # Per-guardrail retries; overrides router guardrail_num_retries when set
 
 
 class GuardrailTypedDict(TypedDict, total=False):
