@@ -6338,6 +6338,30 @@ export const fetchMCPAccessGroups = async (accessToken: string) => {
   }
 };
 
+export const fetchMCPClientIp = async (accessToken: string): Promise<string | null> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/network/client-ip`
+      : `/v1/mcp/network/client-ip`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return data.ip || null;
+  } catch {
+    return null;
+  }
+};
+
 export const createMCPServer = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object

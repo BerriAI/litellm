@@ -49,7 +49,6 @@ class IPAddressUtils:
     ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
         """
         Parse trusted proxy CIDR ranges for XFF validation.
-        
         Returns empty list if not configured (XFF will not be trusted).
         """
         if not configured_ranges:
@@ -121,12 +120,23 @@ class IPAddressUtils:
 
         Args:
             request: FastAPI request object
-            general_settings: Optional settings dict. If not provided, uses cached reference.
+            general_settings: Optional settings dict. If not provided, imports from proxy_server.
         """
-        from litellm.proxy.proxy_server import general_settings
+        if general_settings is None:
+            try:
+                from litellm.proxy.proxy_server import (
+                    general_settings as proxy_general_settings,
+                )
+                general_settings = proxy_general_settings
+            except ImportError:
+                general_settings = {}
+
+        # Handle case where general_settings is still None after import
+        if general_settings is None:
+            general_settings = {}
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
-        
+
         # If XFF is enabled, validate the request comes from a trusted proxy
         if use_xff and "x-forwarded-for" in request.headers:
             trusted_ranges = general_settings.get("mcp_trusted_proxy_ranges")
@@ -142,5 +152,4 @@ class IPAddressUtils:
                         "XFF header from untrusted IP %s, ignoring", direct_ip
                     )
                     return direct_ip
-        
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)

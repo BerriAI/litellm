@@ -10904,6 +10904,8 @@ async def get_config_list(
         "pass_through_endpoints": {"type": "PydanticModel"},
         "store_prompts_in_spend_logs": {"type": "Boolean"},
         "maximum_spend_logs_retention_period": {"type": "String"},
+        "mcp_internal_ip_ranges": {"type": "List"},
+        "mcp_trusted_proxy_ranges": {"type": "List"},
     }
 
     return_val = []
@@ -10973,11 +10975,15 @@ async def get_config_list(
                 elif field_name in general_settings:
                     _stored_in_db = False
 
+                _field_value = general_settings.get(field_name, None)
+                if _field_value is None and field_name in db_general_settings_dict:
+                    _field_value = db_general_settings_dict[field_name]
+
                 _response_obj = ConfigList(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=general_settings.get(field_name, None),
+                    field_value=_field_value,
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,

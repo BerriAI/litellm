@@ -69,7 +69,7 @@ if MCP_AVAILABLE:
             is_valid: bool = True
             warnings: list = []
 
-        def validate_tool_name(name: str) -> _ToolNameValidationResult:
+        def validate_tool_name(name: str) -> _ToolNameValidationResult:  # type: ignore[misc]
             return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
@@ -333,6 +333,7 @@ if MCP_AVAILABLE:
             token_url=payload.token_url,
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
+            available_on_public_internet=payload.available_on_public_internet,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -420,6 +421,18 @@ if MCP_AVAILABLE:
         # Convert to sorted list
         access_groups_list = sorted(list(access_groups))
         return {"access_groups": access_groups_list}
+
+    @router.get(
+        "/network/client-ip",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+        description="Returns the caller's IP address as seen by the proxy.",
+    )
+    async def get_client_ip(request: Request):
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        return {"ip": client_ip}
 
     @router.get(
         "/registry.json",
