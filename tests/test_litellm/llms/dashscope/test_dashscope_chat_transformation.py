@@ -111,3 +111,40 @@ class TestDashScopeConfig:
         # Check for specific content in the response
         assert "```python" in response.choices[0].message.content
         assert "Hey from LiteLLM" in response.choices[0].message.content
+
+    def test_dashscope_preserves_cache_control(self):
+        """
+        Test that DashScope preserves cache_control metadata in messages.
+
+        Regression test for: https://github.com/BerriAI/litellm/issues/18165
+        DashScope now supports cache_control, so we should NOT strip it.
+        """
+        config = DashScopeChatConfig()
+
+        messages_with_cache = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Long document content here...",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+        # This should preserve cache_control (not strip it like OpenAI does)
+        (
+            transformed_messages,
+            tools,
+        ) = config.remove_cache_control_flag_from_messages_and_tools(
+            model="qwen-turbo",
+            messages=messages_with_cache,
+            tools=None,
+        )
+
+        # Verify cache_control is preserved
+        assert transformed_messages[0]["content"][0]["cache_control"] == {
+            "type": "ephemeral"
+        }
