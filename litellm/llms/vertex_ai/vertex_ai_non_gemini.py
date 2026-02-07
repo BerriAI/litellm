@@ -196,7 +196,7 @@ def completion(  # noqa: PLR0915
 
         request_str = ""
         response_obj = None
-        instances = None
+        instances: Any = None
         client_options = {
             "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
         }
