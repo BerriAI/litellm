@@ -1467,6 +1467,16 @@
         "interactions": true
       }
     },
+    "neosantara": {
+      "display_name": "Neosantara (`neosantara`)",
+      "url": "https://docs.litellm.ai/docs/providers/neosantara",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true
+      }
+    },
     "nlp_cloud": {
       "display_name": "NLP Cloud (`nlp_cloud`)",
       "url": "https://docs.litellm.ai/docs/providers/nlp_cloud",
