@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceLoggerPayload
@@ -275,7 +276,6 @@ class OpenTelemetry(CustomLogger):
 
         def create_tracer_provider():
             provider = TracerProvider(resource=self._get_litellm_resource(self.config))
-            provider.add_span_processor(self._get_span_processor())
             return provider
 
         tracer_provider = self._get_or_create_provider(
@@ -286,6 +286,7 @@ class OpenTelemetry(CustomLogger):
             create_new_provider_fn=create_tracer_provider,
             set_provider_fn=trace.set_tracer_provider,
         )
+        tracer_provider.add_span_processor(self._get_span_processor())
 
         # Grab our tracer from the TracerProvider (not from global context)
         # This ensures we use the provided TracerProvider (e.g., for testing)
@@ -311,7 +312,7 @@ class OpenTelemetry(CustomLogger):
                 metric_readers=[metric_reader],
                 resource=self._get_litellm_resource(self.config),
             )
-
+        
         meter_provider = self._get_or_create_provider(
             provider=meter_provider,
             provider_name="MeterProvider",
@@ -363,17 +364,12 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
-        def create_logger_provider():
-            provider = OTLoggerProvider(
-                resource=self._get_litellm_resource(self.config)
-            )
-            log_exporter = self._get_log_exporter()
-            provider.add_log_record_processor(
-                BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
-            )
-            return provider
+        log_exporter = self._get_log_exporter()
 
-        self._get_or_create_provider(
+        def create_logger_provider():
+            return OTLoggerProvider(resource=self._get_litellm_resource(self.config))
+
+        logger_provider = self._get_or_create_provider(
             provider=logger_provider,
             provider_name="LoggerProvider",
             get_existing_provider_fn=get_logger_provider,
@@ -381,6 +377,10 @@ class OpenTelemetry(CustomLogger):
             create_new_provider_fn=create_logger_provider,
             set_provider_fn=set_logger_provider,
         )
+        logger_provider.add_log_record_processor(
+            BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
+        )
+
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_success(kwargs, response_obj, start_time, end_time)
@@ -709,12 +709,6 @@ class OpenTelemetry(CustomLogger):
 
         # 6. Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
-        # However, proxy-created spans should be closed here
-        if (
-            parent_span is not None
-            and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
-        ):
-            parent_span.end(end_time=self._to_ns(end_time))
 
     def _start_primary_span(
         self,
@@ -1207,12 +1201,6 @@ class OpenTelemetry(CustomLogger):
 
         # Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
-        # However, proxy-created spans should be closed here
-        if (
-            parent_otel_span is not None
-            and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
-        ):
-            parent_otel_span.end(end_time=self._to_ns(end_time))
 
     def _record_exception_on_span(self, span: Span, kwargs: dict):
         """
@@ -2306,3 +2294,25 @@ class OpenTelemetry(CustomLogger):
             context=self.get_traceparent_from_header(headers=headers),
             kind=self.span_kind.SERVER,
         )
+
+    def close_litellm_proxy_request_span(
+        self,
+        kwargs: Optional[dict],
+        end_time: datetime,
+    ) -> None:
+        """End the proxy-created parent span after all callbacks finish."""
+
+        if kwargs is None:
+            return
+
+        try:
+            parent_span = _get_parent_otel_span_from_kwargs(kwargs)
+            if parent_span is None:
+                return
+            if getattr(parent_span, "name", None) != LITELLM_PROXY_REQUEST_SPAN_NAME:
+                return
+            parent_span.end(end_time=self._to_ns(end_time))
+        except Exception as exc:
+            verbose_logger.debug(
+                "OpenTelemetry: Failed to end proxy parent span: %s", str(exc)
+            )
