@@ -1,0 +1,102 @@
+{
+  "pii_detector": {
+    "name": "PII Detector",
+    "description": "Detects and blocks personally identifiable information like SSNs, credit cards, and phone numbers",
+    "category": "security",
+    "tags": ["pii", "privacy", "compliance", "gdpr"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "request",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Block requests containing PII patterns\"\"\"\n    text = ' '.join(inputs.get('texts', []))\n    \n    # SSN pattern\n    ssn_matches = regex_find_all(r'\\b\\d{3}-\\d{2}-\\d{4}\\b', text)\n    if ssn_matches:\n        return block('SSN detected in input')\n    \n    # Credit card pattern (basic)\n    cc_matches = regex_find_all(r'\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b', text)\n    if cc_matches:\n        return block('Credit card number detected in input')\n    \n    # Phone number pattern\n    phone_matches = regex_find_all(r'\\b\\d{3}[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b', text)\n    if len(phone_matches) > 2:\n        return block('Multiple phone numbers detected')\n    \n    return allow()"
+  },
+  "pii_redactor": {
+    "name": "PII Redactor",
+    "description": "Redacts PII from inputs by replacing with [REDACTED] markers",
+    "category": "security",
+    "tags": ["pii", "privacy", "redaction", "masking"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "request",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Redact PII patterns from input text\"\"\"\n    texts = inputs.get('texts', [])\n    modified_texts = []\n    \n    for text in texts:\n        # Redact SSNs\n        text = regex_replace(r'\\b\\d{3}-\\d{2}-\\d{4}\\b', '[SSN REDACTED]', text)\n        # Redact credit cards\n        text = regex_replace(r'\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b', '[CC REDACTED]', text)\n        # Redact emails\n        text = regex_replace(r'\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b', '[EMAIL REDACTED]', text)\n        modified_texts.append(text)\n    \n    return modify(texts=modified_texts)"
+  },
+  "prompt_injection_detector": {
+    "name": "Prompt Injection Detector",
+    "description": "Detects common prompt injection patterns and jailbreak attempts",
+    "category": "security",
+    "tags": ["injection", "jailbreak", "security", "safety"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "request",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Detect prompt injection attempts\"\"\"\n    text = ' '.join(inputs.get('texts', [])).lower()\n    \n    # Common injection patterns\n    injection_patterns = [\n        r'ignore (all |previous |above )?instructions',\n        r'disregard (all |previous |above )?instructions',\n        r'forget (all |previous |above )?instructions',\n        r'you are now',\n        r'new persona',\n        r'act as if',\n        r'pretend (that )?you',\n        r'jailbreak',\n        r'dan mode',\n        r'developer mode'\n    ]\n    \n    for pattern in injection_patterns:\n        if regex_match(pattern, text):\n            return block(f'Potential prompt injection detected: {pattern}')\n    \n    return allow()"
+  },
+  "api_key_detector": {
+    "name": "API Key Detector",
+    "description": "Detects and blocks accidental API key exposure in prompts",
+    "category": "security",
+    "tags": ["api-key", "secrets", "security", "leak-prevention"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "request",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Detect API keys and secrets in input\"\"\"\n    text = ' '.join(inputs.get('texts', []))\n    \n    # Common API key patterns\n    patterns = {\n        'OpenAI': r'sk-[a-zA-Z0-9]{48}',\n        'Anthropic': r'sk-ant-[a-zA-Z0-9-]{95}',\n        'AWS': r'AKIA[0-9A-Z]{16}',\n        'GitHub': r'gh[ps]_[a-zA-Z0-9]{36}',\n        'Stripe': r'sk_live_[a-zA-Z0-9]{24}'\n    }\n    \n    for provider, pattern in patterns.items():\n        if regex_match(pattern, text):\n            return block(f'Potential {provider} API key detected')\n    \n    return allow()"
+  },
+  "json_schema_validator": {
+    "name": "JSON Schema Validator",
+    "description": "Validates that LLM responses conform to a specified JSON schema",
+    "category": "validation",
+    "tags": ["json", "schema", "validation", "structured-output"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "response",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Validate response against JSON schema from request metadata\"\"\"\n    text = inputs.get('texts', [''])[0]\n    \n    # Try to parse as JSON\n    parsed = json_parse(text)\n    if parsed is None:\n        return block('Response is not valid JSON')\n    \n    # Get schema from request metadata if provided\n    metadata = request_data.get('metadata', {})\n    schema = metadata.get('response_schema')\n    \n    if schema:\n        if not json_schema_valid(parsed, schema):\n            return block('Response does not match required schema')\n    \n    return allow()"
+  },
+  "toxic_content_filter": {
+    "name": "Toxic Content Filter",
+    "description": "Filters toxic, offensive, or inappropriate content using keyword matching",
+    "category": "moderation",
+    "tags": ["toxic", "moderation", "content-filter", "safety"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "both",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Filter toxic content using keyword patterns\"\"\"\n    text = ' '.join(inputs.get('texts', [])).lower()\n    \n    # Basic toxic patterns (expand as needed)\n    toxic_patterns = [\n        r'\\b(hate|kill|murder|attack)\\s+(people|them|you|him|her)\\b',\n        r'\\bhow to (hack|steal|hurt|harm)\\b'\n    ]\n    \n    for pattern in toxic_patterns:\n        if regex_match(pattern, text):\n            return block('Content flagged as potentially harmful')\n    \n    return allow()"
+  },
+  "word_count_limit": {
+    "name": "Word Count Limit",
+    "description": "Enforces maximum word count on inputs or outputs",
+    "category": "validation",
+    "tags": ["length", "limit", "validation", "cost-control"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "both",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Enforce word count limits\"\"\"\n    text = ' '.join(inputs.get('texts', []))\n    words = text.split()\n    word_count = len(words)\n    \n    # Get limit from metadata or use default\n    metadata = request_data.get('metadata', {})\n    max_words = metadata.get('max_words', 5000)\n    \n    if word_count > max_words:\n        return block(f'Content exceeds {max_words} word limit ({word_count} words)')\n    \n    return allow()"
+  },
+  "code_detector": {
+    "name": "Code Detector",
+    "description": "Detects code in responses and optionally blocks dangerous languages",
+    "category": "content",
+    "tags": ["code", "detection", "programming", "safety"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "response",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Detect and optionally block code in responses\"\"\"\n    text = inputs.get('texts', [''])[0]\n    \n    code_blocks = detect_code(text)\n    \n    # Define dangerous languages to block\n    dangerous_langs = ['bash', 'shell', 'powershell', 'sql']\n    \n    for block_info in code_blocks:\n        lang = block_info.get('language', '').lower()\n        if lang in dangerous_langs:\n            return block(f'Potentially dangerous {lang} code detected')\n    \n    return allow()"
+  },
+  "response_formatter": {
+    "name": "Response Formatter",
+    "description": "Formats and cleans LLM responses (removes markdown, extra whitespace)",
+    "category": "formatting",
+    "tags": ["format", "clean", "markdown", "output"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "response",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Clean and format response text\"\"\"\n    texts = inputs.get('texts', [])\n    modified_texts = []\n    \n    for text in texts:\n        # Remove markdown code blocks if requested\n        metadata = request_data.get('metadata', {})\n        if metadata.get('strip_markdown', False):\n            text = regex_replace(r'```[a-z]*\\n?', '', text)\n            text = regex_replace(r'```', '', text)\n        \n        # Normalize whitespace\n        text = regex_replace(r'\\n{3,}', '\\n\\n', text)\n        text = regex_replace(r' {2,}', ' ', text)\n        \n        modified_texts.append(text.strip())\n    \n    return modify(texts=modified_texts)"
+  },
+  "url_validator": {
+    "name": "URL Validator",
+    "description": "Validates and filters URLs in requests, blocking suspicious domains",
+    "category": "security",
+    "tags": ["url", "validation", "phishing", "security"],
+    "author": "LiteLLM",
+    "version": "1.0.0",
+    "input_type": "request",
+    "code": "def apply_guardrail(inputs, request_data, input_type):\n    \"\"\"Validate URLs and block suspicious domains\"\"\"\n    text = ' '.join(inputs.get('texts', []))\n    urls = extract_urls(text)\n    \n    # Suspicious TLDs often used in phishing\n    suspicious_tlds = ['.xyz', '.top', '.work', '.click', '.loan']\n    \n    for url in urls:\n        url_lower = url.lower()\n        for tld in suspicious_tlds:\n            if url_lower.endswith(tld):\n                return block(f'Suspicious URL detected: {url}')\n        \n        # Block IP-based URLs (often malicious)\n        if regex_match(r'https?://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}', url):\n            return block(f'IP-based URL not allowed: {url}')\n    \n    return allow()"
+  }
+}
