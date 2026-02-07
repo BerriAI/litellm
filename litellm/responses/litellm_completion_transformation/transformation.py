@@ -5,7 +5,13 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
-from openai.types.responses import ResponseFunctionToolCall
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseReasoningItem,
+)
+from openai.types.responses.response import ResponseOutputItem
+from openai.types.responses.response_output_item import ImageGenerationCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
@@ -16,9 +22,13 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionResponseMessage,
+    ChatCompletionTextObject,
+    ChatCompletionThinkingBlock,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionSystemMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -43,7 +53,6 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
-    OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputText,
 )
@@ -55,6 +64,10 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     Usage,
+)
+
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
 )
 
 ########### Initialize Classes used for Responses API  ###########
@@ -78,6 +91,354 @@ class ChatCompletionSession(TypedDict, total=False):
 
 
 class LiteLLMCompletionResponsesConfig:
+    @staticmethod
+    def _normalize_tool_call_id(tool_call_id: str) -> str:
+        if not tool_call_id:
+            return tool_call_id
+        if THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
+            return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        return tool_call_id
+
+    @staticmethod
+    def _is_anthropic_like_model(
+        model: Optional[str],
+        custom_llm_provider: Optional[str],
+    ) -> bool:
+        if model and "claude" in model.lower():
+            return True
+        if custom_llm_provider and custom_llm_provider.lower() == "anthropic":
+            return True
+        return False
+
+    @staticmethod
+    def _requires_thinking_signature(
+        model: Optional[str],
+        custom_llm_provider: Optional[str],
+    ) -> bool:
+        provider = (custom_llm_provider or "").lower()
+        model_name = (model or "").lower()
+        if "claude" in model_name:
+            return True
+        if provider == "anthropic" and "claude" in model_name:
+            return True
+        if "vertex_ai" in provider and "claude" in model_name:
+            return True
+        return False
+
+    @staticmethod
+    def _filter_thinking_blocks_for_signature(
+        thinking_blocks: List[Dict[str, Any]],
+        require_signature: bool,
+    ) -> List[Dict[str, Any]]:
+        if not require_signature:
+            return thinking_blocks
+        filtered_blocks: List[Dict[str, Any]] = []
+        for block in thinking_blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "thinking":
+                signature_val = block.get("signature")
+                if isinstance(signature_val, str) and signature_val.strip():
+                    filtered_blocks.append(block)
+                elif signature_val:
+                    filtered_blocks.append(block)
+                continue
+            filtered_blocks.append(block)
+        return filtered_blocks
+
+    @staticmethod
+    def _extract_reasoning_effort_from_responses_request(
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+    ) -> Optional[str]:
+        reasoning_param = responses_api_request.get("reasoning")
+        reasoning_effort: Optional[str] = None
+        if isinstance(reasoning_param, dict):
+            reasoning_effort = reasoning_param.get("effort")
+        elif isinstance(reasoning_param, str):
+            reasoning_effort = reasoning_param
+        if reasoning_effort is None:
+            return None
+        if isinstance(reasoning_effort, str):
+            lowered = reasoning_effort.lower().strip()
+            if lowered in {"none", "disabled", "off"}:
+                return None
+        return str(reasoning_effort)
+
+    @staticmethod
+    def _is_reasoning_enabled(
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+    ) -> bool:
+        reasoning_effort = LiteLLMCompletionResponsesConfig._extract_reasoning_effort_from_responses_request(
+            responses_api_request
+        )
+        return reasoning_effort is not None
+
+    @staticmethod
+    def _extract_thinking_blocks_from_content(
+        content: Any,
+        require_signature: bool = False,
+    ) -> Tuple[List[Dict[str, Any]], Any]:
+        if not isinstance(content, list):
+            return [], content
+
+        thinking_blocks: List[Dict[str, Any]] = []
+        filtered_content: List[Any] = []
+        for part in content:
+            if not isinstance(part, dict):
+                filtered_content.append(part)
+                continue
+            part_type = part.get("type")
+            if part_type in {"reasoning_text", "summary_text"}:
+                text_val = part.get("text") or part.get("reasoning") or ""
+                if require_signature:
+                    if isinstance(text_val, str) and text_val:
+                        filtered_content.append({"type": "text", "text": text_val})
+                    else:
+                        filtered_content.append(part)
+                elif isinstance(text_val, str) and text_val:
+                    thinking_blocks.append({"type": "thinking", "thinking": text_val})
+                continue
+            if part_type == "thinking":
+                thinking_val = part.get("thinking") or part.get("text") or ""
+                signature_val = part.get("signature")
+                if require_signature and not signature_val:
+                    if isinstance(thinking_val, str) and thinking_val:
+                        filtered_content.append({"type": "text", "text": thinking_val})
+                    continue
+                if isinstance(thinking_val, str):
+                    block: Dict[str, Any] = {
+                        "type": "thinking",
+                        "thinking": thinking_val,
+                    }
+                    if signature_val:
+                        block["signature"] = signature_val
+                    thinking_blocks.append(block)
+                continue
+            if part_type == "redacted_thinking":
+                data_val = part.get("data") or part.get("text") or ""
+                thinking_blocks.append(
+                    {"type": "redacted_thinking", "data": str(data_val)}
+                )
+                continue
+            filtered_content.append(part)
+
+        thinking_blocks = (
+            LiteLLMCompletionResponsesConfig._filter_thinking_blocks_for_signature(
+                thinking_blocks, require_signature
+            )
+        )
+        return thinking_blocks, filtered_content
+
+    @staticmethod
+    def _extract_thinking_blocks_from_input_item(
+        input_item: Any,
+        require_signature: bool = False,
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(input_item, dict):
+            return []
+        if input_item.get("type") == "reasoning":
+            summary = input_item.get("summary") or input_item.get("content") or []
+            (
+                thinking_blocks,
+                _,
+            ) = LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_content(
+                summary, require_signature=require_signature
+            )
+            return thinking_blocks
+        if input_item.get("role") == "assistant":
+            content = input_item.get("content")
+            (
+                thinking_blocks,
+                _,
+            ) = LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_content(
+                content, require_signature=require_signature
+            )
+            return thinking_blocks
+        return []
+
+    @staticmethod
+    def _coerce_thinking_blocks_to_openai_types(
+        thinking_blocks: List[Dict[str, Any]],
+    ) -> List[
+        Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+    ]:
+        typed_blocks: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
+        for block in thinking_blocks:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "thinking":
+                thinking_val = block.get("thinking")
+                if not isinstance(thinking_val, str):
+                    continue
+                typed_thinking_block: ChatCompletionThinkingBlock = {
+                    "type": "thinking",
+                    "thinking": thinking_val,
+                }
+                signature = block.get("signature")
+                if isinstance(signature, str):
+                    typed_thinking_block["signature"] = signature
+                cache_control = block.get("cache_control")
+                if isinstance(cache_control, dict):
+                    typed_thinking_block["cache_control"] = cache_control
+                typed_blocks.append(typed_thinking_block)
+            elif block_type == "redacted_thinking":
+                data_val = block.get("data")
+                if not isinstance(data_val, str):
+                    continue
+                typed_redacted_block: ChatCompletionRedactedThinkingBlock = {
+                    "type": "redacted_thinking",
+                    "data": data_val,
+                }
+                cache_control = block.get("cache_control")
+                if isinstance(cache_control, dict):
+                    typed_redacted_block["cache_control"] = cache_control
+                typed_blocks.append(typed_redacted_block)
+        return typed_blocks
+
+    @staticmethod
+    def _extract_reasoning_text_from_input_item(input_item: Any) -> str:
+        if not isinstance(input_item, dict):
+            return ""
+        if input_item.get("type") == "reasoning":
+            summary = input_item.get("summary") or input_item.get("content") or []
+            if isinstance(summary, list):
+                parts: List[str] = []
+                for part in summary:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") in {"summary_text", "reasoning_text"}:
+                        text_val = part.get("text") or part.get("reasoning") or ""
+                        if isinstance(text_val, str) and text_val:
+                            parts.append(text_val)
+                    elif part.get("type") == "thinking":
+                        thinking_val = part.get("thinking") or part.get("text") or ""
+                        if isinstance(thinking_val, str) and thinking_val:
+                            parts.append(thinking_val)
+                return "".join(parts)
+        return ""
+
+    @staticmethod
+    def _is_input_item_reasoning(input_item: Any) -> bool:
+        return isinstance(input_item, dict) and input_item.get("type") == "reasoning"
+
+    @staticmethod
+    def _coerce_message_to_dict(message: Any) -> Dict[str, Any]:
+        if isinstance(message, dict):
+            return message
+        if hasattr(message, "model_dump"):
+            try:
+                return cast(Dict[str, Any], message.model_dump())
+            except Exception:
+                pass
+        try:
+            return cast(Dict[str, Any], dict(message))
+        except Exception:
+            return {
+                "role": getattr(message, "role", None),
+                "content": getattr(message, "content", None),
+            }
+
+    @staticmethod
+    def _ensure_thinking_blocks_on_tool_calls(
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+                Message,
+            ]
+        ],
+        require_signature: bool = False,
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+            Message,
+        ]
+    ]:
+        last_thinking_blocks: Optional[List[Dict[str, Any]]] = None
+        for idx, msg in enumerate(messages):
+            msg_dict = LiteLLMCompletionResponsesConfig._coerce_message_to_dict(msg)
+            if msg_dict is not msg:
+                messages[idx] = msg_dict  # type: ignore
+
+            if msg_dict.get("role") != "assistant":
+                continue
+
+            thinking_blocks = msg_dict.get("thinking_blocks")
+            if thinking_blocks:
+                filtered_blocks = LiteLLMCompletionResponsesConfig._filter_thinking_blocks_for_signature(
+                    thinking_blocks, require_signature
+                )
+                msg_dict["thinking_blocks"] = filtered_blocks
+                if filtered_blocks:
+                    last_thinking_blocks = filtered_blocks
+
+            if (
+                msg_dict.get("tool_calls") is not None
+                and not msg_dict.get("thinking_blocks")
+                and last_thinking_blocks
+            ):
+                msg_dict["thinking_blocks"] = last_thinking_blocks
+
+        return messages
+
+    @staticmethod
+    def _assistant_tool_calls_missing_thinking_blocks(
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+                Message,
+            ]
+        ],
+    ) -> bool:
+        for msg in messages:
+            msg_dict = LiteLLMCompletionResponsesConfig._coerce_message_to_dict(msg)
+            if msg_dict.get("role") != "assistant":
+                continue
+            if msg_dict.get("tool_calls") is not None and not msg_dict.get(
+                "thinking_blocks"
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _strip_thinking_blocks_from_messages(
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+                Message,
+            ]
+        ],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+            Message,
+        ]
+    ]:
+        for idx, msg in enumerate(messages):
+            msg_dict = LiteLLMCompletionResponsesConfig._coerce_message_to_dict(msg)
+            if msg_dict is not msg:
+                messages[idx] = msg_dict  # type: ignore
+            if msg_dict.get("role") == "assistant":
+                msg_dict.pop("thinking_blocks", None)
+        return messages
+
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
         """
@@ -181,21 +542,35 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         # Extract reasoning_effort from reasoning parameter
-        reasoning_effort = None
-        reasoning_param = responses_api_request.get("reasoning")
-        if reasoning_param:
-            if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high"}
-                reasoning_effort = reasoning_param.get("effort")
-            elif isinstance(reasoning_param, str):
-                # reasoning could be a string directly
-                reasoning_effort = reasoning_param
+        reasoning_effort = LiteLLMCompletionResponsesConfig._extract_reasoning_effort_from_responses_request(
+            responses_api_request
+        )
 
-        litellm_completion_request: dict = {
-            "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
-            ),
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
+        )
+
+        if LiteLLMCompletionResponsesConfig._requires_thinking_signature(
+            model=model, custom_llm_provider=custom_llm_provider
+        ):
+            if (
+                reasoning_effort is not None
+                and LiteLLMCompletionResponsesConfig._assistant_tool_calls_missing_thinking_blocks(
+                    messages
+                )
+            ):
+                reasoning_effort = None
+                messages = LiteLLMCompletionResponsesConfig._strip_thinking_blocks_from_messages(
+                    messages
+                )
+
+        litellm_completion_request: dict = {
+            "messages": messages,
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
                 responses_api_request.get("tool_choice")
@@ -239,6 +614,8 @@ class LiteLLMCompletionResponsesConfig:
     def transform_responses_api_input_to_messages(
         input: Union[str, ResponseInputParam],
         responses_api_request: Union[ResponsesAPIOptionalRequestParams, dict],
+        model: Optional[str] = None,
+        custom_llm_provider: Optional[str] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -260,6 +637,24 @@ class LiteLLMCompletionResponsesConfig:
                 Message,
             ]
         ] = []
+        resolved_model = cast(
+            Optional[str], model or responses_api_request.get("model")
+        )
+        resolved_provider = cast(
+            Optional[str],
+            custom_llm_provider or responses_api_request.get("custom_llm_provider"),
+        )
+        anthropic_like = LiteLLMCompletionResponsesConfig._is_anthropic_like_model(
+            resolved_model, resolved_provider
+        )
+        requires_thinking_signature = (
+            LiteLLMCompletionResponsesConfig._requires_thinking_signature(
+                resolved_model, resolved_provider
+            )
+        )
+        reasoning_enabled = LiteLLMCompletionResponsesConfig._is_reasoning_enabled(
+            cast(ResponsesAPIOptionalRequestParams, responses_api_request)
+        )
         if responses_api_request.get("instructions"):
             messages.append(
                 LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
@@ -270,8 +665,18 @@ class LiteLLMCompletionResponsesConfig:
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
+                anthropic_like=anthropic_like,
+                reasoning_enabled=reasoning_enabled,
+                require_thinking_signature=requires_thinking_signature,
             )
         )
+
+        if anthropic_like and reasoning_enabled and messages:
+            messages = (
+                LiteLLMCompletionResponsesConfig._ensure_thinking_blocks_on_tool_calls(
+                    messages, require_signature=requires_thinking_signature
+                )
+            )
 
         return messages
 
@@ -292,22 +697,21 @@ class LiteLLMCompletionResponsesConfig:
             )
         _messages = litellm_completion_request.get("messages") or []
         session_messages = chat_completion_session.get("messages") or []
-        
+
         # If session messages are empty (e.g., no database in test environment),
         # we still need to process the new input messages
         # Store original _messages before combining for safety check
         original_new_messages = _messages.copy() if _messages else []
-        
+
         combined_messages = session_messages + _messages
-        
+
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools = litellm_completion_request.get("tools") or []
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages,
-            tools=tools
+            messages=combined_messages, tools=tools
         )
-        
+
         # Safety check: Ensure we don't end up with empty messages
         # This can happen when using previous_response_id without a database (e.g., in tests)
         # and session messages are empty but new input messages exist
@@ -326,6 +730,7 @@ class LiteLLMCompletionResponsesConfig:
                 # Both are empty - this likely means function_call_output had empty/invalid call_id
                 # Provide a helpful error message
                 import litellm
+
                 raise litellm.BadRequestError(
                     message=(
                         f"Unable to create messages for completion request. "
@@ -336,9 +741,11 @@ class LiteLLMCompletionResponsesConfig:
                         f"Original request: previous_response_id={previous_response_id}"
                     ),
                     model=litellm_completion_request.get("model", ""),
-                    llm_provider=litellm_completion_request.get("custom_llm_provider", ""),
+                    llm_provider=litellm_completion_request.get(
+                        "custom_llm_provider", ""
+                    ),
                 )
-        
+
         litellm_completion_request["messages"] = combined_messages
         litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
             "litellm_session_id"
@@ -348,6 +755,9 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
         input: Union[str, ResponseInputParam],
+        anthropic_like: bool = False,
+        reasoning_enabled: bool = False,
+        require_thinking_signature: bool = False,
     ) -> List[
         Union[
             AllMessageValues,
@@ -373,8 +783,49 @@ class LiteLLMCompletionResponsesConfig:
         elif isinstance(input, list):
             existing_tool_call_ids: Set[str] = set()
             for _input in input:
+                if (
+                    anthropic_like
+                    and reasoning_enabled
+                    and LiteLLMCompletionResponsesConfig._is_input_item_reasoning(
+                        _input
+                    )
+                ):
+                    thinking_blocks = LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_input_item(
+                        _input, require_signature=require_thinking_signature
+                    )
+                    if thinking_blocks:
+                        typed_thinking_blocks = (
+                            LiteLLMCompletionResponsesConfig._coerce_thinking_blocks_to_openai_types(
+                                thinking_blocks
+                            )
+                        )
+                        if typed_thinking_blocks:
+                            content_blocks: List[
+                                Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]
+                            ] = []
+                            assistant_msg_thinking: ChatCompletionAssistantMessage = {
+                                "role": "assistant",
+                                "content": content_blocks,
+                                "thinking_blocks": typed_thinking_blocks,
+                            }
+                            messages.append(assistant_msg_thinking)
+                    else:
+                        reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(
+                            _input
+                        )
+                        if reasoning_text:
+                            assistant_msg_text: ChatCompletionAssistantMessage = {
+                                "role": "assistant",
+                                "content": reasoning_text,
+                            }
+                            messages.append(assistant_msg_text)
+                    continue
+
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-                    input_item=_input
+                    input_item=_input,
+                    anthropic_like=anthropic_like,
+                    reasoning_enabled=reasoning_enabled,
+                    require_thinking_signature=require_thinking_signature,
                 )
 
                 if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
@@ -386,8 +837,8 @@ class LiteLLMCompletionResponsesConfig:
 
                 #########################################################
                 # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
-                # preserving the ordering of tool call outputs. Some models require the tool 
-                # result to immediately follow the assistant tool call. 
+                # preserving the ordering of tool call outputs. Some models require the tool
+                # result to immediately follow the assistant tool call.
                 #########################################################
                 if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
                     input_item=_input
@@ -541,7 +992,11 @@ class LiteLLMCompletionResponsesConfig:
             if isinstance(assistant_message, dict)
             else getattr(assistant_message, "tool_calls", None)
         )
-        if tool_calls_raw and isinstance(tool_calls_raw, list) and len(tool_calls_raw) > 0:
+        if (
+            tool_calls_raw
+            and isinstance(tool_calls_raw, list)
+            and len(tool_calls_raw) > 0
+        ):
             first_tool_call = tool_calls_raw[0]
             if isinstance(first_tool_call, dict):
                 tool_call_id_raw = first_tool_call.get("id", "")
@@ -572,6 +1027,9 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _check_tool_call_exists(tool_calls: List[Any], tool_call_id: str) -> bool:
         """Check if a tool_call with the given ID exists in the list."""
+        normalized_tool_call_id = (
+            LiteLLMCompletionResponsesConfig._normalize_tool_call_id(tool_call_id)
+        )
         for tool_call in tool_calls:
             tool_call_id_to_check: Optional[str] = None
             if isinstance(tool_call, dict):
@@ -579,6 +1037,15 @@ class LiteLLMCompletionResponsesConfig:
             elif hasattr(tool_call, "id"):
                 tool_call_id_to_check = getattr(tool_call, "id", None)
             if tool_call_id_to_check == tool_call_id:
+                return True
+            if (
+                tool_call_id_to_check
+                and normalized_tool_call_id
+                and LiteLLMCompletionResponsesConfig._normalize_tool_call_id(
+                    str(tool_call_id_to_check)
+                )
+                == normalized_tool_call_id
+            ):
                 return True
         return False
 
@@ -608,7 +1075,9 @@ class LiteLLMCompletionResponsesConfig:
     ) -> ChatCompletionToolCallChunk:
         """Create a ChatCompletionToolCallChunk from tool_use_definition."""
         function_raw = tool_use_definition.get("function")
-        function: Dict[str, Any] = function_raw if isinstance(function_raw, dict) else {}
+        function: Dict[str, Any] = (
+            function_raw if isinstance(function_raw, dict) else {}
+        )
         tool_use_id_raw = tool_use_definition.get("id")
         tool_use_id: str = (
             str(tool_use_id_raw) if tool_use_id_raw is not None else str(tool_call_id)
@@ -647,52 +1116,76 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _ensure_tool_results_have_corresponding_tool_calls(
-        messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionResponseMessage]],
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionResponseMessage,
+            ]
+        ],
         tools: Optional[List[Any]] = None,
-    ) -> List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionResponseMessage]]:
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
         """
         Ensure that tool_result messages have corresponding tool_calls in the previous assistant message.
-        
+
         This is critical for Anthropic API which requires that each tool_result block has a
         corresponding tool_use block in the previous assistant message.
-        
+
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
-            
+
         Returns:
             List of messages with tool_calls added to assistant messages when needed
         """
         if not messages:
             return messages
-        
+
         # Create a deep copy to avoid modifying the original
         import copy
+
         fixed_messages = copy.deepcopy(messages)
         messages_to_remove = []
-        
+
         # Count non-tool messages to avoid removing all messages
         # This prevents empty messages list when using previous_response_id without a database
         non_tool_messages_count = sum(
             1 for msg in fixed_messages if msg.get("role") != "tool"
         )
-        
+
         for i, message in enumerate(fixed_messages):
             # Only process tool messages - check role first to narrow the type
             if message.get("role") != "tool":
                 continue
-                
+
             # At this point, we know it's a tool message, so it should have tool_call_id
             # Use get() with default to safely access tool_call_id
-            tool_call_id_raw = message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", None)
+            tool_call_id_raw = (
+                message.get("tool_call_id")
+                if isinstance(message, dict)
+                else getattr(message, "tool_call_id", None)
+            )
             tool_call_id: str = (
                 str(tool_call_id_raw) if tool_call_id_raw is not None else ""
             )
-            
-            prev_assistant_idx = LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
-                fixed_messages, i
+            normalized_tool_call_id = (
+                LiteLLMCompletionResponsesConfig._normalize_tool_call_id(tool_call_id)
+                if tool_call_id
+                else ""
             )
-            
+
+            prev_assistant_idx = (
+                LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
+                    fixed_messages, i
+                )
+            )
+
             # Try to recover empty tool_call_id from previous assistant message
             if not tool_call_id and prev_assistant_idx is not None:
                 prev_assistant = fixed_messages[prev_assistant_idx]
@@ -707,7 +1200,7 @@ class LiteLLMCompletionResponsesConfig:
                         message_dict["tool_call_id"] = tool_call_id
                     elif hasattr(message, "tool_call_id"):
                         setattr(message, "tool_call_id", tool_call_id)
-            
+
             # Only remove messages with empty tool_call_id if we have other non-tool messages
             # This prevents ending up with an empty messages list when using previous_response_id
             # without a database (e.g., in tests where session messages are empty)
@@ -719,7 +1212,7 @@ class LiteLLMCompletionResponsesConfig:
                 # If no non-tool messages, keep the tool message even with empty call_id
                 # The API will return a proper error message about the missing tool_use block
                 continue
-            
+
             # Check if the previous assistant message has the corresponding tool_call
             # This needs to run for ALL tool messages with a valid tool_call_id,
             # not just those that had an empty tool_call_id initially
@@ -728,19 +1221,25 @@ class LiteLLMCompletionResponsesConfig:
                 tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
                     prev_assistant
                 )
-                
+
                 if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(
                     tool_calls, tool_call_id
                 ):
                     _tool_use_definition = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
-                    
-                    if not _tool_use_definition and tools:
-                        _tool_use_definition = (
-                            LiteLLMCompletionResponsesConfig._reconstruct_tool_call_from_tools(
-                                tool_call_id, tools
-                            )
+                    if (
+                        not _tool_use_definition
+                        and normalized_tool_call_id
+                        and normalized_tool_call_id != tool_call_id
+                    ):
+                        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
+                            key=normalized_tool_call_id
                         )
-                    
+
+                    if not _tool_use_definition and tools:
+                        _tool_use_definition = LiteLLMCompletionResponsesConfig._reconstruct_tool_call_from_tools(
+                            normalized_tool_call_id or tool_call_id, tools
+                        )
+
                     if _tool_use_definition:
                         if not isinstance(_tool_use_definition, dict):
                             _tool_use_definition = {}
@@ -752,16 +1251,19 @@ class LiteLLMCompletionResponsesConfig:
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                             prev_assistant, tool_call_chunk
                         )
-        
+
         # Remove messages with empty tool_call_id that couldn't be fixed
         for idx in reversed(messages_to_remove):
             fixed_messages.pop(idx)
-        
+
         return fixed_messages
 
     @staticmethod
     def _transform_responses_api_input_item_to_chat_completion_message(
         input_item: Any,
+        anthropic_like: bool = False,
+        reasoning_enabled: bool = False,
+        require_thinking_signature: bool = False,
     ) -> List[
         Union[
             AllMessageValues,
@@ -784,6 +1286,36 @@ class LiteLLMCompletionResponsesConfig:
         - ResponseReasoningItemParam
         - ItemReference
         """
+        if LiteLLMCompletionResponsesConfig._is_input_item_reasoning(input_item):
+            extracted_thinking_blocks = LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_input_item(
+                input_item, require_signature=require_thinking_signature
+            )
+            if anthropic_like and reasoning_enabled and extracted_thinking_blocks:
+                typed_thinking_blocks = (
+                    LiteLLMCompletionResponsesConfig._coerce_thinking_blocks_to_openai_types(
+                        extracted_thinking_blocks
+                    )
+                )
+                if typed_thinking_blocks:
+                    content_blocks: List[
+                        Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]
+                    ] = []
+                    assistant_msg: ChatCompletionAssistantMessage = {
+                        "role": "assistant",
+                        "content": content_blocks,
+                        "thinking_blocks": typed_thinking_blocks,
+                    }
+                    return [assistant_msg]
+            reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(
+                input_item
+            )
+            if reasoning_text:
+                assistant_msg_text: ChatCompletionAssistantMessage = {
+                    "role": "assistant",
+                    "content": reasoning_text,
+                }
+                return [assistant_msg_text]
+            return []
         if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
             # handle executed tool call results
             return LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
@@ -791,8 +1323,24 @@ class LiteLLMCompletionResponsesConfig:
             )
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
             # handle function call input items
+            thinking_blocks: Optional[
+                List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+            ] = None
+            if anthropic_like and reasoning_enabled:
+                raw_thinking_blocks = (
+                    LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_input_item(
+                        input_item, require_signature=require_thinking_signature
+                    )
+                )
+                if raw_thinking_blocks:
+                    thinking_blocks = (
+                        LiteLLMCompletionResponsesConfig._coerce_thinking_blocks_to_openai_types(
+                            raw_thinking_blocks
+                        )
+                    )
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
-                function_call=input_item
+                function_call=input_item,
+                thinking_blocks=thinking_blocks,
             )
         else:
             content = input_item.get("content")
@@ -800,14 +1348,42 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            return [
-                GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
+            role = input_item.get("role") or "user"
+            if (
+                anthropic_like
+                and reasoning_enabled
+                and role == "assistant"
+            ):
+                (
+                    raw_thinking_blocks,
+                    content,
+                ) = LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_content(
+                    content, require_signature=require_thinking_signature
                 )
-            ]
+                if raw_thinking_blocks:
+                    typed_thinking_blocks = (
+                        LiteLLMCompletionResponsesConfig._coerce_thinking_blocks_to_openai_types(
+                            raw_thinking_blocks
+                        )
+                    )
+                    if typed_thinking_blocks:
+                        transformed_content = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                            content
+                        )
+                        assistant_msg_with_thinking: ChatCompletionAssistantMessage = {
+                            "role": "assistant",
+                            "content": cast(Any, transformed_content),
+                            "thinking_blocks": typed_thinking_blocks,
+                        }
+                        return [assistant_msg_with_thinking]
+            transformed_content = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                content
+            )
+            generic_msg: GenericChatCompletionMessage = {
+                "role": str(role),
+                "content": transformed_content,
+            }
+            return [generic_msg]
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Any) -> bool:
@@ -892,7 +1468,10 @@ class LiteLLMCompletionResponsesConfig:
                                 )
                         elif isinstance(image_url_val, str) and image_url_val:
                             normalized_blocks.append(
-                                {"type": "image_url", "image_url": {"url": image_url_val}}
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": image_url_val},
+                                }
                             )
 
                 # Prefer structured blocks if we have images; otherwise return a string.
@@ -925,55 +1504,14 @@ class LiteLLMCompletionResponsesConfig:
             tool_call_id=str(call_id),
         )
 
-        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
-            key=tool_call_output.get("call_id") or "",
-        )
-        if _tool_use_definition:
-            """
-            Append the tool use definition to the list of messages
-
-
-            Providers like Anthropic require the tool use definition to be included with the tool output
-
-            - Input:
-                {'function':
-                    arguments:'{"command": ["echo","<html>\\n<head>\\n  <title>Hello</title>\\n</head>\\n<body>\\n  <h1>Hi</h1>\\n</body>\\n</html>",">","index.html"]}',
-                    name='shell',
-                    'id': 'toolu_018KFWsEySHjdKZPdUzXpymJ',
-                    'type': 'function'
-                }
-            - Output:
-                {
-                    "id": "toolu_018KFWsEySHjdKZPdUzXpymJ",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": "{\"latitude\":48.8566,\"longitude\":2.3522}"
-                        }
-                }
-
-            """
-            function: dict = _tool_use_definition.get("function") or {}
-            tool_call_chunk = ChatCompletionToolCallChunk(
-                id=_tool_use_definition.get("id") or "",
-                type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
-                function=ChatCompletionToolCallFunctionChunk(
-                    name=function.get("name") or "",
-                    arguments=str(function.get("arguments") or ""),
-                ),
-                index=0,
-            )
-            chat_completion_response_message = ChatCompletionResponseMessage(
-                tool_calls=[tool_call_chunk],
-                role="assistant",
-            )
-            return [chat_completion_response_message, tool_output_message]
-
         return [tool_output_message]
 
     @staticmethod
     def _transform_responses_api_function_call_to_chat_completion_message(
         function_call: Dict[str, Any],
+        thinking_blocks: Optional[
+            List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+        ] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -998,8 +1536,9 @@ class LiteLLMCompletionResponsesConfig:
         ```
         """
         # Create a tool call for the function call
+        tool_call_id = function_call.get("call_id") or function_call.get("id") or ""
         tool_call = ChatCompletionToolCallChunk(
-            id=function_call.get("call_id") or function_call.get("id") or "",
+            id=tool_call_id,
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
                 name=function_call.get("name") or "",
@@ -1007,13 +1546,22 @@ class LiteLLMCompletionResponsesConfig:
             ),
             index=0,
         )
+        if tool_call_id:
+            TOOL_CALLS_CACHE.set_cache(key=tool_call_id, value=tool_call)
+            normalized_tool_call_id = (
+                LiteLLMCompletionResponsesConfig._normalize_tool_call_id(tool_call_id)
+            )
+            if normalized_tool_call_id and normalized_tool_call_id != tool_call_id:
+                TOOL_CALLS_CACHE.set_cache(key=normalized_tool_call_id, value=tool_call)
 
         # Create an assistant message with the tool call
-        chat_completion_response_message = ChatCompletionResponseMessage(
-            tool_calls=[tool_call],
-            role="assistant",
-            content=None,  # Function calls don't have content
-        )
+        chat_completion_response_message: ChatCompletionResponseMessage = {
+            "tool_calls": [tool_call],
+            "role": "assistant",
+            "content": None,  # Function calls don't have content
+        }
+        if thinking_blocks:
+            chat_completion_response_message["thinking_blocks"] = thinking_blocks
 
         return [chat_completion_response_message]
 
@@ -1192,7 +1740,7 @@ class LiteLLMCompletionResponsesConfig:
                         "description": typed_tool.get("description") or "",
                         "parameters": parameters,
                         "strict": typed_tool.get("strict", False) or False,
-                    }
+                    },
                 }
                 if tool.get("cache_control"):
                     chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
@@ -1206,7 +1754,9 @@ class LiteLLMCompletionResponsesConfig:
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
             else:
-                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
+                chat_completion_tools.append(
+                    cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
+                )
         return chat_completion_tools, web_search_options
 
     @staticmethod
@@ -1378,16 +1928,19 @@ class LiteLLMCompletionResponsesConfig:
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
-            object=chat_completion_response.object,
+            object="response",
             error=getattr(chat_completion_response, "error", None),
             incomplete_details=getattr(
                 chat_completion_response, "incomplete_details", None
             ),
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", {}),
-            output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
-                chat_completion_response=chat_completion_response,
-                choices=getattr(chat_completion_response, "choices", []),
+            output=cast(
+                Any,
+                LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
+                    chat_completion_response=chat_completion_response,
+                    choices=getattr(chat_completion_response, "choices", []),
+                ),
             ),
             parallel_tool_calls=getattr(
                 chat_completion_response, "parallel_tool_calls", False
@@ -1420,33 +1973,32 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[
-        Union[
-            GenericResponseOutputItem,
-            OutputFunctionToolCall,
-            OutputImageGenerationCall,
-            ResponseFunctionToolCall,
-        ]
-    ]:
-        responses_output: List[
-            Union[
-                GenericResponseOutputItem,
-                OutputFunctionToolCall,
-                OutputImageGenerationCall,
-                ResponseFunctionToolCall,
-            ]
-        ] = []
+    ) -> List[ResponseOutputItem]:
+        responses_output: List[ResponseOutputItem] = []
 
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
                 chat_completion_response, choices
             )
         )
-        responses_output.extend(
+        message_output_items = (
             LiteLLMCompletionResponsesConfig._extract_message_output_items(
                 chat_completion_response, choices
             )
         )
+        for item in message_output_items:
+            if isinstance(item, GenericResponseOutputItem):
+                item_dict = (
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                )
+                responses_output.append(ResponseOutputMessage(**item_dict))
+            elif isinstance(item, OutputImageGenerationCall):
+                item_dict = (
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                )
+                responses_output.append(ImageGenerationCall(**item_dict))
+            else:
+                responses_output.append(item)
         responses_output.extend(
             LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
                 chat_completion_response=chat_completion_response
@@ -1458,27 +2010,35 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[GenericResponseOutputItem]:
+    ) -> List[ResponseReasoningItem]:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
                 if hasattr(message, "reasoning_content") and message.reasoning_content:
                     # Only check the first choice for reasoning content
+                    response_id = getattr(chat_completion_response, "id", None)
+                    reasoning_item_id = (
+                        f"rs_{response_id}" if response_id else None
+                    ) or f"rs_{hash(str(message.reasoning_content))}"
                     return [
-                        GenericResponseOutputItem(
+                        ResponseReasoningItem(
                             type="reasoning",
-                            id=f"rs_{hash(str(message.reasoning_content))}",
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                                choice.finish_reason
+                            id=reasoning_item_id,
+                            status=cast(
+                                Literal["in_progress", "completed", "incomplete"],
+                                LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                    choice.finish_reason
+                                ),
                             ),
-                            role="assistant",
-                            content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=message.reasoning_content,
-                                    annotations=[],
-                                )
-                            ],
+                            summary=cast(
+                                List[Any],
+                                [
+                                    {
+                                        "type": "summary_text",
+                                        "text": message.reasoning_content,
+                                    }
+                                ],
+                            ),
                         )
                     ]
         return []
@@ -1605,7 +2165,7 @@ class LiteLLMCompletionResponsesConfig:
                         status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                             choice.finish_reason
                         ),
-                        role=choice.message.role,
+                        role="assistant",
                         content=[
                             LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
                                 choice.message
@@ -1678,10 +2238,9 @@ class LiteLLMCompletionResponsesConfig:
         transformed_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
             annotations=annotations
         )
-
         return OutputText(
             type="output_text",
-            text=message.content,
+            text=message.content or "",
             annotations=transformed_annotations,
         )
 
