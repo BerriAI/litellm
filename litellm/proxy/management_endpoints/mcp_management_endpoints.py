@@ -59,18 +59,18 @@ except ImportError as e:
 
 if MCP_AVAILABLE:
     try:
-        from mcp.shared.tool_name_validation import (  # type: ignore
-            validate_tool_name,
+        from mcp.shared.tool_name_validation import (
+            validate_tool_name,  # pyright: ignore[reportAssignmentType]
         )
     except ImportError:
         from pydantic import BaseModel
 
-        class ToolNameValidationResult(BaseModel):
+        class _ToolNameValidationResult(BaseModel):
             is_valid: bool = True
             warnings: list = []
 
-        def validate_tool_name(name: str) -> ToolNameValidationResult:  # type: ignore[misc]
-            return ToolNameValidationResult()
+        def validate_tool_name(name: str) -> _ToolNameValidationResult:
+            return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
@@ -433,11 +433,21 @@ if MCP_AVAILABLE:
                 detail="MCP registry is not enabled",
             )
 
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
+        verbose_proxy_logger.debug("MCP registry request from IP=%s", client_ip)
+
         base_url = get_request_base_url(request)
         registry_servers: List[Dict[str, Any]] = []
         registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
 
-        registered_servers = list(global_mcp_server_manager.get_registry().values())
+        # Centralized IP-based filtering: external callers only see public servers
+        registered_servers = list(
+            global_mcp_server_manager.get_filtered_registry(client_ip).values()
+        )
+
         registered_servers.sort(key=_build_mcp_registry_server_name)
 
         for server in registered_servers:
