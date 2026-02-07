@@ -336,7 +336,10 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
 
     if model_list_flag_value == 0:
         if prev_llm_router_val is None:
-            assert prev_llm_router_val == llm_router
+            # Router is now created even with empty model list (to support search_tools)
+            # So we check that the model_list is empty instead of checking router is None
+            assert llm_router is not None
+            assert len(llm_router.model_list) == 0
         else:
             assert prev_llm_router_val == len(llm_router.model_list)
     else:
