@@ -122,15 +122,37 @@ if MCP_AVAILABLE:
     async def _resolve_allowed_mcp_servers_for_tool_call(
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
+        client_ip: Optional[str] = None,
     ) -> List[MCPServer]:
-        """Resolve allowed MCP servers for the given user and validate server_id access."""
+        """Resolve allowed MCP servers for the given user and validate server_id access.
+
+        Args:
+            user_api_key_dict: The user's API key auth context
+            server_id: The server ID to validate access for
+            client_ip: Optional client IP for IP-based filtering
+
+        Returns:
+            List of allowed MCP servers
+
+        Raises:
+            HTTPException: If the user doesn't have access to the specified server
+        """
         auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
-        allowed_server_ids_set = set()
+        allowed_server_ids_set: set = set()
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_allowed_mcp_servers(
                 user_api_key_auth=auth_context
             )
             allowed_server_ids_set.update(servers)
+
+        # Apply IP filtering if client_ip is provided
+        if client_ip:
+            allowed_server_ids_set = set(
+                global_mcp_server_manager.filter_server_ids_by_ip(
+                    list(allowed_server_ids_set), client_ip
+                )
+            )
+
         if server_id not in allowed_server_ids_set:
             raise HTTPException(
                 status_code=403,
@@ -381,42 +403,11 @@ if MCP_AVAILABLE:
             if "metadata" in data and "user_api_key_auth" in data["metadata"]:
                 data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
 
-            # Get all auth contexts
-            auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
-
-            # Collect allowed server IDs from all contexts, then apply IP filtering
+            # Resolve allowed MCP servers with IP filtering and validate server_id access
             _rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
-            allowed_server_ids_set = set()
-            for auth_context in auth_contexts:
-                servers = await global_mcp_server_manager.get_allowed_mcp_servers(
-                    user_api_key_auth=auth_context,
-                )
-                allowed_server_ids_set.update(servers)
-
-            allowed_server_ids_set = set(
-                global_mcp_server_manager.filter_server_ids_by_ip(
-                    list(allowed_server_ids_set), _rest_client_ip
-                )
+            allowed_mcp_servers = await _resolve_allowed_mcp_servers_for_tool_call(
+                user_api_key_dict, server_id, _rest_client_ip
             )
-
-            # Check if the specified server_id is allowed
-            if server_id not in allowed_server_ids_set:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "access_denied",
-                        "message": f"The key is not allowed to access server {server_id}",
-                    },
-                )
-
-            # Build allowed_mcp_servers list (only include allowed servers)
-            allowed_mcp_servers: List[MCPServer] = []
-            for allowed_server_id in allowed_server_ids_set:
-                server = global_mcp_server_manager.get_mcp_server_by_id(
-                    allowed_server_id
-                )
-                if server is not None:
-                    allowed_mcp_servers.append(server)
 
             # Call execute_mcp_tool directly (permission checks already done)
             result = await execute_mcp_tool(
