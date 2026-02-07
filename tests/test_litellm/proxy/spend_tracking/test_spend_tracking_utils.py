@@ -19,6 +19,7 @@ import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _convert_to_json_serializable_dict,
     _get_proxy_server_request_for_spend_logs_payload,
     _get_response_for_spend_logs_payload,
     _get_vector_store_request_for_spend_logs_payload,
@@ -956,4 +957,139 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         mock_get_secret_bool.return_value = False
         result = _should_store_prompts_and_responses_in_spend_logs()
         assert result is False, "Expected False (from env var) when key missing, got True"
+
+
+def test_convert_to_json_serializable_dict_with_pydantic_models():
+    """
+    Test that _convert_to_json_serializable_dict handles Pydantic models correctly
+    without triggering pickle RLock errors.
+
+    This is a regression test for issue #20647 where copy.deepcopy() on Pydantic v2
+    models caused "cannot pickle '_thread.RLock' object" errors.
+    """
+    from pydantic import BaseModel
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Test with a real Pydantic model (UserAPIKeyAuth)
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test_key_hash",
+        user_id="test_user",
+        team_id="test_team",
+        max_budget=100.0,
+        spend=50.0,
+        key_alias="test-alias",
+        budget_reset_at=None,
+        user_email="test@example.com",
+        org_id="test_org",
+        team_alias="test-team-alias",
+        end_user_id="end_user_123",
+        request_route="/chat/completions",
+        metadata={"custom": "data"}
+    )
+
+    # Create a complex nested structure with Pydantic models
+    test_obj = {
+        "user_api_key_auth": user_api_key_auth,
+        "messages": [{"role": "user", "content": "test"}],
+        "nested": {
+            "auth": user_api_key_auth,
+            "list": [user_api_key_auth, "string", 123]
+        }
+    }
+
+    # This should NOT raise "cannot pickle '_thread.RLock' object" error
+    result = _convert_to_json_serializable_dict(test_obj)
+
+    # Verify the result is properly converted
+    assert isinstance(result, dict)
+    assert isinstance(result["user_api_key_auth"], dict)  # Pydantic model converted to dict
+    assert result["user_api_key_auth"]["user_id"] == "test_user"
+    assert result["user_api_key_auth"]["api_key"] == "test_key_hash"
+    assert result["messages"] == [{"role": "user", "content": "test"}]
+    assert isinstance(result["nested"]["auth"], dict)
+    assert result["nested"]["auth"]["user_id"] == "test_user"
+    assert isinstance(result["nested"]["list"][0], dict)
+    assert result["nested"]["list"][1] == "string"
+    assert result["nested"]["list"][2] == 123
+
+
+def test_convert_to_json_serializable_dict_primitives():
+    """Test that _convert_to_json_serializable_dict handles primitive types correctly."""
+
+    # Test primitive values
+    assert _convert_to_json_serializable_dict("string") == "string"
+    assert _convert_to_json_serializable_dict(123) == 123
+    assert _convert_to_json_serializable_dict(45.67) == 45.67
+    assert _convert_to_json_serializable_dict(True) is True
+    assert _convert_to_json_serializable_dict(None) is None
+
+    # Test lists
+    test_list = [1, "two", 3.0, None]
+    assert _convert_to_json_serializable_dict(test_list) == test_list
+
+    # Test dicts
+    test_dict = {"a": 1, "b": "two", "c": None}
+    assert _convert_to_json_serializable_dict(test_dict) == test_dict
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_redaction_with_pydantic_models_no_pickle_error(mock_should_store):
+    """
+    Integration test to verify that redaction works with Pydantic models
+    without triggering pickle RLock errors.
+
+    This tests the full flow that caused issue #20647.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_should_store.return_value = True
+
+    # Create a request body with a Pydantic model
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test_key",
+        user_id="test_user",
+        team_id="test_team",
+        max_budget=None,
+        spend=0.0,
+        key_alias="test-key",
+        budget_reset_at=None,
+        user_email=None,
+        org_id="test_org",
+        team_alias=None,
+        end_user_id=None,
+        request_route="/chat/completions",
+        metadata={}
+    )
+
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "messages": [{"role": "user", "content": "secret message"}],
+                "model": "gpt-4",
+                "user_api_key_auth": user_api_key_auth,  # Pydantic model in request body
+            }
+        }
+    }
+
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": True,  # Enable redaction
+        },
+    }
+
+    # This should NOT raise "cannot pickle '_thread.RLock' object" error
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    # Verify it returned valid JSON
+    parsed_request = json.loads(request_result)
+    assert parsed_request["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert parsed_request["model"] == "gpt-4"
+    # Pydantic model should be converted to dict
+    assert isinstance(parsed_request["user_api_key_auth"], dict)
+    assert parsed_request["user_api_key_auth"]["user_id"] == "test_user"
 

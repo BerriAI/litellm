@@ -642,6 +642,35 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
+def _convert_to_json_serializable_dict(obj: Any) -> Any:
+    """
+    Safely convert objects to JSON-serializable format, handling Pydantic models.
+
+    This function avoids the pickle RLock error that occurs with copy.deepcopy()
+    on Pydantic v2 BaseModel instances by using model_dump() instead.
+
+    Args:
+        obj: Object to convert (can be dict, list, Pydantic model, or primitive)
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    # Handle Pydantic models
+    if isinstance(obj, BaseModel):
+        return obj.model_dump()
+
+    # Handle dictionaries recursively
+    if isinstance(obj, dict):
+        return {k: _convert_to_json_serializable_dict(v) for k, v in obj.items()}
+
+    # Handle lists recursively
+    if isinstance(obj, list):
+        return [_convert_to_json_serializable_dict(item) for item in obj]
+
+    # Return primitives and other objects as-is
+    return obj
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
@@ -649,7 +678,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
-    
+
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
@@ -674,9 +703,9 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     ),
                 }
                 
-                # If redaction is enabled, deep copy request body before redacting
+                # If redaction is enabled, convert to JSON-serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = copy.deepcopy(_request_body)
+                    _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
             
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
@@ -736,9 +765,9 @@ def _get_response_for_spend_logs_payload(
                 ),
             }
             
-            # If redaction is enabled, deep copy response before redacting
+            # If redaction is enabled, convert to JSON-serializable dict before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
-                response_obj = copy.deepcopy(response_obj)
+                response_obj = _convert_to_json_serializable_dict(response_obj)
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
