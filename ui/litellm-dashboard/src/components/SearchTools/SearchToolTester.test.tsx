@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchToolTester } from "./SearchToolTester";
 import * as networking from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
-import * as antd from "antd";
 
 vi.mock("../networking", () => ({
   searchToolQueryCall: vi.fn(),
