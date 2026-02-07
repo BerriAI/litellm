@@ -49,6 +49,7 @@ class SupportedGuardrailIntegrations(Enum):
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
     PANGEA = "pangea"
+    CROWDSTRIKE_AIDR = "crowdstrike_aidr"
     LASSO = "lasso"
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
