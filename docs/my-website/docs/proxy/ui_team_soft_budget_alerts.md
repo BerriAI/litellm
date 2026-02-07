@@ -17,6 +17,10 @@ Team soft budget alerts let you:
 - **Target specific recipients** — send alerts to specific email addresses (e.g. team leads, finance), not just the team members
 - **Work without global alerting** — team soft budget alerts are sent via email independently of Slack or other global alerting configuration
 
+:::warning Email integration required
+Team soft budget alerts are sent via email. You must have an active email integration (SendGrid, Resend, or SMTP) configured on your proxy for alerts to be delivered. See [Email Notifications](./email.md) for setup instructions.
+:::
+
 :::info Automatically active
 Team soft budget alerts are **automatically active** once you configure a soft budget and at least one alerting email on a team. No additional proxy configuration or restart is needed — alerts are checked on every request.
 :::
@@ -30,12 +34,6 @@ On every API request made with a key belonging to a team, the proxy checks:
 3. Are there any emails configured in `soft_budget_alerting_emails`?
 
 If all three conditions are met, an email alert is sent to the configured recipients. Alerts are **deduplicated** so the same alert is only sent once within a 24-hour window.
-
-## Prerequisites
-
-:::warning Email integration required
-Team soft budget alerts are sent via email. You must have an active email integration (SendGrid, Resend, or SMTP) configured on your proxy for alerts to be delivered. See [Email Notifications](./email.md) for setup instructions.
-:::
 
 ## How to Set Up Team Soft Budget Alerts
 
