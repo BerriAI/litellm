@@ -10,7 +10,11 @@ ENV PATH="${HOME}/venv/bin:$PATH"
 # rust and cargo are required for building ddtrace from source
 # musl-dev and libffi-dev are needed for some Python packages on Alpine
 RUN apk update && \
-    apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo
+    apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo ca-certificates
+
+# Add AWS RDS CA bundle to system trust store
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/aws-rds-global-bundle.pem
+RUN cat /etc/ssl/certs/aws-rds-global-bundle.pem >> /etc/ssl/certs/ca-certificates.crt
 
 RUN python -m venv ${HOME}/venv
 RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip

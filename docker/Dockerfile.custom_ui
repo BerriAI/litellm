@@ -5,8 +5,12 @@ FROM ghcr.io/berriai/litellm:litellm_fwd_server_root_path-dev
 WORKDIR /app
 
 # Install Node.js and npm (adjust version as needed)
-RUN apt-get update && apt-get install -y nodejs npm && \
+RUN apt-get update && apt-get install -y nodejs npm ca-certificates && \
     npm install -g npm@latest tar@latest
+
+# Add AWS RDS CA bundle to system trust store
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/aws-rds-global-bundle.pem
+RUN cat /etc/ssl/certs/aws-rds-global-bundle.pem >> /etc/ssl/certs/ca-certificates.crt
 
 # Copy the UI source into the container
 COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
