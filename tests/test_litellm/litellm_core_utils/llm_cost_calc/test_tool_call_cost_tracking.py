@@ -376,3 +376,11 @@ class TestGetBuiltInToolsFromKwargs:
         # Direct web_search_options should take precedence
         assert web_search is not None
         assert web_search.get("search_context_size") == "high"
+
+    def test_empty_web_search_options_dict_returns_web_search_options(self):
+        """An empty web_search_options dict should still produce WebSearchOptions (use defaults)."""
+        kwargs = {"web_search_options": {}}
+        web_search, file_search = StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+
+        assert web_search is not None
+        assert file_search is None

@@ -727,10 +727,8 @@ class StandardBuiltInToolCostTracking:
         web_search_options: Optional[WebSearchOptions] = None
         file_search: Optional[FileSearchTool] = None
 
-        # Check direct web_search_options first
-        web_search_options_dict = kwargs.get("web_search_options")
-        if web_search_options_dict:
-            web_search_options = WebSearchOptions(**web_search_options_dict)
+        if "web_search_options" in kwargs:
+            web_search_options = WebSearchOptions(**kwargs["web_search_options"])
 
         # Get tools once
         tools = kwargs.get("tools")
