@@ -95,7 +95,7 @@ def substitute_env_variables(value: str) -> str:
     return re.sub(pattern, replace_env_var, value)
 
 
-class GenericAPILogger(CustomBatchLogger):
+class GenericAPILogger(CustomBatchLogger[Union[Dict, StandardLoggingPayload]]):
     def __init__(
         self,
         endpoint: Optional[str] = None,
@@ -180,7 +180,6 @@ class GenericAPILogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[Union[Dict, StandardLoggingPayload]] = []
 
     def _get_headers(self, headers: Optional[dict] = None):
         """
@@ -343,11 +342,12 @@ class GenericAPILogger(CustomBatchLogger):
                             f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
                         )
             else:
-                # Format the payload based on log_format
+                # Format the payload based on log_format (use list() so JSON gets a list, not BoundedQueue)
+                batch = list(self.log_queue)
                 if self.log_format == "json_array":
-                    data = safe_dumps(self.log_queue)
+                    data = safe_dumps(batch)
                 elif self.log_format == "ndjson":
-                    data = "\n".join(safe_dumps(log) for log in self.log_queue)
+                    data = "\n".join(safe_dumps(log) for log in batch)
                 else:
                     raise ValueError(f"Unknown log_format: {self.log_format}")
 

@@ -37,7 +37,7 @@ def is_serializable(value):
     return not isinstance(value, non_serializable_types)
 
 
-class LangsmithLogger(CustomBatchLogger):
+class LangsmithLogger(CustomBatchLogger[LangsmithQueueObject]):
     def __init__(
         self,
         langsmith_api_key: Optional[str] = None,
@@ -80,7 +80,6 @@ class LangsmithLogger(CustomBatchLogger):
 
         if _batch_size:
             self.batch_size = int(_batch_size)
-        self.log_queue: List[LangsmithQueueObject] = []
         asyncio.create_task(self.periodic_flush())
 
     def get_credentials_from_env(
