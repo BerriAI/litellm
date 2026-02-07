@@ -1279,6 +1279,117 @@ async def test_async_success_handler_sets_standard_logging_object_for_streaming_
     assert logging_obj.model_call_details["standard_logging_object"] is not None, (
         "standard_logging_object should not be None for streaming pass-through endpoints"
     )
+class TestShouldRunCallbackEnterpriseGuard:
+    """
+    Tests for the early-out guard in should_run_callback() that skips
+    EnterpriseCallbackControls.is_callback_disabled_dynamically() when
+    no dynamic callback disabling is configured.
+    """
+
+    @pytest.fixture
+    def logging_obj_for_callback(self):
+        return LitellmLogging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=time.time(),
+            litellm_call_id="test-callback-guard",
+            function_id="test-fn",
+        )
+
+    def test_skips_enterprise_call_when_no_disabling_configured(self, logging_obj_for_callback):
+        """
+        When neither litellm_disabled_callbacks nor x-litellm-disable-callbacks header
+        is set, the enterprise function should NOT be called at all.
+        """
+        litellm_params = {"proxy_server_request": {"headers": {}}}
+
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
+        ) as mock_enterprise:
+            mock_enterprise.__bool__ = lambda self: True
+            result = logging_obj_for_callback.should_run_callback(
+                callback="langfuse",
+                litellm_params=litellm_params,
+                event_hook="success_handler",
+            )
+            assert result is True
+            mock_enterprise.is_callback_disabled_dynamically.assert_not_called()
+
+    def test_calls_enterprise_when_header_is_set(self, logging_obj_for_callback):
+        """
+        When x-litellm-disable-callbacks header is present, the enterprise
+        function SHOULD be called to check if the callback is disabled.
+        """
+        litellm_params = {
+            "proxy_server_request": {
+                "headers": {"x-litellm-disable-callbacks": "langfuse"}
+            }
+        }
+
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
+        ) as mock_enterprise:
+            mock_enterprise.__bool__ = lambda self: True
+            mock_enterprise.is_callback_disabled_dynamically.return_value = True
+            result = logging_obj_for_callback.should_run_callback(
+                callback="langfuse",
+                litellm_params=litellm_params,
+                event_hook="success_handler",
+            )
+            assert result is False
+            mock_enterprise.is_callback_disabled_dynamically.assert_called_once()
+
+    def test_calls_enterprise_when_dynamic_params_set(self, logging_obj_for_callback):
+        """
+        When litellm_disabled_callbacks is set in standard_callback_dynamic_params,
+        the enterprise function SHOULD be called.
+        """
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logging_obj_for_callback.standard_callback_dynamic_params = StandardCallbackDynamicParams(
+            litellm_disabled_callbacks=["langfuse"]
+        )
+        litellm_params = {"proxy_server_request": {"headers": {}}}
+
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
+        ) as mock_enterprise:
+            mock_enterprise.__bool__ = lambda self: True
+            mock_enterprise.is_callback_disabled_dynamically.return_value = True
+            result = logging_obj_for_callback.should_run_callback(
+                callback="langfuse",
+                litellm_params=litellm_params,
+                event_hook="success_handler",
+            )
+            assert result is False
+            mock_enterprise.is_callback_disabled_dynamically.assert_called_once()
+
+    def test_returns_true_when_enterprise_says_not_disabled(self, logging_obj_for_callback):
+        """
+        When the header is set but the enterprise function says the callback
+        is NOT disabled, should_run_callback should return True.
+        """
+        litellm_params = {
+            "proxy_server_request": {
+                "headers": {"x-litellm-disable-callbacks": "datadog"}
+            }
+        }
+
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
+        ) as mock_enterprise:
+            mock_enterprise.__bool__ = lambda self: True
+            mock_enterprise.is_callback_disabled_dynamically.return_value = False
+            result = logging_obj_for_callback.should_run_callback(
+                callback="langfuse",
+                litellm_params=litellm_params,
+                event_hook="success_handler",
+            )
+            assert result is True
+
+
 def test_get_error_information_error_code_priority():
     """
     Test get_error_information prioritizes 'code' attribute over 'status_code' attribute
