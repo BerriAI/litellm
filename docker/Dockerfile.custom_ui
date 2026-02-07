@@ -8,6 +8,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y nodejs npm && \
     npm install -g npm@latest tar@latest
 
+# Fix CVE-2025-64756: Update glob packages to patched versions (>=10.5.0 or >=11.1.0)
+# This patches the HIGH severity Command Injection vulnerability in glob CLI
+RUN npm update -g glob || true
+
 # Copy the UI source into the container
 COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
 
