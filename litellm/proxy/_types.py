@@ -1071,6 +1071,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
+    available_on_public_internet: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -1132,6 +1133,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
+    available_on_public_internet: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -1185,6 +1187,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
+    available_on_public_internet: bool = False
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -2095,6 +2098,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
+    )
+    mcp_internal_ip_ranges: Optional[List[str]] = Field(
+        None,
+        description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
+    )
+    mcp_trusted_proxy_ranges: Optional[List[str]] = Field(
+        None,
+        description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
     )
 
 

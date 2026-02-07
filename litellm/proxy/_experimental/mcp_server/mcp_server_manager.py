@@ -72,7 +72,6 @@ try:
     from mcp.shared.tool_name_validation import (
         SEP_986_URL,
     )
-    from mcp.shared.tool_name_validation import SEP_986_URL
 except ImportError:
     from pydantic import BaseModel
 
@@ -82,7 +81,7 @@ except ImportError:
         is_valid: bool = True
         warnings: list = []
 
-    def validate_tool_name(name: str) -> _ToolNameValidationResult:
+    def validate_tool_name(name: str) -> _ToolNameValidationResult:  # type: ignore[misc]
         return _ToolNameValidationResult()
 
 
@@ -2304,28 +2303,24 @@ class MCPServerManager:
                        non-public servers are hidden from external IPs.
         """
         registry = self.get_registry()
-        
         # Pass 1: Match by alias (highest priority)
         for server in registry.values():
             if server.alias == server_name:
                 if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
-        
         # Pass 2: Match by server_name
         for server in registry.values():
             if server.server_name == server_name:
                 if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
-        
         # Pass 3: Match by name (lowest priority)
         for server in registry.values():
             if server.name == server_name:
                 if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
-        
         return None
 
     def get_filtered_registry(
@@ -2576,6 +2571,7 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
+            available_on_public_internet=server.available_on_public_internet,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:
