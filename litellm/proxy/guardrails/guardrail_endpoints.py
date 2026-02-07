@@ -5,13 +5,13 @@ CRUD ENDPOINTS FOR GUARDRAILS
 import inspect
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
@@ -38,6 +38,76 @@ from litellm.types.guardrails import (
 
 router = APIRouter()
 GUARDRAIL_REGISTRY = GuardrailRegistry()
+
+
+def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Check if user is an admin
+    """
+    return (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+
+
+def _can_access_guardrail(
+    user_api_key_dict: UserAPIKeyAuth, guardrail: Guardrail
+) -> bool:
+    """
+    Check if user can access a guardrail
+    - Admins can access all guardrails
+    - Team members can only access their team's guardrails or global guardrails (no team_id)
+    """
+    if _is_admin(user_api_key_dict):
+        return True
+    
+    guardrail_team_id = guardrail.get("team_id")
+    
+    # Global guardrails (no team_id) are accessible by all
+    if guardrail_team_id is None:
+        return True
+    
+    # Team members can access their team's guardrails
+    return guardrail_team_id == user_api_key_dict.team_id
+
+
+def _can_modify_guardrail(
+    user_api_key_dict: UserAPIKeyAuth, guardrail_team_id: Optional[str]
+) -> bool:
+    """
+    Check if user can create/modify/delete a guardrail
+    - Admins can modify all guardrails
+    - Team members can only modify their team's guardrails
+    """
+    if _is_admin(user_api_key_dict):
+        return True
+    
+    # Team members can only modify guardrails assigned to their team
+    if guardrail_team_id is None:
+        # Only admins can create/modify global guardrails
+        return False
+    
+    return guardrail_team_id == user_api_key_dict.team_id
+
+
+def _get_team_id_for_operation(user_api_key_dict: UserAPIKeyAuth, requested_team_id: Optional[str]) -> Optional[str]:
+    """
+    Determine the team_id to use for creating/updating a guardrail
+    - Admins can specify any team_id or None (global)
+    - Team members must use their own team_id
+    """
+    if _is_admin(user_api_key_dict):
+        return requested_team_id
+    
+    # Non-admin users must use their team_id
+    if requested_team_id is not None and requested_team_id != user_api_key_dict.team_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You can only create/modify guardrails for your team. Your team_id: {user_api_key_dict.team_id}"
+        )
+    
+    # Ensure team members always set their team_id
+    return user_api_key_dict.team_id
 
 
 def _get_guardrails_list_response(
@@ -117,11 +187,16 @@ async def list_guardrails():
     dependencies=[Depends(user_api_key_auth)],
     response_model=ListGuardrailsResponse,
 )
-async def list_guardrails_v2():
+async def list_guardrails_v2(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     List the guardrails that are available in the database using GuardrailRegistry
 
     👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    - Admins can see all guardrails
+    - Team members can see their team's guardrails and global guardrails (no team_id)
 
     Example Request:
     ```bash
@@ -144,7 +219,8 @@ async def list_guardrails_v2():
                 },
                 "guardrail_info": {
                     "description": "Bedrock content moderation guardrail"
-                }
+                },
+                "team_id": "team-123"
             }
         ]
     }
@@ -157,31 +233,38 @@ async def list_guardrails_v2():
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        # Determine team_id filter - admins see all, team members see their team + global
+        team_id_filter = None if _is_admin(user_api_key_dict) else user_api_key_dict.team_id
+        
         guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(
-            prisma_client=prisma_client
+            prisma_client=prisma_client,
+            team_id=team_id_filter
         )
 
         guardrail_configs: List[GuardrailInfoResponse] = []
         seen_guardrail_ids = set()
         for guardrail in guardrails:
-            guardrail_configs.append(
-                GuardrailInfoResponse(
-                    guardrail_id=guardrail.get("guardrail_id"),
-                    guardrail_name=guardrail.get("guardrail_name"),
-                    litellm_params=guardrail.get("litellm_params"),
-                    guardrail_info=guardrail.get("guardrail_info"),
-                    created_at=guardrail.get("created_at"),
-                    updated_at=guardrail.get("updated_at"),
-                    guardrail_definition_location="db",
+            if _can_access_guardrail(user_api_key_dict, guardrail):
+                guardrail_configs.append(
+                    GuardrailInfoResponse(
+                        guardrail_id=guardrail.get("guardrail_id"),
+                        guardrail_name=guardrail.get("guardrail_name"),
+                        litellm_params=guardrail.get("litellm_params"),
+                        guardrail_info=guardrail.get("guardrail_info"),
+                        team_id=guardrail.get("team_id"),
+                        created_at=guardrail.get("created_at"),
+                        updated_at=guardrail.get("updated_at"),
+                        guardrail_definition_location="db",
+                    )
                 )
-            )
-            seen_guardrail_ids.add(guardrail.get("guardrail_id"))
+                seen_guardrail_ids.add(guardrail.get("guardrail_id"))
 
         # get guardrails initialized on litellm config.yaml
         in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
         for guardrail in in_memory_guardrails:
             # only add guardrails that are not in DB guardrail list already
             if guardrail.get("guardrail_id") not in seen_guardrail_ids:
+                # In-memory guardrails are treated as global (accessible to all)
                 guardrail_configs.append(
                     GuardrailInfoResponse(
                         guardrail_id=guardrail.get("guardrail_id"),
@@ -208,11 +291,17 @@ class CreateGuardrailRequest(BaseModel):
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def create_guardrail(request: CreateGuardrailRequest):
+async def create_guardrail(
+    request: CreateGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Create a new guardrail
 
     👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    - Admins can create guardrails for any team or as global (no team_id)
+    - Team members can only create guardrails for their own team
 
     Example Request:
     ```bash
@@ -231,7 +320,8 @@ async def create_guardrail(request: CreateGuardrailRequest):
                 },
                 "guardrail_info": {
                     "description": "Bedrock content moderation guardrail"
-                }
+                },
+                "team_id": "team-123"
             }
         }'
     ```
@@ -251,6 +341,7 @@ async def create_guardrail(request: CreateGuardrailRequest):
         "guardrail_info": {
             "description": "Bedrock content moderation guardrail"
         },
+        "team_id": "team-123",
         "created_at": "2023-11-09T12:34:56.789Z",
         "updated_at": "2023-11-09T12:34:56.789Z"
     }
@@ -263,6 +354,13 @@ async def create_guardrail(request: CreateGuardrailRequest):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        # Determine and validate team_id
+        requested_team_id = request.guardrail.get("team_id")
+        team_id = _get_team_id_for_operation(user_api_key_dict, requested_team_id)
+        
+        # Update the guardrail with the validated team_id
+        request.guardrail["team_id"] = team_id
+        
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(
             guardrail=request.guardrail, prisma_client=prisma_client
         )
@@ -283,6 +381,8 @@ async def create_guardrail(request: CreateGuardrailRequest):
             )
 
         return result
+    except HTTPException as e:
+        raise e
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -297,11 +397,18 @@ class UpdateGuardrailRequest(BaseModel):
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
+async def update_guardrail(
+    guardrail_id: str,
+    request: UpdateGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Update an existing guardrail
 
     👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    - Admins can update any guardrail
+    - Team members can only update their team's guardrails
 
     Example Request:
     ```bash
@@ -362,6 +469,19 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
 
+        # Check if user can modify this guardrail
+        existing_team_id = existing_guardrail.get("team_id")
+        if not _can_modify_guardrail(user_api_key_dict, existing_team_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You don't have permission to update this guardrail. Guardrail belongs to team: {existing_team_id}"
+            )
+
+        # Validate and set team_id for the update
+        requested_team_id = request.guardrail.get("team_id", existing_team_id)
+        team_id = _get_team_id_for_operation(user_api_key_dict, requested_team_id)
+        request.guardrail["team_id"] = team_id
+
         result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
             guardrail=request.guardrail,
@@ -394,11 +514,17 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_guardrail(guardrail_id: str):
+async def delete_guardrail(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Delete a guardrail
 
     👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    - Admins can delete any guardrail
+    - Team members can only delete their team's guardrails
 
     Example Request:
     ```bash
@@ -428,6 +554,14 @@ async def delete_guardrail(guardrail_id: str):
         if existing_guardrail is None:
             raise HTTPException(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
+            )
+
+        # Check if user can delete this guardrail
+        existing_team_id = existing_guardrail.get("team_id")
+        if not _can_modify_guardrail(user_api_key_dict, existing_team_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You don't have permission to delete this guardrail. Guardrail belongs to team: {existing_team_id}"
             )
 
         result = await GUARDRAIL_REGISTRY.delete_guardrail_from_db(
@@ -460,7 +594,11 @@ async def delete_guardrail(guardrail_id: str):
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
+async def patch_guardrail(
+    guardrail_id: str,
+    request: PatchGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Partially update an existing guardrail
 
@@ -471,6 +609,9 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     - guardrail_name: The name of the guardrail
     - default_on: Whether the guardrail is enabled by default
     - guardrail_info: Additional information about the guardrail
+
+    - Admins can patch any guardrail
+    - Team members can only patch their team's guardrails
 
     Example Request:
     ```bash
@@ -523,6 +664,14 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
 
+        # Check if user can modify this guardrail
+        existing_team_id = existing_guardrail.get("team_id")
+        if not _can_modify_guardrail(user_api_key_dict, existing_team_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You don't have permission to update this guardrail. Guardrail belongs to team: {existing_team_id}"
+            )
+
         # Create updated guardrail object
         guardrail_name = (
             request.guardrail_name
@@ -549,12 +698,16 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
             else existing_guardrail.get("guardrail_info", {})
         )
 
+        # Preserve the team_id from the existing guardrail
+        team_id = existing_guardrail.get("team_id")
+
         # Create the guardrail object
         guardrail = Guardrail(
             guardrail_id=guardrail_id,
             guardrail_name=guardrail_name or "",
             litellm_params=litellm_params,
             guardrail_info=guardrail_info,
+            team_id=team_id,
         )
         result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
@@ -594,11 +747,17 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_guardrail_info(guardrail_id: str):
+async def get_guardrail_info(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Get detailed information about a specific guardrail by ID
 
     👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    - Admins can view any guardrail
+    - Team members can only view their team's guardrails and global guardrails
 
     Example Request:
     ```bash
@@ -653,6 +812,13 @@ async def get_guardrail_info(guardrail_id: str):
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
 
+        # Check if user can access this guardrail
+        if not _can_access_guardrail(user_api_key_dict, result):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You don't have permission to view this guardrail."
+            )
+
         litellm_params: Optional[Union[LitellmParams, dict]] = result.get(
             "litellm_params"
         )
@@ -672,6 +838,7 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_name=result.get("guardrail_name"),
             litellm_params=masked_litellm_params_dict,
             guardrail_info=dict(result.get("guardrail_info") or {}),
+            team_id=result.get("team_id"),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
             guardrail_definition_location=guardrail_definition_location,
