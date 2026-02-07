@@ -10,6 +10,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
 )
 from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes
@@ -77,6 +78,26 @@ if MCP_AVAILABLE:
             )
             for tool in tools
         ]
+
+    def _extract_mcp_headers_from_request(
+        request: Request,
+        mcp_request_handler_cls,
+    ) -> tuple:
+        """
+        Extract MCP auth headers from HTTP request.
+
+        Returns:
+            Tuple of (mcp_auth_header, mcp_server_auth_headers, raw_headers)
+        """
+        headers = request.headers
+        raw_headers = dict(headers)
+        mcp_auth_header = mcp_request_handler_cls._get_mcp_auth_header_from_headers(
+            headers
+        )
+        mcp_server_auth_headers = (
+            mcp_request_handler_cls._get_mcp_server_auth_headers_from_headers(headers)
+        )
+        return mcp_auth_header, mcp_server_auth_headers, raw_headers
 
     async def _get_tools_for_single_server(
         server,
@@ -173,21 +194,25 @@ if MCP_AVAILABLE:
 
             auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
+            _rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
             allowed_server_ids_set = set()
             for auth_context in auth_contexts:
                 servers = await global_mcp_server_manager.get_allowed_mcp_servers(
-                    user_api_key_auth=auth_context
+                    user_api_key_auth=auth_context,
                 )
                 allowed_server_ids_set.update(servers)
 
-            allowed_server_ids = list(allowed_server_ids_set)
+            allowed_server_ids = global_mcp_server_manager.filter_server_ids_by_ip(
+                list(allowed_server_ids_set), _rest_client_ip
+            )
 
             list_tools_result = []
             error_message = None
 
             # If server_id is specified, only query that specific server
             if server_id:
-                if server_id not in allowed_server_ids_set:
+                if server_id not in allowed_server_ids:
                     raise HTTPException(
                         status_code=403,
                         detail={
@@ -195,7 +220,9 @@ if MCP_AVAILABLE:
                             "message": f"The key is not allowed to access server {server_id}",
                         },
                     )
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                server = global_mcp_server_manager.get_mcp_server_by_id(
+                    server_id
+                )
                 if server is None:
                     return {
                         "tools": [],
@@ -339,21 +366,10 @@ if MCP_AVAILABLE:
                 )
             )
 
-            # FIX: Extract MCP auth headers from request
-            # The UI sends bearer token in x-mcp-auth header and server-specific headers,
-            # but they weren't being extracted and passed to call_mcp_tool.
-            # This fix ensures auth headers are properly extracted from the HTTP request
-            # and passed through to the MCP server for authentication.
-            headers = request.headers
-            raw_headers_from_request = dict(headers)
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
-                headers
+            # Extract MCP auth headers from request and add to data dict
+            mcp_auth_header, mcp_server_auth_headers, raw_headers_from_request = (
+                _extract_mcp_headers_from_request(request, MCPRequestHandler)
             )
-            mcp_server_auth_headers = (
-                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-            )
-
-            # Add extracted headers to data dict to pass to call_mcp_tool
             if mcp_auth_header:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
@@ -365,9 +381,42 @@ if MCP_AVAILABLE:
             if "metadata" in data and "user_api_key_auth" in data["metadata"]:
                 data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
 
-            allowed_mcp_servers = await _resolve_allowed_mcp_servers_for_tool_call(
-                user_api_key_dict, server_id
+            # Get all auth contexts
+            auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+            # Collect allowed server IDs from all contexts, then apply IP filtering
+            _rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
+            allowed_server_ids_set = set()
+            for auth_context in auth_contexts:
+                servers = await global_mcp_server_manager.get_allowed_mcp_servers(
+                    user_api_key_auth=auth_context,
+                )
+                allowed_server_ids_set.update(servers)
+
+            allowed_server_ids_set = set(
+                global_mcp_server_manager.filter_server_ids_by_ip(
+                    list(allowed_server_ids_set), _rest_client_ip
+                )
             )
+
+            # Check if the specified server_id is allowed
+            if server_id not in allowed_server_ids_set:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "access_denied",
+                        "message": f"The key is not allowed to access server {server_id}",
+                    },
+                )
+
+            # Build allowed_mcp_servers list (only include allowed servers)
+            allowed_mcp_servers: List[MCPServer] = []
+            for allowed_server_id in allowed_server_ids_set:
+                server = global_mcp_server_manager.get_mcp_server_by_id(
+                    allowed_server_id
+                )
+                if server is not None:
+                    allowed_mcp_servers.append(server)
 
             # Call execute_mcp_tool directly (permission checks already done)
             result = await execute_mcp_tool(

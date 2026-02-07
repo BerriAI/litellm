@@ -11771,9 +11771,13 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
         from litellm.types.mcp import MCPAuth
 
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
         if mcp_server is None:
             raise HTTPException(
                 status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
