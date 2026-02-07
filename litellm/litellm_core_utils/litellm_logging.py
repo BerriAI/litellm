@@ -408,30 +408,45 @@ class Logging(LiteLLMLoggingBaseClass):
 
         If a callback is in litellm._known_custom_logger_compatible_callbacks, it needs to be intialized and added to the respective dynamic_* callback list.
         """
-        # Process input callbacks
-        self.dynamic_input_callbacks = self._process_dynamic_callback_list(
-            self.dynamic_input_callbacks, dynamic_callbacks_type="input"
-        )
+        # Early exit if all callbacks are None (common case)
+        if (
+            self.dynamic_input_callbacks is None
+            and self.dynamic_success_callbacks is None
+            and self.dynamic_async_success_callbacks is None
+            and self.dynamic_failure_callbacks is None
+            and self.dynamic_async_failure_callbacks is None
+        ):
+            return
 
-        # Process failure callbacks
-        self.dynamic_failure_callbacks = self._process_dynamic_callback_list(
-            self.dynamic_failure_callbacks, dynamic_callbacks_type="failure"
-        )
+        # Process input callbacks (standalone - no dependencies)
+        if self.dynamic_input_callbacks is not None:
+            self.dynamic_input_callbacks = self._process_dynamic_callback_list(
+                self.dynamic_input_callbacks, dynamic_callbacks_type="input"
+            )
 
-        # Process async failure callbacks
-        self.dynamic_async_failure_callbacks = self._process_dynamic_callback_list(
-            self.dynamic_async_failure_callbacks, dynamic_callbacks_type="async_failure"
-        )
+        # Process success BEFORE async_success (success processing adds to async_success)
+        if self.dynamic_success_callbacks is not None:
+            self.dynamic_success_callbacks = self._process_dynamic_callback_list(
+                self.dynamic_success_callbacks, dynamic_callbacks_type="success"
+            )
 
-        # Process success callbacks
-        self.dynamic_success_callbacks = self._process_dynamic_callback_list(
-            self.dynamic_success_callbacks, dynamic_callbacks_type="success"
-        )
+        # Process async_success AFTER success
+        if self.dynamic_async_success_callbacks is not None:
+            self.dynamic_async_success_callbacks = self._process_dynamic_callback_list(
+                self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
+            )
 
-        # Process async success callbacks
-        self.dynamic_async_success_callbacks = self._process_dynamic_callback_list(
-            self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
-        )
+        # Process failure BEFORE async_failure (failure processing adds to async_failure)
+        if self.dynamic_failure_callbacks is not None:
+            self.dynamic_failure_callbacks = self._process_dynamic_callback_list(
+                self.dynamic_failure_callbacks, dynamic_callbacks_type="failure"
+            )
+
+        # Process async_failure AFTER failure
+        if self.dynamic_async_failure_callbacks is not None:
+            self.dynamic_async_failure_callbacks = self._process_dynamic_callback_list(
+                self.dynamic_async_failure_callbacks, dynamic_callbacks_type="async_failure"
+            )
 
     def _process_dynamic_callback_list(
         self,
