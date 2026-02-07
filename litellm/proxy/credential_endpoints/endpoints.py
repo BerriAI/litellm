@@ -442,6 +442,7 @@ async def validate_aws_credential_endpoint(
             test_role_assumption=test_role_assumption,
         )
         return {"success": True, **result}
+    except HTTPException:
+        raise
     except Exception as e:
-        verbose_proxy_logger.exception(e)
         raise handle_exception_on_proxy(e)

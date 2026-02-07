@@ -883,10 +883,28 @@ def add_aws_credentials_to_request(
     Returns:
         Updated data dictionary with AWS credentials merged in
     """
+    # Fast path: check if any AWS credential references exist before doing work.
+    # This avoids credential store lookups on every non-Bedrock request.
+    team_metadata = user_api_key_dict.team_metadata or {}
+    key_metadata = user_api_key_dict.metadata or {}
+    request_metadata = data.get(_metadata_variable_name, {})
+    if not isinstance(request_metadata, dict):
+        request_metadata = {}
+
+    has_credential_name = (
+        "aws_credential_name" in team_metadata
+        or "aws_credential_name" in key_metadata
+        or "aws_credential_name" in request_metadata
+    )
+    has_direct_aws_params = any(
+        param in request_metadata for param in AWS_CREDENTIAL_PARAMS
+    )
+    if not has_credential_name and not has_direct_aws_params:
+        return data
+
     aws_credentials: Dict[str, Any] = {}
 
     # Priority 4: Team-level aws_credential_name
-    team_metadata = user_api_key_dict.team_metadata or {}
     if "aws_credential_name" in team_metadata:
         team_cred_name = team_metadata["aws_credential_name"]
         verbose_proxy_logger.debug(
@@ -896,7 +914,6 @@ def add_aws_credentials_to_request(
         aws_credentials.update(team_creds)
 
     # Priority 3: Key-level aws_credential_name (overrides team)
-    key_metadata = user_api_key_dict.metadata or {}
     if "aws_credential_name" in key_metadata:
         key_cred_name = key_metadata["aws_credential_name"]
         verbose_proxy_logger.debug(
@@ -906,8 +923,7 @@ def add_aws_credentials_to_request(
         aws_credentials.update(key_creds)
 
     # Priority 2: Per-request aws_credential_name in metadata (overrides key/team)
-    request_metadata = data.get(_metadata_variable_name, {})
-    if isinstance(request_metadata, dict) and "aws_credential_name" in request_metadata:
+    if "aws_credential_name" in request_metadata:
         request_cred_name = request_metadata["aws_credential_name"]
         verbose_proxy_logger.debug(
             f"Found request aws_credential_name: {request_cred_name}"
@@ -916,9 +932,8 @@ def add_aws_credentials_to_request(
         aws_credentials.update(request_creds)
 
     # Priority 1: Direct AWS params in request metadata (highest priority)
-    if isinstance(request_metadata, dict):
-        direct_aws_creds = _extract_aws_credentials_from_metadata(request_metadata)
-        aws_credentials.update(direct_aws_creds)
+    direct_aws_creds = _extract_aws_credentials_from_metadata(request_metadata)
+    aws_credentials.update(direct_aws_creds)
 
     # Merge AWS credentials into data
     if aws_credentials:
