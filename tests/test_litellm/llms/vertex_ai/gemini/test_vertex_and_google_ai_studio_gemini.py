@@ -3338,3 +3338,38 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     assert result.usage.completion_tokens == 0, f"completion_tokens should be 0, got {result.usage.completion_tokens}"
     assert result.usage.total_tokens == 8175, f"total_tokens should be 8175, got {result.usage.total_tokens}"
 
+
+def test_vertex_ai_usage_metadata_preserved_in_hidden_params_streaming():
+    """Test usageMetadata (trafficType, etc.) is preserved in _hidden_params for streaming."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+        "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 200, "totalTokenCount": 300, "trafficType": "ON_DEMAND"},
+    }
+
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
+    result = iterator.chunk_parser(chunk)
+
+    assert result._hidden_params["vertex_ai_usage_metadata"]["trafficType"] == "ON_DEMAND"
+
+
+def test_vertex_ai_usage_metadata_preserved_in_hidden_params_non_streaming():
+    """Test usageMetadata (trafficType, etc.) is preserved in _hidden_params for non-streaming."""
+    completion_response = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}], "role": "model"}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 100, "totalTokenCount": 150, "trafficType": "PROVISIONED_THROUGHPUT"},
+    }
+
+    raw_response = MagicMock()
+    raw_response.json.return_value = completion_response
+
+    result = VertexGeminiConfig().transform_response(
+        model="gemini-pro", raw_response=raw_response, model_response=ModelResponse(),
+        logging_obj=MagicMock(), request_data={}, messages=[], optional_params={}, litellm_params={}, encoding=None,
+    )
+
+    assert result._hidden_params["vertex_ai_usage_metadata"]["trafficType"] == "PROVISIONED_THROUGHPUT"
+
