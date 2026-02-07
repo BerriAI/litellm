@@ -1,0 +1,20 @@
+{
+  "name": "LiteLLM",
+  "description": "Unified API for 100+ LLMs - call OpenAI, Anthropic, Gemini, Cohere, and more through one interface",
+  "version": "1.0.0",
+  "capabilities": [
+    "model-routing",
+    "fallbacks",
+    "cost-tracking",
+    "rate-limiting",
+    "load-balancing"
+  ],
+  "integration": {
+    "mcp_server": "pip install litellm-mcp",
+    "python_sdk": "pip install litellm",
+    "openclaw_skill": "clawhub install litellm"
+  },
+  "documentation": "https://docs.litellm.ai",
+  "github": "https://github.com/BerriAI/litellm",
+  "api_format": "openai-compatible"
+}
