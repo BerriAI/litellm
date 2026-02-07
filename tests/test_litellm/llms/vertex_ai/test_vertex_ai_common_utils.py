@@ -48,7 +48,12 @@ async def test_get_vertex_location_from_url():
 
 
 def test_basic_anyof_conversion():
-    """Test basic conversion of anyOf with 'null'."""
+    """Test basic conversion of anyOf with 'null'.
+
+    When anyOf has only one variant remaining after removing null,
+    it should be unwrapped to preserve sibling fields.
+    See https://github.com/BerriAI/litellm/issues/19255
+    """
     schema = {
         "type": "object",
         "properties": {"example": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
@@ -56,9 +61,48 @@ def test_basic_anyof_conversion():
 
     convert_anyof_null_to_nullable(schema)
 
+    # Single-variant anyOf should be unwrapped
     expected = {
         "type": "object",
-        "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
+        "properties": {"example": {"type": "string", "nullable": True}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_preserves_sibling_fields():
+    """Test that sibling fields like 'default', 'examples', 'pattern' are preserved.
+
+    Pydantic generates Optional[X] as anyOf: [{X schema}, {type: null}] with constraints
+    as siblings. After removing null and unwrapping single-variant anyOf, siblings should
+    be merged into the result.
+    See https://github.com/BerriAI/litellm/issues/19255
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "days_filter": {
+                "anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}],
+                "default": None,
+                "examples": [7, 30, 90],
+                "description": "Filter by number of days",
+            }
+        },
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {
+            "days_filter": {
+                "type": "integer",
+                "minimum": 0,
+                "nullable": True,
+                "default": None,
+                "examples": [7, 30, 90],
+                "description": "Filter by number of days",
+            }
+        },
     }
     assert schema == expected
 
@@ -208,6 +252,8 @@ def test_build_vertex_schema():
         "type": "object",
     }
 
+    # After fix for https://github.com/BerriAI/litellm/issues/19255:
+    # Single-variant anyOf arrays are unwrapped to preserve sibling fields
     expected_output = {
         "properties": {
             "state": {
@@ -230,12 +276,12 @@ def test_build_vertex_schema():
                         ]
                     },
                     "run_name": {"type": "string"},
-                    "max_concurrency": {
-                        "anyOf": [{"type": "integer", "nullable": True}]
-                    },
+                    # Single-variant anyOf unwrapped:
+                    "max_concurrency": {"type": "integer", "nullable": True},
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
-                    "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
+                    # Single-variant anyOf unwrapped:
+                    "run_id": {"type": "string", "nullable": True},
                 },
                 "type": "object",
             },
@@ -1322,7 +1368,14 @@ def test_build_vertex_schema_empty_properties():
 
     # Verify the transformation removed empty properties
     # Navigate to the go_back schema
-    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
+    # Note: Single-variant anyOf is unwrapped per https://github.com/BerriAI/litellm/issues/19255
+    # So items no longer has anyOf, the schema is unwrapped directly into items
+    items_schema = result["properties"]["action"]["items"]
+    
+    # Verify single-variant anyOf was unwrapped
+    assert "anyOf" not in items_schema, "Single-variant anyOf should be unwrapped"
+    
+    go_back_schema = items_schema["properties"]["go_back"]
     
     # Verify empty properties was removed
     assert "properties" not in go_back_schema, "Empty properties should be removed"
@@ -1336,10 +1389,9 @@ def test_build_vertex_schema_empty_properties():
     # Verify description is preserved
     assert go_back_schema.get("description") == "Go back", "Description should be preserved"
     
-    # Verify parent schema still has proper structure
-    parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
-    assert parent_schema["type"] == "object", "Parent schema should still have object type"
-    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
+    # Verify parent schema still has proper structure (now items directly, not anyOf[0])
+    assert items_schema["type"] == "object", "Items schema should have object type"
+    assert "go_back" in items_schema["properties"], "go_back should still be in items properties"
 
 
 def test_add_object_type_schema_with_no_properties_and_no_type():
