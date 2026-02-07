@@ -287,40 +287,52 @@ const sidebars = {
           label: "Admin UI",
           items: [
             "proxy/ui",
-            "proxy/admin_ui_sso",
-            "proxy/custom_root_ui",
-            "proxy/custom_sso",
-            "proxy/ai_hub",
-            "proxy/model_compare_ui",
-            "proxy/ui_credentials",
-            "tutorials/scim_litellm",
             {
               type: "category",
-              label: "UI User/Team Management",
+              label: "Setup & SSO",
               items: [
-            "proxy/access_control",
-                "proxy/public_teams",
+                "proxy/admin_ui_sso",
+                "proxy/custom_sso",
+                "proxy/custom_root_ui",
+                "tutorials/scim_litellm",
+              ]
+            },
+            {
+              type: "category",
+              label: "Models",
+              items: [
+                "proxy/ui_credentials",
+                "proxy/ai_hub",
+                "proxy/model_compare_ui",
+              ]
+            },
+            {
+              type: "category",
+              label: "Teams & Organizations",
+              items: [
+                "proxy/access_control",
                 "proxy/self_serve",
+                "proxy/public_teams",
                 "proxy/ui/bulk_edit_users",
                 "proxy/ui/page_visibility",
               ]
             },
             {
               type: "category",
-              label: "UI Usage Tracking",
+              label: "Observability: Usage",
               items: [
                 "proxy/customer_usage",
-                "proxy/endpoint_activity"
+                "proxy/endpoint_activity",
               ]
             },
             {
               type: "category",
-              label: "UI Logs",
+              label: "Logs",
               items: [
                 "proxy/ui_logs",
                 "proxy/ui_spend_log_settings",
                 "proxy/ui_logs_sessions",
-                "proxy/deleted_keys_teams"
+                "proxy/deleted_keys_teams",
               ]
             }
           ],
