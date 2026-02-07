@@ -1,6 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Any, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, cast
 
 from fastapi import HTTPException
 
@@ -253,7 +253,7 @@ class PangeaHandler(CustomGuardrail):
         if not isinstance(response, ModelResponse):
             return
         else:
-            input_messages = data.get("messages")
+            input_messages = cast(List[Dict[Any, Any]], data.get("messages"))
 
         if choices := response.get("choices"):
             if isinstance(choices, list):
