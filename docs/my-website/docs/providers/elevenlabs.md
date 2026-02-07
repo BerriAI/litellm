@@ -367,17 +367,135 @@ audio = litellm.speech(
     voice="alloy",                               # Required: Voice selection (mapped or raw ID)
     response_format="mp3",                      # Optional: Audio format (mp3, pcm, opus)
     speed=1.0,                                  # Optional: Speech speed (maps to voice_settings.speed)
+    with_timestamps=False,                      # Optional: Return word/character-level timestamps (see below)
     # ElevenLabs-specific parameters (passed directly):
     model_id="eleven_multilingual_v2",           # Optional: Override model
     voice_settings={                             # Optional: Voice customization
-        "stability": 0.5,
-        "similarity_boost": 0.75,
-        "speed": 1.0
+        "stability": 0.5,                        # 0.0-1.0: Higher = more consistent, lower = more expressive
+        "similarity_boost": 0.75,                # 0.0-1.0: Higher = closer to original voice
+        "style": 0.0,                            # 0.0-1.0: Style exaggeration (v2 models only)
+        "use_speaker_boost": True,               # Boost voice clarity and similarity
+        "speed": 1.0                             # 0.25-4.0: Speech speed multiplier
     },
     pronunciation_dictionary_locators=[         # Optional: Custom pronunciation
            {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
     ],
 )
+```
+
+### Voice Settings Reference
+
+For more details, see the [ElevenLabs Voice Settings API ↗](https://elevenlabs.io/docs/api-reference/voices/settings/update).
+
+| Parameter | Type | Range | Description |
+|-----------|------|-------|-------------|
+| `stability` | float | 0.0-1.0 | Controls voice consistency. Higher = more stable/predictable, lower = more expressive/variable. Corresponds to "Stability" slider in the web app |
+| `similarity_boost` | float | 0.0-1.0 | Controls how closely the generated voice matches the original. Higher = more similar. Corresponds to "Clarity + Similarity Enhancement" in the web app |
+| `style` | float | 0.0-1.0 | Style exaggeration. Only available for `eleven_multilingual_v2` and `eleven_turbo_v2` models |
+| `use_speaker_boost` | bool | true/false | Enhances voice clarity and target speaker similarity. May increase latency |
+| `speed` | float | 0.25-1.0 | Speech speed multiplier. 1.0 = normal speed, <1.0 = slower, >1.0 = faster |
+
+### Text-to-Speech with Timestamps (ElevenLabs-specific)
+
+ElevenLabs supports returning word-level and character-level timestamp data along with the audio. This is useful for creating synchronized animations, captions, or lip-sync applications.
+
+**Note**: This feature is ElevenLabs-specific and not part of the standard OpenAI API.
+
+#### Usage with Timestamps
+
+```python showLineNumbers title="TTS with timestamps"
+import litellm
+import base64
+import os
+
+os.environ["ELEVENLABS_API_KEY"] = "your-elevenlabs-api-key"
+
+# Request audio with timestamps
+response = litellm.speech(
+    model="elevenlabs/elevenlabs_turbo_v2",
+    input="Hello world, this is a test.",
+    voice="alloy",
+    with_timestamps=True,  # Enable timestamps
+)
+
+# Response is a dict (not binary audio)
+print(response["audio_base_64"])  # Base64-encoded audio
+print(response["alignment"])  # Word/character-level timing data
+print(response["normalized_alignment"])  # Normalized timing data
+
+# Decode and save audio
+audio_data = base64.b64decode(response["audio_base_64"])
+with open("audio_with_timestamps.mp3", "wb") as f:
+    f.write(audio_data)
+
+# Access timing information
+alignment = response["alignment"]
+print(f"Characters: {alignment['characters']}")
+print(f"Start times: {alignment['character_start_times_seconds']}")
+print(f"End times: {alignment['character_end_times_seconds']}")
+```
+
+#### Response Format with Timestamps
+
+When `with_timestamps=True`, the response is a dictionary containing:
+
+```python
+{
+    "audio_base_64": "base64encodedaudiodata==",  # Base64-encoded audio file
+    "alignment": {
+        "characters": ["H", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"],
+        "character_start_times_seconds": [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5],
+        "character_end_times_seconds": [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55]
+    },
+    "normalized_alignment": {
+        "characters": [
+            {"character": "H", "start_time_seconds": 0.0, "duration_seconds": 0.05},
+            {"character": "e", "start_time_seconds": 0.05, "duration_seconds": 0.05},
+            ...
+        ],
+        "max_character_duration_seconds": 0.1
+    }
+}
+```
+
+#### Using with LiteLLM Proxy
+
+```bash showLineNumbers title="TTS with timestamps via proxy"
+curl http://localhost:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs_turbo_v2",
+    "input": "Hello world, this is a test.",
+    "voice": "alloy",
+    "with_timestamps": true
+  }' \
+  | jq .
+```
+
+```python showLineNumbers title="TTS with timestamps using OpenAI SDK"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+# Note: OpenAI SDK doesn't natively support with_timestamps
+# You'll need to make a raw HTTP request or use litellm SDK directly
+import litellm
+
+response = litellm.speech(
+    model="elevenlabs-tts",
+    input="Hello world, this is a test.",
+    voice="alloy",
+    with_timestamps=True,
+    api_base="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+print(response["audio_base_64"])
+print(response["alignment"])
 ```
 
 ### LiteLLM Proxy
@@ -452,9 +570,11 @@ curl http://localhost:4000/v1/audio/speech \
           {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
       ],
       "voice_settings": {
-        "speed": 1.1,
         "stability": 0.5,
-        "similarity_boost": 0.75
+        "similarity_boost": 0.75,
+        "style": 0.0,
+        "use_speaker_boost": true,
+        "speed": 1.2
       }
     }
   }' \
@@ -479,9 +599,11 @@ response = client.audio.speech.create(
                {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
         ],
         "voice_settings": {
-            "speed": 1.1,
             "stability": 0.5,
-            "similarity_boost": 0.75
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True,
+            "speed": 1.2
         }
     }
 )
