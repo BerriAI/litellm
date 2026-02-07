@@ -499,13 +499,15 @@ class Logging(LiteLLMLoggingBaseClass):
 
         checks if web_search_options in kwargs or tools and sets the corresponding attribute in StandardBuiltInToolsParams
         """
+        if not kwargs or ("web_search_options" not in kwargs and "tools" not in kwargs):
+            return StandardBuiltInToolsParams()
+
+        web_search, file_search = (
+            StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+        )
         return StandardBuiltInToolsParams(
-            web_search_options=StandardBuiltInToolCostTracking._get_web_search_options(
-                kwargs or {}
-            ),
-            file_search=StandardBuiltInToolCostTracking._get_file_search_tool_call(
-                kwargs or {}
-            ),
+            web_search_options=web_search,
+            file_search=file_search,
         )
 
     def update_environment_variables(
