@@ -2120,6 +2120,10 @@ async def test_filter_tools_by_allowed_tools_integration():
             return_value=["test-server-123"]
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip = MagicMock(
+            side_effect=lambda server_ids, client_ip: server_ids
+        )
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
