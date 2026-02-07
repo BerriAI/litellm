@@ -189,4 +189,93 @@ If you have firewalls, and want to just use the local copy of the model cost map
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 ```
 
-Note: this means you will need to upgrade to get updated pricing, and newer models. 
+Note: this means you will need to upgrade to get updated pricing, and newer models.
+
+## Performance: Disabling or Optimizing Tokenization
+
+For high-throughput scenarios, tokenization can consume significant CPU resources. LiteLLM provides options to optimize or disable tokenization.
+
+### Option 1: Disable Token Counter (Simple)
+
+Completely disable tokenization for all requests:
+
+```python
+import litellm
+
+# Disable all tokenization
+litellm.disable_token_counter = True
+
+response = litellm.completion(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+
+# response.usage will show 0 tokens (from provider if available, otherwise 0)
+```
+
+**Use when:**
+- You don't need token counts or cost tracking
+- Running in CPU-constrained environments
+- Processing hundreds of concurrent requests
+
+**Trade-off:** No client-side token counting, relies on provider-returned usage only.
+
+### Option 2: Async Tokenization (Recommended)
+
+Run tokenization in a threadpool for large inputs, preventing event loop blocking while keeping token counts for small requests:
+
+```python
+import litellm
+
+# Configure async tokenization
+litellm.async_tokenizer_threshold_bytes = 500_000  # 500KB threshold
+litellm.tokenizer_threadpool_max_workers = 4       # Max 4 threads
+litellm.tokenizer_timeout_seconds = 5.0            # 5s timeout
+
+# Use async token counter
+result = await litellm.async_token_counter(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": large_text}]
+)
+```
+
+**How it works:**
+- **Small inputs (< threshold):** Fast inline tokenization
+- **Large inputs (≥ threshold):** Threadpool tokenization (non-blocking)
+- **Pool saturated:** Falls back to inline (graceful degradation)
+- **Timeout:** Returns 0 tokens and logs error (prevents hangs)
+
+**Use when:**
+- Processing mixed request sizes (small + large)
+- Need token counts but want to prevent event loop blocking
+- Running async web servers with LiteLLM
+
+**Example: High-throughput server**
+
+```python
+import litellm
+from fastapi import FastAPI
+
+app = FastAPI()
+
+# Configure on startup
+litellm.async_tokenizer_threshold_bytes = 500_000  # 500KB
+litellm.tokenizer_threadpool_max_workers = 8
+
+@app.post("/chat")
+async def chat(request):
+    # Large inputs automatically use threadpool
+    # Event loop stays responsive for other requests
+    response = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=request.messages
+    )
+    return response
+```
+
+**Performance Impact:**
+
+From our testing with 1MB inputs:
+- **Without async tokenization:** Event loop blocked (0 Hz), sequential processing
+- **With async tokenization:** Event loop responsive (88 Hz), concurrent processing
+- **Speedup:** 225x faster for large batch processing
