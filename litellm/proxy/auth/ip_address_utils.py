@@ -121,9 +121,20 @@ class IPAddressUtils:
 
         Args:
             request: FastAPI request object
-            general_settings: Optional settings dict. If not provided, uses cached reference.
+            general_settings: Optional settings dict. If not provided, imports from proxy_server.
         """
-        from litellm.proxy.proxy_server import general_settings
+        if general_settings is None:
+            try:
+                from litellm.proxy.proxy_server import (
+                    general_settings as proxy_general_settings,
+                )
+                general_settings = proxy_general_settings
+            except ImportError:
+                general_settings = {}
+
+        # Handle case where general_settings is still None after import
+        if general_settings is None:
+            general_settings = {}
 
         use_xff = general_settings.get("use_x_forwarded_for", False)
         
