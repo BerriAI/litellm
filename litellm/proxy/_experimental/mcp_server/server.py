@@ -722,23 +722,45 @@ if MCP_AVAILABLE:
 
         return tools_to_return
 
-    async def _get_allowed_mcp_servers(
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-        mcp_servers: Optional[List[str]],
-    ) -> List[MCPServer]:
-        """Return allowed MCP servers for a request after applying filters.
-
-        Reads client_ip from the auth context (set by handle_streamable_http_mcp/handle_sse_mcp)
-        to enforce IP-based access control on MCP servers.
+    def _get_client_ip_from_context() -> Optional[str]:
         """
-        # Extract client_ip from auth context for IP-based filtering
-        client_ip: Optional[str] = None
+        Extract client_ip from auth context.
+        
+        Returns None if context not set (caller should handle this as "no IP filtering").
+        """
         try:
             auth_user = auth_context_var.get()
             if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
-                client_ip = auth_user.client_ip
+                return auth_user.client_ip
         except Exception:
             pass
+        return None
+
+    async def _get_allowed_mcp_servers(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_servers: Optional[List[str]],
+        client_ip: Optional[str] = None,
+    ) -> List[MCPServer]:
+        """Return allowed MCP servers for a request after applying filters.
+
+        Args:
+            user_api_key_auth: The authenticated user's API key info.
+            mcp_servers: Optional list of server names to filter to.
+            client_ip: Client IP for IP-based access control. If None, falls back to
+                      auth context. Pass explicitly from request handlers for safety.
+        
+        Note: If client_ip is None and auth context is not set, IP filtering is skipped.
+              This is intentional for internal callers but may indicate a bug if called
+              from a request handler without proper context setup.
+        """
+        # Use explicit client_ip if provided, otherwise try auth context
+        if client_ip is None:
+            client_ip = _get_client_ip_from_context()
+            if client_ip is None:
+                verbose_logger.debug(
+                    "MCP _get_allowed_mcp_servers called without client_ip and no auth context. "
+                    "IP filtering will be skipped. This is expected for internal calls."
+                )
 
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(
