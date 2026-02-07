@@ -303,7 +303,7 @@ if MCP_AVAILABLE:
                 host_token = getattr(host_ctx.meta, 'progressToken', None)
                 if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
                     host_session = host_ctx.session
-                    
+
                     async def forward_progress(progress: float, total: float | None):
                         """Forward progress notifications from external MCP to Host"""
                         try:
@@ -315,7 +315,7 @@ if MCP_AVAILABLE:
                             verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
                         except Exception as e:
                             verbose_logger.error(f"Failed to forward progress to Host: {e}")
-                    
+
                     host_progress_callback = forward_progress
                     verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
         except Exception as e:
@@ -725,7 +725,7 @@ if MCP_AVAILABLE:
     def _get_client_ip_from_context() -> Optional[str]:
         """
         Extract client_ip from auth context.
-        
+
         Returns None if context not set (caller should handle this as "no IP filtering").
         """
         try:
@@ -748,7 +748,7 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names to filter to.
             client_ip: Client IP for IP-based access control. If None, falls back to
                       auth context. Pass explicitly from request handlers for safety.
-        
+
         Note: If client_ip is None and auth context is not set, IP filtering is skipped.
               This is intentional for internal callers but may indicate a bug if called
               from a request handler without proper context setup.
@@ -1781,7 +1781,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
-        host_progress_callback: Optional[Callable] = None, 
+        host_progress_callback: Optional[Callable] = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
