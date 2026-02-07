@@ -78,6 +78,93 @@ class TestProxyBaseLLMRequestProcessing:
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
     @pytest.mark.asyncio
+    async def test_should_apply_hierarchical_router_settings_as_override(
+        self, monkeypatch
+    ):
+        """
+        Test that hierarchical router settings are stored as router_settings_override
+        instead of creating a full user_config with model_list.
+        
+        This approach avoids expensive per-request Router instantiation by passing
+        settings as kwargs overrides to the main router.
+        """
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {}
+
+        async def mock_common_processing_pre_call_logic(
+            user_api_key_dict, data, call_type
+        ):
+            data_copy = copy.deepcopy(data)
+            return data_copy
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=mock_common_processing_pre_call_logic
+        )
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        mock_general_settings = {}
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        
+        mock_router_settings = {
+            "routing_strategy": "least-busy",
+            "timeout": 30.0,
+            "num_retries": 3,
+        }
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value=mock_router_settings
+        )
+
+        mock_llm_router = MagicMock()
+
+        mock_prisma_client = MagicMock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        )
+
+        route_type = "acompletion"
+
+        returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings=mock_general_settings,
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type=route_type,
+            llm_router=mock_llm_router,
+        )
+
+        mock_proxy_config._get_hierarchical_router_settings.assert_called_once_with(
+            user_api_key_dict=mock_user_api_key_dict,
+            prisma_client=mock_prisma_client,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+        # get_model_list should NOT be called - we no longer copy model list for per-request routers
+        mock_llm_router.get_model_list.assert_not_called()
+
+        # Settings should be stored as router_settings_override (not user_config)
+        # This allows passing them as kwargs to the main router instead of creating a new one
+        assert "router_settings_override" in returned_data
+        assert "user_config" not in returned_data
+        
+        router_settings_override = returned_data["router_settings_override"]
+        assert router_settings_override["routing_strategy"] == "least-busy"
+        assert router_settings_override["timeout"] == 30.0
+        assert router_settings_override["num_retries"] == 3
+        # model_list should NOT be in the override settings
+        assert "model_list" not in router_settings_override
+
+    @pytest.mark.asyncio
     async def test_stream_timeout_header_processing(self):
         """
         Test that x-litellm-stream-timeout header gets processed and added to request data as stream_timeout.
