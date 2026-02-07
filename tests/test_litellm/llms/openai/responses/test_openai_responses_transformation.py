@@ -417,6 +417,129 @@ class TestOpenAIResponsesAPIConfig:
         assert event.error.code == "unknown_error"
         assert event.error.message == "Something went wrong"
 
+    def test_transform_streaming_response_missing_required_fields_response_created(
+        self,
+    ):
+        """Test that ResponseCreatedEvent with missing required fields (created_at,
+        output) does not crash but falls back to model_construct.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import ResponseCreatedEvent
+
+        # Minimal payload an OpenAI-compatible provider might send,
+        # omitting `created_at` and `output` inside the response object.
+        parsed_chunk = {
+            "type": "response.created",
+            "response": {
+                "id": "resp_q7BOLpck7clq",
+                "model": "gpt-oss-120b",
+                "status": "in_progress",
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, ResponseCreatedEvent)
+        assert result.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+        assert result.response["id"] == "resp_q7BOLpck7clq"
+
+    def test_transform_streaming_response_missing_required_fields_output_text_delta(
+        self,
+    ):
+        """Test that OutputTextDeltaEvent with missing output_index and
+        content_index falls back to model_construct without crashing.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import OutputTextDeltaEvent
+
+        # Provider omits output_index and content_index
+        parsed_chunk = {
+            "type": "response.output_text.delta",
+            "item_id": "item_456",
+            "delta": "Hello",
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputTextDeltaEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        assert result.delta == "Hello"
+        assert result.item_id == "item_456"
+
+    def test_transform_streaming_response_missing_required_fields_content_part_added(
+        self,
+    ):
+        """Test that ContentPartAddedEvent with missing output_index and
+        content_index falls back to model_construct without crashing.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import ContentPartAddedEvent
+
+        # Provider omits output_index and content_index
+        parsed_chunk = {
+            "type": "response.content_part.added",
+            "item_id": "item_789",
+            "part": {"type": "output_text", "text": ""},
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, ContentPartAddedEvent)
+        assert result.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+        assert result.item_id == "item_789"
+
+    def test_transform_streaming_response_missing_required_fields_output_item_added(
+        self,
+    ):
+        """Test that OutputItemAddedEvent with missing output_index falls back
+        to model_construct without crashing.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import OutputItemAddedEvent
+
+        # Provider omits output_index
+        parsed_chunk = {
+            "type": "response.output_item.added",
+            "item": {"type": "message", "id": "msg_001", "role": "assistant"},
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputItemAddedEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+
+    def test_transform_streaming_response_valid_chunk_still_works(self):
+        """Ensure that fully valid chunks still go through normal Pydantic
+        validation (not model_construct) and work correctly."""
+        parsed_chunk = {
+            "type": "response.output_text.delta",
+            "item_id": "item_123",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "World",
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputTextDeltaEvent)
+        assert result.delta == "World"
+        assert result.output_index == 0
+        assert result.content_index == 0
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):

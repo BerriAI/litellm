@@ -4408,6 +4408,37 @@ class BaseLLMHTTPHandler:
                             stream=stream,
                             kwargs=kwargs_with_provider,
                         )
+                        
+                        # Check if we need to convert agentic loop response to fake stream
+                        # This happens when the original request was streaming but was converted
+                        # to non-streaming for WebSearch interception, and the agentic loop ran
+                        websearch_converted_stream = (
+                            logging_obj.model_call_details.get("websearch_interception_converted_stream", False)
+                            if logging_obj is not None
+                            else False
+                        )
+                        
+                        if websearch_converted_stream and agentic_response is not None:
+                            from typing import cast
+                            
+                            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                                FakeAnthropicMessagesStreamIterator,
+                            )
+                            from litellm.types.llms.anthropic_messages.anthropic_response import (
+                                AnthropicMessagesResponse,
+                            )
+                            
+                            verbose_logger.debug(
+                                "WebSearchInterception: Agentic loop completed, converting response to fake stream"
+                            )
+                            
+                            # Convert the non-streaming response to a fake stream
+                            if isinstance(agentic_response, dict):
+                                fake_stream = FakeAnthropicMessagesStreamIterator(
+                                    response=cast(AnthropicMessagesResponse, agentic_response)
+                                )
+                                return fake_stream
+                        
                         # First hook that runs agentic loop wins
                         return agentic_response
 
