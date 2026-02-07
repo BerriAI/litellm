@@ -1543,13 +1543,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
 
         # Check for dynamically disabled callbacks via headers
-        # Skip the enterprise call entirely when no dynamic disabling is configured
         if (
             EnterpriseCallbackControls is not None
-            and (
-                self.standard_callback_dynamic_params.get("litellm_disabled_callbacks") is not None
-                or litellm_params.get("proxy_server_request", {}).get("headers", {}).get("x-litellm-disable-callbacks") is not None
-            )
             and EnterpriseCallbackControls.is_callback_disabled_dynamically(
                 callback=callback,
                 litellm_params=litellm_params,
