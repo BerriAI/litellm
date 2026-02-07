@@ -1981,6 +1981,10 @@ class ProxyLogging:
             )
         return merged_headers
 
+    def is_a2a_streaming_response(self, response: dict) -> bool:
+        expected_keys = ["jsonrpc", "id", "result"]
+        return all(key in response for key in expected_keys)
+
     async def async_post_call_streaming_hook(
         self,
         data: dict,
@@ -2001,6 +2005,10 @@ class ProxyLogging:
         response_str: Optional[str] = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
+        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+            from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+            response_str = extract_text_from_a2a_response(response)
         if response_str is not None:
             for callback in litellm.callbacks:
                 try:
