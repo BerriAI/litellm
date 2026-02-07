@@ -1,6 +1,9 @@
 """Tests for unified guardrail."""
 
+import json
+
 import pytest
+from fastapi import HTTPException
 
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -9,7 +12,9 @@ from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import
     MCPGuardrailTranslationHandler,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import unified_guardrail as unified_module
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
+    unified_guardrail as unified_module,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -229,3 +234,129 @@ class TestUnifiedLLMGuardrails:
                     f"Chunk {i} lost its content (got {content!r}). "
                     f"Expected non-empty content for every streamed chunk."
                 )
+
+        @pytest.mark.asyncio
+        async def test_a2a_streaming_httpexception_yields_jsonrpc_error_chunk(self):
+            """
+            When A2A streaming guardrail raises HTTPException, the hook should yield
+            a JSON-RPC 2.0 error chunk so the client sees the rejection in-stream,
+            since the HTTP response has already started.
+            """
+
+            class _HTTPExceptionRaisingTranslation(BaseTranslation):
+                """Raises HTTPException to simulate guardrail rejection."""
+
+                async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
+                    return data
+
+                async def process_output_response(self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None):  # type: ignore[override]
+                    return response
+
+                async def process_output_streaming_response(
+                    self,
+                    responses_so_far,
+                    guardrail_to_apply,
+                    litellm_logging_obj=None,
+                    user_api_key_dict=None,
+                ):
+                    raise HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+            unified_module.endpoint_guardrail_translation_mappings = {
+                CallTypes.asend_message: _HTTPExceptionRaisingTranslation,
+            }
+
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            # A2A NDJSON chunk format
+            chunks = [
+                '{"jsonrpc":"2.0","id":"req-1","result":{"artifact":{"parts":[{"kind":"text","text":"blocked"}]}}}\n',
+            ]
+
+            async def mock_stream():
+                for chunk in chunks:
+                    yield chunk
+
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test-key",
+                request_route="/a2a/test-agent/message/send",
+            )
+
+            request_data = {
+                "guardrail_to_apply": guardrail,
+                "body": {"id": "req-1"},
+            }
+
+            yielded = []
+            async for item in handler.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                yielded.append(item)
+
+            # Should have yielded the first chunk(s) plus a JSON-RPC error
+            assert len(yielded) >= 1
+            last = yielded[-1]
+            if isinstance(last, str):
+                parsed = json.loads(last.strip())
+                assert "error" in parsed
+                assert parsed["error"]["code"] == -32603
+                assert "Content blocked" in str(parsed["error"]["message"])
+
+        @pytest.mark.asyncio
+        async def test_non_a2a_streaming_httpexception_re_raises(self):
+            """When non-A2A streaming guardrail raises HTTPException, it should re-raise."""
+
+            class _HTTPExceptionRaisingTranslation(BaseTranslation):
+                async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
+                    return data
+
+                async def process_output_response(self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None):  # type: ignore[override]
+                    return response
+
+                async def process_output_streaming_response(
+                    self,
+                    responses_so_far,
+                    guardrail_to_apply,
+                    litellm_logging_obj=None,
+                    user_api_key_dict=None,
+                ):
+                    raise HTTPException(status_code=400, detail="Blocked")
+
+            unified_module.endpoint_guardrail_translation_mappings = {
+                CallTypes.acompletion: _HTTPExceptionRaisingTranslation,
+            }
+
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            chunks = [
+                ModelResponseStream(
+                    choices=[StreamingChoices(delta=Delta(content="hi", role="assistant"), finish_reason=None)],
+                ),
+            ]
+
+            async def mock_stream():
+                for chunk in chunks:
+                    yield chunk
+
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test-key",
+                request_route="/v1/chat/completions",
+            )
+
+            request_data = {
+                "guardrail_to_apply": guardrail,
+                "model": "gpt-4",
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                async for _ in handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=mock_stream(),
+                    request_data=request_data,
+                ):
+                    pass
+
+            assert exc_info.value.status_code == 400
