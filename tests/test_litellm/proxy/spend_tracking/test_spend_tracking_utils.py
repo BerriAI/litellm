@@ -22,6 +22,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
     _get_response_for_spend_logs_payload,
     _get_vector_store_request_for_spend_logs_payload,
+    _safe_deepcopy,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
@@ -957,3 +958,127 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         result = _should_store_prompts_and_responses_in_spend_logs()
         assert result is False, "Expected False (from env var) when key missing, got True"
 
+
+
+import threading
+from pydantic import BaseModel as PydanticBaseModel
+
+
+class _MockPydanticModel(PydanticBaseModel):
+    """A test Pydantic model that mirrors UserAPIKeyAuth structure."""
+    api_key: str = "sk-test"
+    user_role: str = "admin"
+    team_id: str = "team-123"
+
+
+def test_safe_deepcopy_with_pydantic_model():
+    """
+    Test that _safe_deepcopy handles Pydantic v2 BaseModel instances without
+    raising 'cannot pickle _thread.RLock object' error.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20647
+    """
+    model = _MockPydanticModel(api_key="sk-secret", user_role="admin", team_id="team-456")
+
+    # This should NOT raise TypeError: cannot pickle '_thread.RLock' object
+    result = _safe_deepcopy(model)
+
+    assert isinstance(result, dict)
+    assert result["api_key"] == "sk-secret"
+    assert result["user_role"] == "admin"
+    assert result["team_id"] == "team-456"
+
+
+def test_safe_deepcopy_with_nested_pydantic_model_in_dict():
+    """
+    Test that _safe_deepcopy handles dicts containing Pydantic models,
+    which is the actual pattern in proxy_server_request["body"].
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20647
+    """
+    model = _MockPydanticModel(api_key="sk-secret")
+    request_body = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "model": "gpt-4",
+        "user_api_key_auth": model,
+        "nested": {"inner_model": model},
+        "list_of_models": [model, "plain_string"],
+    }
+
+    result = _safe_deepcopy(request_body)
+
+    assert isinstance(result, dict)
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+    assert result["model"] == "gpt-4"
+    # Pydantic model should be converted to dict
+    assert isinstance(result["user_api_key_auth"], dict)
+    assert result["user_api_key_auth"]["api_key"] == "sk-secret"
+    # Nested dict with model
+    assert isinstance(result["nested"]["inner_model"], dict)
+    # List with model
+    assert isinstance(result["list_of_models"][0], dict)
+    assert result["list_of_models"][1] == "plain_string"
+
+    # Verify it's a true copy (modifying result should not affect original)
+    result["messages"][0]["content"] = "Modified"
+    assert request_body["messages"][0]["content"] == "Hello"
+
+
+def test_safe_deepcopy_with_plain_objects():
+    """Test that _safe_deepcopy works correctly for normal objects without Pydantic models."""
+    original = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "model": "gpt-4",
+        "temperature": 0.7,
+        "nested": {"key": "value"},
+    }
+
+    result = _safe_deepcopy(original)
+
+    assert result == original
+    # Verify it's a deep copy
+    result["messages"][0]["content"] = "Modified"
+    assert original["messages"][0]["content"] == "Hello"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_spend_logs_redaction_with_pydantic_model_in_request_body(mock_should_store):
+    """
+    Test that spend log creation succeeds when request body contains Pydantic models
+    and redaction is enabled. This is the exact scenario that caused the original bug.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20647
+    """
+    mock_should_store.return_value = True
+
+    # Simulate request body containing a Pydantic model (UserAPIKeyAuth)
+    pydantic_model = _MockPydanticModel(api_key="sk-secret-key", user_role="admin")
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "messages": [{"role": "user", "content": "secret message"}],
+                "model": "gpt-4",
+                "user_api_key_dict": pydantic_model,
+            }
+        }
+    }
+    metadata = {}
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": True,
+        },
+    }
+
+    # This should NOT raise TypeError: cannot pickle '_thread.RLock' object
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    parsed_request = json.loads(request_result)
+    # Messages should be redacted
+    assert parsed_request["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    # Model should still be present
+    assert parsed_request["model"] == "gpt-4"
