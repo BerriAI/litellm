@@ -45,7 +45,14 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
-from litellm.types.integrations.datadog import *
+from litellm.types.integrations.datadog import (
+    DD_ERRORS,
+    DD_MAX_BATCH_SIZE,
+    DataDogStatus,
+    DatadogInitParams,
+    DatadogPayload,
+    DatadogProxyFailureHookJsonMessage,
+)
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import StandardLoggingPayload
 
@@ -85,12 +92,14 @@ class DataDogLogger(
         """
         try:
             verbose_logger.debug("Datadog: in init datadog logger")
-            
+
             self.is_mock_mode = should_use_datadog_mock()
-            
+
             if self.is_mock_mode:
                 create_mock_datadog_client()
-                verbose_logger.debug("[DATADOG MOCK] Datadog logger initialized in mock mode")
+                verbose_logger.debug(
+                    "[DATADOG MOCK] Datadog logger initialized in mock mode"
+                )
 
             #########################################################
             # Handle datadog_params set as litellm.datadog_params
@@ -209,6 +218,96 @@ class DataDogLogger(
             )
             pass
 
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: Any,
+        traceback_str: Optional[str] = None,
+    ) -> Optional[Any]:
+        """
+        Log proxy-level failures (e.g. 401 auth, DB connection errors) to Datadog.
+
+        Ensures failures that occur before or outside the LLM completion flow
+        (e.g. ConnectError during auth when DB is down) are visible in Datadog
+        alongside Prometheus.
+        """
+        try:
+            from litellm.litellm_core_utils.litellm_logging import (
+                StandardLoggingPayloadSetup,
+            )
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+            error_information = StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            )
+            _code = error_information.get("error_code") or ""
+            status_code: Optional[int] = None
+            if _code and str(_code).strip().isdigit():
+                status_code = int(_code)
+
+            # Use project-standard sanitized user context when running in proxy
+            user_context: Dict[str, Any] = {}
+            try:
+                from litellm.proxy.litellm_pre_call_utils import (
+                    LiteLLMProxyRequestSetup,
+                )
+
+                _meta = (
+                    LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                        user_api_key_dict=user_api_key_dict
+                    )
+                )
+                user_context = dict(_meta) if isinstance(_meta, dict) else _meta
+            except Exception:
+                # Fallback if proxy not available (e.g. SDK-only): minimal safe fields
+                if hasattr(user_api_key_dict, "request_route"):
+                    user_context["request_route"] = getattr(
+                        user_api_key_dict, "request_route", None
+                    )
+                if hasattr(user_api_key_dict, "team_id"):
+                    user_context["team_id"] = getattr(
+                        user_api_key_dict, "team_id", None
+                    )
+                if hasattr(user_api_key_dict, "user_id"):
+                    user_context["user_id"] = getattr(
+                        user_api_key_dict, "user_id", None
+                    )
+                if hasattr(user_api_key_dict, "end_user_id"):
+                    user_context["end_user_id"] = getattr(
+                        user_api_key_dict, "end_user_id", None
+                    )
+
+            message_payload: DatadogProxyFailureHookJsonMessage = {
+                "exception": error_information.get("error_message")
+                or str(original_exception),
+                "error_class": error_information.get("error_class")
+                or original_exception.__class__.__name__,
+                "status_code": status_code,
+                "traceback": error_information.get("traceback") or "",
+                "user_api_key_dict": user_context,
+            }
+
+            dd_payload = DatadogPayload(
+                ddsource=get_datadog_source(),
+                ddtags=get_datadog_tags(),
+                hostname=get_datadog_hostname(),
+                message=safe_dumps(message_payload),
+                service=get_datadog_service(),
+                status=DataDogStatus.ERROR,
+            )
+            self._add_trace_context_to_payload(dd_payload=dd_payload)
+            self.log_queue.append(dd_payload)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog: async_post_call_failure_hook - {str(e)}\n{traceback.format_exc()}"
+            )
+        return None
+
     async def async_send_batch(self):
         """
         Sends the in memory logs queue to datadog api
@@ -230,9 +329,11 @@ class DataDogLogger(
                 len(self.log_queue),
                 self.intake_url,
             )
-            
+
             if self.is_mock_mode:
-                verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
+                verbose_logger.debug(
+                    "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
+                )
 
             response = await self.async_send_compressed_data(self.log_queue)
             if response.status_code == 413:
