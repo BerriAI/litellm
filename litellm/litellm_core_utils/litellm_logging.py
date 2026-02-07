@@ -1640,6 +1640,13 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_built_in_tools_params=self.standard_built_in_tools_params,
         )
 
+        if (
+            standard_logging_payload := self.model_call_details.get(
+                "standard_logging_object"
+            )
+        ) is not None:
+            emit_standard_logging_payload(standard_logging_payload)
+
     def _transform_usage_objects(self, result):
         if isinstance(result, ResponsesAPIResponse):
             result = result.model_copy()
@@ -3218,6 +3225,8 @@ class Logging(LiteLLMLoggingBaseClass):
         is_async: bool,
         streaming_chunks: List[Any],
     ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
+        if self.stream is not True:
+            return None
         if isinstance(result, ModelResponse):
             return result
         elif isinstance(result, TextCompletionResponse):
