@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union, Final
 
 import httpx
 
@@ -15,6 +15,18 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+# Known internal parameters that should never be sent to provider APIs
+INTERNAL_PARAMS: Final = {
+    "skip_mcp_handler",
+    "mcp_handler_context",
+    "_skip_mcp_handler",
+}
+
+# Known internal parameters prefixes that should never be sent to provider APIs
+INTERNAL_PARAMS_PREFIXES: Final = {
+    "_websearch_interception",
+}
 
 
 def safe_divide_seconds(
@@ -389,6 +401,25 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     else:
         return data
 
+def _is_param_internal(param: str, additional_internal_params: Optional[set]) -> bool:
+    """
+    Check if a parameter is internal and should not be sent to provider APIs.
+
+    Args:
+        param: Parameter name to check
+        additional_internal_params: Optional set of extra internal param names
+
+    Returns:
+        True if param matches INTERNAL_PARAMS, additional_internal_params,
+        or starts with any INTERNAL_PARAMS_PREFIXES
+    """
+    if param in INTERNAL_PARAMS:
+        return True
+    if additional_internal_params and param in additional_internal_params:
+        return True
+    if any(param.startswith(prefix) for prefix in INTERNAL_PARAMS_PREFIXES):
+        return True
+    return False
 
 def filter_internal_params(
     data: dict, additional_internal_params: Optional[set] = None
@@ -409,16 +440,9 @@ def filter_internal_params(
     if not isinstance(data, dict):
         return data
 
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
+
+    return {
+        k: v
+        for k, v in data.items()
+        if not _is_param_internal(k, additional_internal_params)
     }
-
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
-    return {k: v for k, v in data.items() if k not in internal_params}
