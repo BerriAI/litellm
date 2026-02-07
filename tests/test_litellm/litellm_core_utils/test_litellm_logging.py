@@ -1104,6 +1104,128 @@ def test_global_redaction_skips_per_callback_redaction():
     assert result is model_call_details  # Should return unchanged (early return)
 
 
+def test_perform_redaction_redacts_standard_logging_object():
+    """
+    When perform_redaction runs (global redaction path), it should also redact
+    the standard_logging_object inside model_call_details.
+
+    This prevents sensitive data from leaking to callbacks (e.g. Langfuse, Datadog)
+    when per-callback redaction is skipped due to global_redaction_applied=True.
+    """
+    from litellm.litellm_core_utils.redact_messages import perform_redaction
+
+    # Standard ModelResponse format
+    model_call_details = {
+        "messages": [{"role": "user", "content": "my secret prompt"}],
+        "prompt": "my secret prompt",
+        "input": "my secret input",
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "my secret prompt"}],
+            "response": {
+                "choices": [
+                    {"message": {"content": "sensitive response data"}}
+                ]
+            },
+        },
+    }
+
+    perform_redaction(model_call_details, result=None)
+
+    slo = model_call_details["standard_logging_object"]
+    # Messages should be redacted
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    # Response should be redacted
+    assert slo["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
+
+    # ResponsesAPIResponse format
+    model_call_details_responses = {
+        "messages": [{"role": "user", "content": "my secret prompt"}],
+        "prompt": "",
+        "input": "",
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "my secret prompt"}],
+            "response": {
+                "output": [
+                    {
+                        "content": [
+                            {"type": "output_text", "text": "sensitive response"}
+                        ]
+                    }
+                ]
+            },
+        },
+    }
+
+    perform_redaction(model_call_details_responses, result=None)
+
+    slo = model_call_details_responses["standard_logging_object"]
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert slo["response"]["output"][0]["content"][0]["text"] == "redacted-by-litellm"
+
+    # No standard_logging_object - should not raise
+    model_call_details_none = {
+        "messages": [{"role": "user", "content": "prompt"}],
+        "prompt": "",
+        "input": "",
+    }
+    perform_redaction(model_call_details_none, result=None)  # should not raise
+
+
+def test_global_redaction_covers_standard_logging_object_for_callbacks():
+    """
+    End-to-end test: when global redaction is applied, per-callback redaction
+    is skipped, but standard_logging_object must still be redacted because
+    perform_redaction (the global path) now handles it.
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_custom_logger,
+        redact_message_input_output_from_logging,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+
+    model_call_details = {
+        "messages": [{"role": "user", "content": "secret prompt"}],
+        "prompt": "secret prompt",
+        "input": "secret input",
+        "litellm_params": {},
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "secret prompt"}],
+            "response": "sensitive response string",
+        },
+    }
+
+    # Step 1: Global redaction (simulates what async_success_handler does)
+    redact_message_input_output_from_logging(
+        model_call_details=model_call_details,
+        result=None,
+        should_redact=True,
+    )
+
+    # Verify standard_logging_object was redacted by the global path
+    slo = model_call_details["standard_logging_object"]
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert slo["response"] == "redacted-by-litellm"
+
+    # Step 2: Per-callback redaction is skipped (as expected)
+    custom_logger = CustomLogger()
+    custom_logger.message_logging = False
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = model_call_details
+
+    result = redact_message_input_output_from_custom_logger(
+        litellm_logging_obj=mock_logging_obj,
+        result=None,
+        custom_logger=custom_logger,
+        global_redaction_applied=True,
+    )
+
+    # Per-callback redaction skipped, but standard_logging_object is still redacted
+    # from the global path above
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert slo["response"] == "redacted-by-litellm"
+
+
 def test_per_callback_redaction_proceeds_when_global_redaction_not_applied():
     """
     When global_redaction_applied=False, per-callback redaction should still
