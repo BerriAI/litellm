@@ -51,10 +51,15 @@ async def test_process_input_messages_calls_guardrail_with_tool():
     assert "tools" in guardrail.last_inputs
     assert len(guardrail.last_inputs["tools"]) == 1
 
-    tool = guardrail.last_inputs["tools"][0]
-    assert tool["type"] == "function"
-    assert tool["function"]["name"] == "weather"
-    assert tool["function"]["description"] == "Get weather for a city"
+    # ChatCompletionToolParam is a TypedDict (dict), so dict access works.
+    # Convert to dict explicitly to ensure compatibility with any future changes.
+    tool = dict(guardrail.last_inputs["tools"][0])
+    assert tool.get("type") == "function"
+    
+    # The function is also a TypedDict (ChatCompletionToolParamFunctionChunk)
+    function = dict(tool.get("function", {}))
+    assert function.get("name") == "weather"
+    assert function.get("description") == "Get weather for a city"
 
     # Request data should be passed through
     assert guardrail.last_request_data == data
@@ -91,7 +96,10 @@ async def test_process_input_messages_handles_name_alias():
     result = await handler.process_input_messages(data, guardrail)
 
     assert guardrail.call_count == 1
-    assert guardrail.last_inputs["tools"][0]["function"]["name"] == "calendar"
+    # Convert to dict for safe access
+    tool = dict(guardrail.last_inputs["tools"][0])
+    function = dict(tool.get("function", {}))
+    assert function.get("name") == "calendar"
 
 
 @pytest.mark.asyncio
@@ -108,4 +116,7 @@ async def test_process_input_messages_handles_missing_arguments():
     result = await handler.process_input_messages(data, guardrail)
 
     assert guardrail.call_count == 1
-    assert guardrail.last_inputs["tools"][0]["function"]["name"] == "simple_tool"
+    # Convert to dict for safe access
+    tool = dict(guardrail.last_inputs["tools"][0])
+    function = dict(tool.get("function", {}))
+    assert function.get("name") == "simple_tool"
