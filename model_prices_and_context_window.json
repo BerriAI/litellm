@@ -29912,7 +29912,9 @@
         "mode": "chat",
         "output_cost_per_token": 1e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29925,7 +29927,9 @@
         "mode": "chat",
         "output_cost_per_token": 4e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29938,7 +29942,9 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -29951,7 +29957,9 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -34903,556 +34911,334 @@
     "neosantara/nusantara-base": {
         "max_input_tokens": 64000,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000001875,
-        "output_cost_per_token": 0.00000009375,
+        "input_cost_per_token": 1.875e-08,
+        "output_cost_per_token": 9.375e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/archipelago-70b": {
         "max_input_tokens": 24000,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.000000294375,
-        "output_cost_per_token": 0.0000022839375,
+        "input_cost_per_token": 2.94375e-07,
+        "output_cost_per_token": 2.2839375e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/garda-beta-mini": {
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000015625,
-        "output_cost_per_token": 0.0000006561875,
+        "input_cost_per_token": 1.5625e-07,
+        "output_cost_per_token": 6.561875e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/sea-lion-v4-27b-it": {
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000000021875,
-        "output_cost_per_token": 0.000000035,
+        "input_cost_per_token": 2.1875e-08,
+        "output_cost_per_token": 3.5e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/claude-3-haiku": {
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000025,
-        "output_cost_per_token": 0.00000125,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 1.25e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/claude-3-sonnet": {
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/gemma-3-27b-it": {
         "max_input_tokens": 32768,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000000125,
-        "output_cost_per_token": 0.00000009375,
+        "input_cost_per_token": 1.25e-08,
+        "output_cost_per_token": 9.375e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/granite-3-8b-instruct": {
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000018,
-        "output_cost_per_token": 0.00000072,
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 7.2e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/llama-3.3-70b-instruct": {
         "max_input_tokens": 32000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000028125,
-        "output_cost_per_token": 0.000002,
+        "input_cost_per_token": 2.8125e-07,
+        "output_cost_per_token": 2e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/holo2-30b": {
         "max_input_tokens": 32000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000009375,
-        "output_cost_per_token": 0.00000028125,
+        "input_cost_per_token": 9.375e-08,
+        "output_cost_per_token": 2.8125e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/hermes-2-pro-mistral-7b": {
         "max_input_tokens": 24000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000000028125,
-        "output_cost_per_token": 0.000000075,
+        "input_cost_per_token": 2.8125e-08,
+        "output_cost_per_token": 7.5e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/gemma2-9b-it": {
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0000000125,
-        "output_cost_per_token": 0.0000000625,
+        "input_cost_per_token": 1.25e-08,
+        "output_cost_per_token": 6.25e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/qwen3-32b": {
         "max_input_tokens": 131072,
         "max_output_tokens": 40960,
-        "input_cost_per_token": 0.00000030175,
-        "output_cost_per_token": 0.0000006139375,
+        "input_cost_per_token": 3.0175e-07,
+        "output_cost_per_token": 6.139375e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/llama-3.3-70b-turbo": {
         "max_input_tokens": 8192,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000001875,
-        "output_cost_per_token": 0.000000075,
+        "input_cost_per_token": 1.875e-08,
+        "output_cost_per_token": 7.5e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/gpt-oss-20b": {
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000025,
-        "output_cost_per_token": 0.0000001,
+        "input_cost_per_token": 2.5e-08,
+        "output_cost_per_token": 1e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/llama-3.2-11b": {
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000000625,
-        "output_cost_per_token": 0.000000025,
+        "input_cost_per_token": 6.25e-09,
+        "output_cost_per_token": 2.5e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/apriel-1.6-thinker": {
         "max_input_tokens": 32768,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000001875,
-        "output_cost_per_token": 0.0000005625,
+        "input_cost_per_token": 1.875e-07,
+        "output_cost_per_token": 5.625e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/kimi-k2": {
         "max_input_tokens": 131000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
+        "input_cost_per_token": 1.040125e-06,
+        "output_cost_per_token": 3.1205625e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/deepseek-chat-v3.1": {
         "max_input_tokens": 164000,
         "max_output_tokens": 4029,
-        "input_cost_per_token": 0.0000002083125,
-        "output_cost_per_token": 0.0000005208125,
+        "input_cost_per_token": 2.083125e-07,
+        "output_cost_per_token": 5.208125e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/glm-4.6": {
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000625,
-        "output_cost_per_token": 0.000001875,
+        "input_cost_per_token": 6.25e-07,
+        "output_cost_per_token": 1.875e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/gemini-3-pro-preview": {
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0000025,
-        "output_cost_per_token": 0.0000075,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/gemini-3-flash-preview": {
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000004,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 4e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/claude-4.5-sonnet": {
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/gemini-3-flash": {
         "max_input_tokens": 1000000,
         "max_output_tokens": 2400,
-        "input_cost_per_token": 0.0000005,
-        "output_cost_per_token": 0.0000003,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 3e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/grok-code-fast": {
         "max_input_tokens": 256000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000002,
-        "output_cost_per_token": 0.0000015,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 1.5e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/grok-4.1-fast-non-reasoning": {
         "max_input_tokens": 2000000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000003,
-        "output_cost_per_token": 0.00000072,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 7.2e-07,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/nusa-embedding-0001": {
         "max_input_tokens": 8192,
-        "input_cost_per_token": 0.0000001,
+        "input_cost_per_token": 1e-07,
         "output_cost_per_token": 0,
         "litellm_provider": "neosantara",
         "mode": "embedding"
     },
     "neosantara/gemini-embedding-001": {
         "max_input_tokens": 2048,
-        "input_cost_per_token": 0.0000001,
+        "input_cost_per_token": 1e-07,
         "output_cost_per_token": 0,
         "litellm_provider": "neosantara",
         "mode": "embedding"
-    },
-    "neosantara/nusantara-base": {
-        "max_input_tokens": 64000,
-        "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000001875,
-        "output_cost_per_token": 0.00000009375,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/archipelago-70b": {
-        "max_input_tokens": 24000,
-        "max_output_tokens": 2048,
-        "input_cost_per_token": 0.000000294375,
-        "output_cost_per_token": 0.0000022839375,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/garda-beta-mini": {
-        "max_input_tokens": 131072,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000015625,
-        "output_cost_per_token": 0.0000006561875,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/sea-lion-v4-27b-it": {
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000000021875,
-        "output_cost_per_token": 0.000000035,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/claude-3-haiku": {
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000025,
-        "output_cost_per_token": 0.00000125,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/claude-3-sonnet": {
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000015,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/gemma-3-27b-it": {
-        "max_input_tokens": 32768,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000000125,
-        "output_cost_per_token": 0.00000009375,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/granite-3-8b-instruct": {
-        "max_input_tokens": 128000,
-        "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000018,
-        "output_cost_per_token": 0.00000072,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
     },
     "neosantara/llama-3.3-nemotron-super-49b-v1.5": {
         "max_input_tokens": 132000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000000285,
-        "output_cost_per_token": 0.0000019994375,
+        "input_cost_per_token": 2.85e-07,
+        "output_cost_per_token": 1.9994375e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
-    },
-    "neosantara/llama-3.3-70b-instruct": {
-        "max_input_tokens": 32000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000028125,
-        "output_cost_per_token": 0.000002,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/holo2-30b": {
-        "max_input_tokens": 32000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000009375,
-        "output_cost_per_token": 0.00000028125,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/hermes-2-pro-mistral-7b": {
-        "max_input_tokens": 24000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000000028125,
-        "output_cost_per_token": 0.000000075,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/gemma2-9b-it": {
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0000000125,
-        "output_cost_per_token": 0.0000000625,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/qwen3-32b": {
-        "max_input_tokens": 131072,
-        "max_output_tokens": 40960,
-        "input_cost_per_token": 0.00000030175,
-        "output_cost_per_token": 0.0000006139375,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/llama-3.3-70b-turbo": {
-        "max_input_tokens": 8192,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000001875,
-        "output_cost_per_token": 0.000000075,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/gpt-oss-20b": {
-        "max_input_tokens": 131072,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000025,
-        "output_cost_per_token": 0.0000001,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/llama-3.2-11b": {
-        "max_input_tokens": 8192,
-        "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000000625,
-        "output_cost_per_token": 0.000000025,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/apriel-1.6-thinker": {
-        "max_input_tokens": 32768,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000001875,
-        "output_cost_per_token": 0.0000005625,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/kimi-k2": {
-        "max_input_tokens": 131000,
-        "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/deepseek-chat-v3.1": {
-        "max_input_tokens": 164000,
-        "max_output_tokens": 4029,
-        "input_cost_per_token": 0.0000002083125,
-        "output_cost_per_token": 0.0000005208125,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/glm-4.6": {
-        "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000625,
-        "output_cost_per_token": 0.000001875,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/gemini-3-flash-preview": {
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000004,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/claude-4.5-sonnet": {
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000015,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/gemini-3-flash": {
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 2400,
-        "input_cost_per_token": 0.0000005,
-        "output_cost_per_token": 0.000003,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/nusa-embedding-0001": {
-        "max_input_tokens": 8192,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0,
-        "litellm_provider": "neosantara",
-        "mode": "embedding"
-    },
-    "neosantara/gemini-embedding-001": {
-        "max_input_tokens": 2048,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0,
-        "litellm_provider": "neosantara",
-        "mode": "embedding"
     },
     "neosantara/kimi-k2:latest": {
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
+        "input_cost_per_token": 1.040125e-06,
+        "output_cost_per_token": 3.1205625e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/kimi-k2:search": {
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
+        "input_cost_per_token": 1.040125e-06,
+        "output_cost_per_token": 3.1205625e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/kimi-k2:research": {
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
+        "input_cost_per_token": 1.040125e-06,
+        "output_cost_per_token": 3.1205625e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/kimi-k1": {
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
+        "input_cost_per_token": 1.040125e-06,
+        "output_cost_per_token": 3.1205625e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/kimi-k2:math": {
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
+        "input_cost_per_token": 1.040125e-06,
+        "output_cost_per_token": 3.1205625e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/kimi-k2:silent": {
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000001040125,
-        "output_cost_per_token": 0.0000031205625,
+        "input_cost_per_token": 1.040125e-06,
+        "output_cost_per_token": 3.1205625e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/glm-4.6-plus": {
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000625,
-        "output_cost_per_token": 0.000001875,
+        "input_cost_per_token": 6.25e-07,
+        "output_cost_per_token": 1.875e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/glm-4.6v-flash": {
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000015625,
-        "output_cost_per_token": 0.000000046875,
+        "input_cost_per_token": 1.5625e-08,
+        "output_cost_per_token": 4.6875e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/glm-4.5-flash": {
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000015625,
-        "output_cost_per_token": 0.000000046875,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/gemini-3-pro-preview": {
-        "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0000025,
-        "output_cost_per_token": 0.0000075,
+        "input_cost_per_token": 1.5625e-08,
+        "output_cost_per_token": 4.6875e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/glm-4.7": {
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000000625,
-        "output_cost_per_token": 0.000001875,
+        "input_cost_per_token": 6.25e-07,
+        "output_cost_per_token": 1.875e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/kimi-k2-thinking": {
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000125,
-        "output_cost_per_token": 0.00000375,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/grok-code-fast": {
-        "max_input_tokens": 256000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000002,
-        "output_cost_per_token": 0.0000015,
-        "litellm_provider": "neosantara",
-        "mode": "chat"
-    },
-    "neosantara/grok-4.1-fast-non-reasoning": {
-        "max_input_tokens": 2000000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.0000003,
-        "output_cost_per_token": 0.00000072,
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 3.75e-06,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/llama-guard-3-8b": {
         "max_input_tokens": 131072,
         "max_output_tokens": 256,
-        "input_cost_per_token": 0.00000048,
-        "output_cost_per_token": 0.00000003,
+        "input_cost_per_token": 4.8e-07,
+        "output_cost_per_token": 3e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     },
     "neosantara/sahabat-ai-llama-v4": {
         "max_input_tokens": 32768,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000000009375,
-        "output_cost_per_token": 0.0000000375,
+        "input_cost_per_token": 9.375e-09,
+        "output_cost_per_token": 3.75e-08,
         "litellm_provider": "neosantara",
         "mode": "chat"
     }
