@@ -2,9 +2,7 @@ import os
 import sys
 import unittest.mock as mock
 
-import httpx
 import pytest
-import respx
 from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../../.."))
