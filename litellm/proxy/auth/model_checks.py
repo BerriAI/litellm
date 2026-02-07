@@ -64,6 +64,27 @@ def _get_models_from_access_groups(
     return all_models
 
 
+def get_access_groups_from_models(
+    model_access_groups: Dict[str, List[str]],
+    models: List[str],
+) -> List[str]:
+    """
+    Extract access group names from a models list.
+
+    Given a models list like ["gpt-4", "beta-models", "claude-v1"]
+    and access groups like {"beta-models": ["gpt-5", "gpt-6"]},
+    returns ["beta-models"].
+
+    This is used to pass allowed access groups to the router for filtering
+    deployments during load balancing (GitHub issue #18333).
+    """
+    access_groups = []
+    for model in models:
+        if model in model_access_groups:
+            access_groups.append(model)
+    return access_groups
+
+
 async def get_mcp_server_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> List[str]:
@@ -80,7 +101,6 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-
         result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
             where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
@@ -176,6 +196,7 @@ def get_complete_model_list(
     """
 
     unique_models = []
+
     def append_unique(models):
         for model in models:
             if model not in unique_models:
@@ -188,7 +209,7 @@ def get_complete_model_list(
     else:
         append_unique(proxy_model_list)
         if include_model_access_groups:
-            append_unique(list(model_access_groups.keys())) # TODO: keys order
+            append_unique(list(model_access_groups.keys()))  # TODO: keys order
 
         if user_model:
             append_unique([user_model])
