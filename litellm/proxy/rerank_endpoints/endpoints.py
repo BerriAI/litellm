@@ -108,7 +108,7 @@ async def rerank(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.rerank(): Exception occured - {}".format(str(e))
+            "litellm.proxy.proxy_server.rerank(): Exception occurred - {}".format(str(e))
         )
         if isinstance(e, HTTPException):
             raise ProxyException(

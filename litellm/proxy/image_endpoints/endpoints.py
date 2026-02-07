@@ -173,7 +173,7 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.image_generation(): Exception occurred - {}".format(
                 str(e)
             )
         )

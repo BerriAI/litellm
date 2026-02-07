@@ -1047,7 +1047,7 @@ class ProxyBaseLLMRequestProcessing:
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
+            f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occurred - {str(e)}"
         )
         # Allow callbacks to transform the error response
         transformed_exception = await proxy_logging_obj.post_call_failure_hook(
@@ -1240,7 +1240,7 @@ class ProxyBaseLLMRequestProcessing:
                 yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occurred - {}".format(
                     str(e)
                 )
             )

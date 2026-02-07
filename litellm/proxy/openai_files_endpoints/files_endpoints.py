@@ -516,7 +516,7 @@ async def create_file(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.create_file(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.create_file(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -761,7 +761,7 @@ async def get_file_content(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.retrieve_file_content(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -941,7 +941,7 @@ async def get_file(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.retrieve_file(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.retrieve_file(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -1136,7 +1136,7 @@ async def delete_file(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.delete_file(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.delete_file(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -1313,7 +1313,7 @@ async def list_files(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.list_files(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.list_files(): Exception occurred - {}".format(
                 str(e)
             )
         )

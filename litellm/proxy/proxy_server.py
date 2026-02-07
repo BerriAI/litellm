@@ -4689,7 +4689,7 @@ async def async_assistants_data_generator(
         yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -4837,7 +4837,7 @@ async def async_data_generator(
         yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -6109,7 +6109,7 @@ async def completion(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.completion(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.completion(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -6363,7 +6363,7 @@ async def moderations(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.moderations(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.moderations(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -6502,7 +6502,7 @@ async def audio_speech(
 
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.audio_speech(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -6640,7 +6640,7 @@ async def audio_transcriptions(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.audio_transcription(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.audio_transcription(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -6879,7 +6879,7 @@ async def get_assistants(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.get_assistants(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.get_assistants(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -6978,7 +6978,7 @@ async def create_assistant(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.create_assistant(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.create_assistant(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -7075,7 +7075,7 @@ async def delete_assistant(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.delete_assistant(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.delete_assistant(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -7172,7 +7172,7 @@ async def create_threads(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.create_threads(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.create_threads(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -7267,7 +7267,7 @@ async def get_thread(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.get_thread(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.get_thread(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -7366,7 +7366,7 @@ async def add_messages(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.add_messages(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.add_messages(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -7461,7 +7461,7 @@ async def get_messages(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.get_messages(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.get_messages(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -7571,7 +7571,7 @@ async def run_thread(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.run_thread(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.run_thread(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -7704,7 +7704,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             )
         except Exception:
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
+                "litellm.proxy.proxy_server.token_counter(): Exception occurred while getting deployment"
             )
             pass
     if deployment is not None:
@@ -10677,7 +10677,7 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
         return {"message": "Config updated successfully"}
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.update_config(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.update_config(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -11309,7 +11309,7 @@ async def get_config():  # noqa: PLR0915
         }
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.get_config(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.get_config(): Exception occurred - {}".format(
                 str(e)
             )
         )

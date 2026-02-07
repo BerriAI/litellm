@@ -5394,7 +5394,7 @@ class Router:
 
         except Exception as e:
             verbose_router_logger.debug(
-                "litellm.router.Router::deployment_callback_on_success(): Exception occured - {}".format(
+                "litellm.router.Router::deployment_callback_on_success(): Exception occurred - {}".format(
                     str(e)
                 )
             )

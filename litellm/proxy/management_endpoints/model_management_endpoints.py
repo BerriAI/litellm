@@ -956,7 +956,7 @@ async def add_new_model(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.add_new_model(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.add_new_model(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -1114,7 +1114,7 @@ async def update_model(
             return model_response
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.update_model(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.update_model(): Exception occurred - {}".format(
                 str(e)
             )
         )
