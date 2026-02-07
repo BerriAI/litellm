@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from pathlib import Path
@@ -7,9 +7,11 @@ from dataclasses import dataclass
 import json
 import os
 import tempfile
+import httpx
 
 from litellm import sap_service_key
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client, HTTPHandler
+from litellm._logging import verbose_logger
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -28,11 +30,13 @@ def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
 
 
-def _get_nested(d: Dict[str, Any], path: Sequence[str]) -> Any:
+def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
     cur: Any = d
+    if isinstance(cur, str):
+        cur = json.loads(cur)
     for k in path:
         if not isinstance(cur, dict) or k not in cur:
-            raise KeyError(".".join(path))
+            return None
         cur = cur[k]
     return cur
 
@@ -46,6 +50,9 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError:
         return None
 
+def _str_or_none(value) -> Optional[str]:
+    return str(value) if value else None
+
 
 def _load_vcap() -> Dict[str, Any]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
@@ -58,6 +65,10 @@ def _get_vcap_service(label: str) -> Optional[Dict[str, Any]]:
                 return svc
     return None
 
+@dataclass
+class Source:
+    name: str
+    get: Callable[[CredentialsValue], Optional[str]]
 
 @dataclass(frozen=True)
 class CredentialsValue:
@@ -82,7 +93,6 @@ CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
         transform_fn=lambda url: url.rstrip("/")
         + ("" if url.endswith("/v2") else "/v2"),
     ),
-    CredentialsValue("resource_group", default="default"),
     CredentialsValue(
         "cert_url",
         ("certurl",),
@@ -100,7 +110,6 @@ CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
         "key_str", ("key",), transform_fn=lambda s: s.replace("\\n", "\n")
     ),
 ]
-
 
 def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -144,80 +153,108 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
 def _env_name(name: str) -> str:
     return f"AICORE_{name.upper()}"
 
+def extract_credentials(source: Source, exclude: Optional[List[str]] = None) -> Dict[str, str]:
+    """Extract all credentials from a source."""
+    exclude = exclude or []
+    credentials = {}
+    for cv in CREDENTIAL_VALUES:
+        if cv.name in exclude:
+            continue
+        value = source.get(cv)
+        if value:
+            credentials[cv.name] = cv.transform_fn(value) if cv.transform_fn else value
+    return credentials
 
-def _resolve_value(
-    cred: CredentialsValue,
-    *,
-    kwargs: Dict[str, Any],
-    env: Dict[str, str],
-    config: Dict[str, Any],
-    service_like: Optional[Dict[str, Any]],
-) -> Optional[str]:
-    # 1) explicit kwargs
-    if cred.name in kwargs and kwargs[cred.name] is not None:
-        return kwargs[cred.name]
+def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
+    """Extract credentials from the first source that has any defined."""
+    for source in sources:
+        credentials = extract_credentials(source, exclude=['resource_group'])
+        if credentials:
+            verbose_logger.debug(f"Resolved SAP credentials from source {source.name}")
+            return credentials
+    raise ValueError("No credentials found in any source")
 
-    # 2) environment variables (primary name)
-    env_key = _env_name(cred.name)
-    if env_key in env and env[env_key] is not None:
-        return env[env_key]
+def resolve_resource_group(sources: List[Source]) -> Optional[str]:
+    """Find resource_group from the first source that defines it."""
+    rg_cred = CredentialsValue("resource_group", default="default")
+    for source in sources:
+        value = source.get(rg_cred)
+        if value:
+            verbose_logger.debug(f"Resolved GEN AI Hub resource_group from source {source.name}")
+            return value
+    return rg_cred.default
 
-    # 3) config file (accept both prefixed and plain keys)
-    for key in (env_key, cred.name):
-        if key in config and config[key] is not None:
-            return config[key]
-
-    # 4) service-like source (AICORE_SERVICE_KEY first, else VCAP)
-    if service_like and cred.vcap_key:
-        try:
-            val = _get_nested(service_like, ("credentials",) + cred.vcap_key)
-            if val is not None:
-                return val
-        except KeyError:
-            pass
-
-    # 5) default
-    return cred.default
-
-
-def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
+def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
     """
     Resolution order per key:
       kwargs
+      > service key
       > env (AICORE_<NAME>)
       > config (AICORE_<NAME> or plain <name>)
-      > service-like source from JSON in $AICORE_SERVICE_KEY (same structure as a VCAP service object)
-        falling back to service entry in $VCAP_SERVICES with label 'aicore'
+      > vcap service key
       > default
     """
     config = init_conf(profile)
-    env = os.environ  # snapshot for testability
-    service_like = None
 
-    if not config:
-        # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-        service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
-            VCAP_AICORE_SERVICE_NAME
+    service_key = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+    vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
+
+    sources = [
+        Source("kwargs",
+               lambda cv: _str_or_none(kwargs.get(cv.name))),
+        Source("service key",
+               lambda cv: _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))), # type: ignore[arg-type]
+        Source("environment variables",
+               lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
+        Source("config file",
+               lambda cv: _str_or_none(config.get(f'AICORE_{cv.name.upper()}'))),
+        Source("VCAP service",
+               lambda cv: _get_nested(vcap_service, ("credentials",) + cv.vcap_key if cv.vcap_key else (cv.name,))), # type: ignore[arg-type]
+    ]
+
+    credentials = resolve_credentials(sources)
+
+    resource_group = resolve_resource_group(sources)
+
+    if resource_group:
+        credentials['resource_group'] = resource_group
+
+    if 'cert_url' in credentials:
+        credentials['auth_url'] = credentials.pop('cert_url')
+    return credentials
+
+def validate_credentials(
+        auth_url: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        cert_str: Optional[str] = None,
+        key_str: Optional[str] = None,
+        cert_file_path: Optional[str] = None,
+        key_file_path: Optional[str] = None
+):
+    if not auth_url or not client_id:
+        raise ValueError(
+            "SAP AI Core credentials not found."
+            "Please provide credentials by setting appropriate environment variables "
+            "(e.g. AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, etc.)"
         )
 
-    out: Dict[str, str] = {}
-    for cred in CREDENTIAL_VALUES:
-        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like)  # type: ignore
-        if value is None:
-            continue
-        if cred.transform_fn:
-            value = cred.transform_fn(value)
-        out[cred.name] = value
-    if "cert_url" in out.keys():
-        out["auth_url"] = out.pop("cert_url")
-    return out
-
+    modes = [
+        client_secret is not None,
+        (cert_str is not None and key_str is not None),
+        (cert_file_path is not None and key_file_path is not None),
+    ]
+    if sum(bool(m) for m in modes) != 1:
+        raise ValueError(
+            "SAP AI Core credentials are incomplete."
+            "Invalid credentials: provide exactly one of client_secret, "
+            "(cert_str & key_str), or (cert_file_path & key_file_path)."
+        )
 
 def get_token_creator(
     service_key: Optional[str] = None,
     profile: Optional[str] = None,
     *,
-    timeout: float = 30.0,
     expiry_buffer_minutes: int = 60,
     **overrides,
 ) -> Tuple[Callable[[], str], str, str]:
@@ -232,7 +269,6 @@ def get_token_creator(
 
     Args:
         profile: Optional AICore profile name
-        timeout: HTTP request timeout in seconds (default 30s)
         expiry_buffer_minutes: Refresh the token this many minutes before expiry
         overrides: Any explicit credential overrides (client_id, client_secret, etc.)
 
@@ -252,21 +288,7 @@ def get_token_creator(
     key_file_path = credentials.get("key_file_path")
 
     # Sanity check
-    if not auth_url or not client_id:
-        raise ValueError(
-            "fetch_credentials did not return valid 'auth_url' or 'client_id'"
-        )
-
-    modes = [
-        client_secret is not None,
-        (cert_str is not None and key_str is not None),
-        (cert_file_path is not None and key_file_path is not None),
-    ]
-    if sum(bool(m) for m in modes) != 1:
-        raise ValueError(
-            "Invalid credentials: provide exactly one of client_secret, "
-            "(cert_str & key_str), or (cert_file_path & key_file_path)."
-        )
+    validate_credentials(auth_url, client_id, client_secret, cert_str, key_str, cert_file_path, key_file_path)
 
     lock = Lock()
     token: Optional[str] = None
@@ -277,10 +299,10 @@ def get_token_creator(
         if client_secret:
             data["client_secret"] = client_secret
 
-        client = _get_httpx_client()
-        # with httpx.Client(cert=cert_pair, timeout=timeout) as client:
-        resp = client.post(auth_url, data=data)
+        client = HTTPHandler(client=httpx.Client(cert=cert_pair)) if cert_pair else _get_httpx_client()
+
         try:
+            resp = client.post(auth_url, data=data) # type: ignore[arg-type]
             resp.raise_for_status()
             payload = resp.json()
             access_token = payload["access_token"]
