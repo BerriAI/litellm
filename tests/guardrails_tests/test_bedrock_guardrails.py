@@ -777,6 +777,69 @@ async def test_bedrock_guardrail_response_pii_masking_non_streaming():
 
 
 @pytest.mark.asyncio
+async def test_bedrock_guardrail_post_call_returns_response():
+    """Test that async_post_call_success_hook returns the response object"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+    )
+
+    # Mock the Bedrock API response
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "NONE",
+        "outputs": [{"text": "Hello, how can I help?"}],
+        "assessments": []
+    }
+
+    # Create a mock response
+    mock_response = litellm.ModelResponse(
+        id="test-id",
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(
+                    role="assistant", 
+                    content="Hello, how can I help?"
+                ),
+                finish_reason="stop"
+            )
+        ],
+        created=1234567890,
+        model="gpt-4o",
+        object="chat.completion"
+    )
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Hi"},
+        ],
+    }
+
+    with patch.object(guardrail.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # Call the post-call success hook and capture return value
+        result = await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_response
+        )
+        
+        # Verify that the response is returned (not None)
+        assert result is not None, "async_post_call_success_hook should return the response object"
+        assert result == mock_response, "Returned response should be the same object passed in"
+        print("✓ Post-call hook returns response test passed")
+
+
+@pytest.mark.asyncio
 async def test_bedrock_guardrail_response_pii_masking_streaming():
     """Test that PII masking is applied to response content in streaming scenarios"""
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -1598,6 +1661,6 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
         response=mock_response,
         user_api_key_dict=mock_user_api_key_dict,
     )
-    # If no error is raised and result is None, then the test passes
+    # Should return None when there's no output text to process
     assert result is None
     print("✅ No output text in response test passed")
