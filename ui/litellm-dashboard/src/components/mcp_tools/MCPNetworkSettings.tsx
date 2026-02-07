@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Select, Button, Card, Typography, Spin, Tag } from "antd";
 import { SaveOutlined, PlusOutlined } from "@ant-design/icons";
-import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "../networking";
+import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting, fetchMCPClientIp } from "../networking";
 
 const { Text } = Typography;
 
@@ -47,14 +47,10 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   };
 
   const detectCurrentIp = async () => {
-    try {
-      const res = await fetch("https://api.ipify.org?format=json");
-      const data = await res.json();
-      if (data.ip) {
-        setCurrentIp(data.ip);
-      }
-    } catch {
-      // Silently fail — not critical
+    if (!accessToken) return;
+    const ip = await fetchMCPClientIp(accessToken);
+    if (ip) {
+      setCurrentIp(ip);
     }
   };
 

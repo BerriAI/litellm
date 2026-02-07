@@ -423,6 +423,18 @@ if MCP_AVAILABLE:
         return {"access_groups": access_groups_list}
 
     @router.get(
+        "/network/client-ip",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+        description="Returns the caller's IP address as seen by the proxy.",
+    )
+    async def get_client_ip(request: Request):
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        return {"ip": client_ip}
+
+    @router.get(
         "/registry.json",
         tags=["mcp"],
         description="MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry",
