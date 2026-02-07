@@ -58,8 +58,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             self.enabled_providers = [LlmProviders.BEDROCK.value]
         else:
             self.enabled_providers = [
-                p.value if isinstance(p, LlmProviders) else p
-                for p in enabled_providers
+                p.value if isinstance(p, LlmProviders) else p for p in enabled_providers
             ]
         self.search_tool_name = search_tool_name
         self._request_has_websearch = False  # Track if current request has web search
@@ -75,7 +74,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         that we can intercept and execute ourselves.
         """
         # Check if this is for an enabled provider
-        custom_llm_provider = kwargs.get("litellm_params", {}).get("custom_llm_provider", "")
+        custom_llm_provider = kwargs.get("litellm_params", {}).get(
+            "custom_llm_provider", ""
+        )
         if custom_llm_provider not in self.enabled_providers:
             return None
 
@@ -247,7 +248,9 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Tuple[bool, Dict]:
         """Check if WebSearch tool interception is needed"""
 
-        verbose_logger.debug(f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}")
+        verbose_logger.debug(
+            f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}"
+        )
         verbose_logger.debug(f"WebSearchInterception: Response type: {type(response)}")
 
         # Check if provider should be intercepted
@@ -262,9 +265,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Check if tools include any web search tool (LiteLLM standard or native)
         has_websearch_tool = any(is_web_search_tool(t) for t in (tools or []))
         if not has_websearch_tool:
-            verbose_logger.debug(
-                "WebSearchInterception: No web search tool in request"
-            )
+            verbose_logger.debug("WebSearchInterception: No web search tool in request")
             return False, {}
 
         # Detect WebSearch tool_use in response
@@ -362,9 +363,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 verbose_logger.error(
                     f"WebSearchInterception: Search {i} failed with error: {str(result)}"
                 )
-                final_search_results.append(
-                    f"Search failed: {str(result)}"
-                )
+                final_search_results.append(f"Search failed: {str(result)}")
             elif isinstance(result, str):
                 # Explicitly cast to str for type checker
                 final_search_results.append(cast(str, result))
@@ -400,7 +399,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             # max_tokens is a required parameter for anthropic_messages.acreate()
             max_tokens = anthropic_messages_optional_request_params.get(
                 "max_tokens",
-                kwargs.get("max_tokens", 1024)  # Default to 1024 if not found
+                kwargs.get("max_tokens", 1024),  # Default to 1024 if not found
             )
 
             verbose_logger.debug(
@@ -409,27 +408,31 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             # Create a copy of optional params without max_tokens (since we pass it explicitly)
             optional_params_without_max_tokens = {
-                k: v for k, v in anthropic_messages_optional_request_params.items()
-                if k != 'max_tokens'
+                k: v
+                for k, v in anthropic_messages_optional_request_params.items()
+                if k != "max_tokens"
             }
 
             # Remove internal websearch interception flags from kwargs before follow-up request
             # These flags are used internally and should not be passed to the LLM provider
             kwargs_for_followup = {
-                k: v for k, v in kwargs.items()
-                if not k.startswith('_websearch_interception')
+                k: v
+                for k, v in kwargs.items()
+                if not k.startswith("_websearch_interception")
             }
 
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
             full_model_name = model
             if logging_obj is not None:
-                agentic_params = logging_obj.model_call_details.get("agentic_loop_params", {})
+                agentic_params = logging_obj.model_call_details.get(
+                    "agentic_loop_params", {}
+                )
                 full_model_name = agentic_params.get("model", model)
             verbose_logger.debug(
                 f"WebSearchInterception: Using model name: {full_model_name}"
             )
-            
+
             final_response = await anthropic_messages.acreate(
                 max_tokens=max_tokens,
                 messages=follow_up_messages,
@@ -443,6 +446,18 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Final response: {final_response}"
             )
+            # [cscguochang fix] Precision usage accumulation with null safety
+            if (
+                hasattr(response, "usage")
+                and response.usage
+                and hasattr(final_response, "usage")
+                and final_response.usage
+            ):
+                for attr in ["prompt_tokens", "completion_tokens", "total_tokens"]:
+                    val = (getattr(final_response.usage, attr, 0) or 0) + (
+                        getattr(response.usage, attr, 0) or 0
+                    )
+                    setattr(final_response.usage, attr, val)
             return final_response
         except Exception as e:
             verbose_logger.exception(
@@ -469,12 +484,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if self.search_tool_name:
                     # Find specific search tool by name
                     matching_tools = [
-                        tool for tool in llm_router.search_tools
+                        tool
+                        for tool in llm_router.search_tools
                         if tool.get("search_tool_name") == self.search_tool_name
                     ]
                     if matching_tools:
                         search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get("search_provider")
+                        search_provider = search_tool.get("litellm_params", {}).get(
+                            "search_provider"
+                        )
                         verbose_logger.debug(
                             f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
                             f"with provider '{search_provider}'"
@@ -488,7 +506,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # If no specific tool or not found, use first available
                 if not search_provider and llm_router.search_tools:
                     first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get("search_provider")
+                    search_provider = first_tool.get("litellm_params", {}).get(
+                        "search_provider"
+                    )
                     verbose_logger.debug(
                         f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
                     )
@@ -504,9 +524,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(
-                query=query, search_provider=search_provider
-            )
+            result = await litellm.asearch(query=query, search_provider=search_provider)
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
