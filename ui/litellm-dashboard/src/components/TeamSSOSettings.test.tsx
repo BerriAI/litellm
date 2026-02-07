@@ -12,25 +12,35 @@ vi.mock("./networking");
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
   const React = await import("react");
+  const Card = ({ children }: { children: React.ReactNode }) => React.createElement("div", { "data-testid": "card" }, children);
+  Card.displayName = "Card";
+  const Title = ({ children }: { children: React.ReactNode }) => React.createElement("h2", {}, children);
+  Title.displayName = "Title";
+  const Text = ({ children }: { children: React.ReactNode }) => React.createElement("span", {}, children);
+  Text.displayName = "Text";
+  const Divider = () => React.createElement("hr", {});
+  Divider.displayName = "Divider";
+  const TextInput = ({ value, onChange, placeholder, className }: any) =>
+    React.createElement("input", {
+      type: "text",
+      value: value || "",
+      onChange,
+      placeholder,
+      className,
+    });
+  TextInput.displayName = "TextInput";
   return {
     ...actual,
-    Card: ({ children }: { children: React.ReactNode }) => React.createElement("div", { "data-testid": "card" }, children),
-    Title: ({ children }: { children: React.ReactNode }) => React.createElement("h2", {}, children),
-    Text: ({ children }: { children: React.ReactNode }) => React.createElement("span", {}, children),
-    Divider: () => React.createElement("hr", {}),
-    TextInput: ({ value, onChange, placeholder, className }: any) =>
-      React.createElement("input", {
-        type: "text",
-        value: value || "",
-        onChange,
-        placeholder,
-        className,
-      }),
+    Card,
+    Title,
+    Text,
+    Divider,
+    TextInput,
   };
 });
 
-vi.mock("./common_components/budget_duration_dropdown", () => ({
-  default: ({ value, onChange }: { value: string | null; onChange: (value: string) => void }) => (
+vi.mock("./common_components/budget_duration_dropdown", () => {
+  const BudgetDurationDropdown = ({ value, onChange }: { value: string | null; onChange: (value: string) => void }) => (
     <select
       data-testid="budget-duration-dropdown"
       value={value || ""}
@@ -41,16 +51,20 @@ vi.mock("./common_components/budget_duration_dropdown", () => ({
       <option value="daily">Daily</option>
       <option value="monthly">Monthly</option>
     </select>
-  ),
-  getBudgetDurationLabel: vi.fn((value: string) => `Budget: ${value}`),
-}));
+  );
+  BudgetDurationDropdown.displayName = "BudgetDurationDropdown";
+  return {
+    default: BudgetDurationDropdown,
+    getBudgetDurationLabel: vi.fn((value: string) => `Budget: ${value}`),
+  };
+});
 
 vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: vi.fn((model: string) => model),
 }));
 
-vi.mock("./ModelSelect/ModelSelect", () => ({
-  ModelSelect: ({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) => (
+vi.mock("./ModelSelect/ModelSelect", () => {
+  const ModelSelect = ({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) => (
     <select
       data-testid="model-select"
       multiple
@@ -64,8 +78,10 @@ vi.mock("./ModelSelect/ModelSelect", () => ({
       <option value="gpt-4">gpt-4</option>
       <option value="claude-3">claude-3</option>
     </select>
-  ),
-}));
+  );
+  ModelSelect.displayName = "ModelSelect";
+  return { ModelSelect };
+});
 
 vi.mock("antd", async (importOriginal) => {
   const actual = await importOriginal<typeof import("antd")>();
@@ -101,22 +117,31 @@ vi.mock("antd", async (importOriginal) => {
       children,
     );
   };
-  SelectComponent.Option = ({ value: optionValue, children: optionChildren }: { value: string; children: React.ReactNode }) =>
+  SelectComponent.displayName = "Select";
+  const SelectOption = ({ value: optionValue, children: optionChildren }: { value: string; children: React.ReactNode }) =>
     React.createElement("option", { value: optionValue }, optionChildren);
+  SelectOption.displayName = "SelectOption";
+  SelectComponent.Option = SelectOption;
+  const Spin = ({ size }: { size?: string }) => React.createElement("div", { "data-testid": "spinner", "data-size": size });
+  Spin.displayName = "Spin";
+  const Switch = ({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) =>
+    React.createElement("input", {
+      type: "checkbox",
+      role: "switch",
+      checked: checked,
+      onChange: (e) => onChange(e.target.checked),
+      "aria-label": "Toggle switch",
+    });
+  Switch.displayName = "Switch";
+  const Paragraph = ({ children }: { children: React.ReactNode }) => React.createElement("p", {}, children);
+  Paragraph.displayName = "Paragraph";
   return {
     ...actual,
-    Spin: ({ size }: { size?: string }) => React.createElement("div", { "data-testid": "spinner", "data-size": size }),
-    Switch: ({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) =>
-      React.createElement("input", {
-        type: "checkbox",
-        role: "switch",
-        checked: checked,
-        onChange: (e) => onChange(e.target.checked),
-        "aria-label": "Toggle switch",
-      }),
+    Spin,
+    Switch,
     Select: SelectComponent,
     Typography: {
-      Paragraph: ({ children }: { children: React.ReactNode }) => React.createElement("p", {}, children),
+      Paragraph,
     },
   };
 });

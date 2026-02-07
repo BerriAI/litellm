@@ -30,6 +30,7 @@ from litellm.proxy.auth.auth_checks import (
     _can_object_call_vector_stores,
     _get_fuzzy_user_object,
     _get_team_db_check,
+    _log_budget_lookup_failure,
     _virtual_key_max_budget_alert_check,
     _virtual_key_soft_budget_check,
     get_user_object,
@@ -271,6 +272,27 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+def test_log_budget_lookup_failure_dry_run():
+    """Dry run: verify _log_budget_lookup_failure logs for schema/DB errors."""
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        err = Exception("column 'policies' does not exist in prisma schema")
+        _log_budget_lookup_failure("user", err)
+        mock_logger.error.assert_called_once()
+        call_msg = mock_logger.error.call_args[0][0]
+        assert "user" in call_msg
+        assert "cache will not be populated" in call_msg
+        assert "policies" in call_msg or "prisma" in call_msg
+        assert "prisma db push" in call_msg
+
+
+def test_log_budget_lookup_failure_skips_user_not_found():
+    """Verify _log_budget_lookup_failure does NOT log for expected user-not-found."""
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        err = Exception()  # bare Exception from get_user_object when user not found
+        _log_budget_lookup_failure("user", err)
+        mock_logger.error.assert_not_called()
 
 
 @pytest.mark.asyncio

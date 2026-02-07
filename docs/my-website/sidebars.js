@@ -129,6 +129,7 @@ const sidebars = {
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
             "tutorials/claude_code_plugin_marketplace",
+            "tutorials/claude_code_beta_headers",
           ]
         },
         "tutorials/opencode_integration",
@@ -542,6 +543,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",

@@ -3749,7 +3749,7 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        if user_id is None and user_api_key_dict.user_role not in [
+        if not user_id and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]:

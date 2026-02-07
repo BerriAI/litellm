@@ -136,11 +136,9 @@ export default function ModelInfoView({
 
   useEffect(() => {
     const getExistingCredential = async () => {
-      console.log("accessToken, ", accessToken);
       if (!accessToken) return;
       if (usingExistingCredential) return;
       let existingCredentialResponse = await credentialGetCall(accessToken, null, modelId);
-      console.log("existingCredentialResponse, ", existingCredentialResponse);
       setExistingCredential({
         credential_name: existingCredentialResponse["credential_name"],
         credential_values: existingCredentialResponse["credential_values"],
@@ -153,7 +151,6 @@ export default function ModelInfoView({
       // Only fetch if we don't have modelData yet
       if (modelData) return;
       let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
-      console.log("modelInfoResponse, ", modelInfoResponse);
       let specificModelData = modelInfoResponse.data[0];
       if (specificModelData && !specificModelData.litellm_model_name) {
         specificModelData = {
@@ -201,7 +198,6 @@ export default function ModelInfoView({
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
-    console.log("values, ", values);
     if (!accessToken) return;
     let credentialItem = {
       credential_name: values.credential_name,
@@ -212,7 +208,6 @@ export default function ModelInfoView({
     };
     NotificationsManager.info("Storing credential..");
     let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
-    console.log("credentialResponse, ", credentialResponse);
     NotificationsManager.success("Credential stored successfully");
   };
 
@@ -220,8 +215,6 @@ export default function ModelInfoView({
     try {
       if (!accessToken) return;
       setIsSaving(true);
-
-      console.log("values.model_name, ", values.model_name);
 
       // Parse LiteLLM extra params from JSON text area
       let parsedExtraParams: Record<string, any> = {};
@@ -412,7 +405,6 @@ export default function ModelInfoView({
     }
   };
   const isWildcardModel = modelData.litellm_model_name.includes("*");
-  console.log("isWildcardModel, ", isWildcardModel);
 
   return (
     <div className="p-4">
@@ -657,7 +649,7 @@ export default function ModelInfoView({
                               ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.input_cost_per_token
                                 ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4)
-                                : null}
+                                : "Not Set"}
                           </div>
                         )}
                       </div>
@@ -674,7 +666,7 @@ export default function ModelInfoView({
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.output_cost_per_token
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
-                                : null}
+                                : "Not Set"}
                           </div>
                         )}
                       </div>

@@ -43,7 +43,7 @@ import { isJwtExpired } from "@/utils/jwtUtils";
 import { isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams, ReadonlyURLSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { ConfigProvider, theme } from "antd";
 

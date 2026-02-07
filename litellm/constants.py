@@ -306,6 +306,22 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+# Patterns that indicate a localhost/internal URL in A2A agent cards that should be
+# replaced with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
@@ -971,6 +987,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-6-v1:0",
+    "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
