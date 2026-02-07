@@ -86,5 +86,12 @@
     "headers": {
       "api-subscription-key": "{api_key}"
     }
+  },
+  "firmware": {
+    "base_url": "https://app.firmware.ai/api/v1",
+    "api_key_env": "FIRMWARE_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }

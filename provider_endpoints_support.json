@@ -867,6 +867,24 @@
         "interactions": true
       }
     },
+    "firmware": {
+      "display_name": "Firmware.ai (`firmware`)",
+      "url": "https://docs.litellm.ai/docs/providers/firmware",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "fireworks_ai": {
       "display_name": "Fireworks AI (`fireworks_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/fireworks_ai",
