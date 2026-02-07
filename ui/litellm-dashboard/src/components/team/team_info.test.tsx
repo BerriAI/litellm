@@ -573,4 +573,63 @@ describe("TeamInfoView", () => {
       expect(teamNameElements.length).toBeGreaterThan(0);
     });
   });
+
+  it("should display soft budget in settings view when present", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        soft_budget: 500.75,
+        max_budget: 1000,
+      })
+    );
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const settingsTab = screen.getByRole("tab", { name: "Settings" });
+    await user.click(settingsTab);
+
+    await waitFor(() => {
+      expect(screen.getByText("Team Settings")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Soft Budget:/)).toBeInTheDocument();
+      expect(screen.getByText(/\$500\.75/)).toBeInTheDocument();
+    });
+  });
+
+  it("should display soft budget alerting emails in settings view when present", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        metadata: {
+          soft_budget_alerting_emails: ["alert1@test.com", "alert2@test.com"],
+        },
+      })
+    );
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const settingsTab = screen.getByRole("tab", { name: "Settings" });
+    await user.click(settingsTab);
+
+    await waitFor(() => {
+      expect(screen.getByText("Team Settings")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Soft Budget Alerting Emails:/)).toBeInTheDocument();
+      expect(screen.getByText(/alert1@test\.com, alert2@test\.com/)).toBeInTheDocument();
+    });
+  });
 });
