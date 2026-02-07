@@ -55,11 +55,11 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
 
         headers["content-type"] = "application/json"
-        
+
         # Add beta headers for Vertex AI
         tools = optional_params.get("tools", [])
         beta_values: set[str] = set()
-        
+
         # Get existing beta headers if any
         existing_beta = headers.get("anthropic-beta")
         if existing_beta:
@@ -93,15 +93,15 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
                 beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
                 break
-        
+
         # Check for tool search tools - Vertex AI uses different beta header
         anthropic_model_info = AnthropicModelInfo()
         if anthropic_model_info.is_tool_search_used(tools):
             beta_values.add(get_tool_search_beta_header("vertex_ai"))
-        
+
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
-        
+
         return headers, api_base
 
     def get_complete_url(

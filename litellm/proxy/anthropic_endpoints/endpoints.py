@@ -2,6 +2,8 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
+from typing import Any, Dict, List
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm._logging import verbose_proxy_logger
@@ -17,6 +19,85 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
+
+
+def _is_claude_code_client(request: Request) -> bool:
+    """Check if the request originates from a Claude Code client via User-Agent header."""
+    user_agent = request.headers.get("user-agent", "") or ""
+    return "claude-code" in user_agent.lower()
+
+
+def _has_cache_control_in_messages(messages: List[Dict[str, Any]]) -> bool:
+    """Check if any message content block already has cache_control set."""
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and "cache_control" in block:
+                    return True
+    return False
+
+
+def _inject_cache_control_to_last_message(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Inject cache_control: {"type": "ephemeral"} into the last content block
+    of the last message. If the content is a string, convert it to list format.
+    """
+    if not messages:
+        return messages
+
+    last_message = messages[-1]
+    content = last_message.get("content")
+
+    if isinstance(content, str):
+        # Convert string content to list format with cache_control
+        last_message["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    elif isinstance(content, list) and len(content) > 0:
+        last_block = content[-1]
+        if isinstance(last_block, dict):
+            last_block["cache_control"] = {"type": "ephemeral"}
+
+    return messages
+
+
+def maybe_inject_auto_prompt_caching(
+    request: Request,
+    data: dict,
+    general_settings: dict,
+) -> dict:
+    """
+    Automatically inject cache_control into messages for Claude Code clients.
+
+    Controlled by general_settings["auto_prompt_caching"] (default: True).
+    Only applies when:
+    - The User-Agent indicates a Claude Code client
+    - No existing cache_control is found in the messages
+    - auto_prompt_caching is not disabled in settings
+    """
+    auto_prompt_caching = general_settings.get("auto_prompt_caching", True)
+    if not auto_prompt_caching:
+        return data
+
+    if not _is_claude_code_client(request):
+        return data
+
+    messages = data.get("messages")
+    if not messages or not isinstance(messages, list):
+        return data
+
+    if _has_cache_control_in_messages(messages):
+        return data
+
+    data["messages"] = _inject_cache_control_to_last_message(messages)
+    return data
 
 
 @router.post(
@@ -48,6 +129,12 @@ async def anthropic_response(  # noqa: PLR0915
     )
 
     data = await _read_request_body(request=request)
+
+    # Auto-inject prompt caching for Claude Code clients
+    data = maybe_inject_auto_prompt_caching(
+        request=request, data=data, general_settings=general_settings
+    )
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(

@@ -62,7 +62,7 @@ def test_web_search_header_added_for_messages_endpoint():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header with web-search is present
         assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
         assert updated_headers["anthropic-beta"] == "web-search-2025-03-05", \
@@ -94,7 +94,7 @@ def test_web_search_header_not_added_without_tool():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header is NOT present when no web search tool
         assert "anthropic-beta" not in updated_headers, \
             "anthropic-beta header should not be present without web search tool"
