@@ -766,7 +766,7 @@ async def get_category_yaml(category_name: str):
     # Resolve to absolute path and verify it stays within categories_dir
     resolved_path = os.path.realpath(category_file_path)
     resolved_categories_dir = os.path.realpath(categories_dir)
-    if not resolved_path.startswith(resolved_categories_dir + os.sep):
+    if not (resolved_path.startswith(resolved_categories_dir + os.sep) or resolved_path == resolved_categories_dir):
         raise HTTPException(
             status_code=400, detail="Invalid category name."
         )

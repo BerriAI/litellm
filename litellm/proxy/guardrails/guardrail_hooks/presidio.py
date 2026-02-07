@@ -152,6 +152,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         1. No path traversal sequences (../)
         2. File must have .json extension
         3. Path is resolved to absolute and checked
+        4. Path must stay within the current working directory (directory boundary check)
         """
         import os
 
@@ -174,6 +175,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if not resolved_path.endswith(".json"):
             raise ValueError(
                 f"Invalid file path: resolved path must be a .json file. file_path={file_path}"
+            )
+
+        # Directory boundary check: ensure the resolved path stays within the
+        # current working directory to prevent absolute path attacks
+        base_dir = os.path.realpath(os.getcwd())
+        if not (resolved_path.startswith(base_dir + os.sep) or resolved_path == base_dir):
+            raise ValueError(
+                f"Invalid file path: path must be within the working directory. file_path={file_path}"
             )
 
         return resolved_path
