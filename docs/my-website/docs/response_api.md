@@ -1221,9 +1221,9 @@ Response:
 }
 ```
 
+## API Reference
 
-
-
+See [responses()](./api-reference/responses) for full function signature and parameters.
 
 
 

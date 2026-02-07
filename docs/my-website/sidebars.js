@@ -166,6 +166,12 @@ const sidebars = {
     {
       type: "category",
       label: "LiteLLM Python SDK",
+      link: {
+        type: "generated-index",
+        title: "LiteLLM Python SDK",
+        description: "Unified Python SDK for 100+ LLM providers with consistent interface and return types",
+        slug: "/sdk",
+      },
       items: [
         {
           type: "link",
@@ -174,59 +180,94 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "SDK Functions",
+          label: "Completions",
           items: [
-            {
-              type: "doc",
-              id: "completion/input",
-              label: "completion()",
-            },
-            {
-              type: "doc",
-              id: "embedding/supported_embedding",
-              label: "embedding()",
-            },
-            {
-              type: "doc",
-              id: "response_api",
-              label: "responses()",
-            },
-            {
-              type: "doc",
-              id: "text_completion",
-              label: "text_completion()",
-            },
-            {
-              type: "doc",
-              id: "image_generation",
-              label: "image_generation()",
-            },
-            {
-              type: "doc",
-              id: "audio_transcription",
-              label: "transcription()",
-            },
-            {
-              type: "doc",
-              id: "text_to_speech",
-              label: "speech()",
-            },
-            {
-              type: "link",
-              label: "All Supported Endpoints →",
-              href: "https://docs.litellm.ai/docs/supported_endpoints",
-            },
+            "completion/input",
+            "completion/output",
+            "api-reference/completion",
+          ],
+        },
+        {
+          type: "category",
+          label: "Responses",
+          items: [
+            "response_api",
+            "api-reference/responses",
+          ],
+        },
+        {
+          type: "category",
+          label: "Embeddings",
+          items: [
+            "embedding/supported_embedding",
+            "embedding/async_embedding",
+          ],
+        },
+        {
+          type: "category",
+          label: "Images & Video",
+          items: [
+            "image_generation",
+            "videos",
+          ],
+        },
+        {
+          type: "category",
+          label: "Audio",
+          items: [
+            "audio_transcription",
+            "text_to_speech",
+          ],
+        },
+        {
+          type: "category",
+          label: "Files",
+          items: [
+            "files_endpoints",
+          ],
+        },
+        {
+          type: "category",
+          label: "Batches",
+          items: [
+            "batches",
+          ],
+        },
+        {
+          type: "category",
+          label: "Fine-tuning",
+          items: [
+            "fine_tuning",
+          ],
+        },
+        {
+          type: "category",
+          label: "Vector Stores",
+          items: [
+            "vector_stores/create",
+            "vector_stores/search",
+            "vector_store_files",
+          ],
+        },
+        {
+          type: "category",
+          label: "Utilities",
+          items: [
+            "moderation",
+            "rerank",
+            "ocr",
           ],
         },
         {
           type: "category",
           label: "Configuration",
           items: [
-            "set_keys",
+            "budget_manager",
             "caching/all_caches",
+            "completion/token_usage",
+            "sdk_custom_pricing",
           ],
         },
-        "completion/token_usage",
         "exception_mapping",
         {
           type: "category",
