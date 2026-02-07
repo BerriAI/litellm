@@ -18,6 +18,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
@@ -247,6 +248,9 @@ def _handle_invalid_parallel_tool_calls(
     try:
         replacements: Dict[int, List[ChatCompletionMessageToolCall]] = defaultdict(list)
         for i, tool_call in enumerate(tool_calls):
+            # Skip custom tool calls - they don't have a function attribute
+            if getattr(tool_call, "type", None) == "custom":
+                continue
             current_function = tool_call.function.name
             function_args = json.loads(tool_call.function.arguments)
             if current_function == "multi_tool_use.parallel":
@@ -523,7 +527,11 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if tool_calls is not None:
                     _openai_tool_calls = []
                     for _tc in tool_calls:
-                        _openai_tc = ChatCompletionMessageToolCall(**_tc)
+                        # Handle custom tool calls (GPT-5.x+) vs function tool calls
+                        if _tc.get("type") == "custom":
+                            _openai_tc = ChatCompletionMessageCustomToolCall(**_tc)
+                        else:
+                            _openai_tc = ChatCompletionMessageToolCall(**_tc)
                         _openai_tool_calls.append(_openai_tc)
                     fixed_tool_calls = _handle_invalid_parallel_tool_calls(
                         _openai_tool_calls

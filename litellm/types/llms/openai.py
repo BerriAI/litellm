@@ -859,12 +859,41 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     strict: bool
 
 
-class OpenAIChatCompletionToolParam(TypedDict):
-    type: Union[Literal["function"], str]
+class ChatCompletionFunctionToolParam(TypedDict):
+    """Function tool parameter for Chat Completions API"""
+
+    type: Literal["function"]
     function: ChatCompletionToolParamFunctionChunk
 
 
-class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
+class ChatCompletionCustomToolParamChunk(TypedDict, total=False):
+    """Custom tool definition chunk for Chat Completions API"""
+
+    name: Required[str]
+    description: str
+
+
+class ChatCompletionCustomToolParam(TypedDict):
+    """Custom tool parameter for Chat Completions API (GPT-5.x+)"""
+
+    type: Literal["custom"]
+    custom: ChatCompletionCustomToolParamChunk
+
+
+# Union of all tool types - allows type: "function", "custom", or any dict for forward compatibility
+OpenAIChatCompletionToolParam = Union[
+    ChatCompletionFunctionToolParam,
+    ChatCompletionCustomToolParam,
+    Dict[str, Any],  # Forward compatibility for new tool types
+]
+
+
+class ChatCompletionToolParam(TypedDict, total=False):
+    """Extended tool parameter with cache_control support and flexible structure"""
+
+    type: str
+    function: ChatCompletionToolParamFunctionChunk
+    custom: ChatCompletionCustomToolParamChunk
     cache_control: ChatCompletionCachedContent
 
 

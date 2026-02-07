@@ -1205,7 +1205,12 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
+            elif tool.get("type") == "custom":
+                # Pass custom tools through as-is for OpenAI/Azure (GPT-5.x+)
+                chat_completion_tools.append(cast(ChatCompletionToolParam, tool))
             else:
+                # Pass through other tool types (e.g., file_search, code_interpreter, computer_use_preview)
+                # These are OpenAI built-in tools that are passed through for the Responses API
                 chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
         return chat_completion_tools, web_search_options
 
