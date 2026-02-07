@@ -15,6 +15,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,
     _get_enforced_params,
+    _get_metadata_variable_name,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
@@ -45,6 +46,47 @@ def test_check_if_token_is_service_account():
         api_key="test-key", metadata={"user_id": "test-user"}
     )
     assert check_if_token_is_service_account(other_metadata_token) == False
+
+
+class TestGetMetadataVariableName:
+    """Tests for _get_metadata_variable_name()"""
+
+    def _make_request(self, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.url.path = path
+        return request
+
+    def test_returns_litellm_metadata_for_thread_routes(self):
+        request = self._make_request("/v1/threads/thread_123/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_assistant_routes(self):
+        request = self._make_request("/v1/assistants/asst_123")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_batches_route(self):
+        request = self._make_request("/v1/batches")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_messages_route(self):
+        request = self._make_request("/v1/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_files_route(self):
+        request = self._make_request("/v1/files")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_metadata_for_chat_completions(self):
+        request = self._make_request("/chat/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_completions(self):
+        request = self._make_request("/v1/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_embeddings(self):
+        request = self._make_request("/v1/embeddings")
+        assert _get_metadata_variable_name(request) == "metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
