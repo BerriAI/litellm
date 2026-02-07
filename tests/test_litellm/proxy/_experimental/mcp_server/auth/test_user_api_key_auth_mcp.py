@@ -1188,7 +1188,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     # Patch the session manager to send a dummy response and capture context
     async def dummy_handle_request(scope, receive, send):
         """Dummy handler for testing"""
-        # Get auth context
+        # Get auth context (includes client_ip as 7th value)
         (
             user_api_key_auth,
             mcp_auth_header,
@@ -1196,6 +1196,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
+            client_ip,
         ) = get_auth_context()
 
         # Capture the MCP servers for testing
