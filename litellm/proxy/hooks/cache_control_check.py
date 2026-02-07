@@ -52,7 +52,7 @@ class _PROXY_CacheControlCheck(CustomLogger):
             raise e
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.cache_control_check.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.proxy.hooks.cache_control_check.py::async_pre_call_hook(): Exception occurred - {}".format(
                     str(e)
                 )
             )

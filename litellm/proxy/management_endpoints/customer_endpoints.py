@@ -298,7 +298,7 @@ async def new_end_user(
         return end_user_record
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -365,7 +365,7 @@ async def end_user_info(
     
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -519,7 +519,7 @@ async def update_end_user(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.update_end_user(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.update_end_user(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -608,7 +608,7 @@ async def delete_end_user(
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.delete_end_user(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.delete_end_user(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -673,7 +673,7 @@ async def list_end_user(
     
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occurred - {}".format(
                 str(e)
             )
         )
