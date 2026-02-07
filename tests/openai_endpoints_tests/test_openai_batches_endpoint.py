@@ -292,3 +292,317 @@ async def test_list_batches_with_target_model_names():
         # Verify the response structure
         assert response["object"] == "list"
         assert len(response["data"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_batch_status_sync_from_provider_to_database():
+    """
+    Test that when batch status changes at the provider, 
+    it gets synced to the ManagedObjectTable database.
+    
+    This tests the new refactored utility functions:
+    - get_batch_from_database()
+    - update_batch_in_database()
+    """
+    from unittest.mock import MagicMock, AsyncMock
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_from_database,
+        update_batch_in_database,
+    )
+    from litellm.types.utils import LiteLLMBatch
+    import json
+    
+    # Setup: Create mock objects
+    batch_id = "batch_test123"
+    unified_batch_id = "litellm_proxy:test_unified_batch"
+    
+    # Mock database batch object with "validating" status
+    mock_db_batch = MagicMock()
+    mock_db_batch.unified_object_id = batch_id
+    mock_db_batch.status = "validating"
+    mock_db_batch.file_object = json.dumps({
+        "id": batch_id,
+        "object": "batch",
+        "status": "validating",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-test123",
+        "completion_window": "24h",
+        "created_at": 1234567890,
+    })
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=mock_db_batch
+    )
+    mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+    
+    # Mock managed_files_obj
+    mock_managed_files = MagicMock()
+    
+    # Mock logger
+    mock_logger = MagicMock()
+    mock_logger.debug = MagicMock()
+    mock_logger.info = MagicMock()
+    mock_logger.warning = MagicMock()
+    mock_logger.error = MagicMock()
+    
+    # Test 1: Retrieve batch from database (initial state)
+    db_batch_object, response_batch = await get_batch_from_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+    )
+    
+    # Verify database was queried
+    mock_prisma_client.db.litellm_managedobjecttable.find_first.assert_called_once_with(
+        where={"unified_object_id": batch_id}
+    )
+    
+    # Verify batch was retrieved correctly
+    assert db_batch_object is not None
+    assert response_batch is not None
+    assert response_batch.id == batch_id
+    assert response_batch.status == "validating"
+    
+    # Test 2: Simulate provider returning updated status
+    updated_batch_response = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="completed",  # Status changed from "validating" to "completed"
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        output_file_id="file-output123",
+    )
+    
+    # Test 3: Update database with new status from provider
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=updated_batch_response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+    
+    # Verify database was updated
+    mock_prisma_client.db.litellm_managedobjecttable.update.assert_called_once()
+    update_call_args = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
+    
+    # Verify the update call had correct parameters
+    assert update_call_args.kwargs["where"]["unified_object_id"] == batch_id
+    assert update_call_args.kwargs["data"]["status"] == "complete"  # "completed" normalized to "complete"
+    assert "file_object" in update_call_args.kwargs["data"]
+    assert "updated_at" in update_call_args.kwargs["data"]
+    
+    # Verify logger was called with status change message
+    mock_logger.info.assert_called()
+    log_message = mock_logger.info.call_args[0][0]
+    assert "validating" in log_message
+    assert "completed" in log_message
+    
+    print("✅ Test passed: Batch status synced from provider to database")
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_updates_database():
+    """
+    Test that canceling a batch updates the database status.
+    """
+    from unittest.mock import MagicMock, AsyncMock
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        update_batch_in_database,
+    )
+    from litellm.types.utils import LiteLLMBatch
+    
+    # Setup
+    batch_id = "batch_cancel_test"
+    unified_batch_id = "litellm_proxy:cancel_test"
+    
+    # Mock cancelled batch response from provider
+    cancelled_batch_response = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="cancelled",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        cancelled_at=1234567999,
+    )
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+    
+    # Mock managed_files_obj
+    mock_managed_files = MagicMock()
+    
+    # Mock logger
+    mock_logger = MagicMock()
+    mock_logger.info = MagicMock()
+    mock_logger.error = MagicMock()
+    
+    # Call update_batch_in_database for cancel operation
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=cancelled_batch_response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+        operation="cancel",
+    )
+    
+    # Verify database was updated
+    mock_prisma_client.db.litellm_managedobjecttable.update.assert_called_once()
+    update_call_args = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
+    
+    # Verify the update call had correct parameters
+    assert update_call_args.kwargs["where"]["unified_object_id"] == batch_id
+    assert update_call_args.kwargs["data"]["status"] == "cancelled"
+    assert "file_object" in update_call_args.kwargs["data"]
+    
+    # Verify logger was called
+    mock_logger.info.assert_called()
+    log_message = mock_logger.info.call_args[0][0]
+    assert "cancel" in log_message.lower()
+    assert "cancelled" in log_message
+    
+    print("✅ Test passed: Batch cancel updates database")
+
+
+@pytest.mark.asyncio
+async def test_batch_terminal_state_skip_provider_call():
+    """
+    Test that when a batch is in a terminal state (completed, failed, cancelled, expired),
+    it returns immediately from database without calling the provider.
+    """
+    from unittest.mock import MagicMock, AsyncMock
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_from_database,
+    )
+    from litellm.types.utils import LiteLLMBatch
+    import json
+    
+    # Setup: Create mock objects for a completed batch
+    batch_id = "batch_completed_test"
+    unified_batch_id = "litellm_proxy:completed_test"
+    
+    # Mock database batch object with "completed" status
+    mock_db_batch = MagicMock()
+    mock_db_batch.unified_object_id = batch_id
+    mock_db_batch.status = "complete"
+    mock_db_batch.file_object = json.dumps({
+        "id": batch_id,
+        "object": "batch",
+        "status": "completed",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-test123",
+        "output_file_id": "file-output123",
+        "completion_window": "24h",
+        "created_at": 1234567890,
+        "completed_at": 1234567999,
+    })
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=mock_db_batch
+    )
+    
+    # Mock managed_files_obj
+    mock_managed_files = MagicMock()
+    
+    # Mock logger
+    mock_logger = MagicMock()
+    mock_logger.debug = MagicMock()
+    
+    # Retrieve batch from database
+    db_batch_object, response_batch = await get_batch_from_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+    )
+    
+    # Verify batch was retrieved
+    assert db_batch_object is not None
+    assert response_batch is not None
+    assert response_batch.status == "completed"
+    
+    # In the actual endpoint, when status is in terminal states,
+    # it should return immediately without calling the provider
+    # This test verifies the database retrieval works correctly
+    assert response_batch.status in ["completed", "failed", "cancelled", "expired"]
+    
+    print("✅ Test passed: Terminal state batch retrieved from database")
+
+
+@pytest.mark.asyncio
+async def test_batch_no_status_change_skip_update():
+    """
+    Test that when batch status hasn't changed, database update is skipped.
+    """
+    from unittest.mock import MagicMock, AsyncMock
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        update_batch_in_database,
+    )
+    from litellm.types.utils import LiteLLMBatch
+    
+    # Setup
+    batch_id = "batch_no_change_test"
+    unified_batch_id = "litellm_proxy:no_change_test"
+    
+    # Mock database batch object with "validating" status
+    mock_db_batch = MagicMock()
+    mock_db_batch.status = "validating"
+    
+    # Mock batch response from provider with same status
+    batch_response = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="validating",  # Same status as in database
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+    )
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+    
+    # Mock managed_files_obj
+    mock_managed_files = MagicMock()
+    
+    # Mock logger
+    mock_logger = MagicMock()
+    mock_logger.info = MagicMock()
+    
+    # Call update_batch_in_database
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=batch_response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+        db_batch_object=mock_db_batch,
+        operation="retrieve",
+    )
+    
+    # Verify database update was NOT called (status hasn't changed)
+    mock_prisma_client.db.litellm_managedobjecttable.update.assert_not_called()
+    
+    # Verify logger info was NOT called (no status change to log)
+    mock_logger.info.assert_not_called()
+    
+    print("✅ Test passed: Database update skipped when status unchanged")

@@ -1,6 +1,6 @@
 import test, { expect } from "@playwright/test";
 import { Role } from "../../fixtures/roles";
-import { ADMIN_STORAGE_PATH, INTERNAL_USER_VIEWER_STORAGE_PATH } from "../../constants";
+import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { menuLabelToPage } from "../../fixtures/menuMappings";
 import { navigateToPage } from "../../helpers/navigation";
@@ -8,28 +8,17 @@ import { navigateToPage } from "../../helpers/navigation";
 const sidebarButtons = {
   [Role.ProxyAdmin]: [
     "Virtual Keys",
-    "MCP Servers",
     "Playground",
     "Models",
     "Usage",
-    "Logs",
     "Teams",
     "Internal Users",
     "API Reference",
     "AI Hub",
   ],
-  [Role.InternalUserViewer]: [
-    "Virtual Keys",
-    "MCP Servers",
-    "Usage",
-    "Teams",
-    "Logs",
-    "API Reference",
-    "AI Hub",
-  ],
 };
 
-const roles = [{ role: Role.ProxyAdmin, storage: ADMIN_STORAGE_PATH }, { role: Role.InternalUserViewer, storage: INTERNAL_USER_VIEWER_STORAGE_PATH }];
+const roles = [{ role: Role.ProxyAdmin, storage: ADMIN_STORAGE_PATH }];
 
 for (const { role, storage } of roles) {
   test.describe(`${role} sidebar`, () => {

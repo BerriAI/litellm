@@ -1,42 +1,62 @@
 model_list:
-  # Anthropic direct
-  - model_name: anthropic-claude
+  - model_name: gpt-4o
     litellm_params:
-      model: anthropic/claude-sonnet-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
 
-  # Azure AI Anthropic
-  - model_name: azure-ai-claude
+  - model_name: text-embedding-3-small
     litellm_params:
-      model: azure_ai/claude-3-5-sonnet
-      api_base: https://krish-mh44t553-eastus2.services.ai.azure.com/
-      api_key: os.environ/AZURE_ANTHROPIC_API_KEY
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
 
-  # Azure AI Anthropic (alternate endpoint format)
-  - model_name: claude-4.5-haiku
+  - model_name: bedrock-claude-sonnet-3.5
     litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_base: https://krish-mh44t553-eastus2.services.ai.azure.com/anthropic/v1/messages
-      api_version: "2023-06-01"
-      api_key: os.environ/AZURE_ANTHROPIC_API_KEY
+      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      aws_region_name: "us-east-1"
 
+  - model_name: bedrock-claude-sonnet-4
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
 
+  - model_name: bedrock-claude-sonnet-4.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
 
-# Search Tools Configuration - Define search providers for WebSearch interception
-# search_tools:
-#   - search_tool_name: "my-perplexity-search"
-#     litellm_params:
-#       search_provider: "perplexity"  # Can be: perplexity, brave, etc.
+  - model_name: bedrock-claude-opus-4.5
+    litellm_params:
+      model: "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      aws_region_name: "us-east-1"
 
-litellm_settings:
-  callbacks: ["websearch_interception"]
-  # WebSearch Interception - Automatically intercepts and executes WebSearch tool calls
-  # for models that don't natively support web search (e.g., Bedrock/Claude)
-  websearch_interception_params:
-    enabled_providers: ["bedrock"]  # List of providers to enable interception for
-    search_tool_name: "my-perplexity-search"  # Optional: Name of search tool from search_tools config
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/us.amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"
 
+# MCP Server Configuration
+mcp_servers:
+  # Wikipedia MCP - reliable and works without external deps
+  wikipedia:
+    transport: "stdio"
+    command: "uvx"
+    args: ["mcp-server-fetch"]
+    description: "Fetch web pages and Wikipedia content"
+  deepwiki:
+    transport: "http"
+    url: "https://mcp.deepwiki.com/mcp"
+
+# General Settings
 general_settings:
-  store_prompts_in_spend_logs: true
-  forward_client_headers_to_llm_api: true
+  master_key: sk-1234
+  store_model_in_db: false
 
+# LiteLLM Settings
+litellm_settings:
+  # Enable MCP Semantic Tool Filter
+  mcp_semantic_tool_filter:
+    enabled: true
+    embedding_model: "text-embedding-3-small"
+    top_k: 5
+    similarity_threshold: 0.3
+  

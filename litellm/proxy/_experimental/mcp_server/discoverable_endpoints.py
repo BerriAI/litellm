@@ -9,13 +9,14 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.proxy.utils import get_server_root_path
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 router = APIRouter(
     tags=["mcp"],
@@ -300,7 +301,10 @@ async def authorize(
     )
 
     lookup_name = mcp_server_name or client_id
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        lookup_name, client_ip=client_ip
+    )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await authorize_with_server(
@@ -342,7 +346,10 @@ async def token_endpoint(
     )
 
     lookup_name = mcp_server_name or client_id
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        lookup_name, client_ip=client_ip
+    )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await exchange_token_with_server(
@@ -387,25 +394,60 @@ async def callback(code: str, state: str):
     1. Try resource_metadata from WWW-Authenticate header (if present)
     2. Fall back to path-based well-known URI: /.well-known/oauth-protected-resource/{path}
     (
-    If the resource identifier value contains a path or query component, any terminating slash (/) 
-    following the host component MUST be removed before inserting /.well-known/ and the well-known 
-    URI path suffix between the host component and the path(include root path) and/or query components. 
+    If the resource identifier value contains a path or query component, any terminating slash (/)
+    following the host component MUST be removed before inserting /.well-known/ and the well-known
+    URI path suffix between the host component and the path(include root path) and/or query components.
     https://datatracker.ietf.org/doc/html/rfc9728#section-3.1)
     3. Fall back to root-based well-known URI: /.well-known/oauth-protected-resource
+
+    Dual Pattern Support:
+    - Standard MCP pattern: /mcp/{server_name} (recommended, used by mcp-inspector, VSCode Copilot)
+    - LiteLLM legacy pattern: /{server_name}/mcp (backward compatibility)
+
+    The resource URL returned matches the pattern used in the discovery request.
 """
-@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp")
-@router.get("/.well-known/oauth-protected-resource")
-async def oauth_protected_resource_mcp(
-    request: Request, mcp_server_name: Optional[str] = None
-):
+
+
+def _build_oauth_protected_resource_response(
+    request: Request,
+    mcp_server_name: Optional[str],
+    use_standard_pattern: bool,
+) -> dict:
+    """
+    Build OAuth protected resource response with the appropriate URL pattern.
+
+    Args:
+        request: FastAPI Request object
+        mcp_server_name: Name of the MCP server
+        use_standard_pattern: If True, use /mcp/{server_name} pattern;
+                             if False, use /{server_name}/mcp pattern
+
+    Returns:
+        OAuth protected resource metadata dict
+    """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
-    # Get the correct base URL considering X-Forwarded-* headers
+
     request_base_url = get_request_base_url(request)
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
+
+    # Build resource URL based on the pattern
+    if mcp_server_name:
+        if use_standard_pattern:
+            # Standard MCP pattern: /mcp/{server_name}
+            resource_url = f"{request_base_url}/mcp/{mcp_server_name}"
+        else:
+            # LiteLLM legacy pattern: /{server_name}/mcp
+            resource_url = f"{request_base_url}/{mcp_server_name}/mcp"
+    else:
+        resource_url = f"{request_base_url}/mcp"
+
     return {
         "authorization_servers": [
             (
@@ -414,13 +456,54 @@ async def oauth_protected_resource_mcp(
                 else f"{request_base_url}"
             )
         ],
-        "resource": (
-            f"{request_base_url}/{mcp_server_name}/mcp"
-            if mcp_server_name
-            else f"{request_base_url}/mcp"
-        ),  # this is what Claude will call
+        "resource": resource_url,
         "scopes_supported": mcp_server.scopes if mcp_server else [],
     }
+
+
+# Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
+# This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
+@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}")
+async def oauth_protected_resource_mcp_standard(
+    request: Request, mcp_server_name: str
+):
+    """
+    OAuth protected resource discovery endpoint using standard MCP URL pattern.
+
+    Standard pattern: /mcp/{server_name}
+    Discovery path: /.well-known/oauth-protected-resource/mcp/{server_name}
+
+    This endpoint is compliant with MCP specification and works with standard
+    MCP clients like mcp-inspector and VSCode Copilot.
+    """
+    return _build_oauth_protected_resource_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+        use_standard_pattern=True,
+    )
+
+
+# LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
+# Kept for backward compatibility with existing deployments
+@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp")
+@router.get("/.well-known/oauth-protected-resource")
+async def oauth_protected_resource_mcp(
+    request: Request, mcp_server_name: Optional[str] = None
+):
+    """
+    OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
+
+    Legacy pattern: /{server_name}/mcp
+    Discovery path: /.well-known/oauth-protected-resource/{server_name}/mcp
+
+    This endpoint is kept for backward compatibility. New integrations should
+    use the standard MCP pattern (/mcp/{server_name}) instead.
+    """
+    return _build_oauth_protected_resource_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+        use_standard_pattern=False,
+    )
 
 """
     https://datatracker.ietf.org/doc/html/rfc8414#section-3.1
@@ -430,15 +513,26 @@ async def oauth_protected_resource_mcp(
     the well-known URI suffix between the host component and the path(include root path)
     component.
 """
-@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}")
-@router.get("/.well-known/oauth-authorization-server")
-async def oauth_authorization_server_mcp(
-    request: Request, mcp_server_name: Optional[str] = None
-):
+
+
+def _build_oauth_authorization_server_response(
+    request: Request,
+    mcp_server_name: Optional[str],
+) -> dict:
+    """
+    Build OAuth authorization server metadata response.
+
+    Args:
+        request: FastAPI Request object
+        mcp_server_name: Name of the MCP server
+
+    Returns:
+        OAuth authorization server metadata dict
+    """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
-    # Get the correct base URL considering X-Forwarded-* headers
+
     request_base_url = get_request_base_url(request)
 
     authorization_endpoint = (
@@ -454,7 +548,10 @@ async def oauth_authorization_server_mcp(
 
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
 
     return {
         "issuer": request_base_url,  # point to your proxy
@@ -470,18 +567,58 @@ async def oauth_authorization_server_mcp(
     }
 
 
+# Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
+@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}")
+async def oauth_authorization_server_mcp_standard(
+    request: Request, mcp_server_name: str
+):
+    """
+    OAuth authorization server discovery endpoint using standard MCP URL pattern.
+
+    Standard pattern: /mcp/{server_name}
+    Discovery path: /.well-known/oauth-authorization-server/mcp/{server_name}
+    """
+    return _build_oauth_authorization_server_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+    )
+
+
+# LiteLLM legacy pattern and root endpoint
+@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}")
+@router.get("/.well-known/oauth-authorization-server")
+async def oauth_authorization_server_mcp(
+    request: Request, mcp_server_name: Optional[str] = None
+):
+    """
+    OAuth authorization server discovery endpoint.
+
+    Supports both legacy pattern (/{server_name}) and root endpoint.
+    """
+    return _build_oauth_authorization_server_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+    )
+
+
 # Alias for standard OpenID discovery
 @router.get("/.well-known/openid-configuration")
 async def openid_configuration(request: Request):
     return await oauth_authorization_server_mcp(request)
 
 
+# Additional legacy pattern support
 @router.get("/.well-known/oauth-authorization-server/{mcp_server_name}/mcp")
-@router.get("/.well-known/oauth-authorization-server")
-async def oauth_authorization_server_root(
-    request: Request, mcp_server_name: Optional[str] = None
+async def oauth_authorization_server_legacy(
+    request: Request, mcp_server_name: str
 ):
-    return await oauth_authorization_server_mcp(request, mcp_server_name)
+    """
+    OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
+    """
+    return _build_oauth_authorization_server_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+    )
 
 
 @router.post("/{mcp_server_name}/register")
@@ -505,7 +642,10 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     if not mcp_server_name:
         return dummy_return
 
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        mcp_server_name, client_ip=client_ip
+    )
     if mcp_server is None:
         return dummy_return
     return await register_client_with_server(

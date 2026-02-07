@@ -1114,7 +1114,7 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: Optional[int] = None
+    reasoning_tokens: int = 0
 
     text_tokens: Optional[int] = None
 
@@ -1123,7 +1123,7 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: Optional[int] = None
-    cached_tokens: Optional[int] = None
+    cached_tokens: int = 0
     text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
@@ -1193,7 +1193,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     text: Optional[Union["ResponseText", Dict[str, Any]]] = None
     truncation: Optional[Literal["auto", "disabled"]] = None
-    usage: Optional[Any] = None
+    usage: Optional[ResponseAPIUsage] = None
     user: Optional[str] = None
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
@@ -2012,7 +2012,7 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific
+    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
 ]
 
 
