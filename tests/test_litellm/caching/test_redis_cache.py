@@ -61,6 +61,39 @@ async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping)
 
 
 @pytest.mark.asyncio
+async def test_redis_socket_timeout_env_var_respected(monkeypatch, redis_no_ping):
+    """REDIS_SOCKET_TIMEOUT env var should be used when no explicit socket_timeout is passed."""
+    monkeypatch.setenv("REDIS_HOST", "my-fake-host")
+    monkeypatch.setenv("REDIS_SOCKET_TIMEOUT", "10")
+    redis_cache = RedisCache()
+    client = redis_cache.init_async_client()
+    assert client is not None
+    assert client.connection_pool.connection_kwargs["socket_timeout"] == "10"
+
+
+@pytest.mark.asyncio
+async def test_redis_socket_timeout_explicit_overrides_env_var(monkeypatch, redis_no_ping):
+    """Explicit socket_timeout in config should take precedence over REDIS_SOCKET_TIMEOUT env var."""
+    monkeypatch.setenv("REDIS_HOST", "my-fake-host")
+    monkeypatch.setenv("REDIS_SOCKET_TIMEOUT", "10")
+    redis_cache = RedisCache(socket_timeout=2.0)
+    client = redis_cache.init_async_client()
+    assert client is not None
+    assert client.connection_pool.connection_kwargs["socket_timeout"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_redis_socket_timeout_default_when_nothing_set(monkeypatch, redis_no_ping):
+    """When neither explicit config nor env var sets socket_timeout, default 5.0 should apply."""
+    monkeypatch.setenv("REDIS_HOST", "my-fake-host")
+    monkeypatch.delenv("REDIS_SOCKET_TIMEOUT", raising=False)
+    redis_cache = RedisCache()
+    client = redis_cache.init_async_client()
+    assert client is not None
+    assert client.connection_pool.connection_kwargs["socket_timeout"] == 5.0
+
+
+@pytest.mark.asyncio
 async def test_redis_cache_async_batch_get_cache(monkeypatch, redis_no_ping):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()

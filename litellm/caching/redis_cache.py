@@ -96,7 +96,7 @@ class RedisCache(BaseCache):
         redis_flush_size: Optional[int] = 100,
         namespace: Optional[str] = None,
         startup_nodes: Optional[List] = None,  # for redis-cluster
-        socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
+        socket_timeout: Optional[float] = None,
         **kwargs,
     ):
         from litellm._service_logger import ServiceLogging
