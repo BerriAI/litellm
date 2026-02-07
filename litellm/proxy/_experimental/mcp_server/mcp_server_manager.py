@@ -2290,6 +2290,8 @@ class MCPServerManager:
         """
         Get the MCP Server from the server name.
 
+        Matches against alias (highest priority), server_name, or name fields.
+
         Args:
             server_name: The server name to look up.
             client_ip: Optional client IP for access control. When provided,
@@ -2297,7 +2299,12 @@ class MCPServerManager:
         """
         registry = self.get_registry()
         for server in registry.values():
-            if server.server_name == server_name:
+            # Match against alias, server_name, or name
+            if (
+                server.alias == server_name
+                or server.server_name == server_name
+                or server.name == server_name
+            ):
                 if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
