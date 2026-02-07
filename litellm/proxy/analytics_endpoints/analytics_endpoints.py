@@ -104,3 +104,112 @@ async def get_global_activity(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": str(e)},
         )
+
+
+@router.get(
+    "/analytics/latency",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=True,
+)
+async def get_latency_percentiles(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date for latency analysis (YYYY-MM-DD)",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date for latency analysis (YYYY-MM-DD)",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific model name",
+    ),
+):
+    """
+    Get response time latency percentiles (P50, P95, P99) grouped by model.
+
+    Useful for SLO monitoring and performance analysis.
+
+    Example Request:
+    ```
+    curl -X GET "http://0.0.0.0:4000/analytics/latency?start_date=2024-01-01&end_date=2024-01-31" \
+        -H "Authorization: Bearer sk-1234"
+    ```
+    """
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise ValueError(
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        # Build the SQL query for latency percentiles
+        # Note: PostgreSQL uses percentile_cont for percentile calculation
+        if model:
+            sql_query = """
+            SELECT
+                "model",
+                COUNT(*) AS request_count,
+                ROUND(AVG("completionStartTime" - "startTime") * 1000) AS avg_latency_ms,
+                ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY ("completionStartTime" - "startTime")) * 1000) AS p50_ms,
+                ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ("completionStartTime" - "startTime")) * 1000) AS p95_ms,
+                ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY ("completionStartTime" - "startTime")) * 1000) AS p99_ms
+            FROM "LiteLLM_SpendLogs"
+            WHERE 
+                "startTime" >= $1::timestamptz 
+                AND "startTime" < ($2::timestamptz + INTERVAL '1 day')
+                AND "completionStartTime" IS NOT NULL
+                AND "model" = $3
+            GROUP BY "model"
+            ORDER BY request_count DESC
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj, model
+            )
+        else:
+            sql_query = """
+            SELECT
+                "model",
+                COUNT(*) AS request_count,
+                ROUND(AVG("completionStartTime" - "startTime") * 1000) AS avg_latency_ms,
+                ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY ("completionStartTime" - "startTime")) * 1000) AS p50_ms,
+                ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ("completionStartTime" - "startTime")) * 1000) AS p95_ms,
+                ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY ("completionStartTime" - "startTime")) * 1000) AS p99_ms
+            FROM "LiteLLM_SpendLogs"
+            WHERE 
+                "startTime" >= $1::timestamptz 
+                AND "startTime" < ($2::timestamptz + INTERVAL '1 day')
+                AND "completionStartTime" IS NOT NULL
+            GROUP BY "model"
+            ORDER BY request_count DESC
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
+
+        if db_response is None:
+            db_response = []
+
+        return {
+            "latency_percentiles": db_response,
+            "start_date": start_date,
+            "end_date": end_date,
+            "total_models": len(db_response),
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
