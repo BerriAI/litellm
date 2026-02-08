@@ -678,7 +678,8 @@ class OpenTelemetry(CustomLogger):
             # Ensure proxy-request parent span is annotated with the actual operation kind
             if (
                 parent_span is not None
-                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+                and getattr(parent_span, "name", None)
+                == LITELLM_PROXY_REQUEST_SPAN_NAME
             ):
                 self.set_attributes(parent_span, kwargs, response_obj)
         else:
@@ -712,7 +713,8 @@ class OpenTelemetry(CustomLogger):
         # However, proxy-created spans should be closed here
         if (
             parent_span is not None
-            and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+            and getattr(parent_span, "name", None)
+            == LITELLM_PROXY_REQUEST_SPAN_NAME
         ):
             parent_span.end(end_time=self._to_ns(end_time))
 
@@ -1210,7 +1212,8 @@ class OpenTelemetry(CustomLogger):
         # However, proxy-created spans should be closed here
         if (
             parent_otel_span is not None
-            and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+            and getattr(parent_otel_span, "name", None)
+            == LITELLM_PROXY_REQUEST_SPAN_NAME
         ):
             parent_otel_span.end(end_time=self._to_ns(end_time))
 
