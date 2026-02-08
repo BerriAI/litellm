@@ -3313,19 +3313,16 @@ async def regenerate_key_fn(
 
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
-        # Save the old key record to deleted table before regeneration
-        # This preserves key_alias and team_id metadata for historical spend records
-        try:
-            await _persist_deleted_verification_tokens(
-                keys=[_key_in_db],
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Failed to persist old key record to deleted table during regeneration"
-            )
+        # Save the old key record to deleted table before regeneration.
+        # This preserves key_alias and team_id metadata for historical spend records.
+        # If this fails, abort the regeneration to avoid permanently losing the
+        # old hash→metadata mapping.
+        await _persist_deleted_verification_tokens(
+            keys=[_key_in_db],
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
 
         new_token = get_new_token(data=data)
 

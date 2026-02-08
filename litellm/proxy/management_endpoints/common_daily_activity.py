@@ -357,9 +357,11 @@ async def get_api_key_metadata(
                         "key_alias": k.key_alias,
                         "team_id": k.team_id,
                     }
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Failed to fetch deleted key metadata for missing keys"
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to fetch deleted key metadata for %d missing keys: %s",
+                len(missing_keys),
+                e,
             )
 
     return result
