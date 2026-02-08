@@ -476,12 +476,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -1427,7 +1427,7 @@ class MCPServerManager:
                 return []
 
         try:
-            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
+            return await _list_tools_task()
         except asyncio.TimeoutError:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
@@ -2234,6 +2234,7 @@ class MCPServerManager:
             from litellm.proxy.proxy_server import (
                 general_settings as proxy_general_settings,
             )
+
             return proxy_general_settings
         except ImportError:
             # Fallback if proxy_server not available
