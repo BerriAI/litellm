@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { Drawer, Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space } from "antd";
+import { useQuery } from "@tanstack/react-query";
+import { Drawer, Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin } from "antd";
 import moment from "moment";
 import { LogEntry } from "../columns";
+import { uiSpendLogDetailsCall } from "../../networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
@@ -45,6 +47,8 @@ export interface LogDetailsDrawerProps {
   onOpenSettings?: () => void;
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
+  accessToken?: string;
+  startTime?: string;
 }
 
 /**
@@ -64,6 +68,8 @@ export function LogDetailsDrawer({
   onOpenSettings,
   allLogs = [],
   onSelectLog,
+  accessToken,
+  startTime,
 }: LogDetailsDrawerProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
 
@@ -76,16 +82,35 @@ export function LogDetailsDrawer({
     onSelectLog,
   });
 
+  // Lazy-load log details (messages/response) only when drawer is open
+  // This fetches data for a single log on-demand instead of prefetching all 50
+  const logDetails = useQuery({
+    queryKey: ["logDetails", logEntry?.request_id, startTime],
+    queryFn: async () => {
+      if (!accessToken || !logEntry?.request_id || !startTime) return null;
+      return await uiSpendLogDetailsCall(accessToken, logEntry.request_id, startTime);
+    },
+    enabled: open && !!accessToken && !!logEntry?.request_id && !!startTime,
+    staleTime: 10 * 60 * 1000, // 10 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+  });
+
   if (!logEntry) return null;
+
+  // Merge lazy-loaded details into the log entry
+  const detailsData = logDetails.data as any;
+  const effectiveMessages = detailsData?.messages || logEntry.messages;
+  const effectiveResponse = detailsData?.response || logEntry.response;
+  const isLoadingDetails = logDetails.isLoading;
 
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
 
-  // Check if request/response data is present
-  const hasMessages = checkHasMessages(logEntry.messages);
-  const hasResponse = checkHasResponse(logEntry.response);
-  const missingData = !hasMessages && !hasResponse;
+  // Check if request/response data is present (using lazy-loaded data)
+  const hasMessages = checkHasMessages(effectiveMessages);
+  const hasResponse = checkHasResponse(effectiveResponse);
+  const missingData = !hasMessages && !hasResponse && !isLoadingDetails;
 
   // Guardrail data
   const guardrailInfo = metadata?.guardrail_information;
@@ -103,7 +128,7 @@ export function LogDetailsDrawer({
   const environment = metadata?.user_api_key_team_alias || "default";
 
   const getRawRequest = () => {
-    return formatData(logEntry.proxy_server_request || logEntry.messages);
+    return formatData(logEntry.proxy_server_request || effectiveMessages);
   };
 
   const getFormattedResponse = () => {
@@ -117,7 +142,7 @@ export function LogDetailsDrawer({
         },
       };
     }
-    return formatData(logEntry.response);
+    return formatData(effectiveResponse);
   };
 
   return (
@@ -204,12 +229,19 @@ export function LogDetailsDrawer({
         )}
 
         {/* Request/Response JSON - Collapsible */}
-        <RequestResponseSection
-          hasResponse={hasResponse}
-          getRawRequest={getRawRequest}
-          getFormattedResponse={getFormattedResponse}
-          logEntry={logEntry}
-        />
+        {isLoadingDetails ? (
+          <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+            <Spin size="default" />
+            <div style={{ marginTop: 8, color: "#999" }}>Loading request & response data...</div>
+          </div>
+        ) : (
+          <RequestResponseSection
+            hasResponse={hasResponse}
+            getRawRequest={getRawRequest}
+            getFormattedResponse={getFormattedResponse}
+            logEntry={logEntry}
+          />
+        )}
 
         {/* Guardrail Data - Show only if present */}
         {hasGuardrailData && <GuardrailViewer data={guardrailInfo} />}
