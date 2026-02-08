@@ -25,9 +25,25 @@ class MockLiteLLMTeamMembership:
         return {"count": 1}
 
 
+class MockLiteLLMOrganizationTable:
+    def __init__(self):
+        self.organizations: List[Any] = []
+
+    async def find_many(self, where: Dict[str, Any] = None) -> List[Any]:
+        if where and "budget_id" in where:
+            budget_ids = where["budget_id"].get("in", [])
+            return [
+                org
+                for org in self.organizations
+                if hasattr(org, "budget_id") and org.budget_id in budget_ids
+            ]
+        return self.organizations
+
+
 class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
+        self.litellm_organizationtable = MockLiteLLMOrganizationTable()
 
 
 class MockPrismaClient:
@@ -38,6 +54,7 @@ class MockPrismaClient:
             "team": [],
             "budget": [],
             "enduser": [],
+            "organization": [],
         }
         self.updated_data: Dict[str, List[Any]] = {
             "key": [],
@@ -45,6 +62,7 @@ class MockPrismaClient:
             "team": [],
             "budget": [],
             "enduser": [],
+            "organization": [],
         }
         self.db = MockDB()
 
@@ -320,3 +338,55 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     assert mock_prisma_client.updated_data["user"][0].spend == 0.0
     assert mock_prisma_client.updated_data["team"][0].spend == 0.0
     assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
+
+
+def test_reset_budget_for_organization(reset_budget_job, mock_prisma_client):
+    """
+    Test that organization budget reset:
+    1. Resets spend to 0.0
+    2. Updates budget_reset_at to prevent repeated resets
+    3. Uses prisma_client.update_data() consistent with other entity resets
+    """
+    now = datetime.now(timezone.utc)
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 1000.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now,
+            "budget_id": "test-org-budget-1",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    test_organization = type(
+        "LiteLLM_OrganizationTable",
+        (),
+        {
+            "organization_id": "test-org-1",
+            "organization_alias": "Test Org",
+            "budget_id": "test-org-budget-1",
+            "spend": 750.0,
+            "metadata": None,
+            "models": [],
+            "created_by": "admin",
+            "updated_by": "admin",
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+    mock_prisma_client.db.litellm_organizationtable.organizations = [test_organization]
+
+    # Run the test
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_organizations())
+
+    # Verify budget_reset_at was updated (prevents repeated resets)
+    assert len(mock_prisma_client.updated_data["budget"]) == 1
+    updated_budget = mock_prisma_client.updated_data["budget"][0]
+    assert updated_budget.budget_reset_at > now
+
+    # Verify organization spend was reset
+    assert len(mock_prisma_client.updated_data["organization"]) == 1
+    updated_org = mock_prisma_client.updated_data["organization"][0]
+    assert updated_org.spend == 0.0

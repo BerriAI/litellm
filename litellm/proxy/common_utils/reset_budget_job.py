@@ -560,17 +560,10 @@ class ResetBudgetJob:
                 )
 
                 if updated_organizations:
-                    await self.prisma_client.db.litellm_organizationtable.update_many(
-                        where={
-                            "organization_id": {
-                                "in": [
-                                    org.organization_id
-                                    for org in updated_organizations
-                                    if org.organization_id is not None
-                                ]
-                            }
-                        },
-                        data={"spend": 0.0},
+                    await self.prisma_client.update_data(
+                        query_type="update_many",
+                        data_list=updated_organizations,
+                        table_name="organization",
                     )
 
             end_time = time.time()

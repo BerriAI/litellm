@@ -2894,7 +2894,16 @@ class PrismaClient:
         team_id: Optional[str] = None,
         query_type: Literal["update", "update_many"] = "update",
         table_name: Optional[
-            Literal["user", "key", "config", "spend", "team", "enduser", "budget"]
+            Literal[
+                "user",
+                "key",
+                "config",
+                "spend",
+                "team",
+                "enduser",
+                "budget",
+                "organization",
+            ]
         ] = None,
         update_key_values: Optional[dict] = None,
         update_key_values_custom_query: Optional[dict] = None,
@@ -3154,6 +3163,41 @@ class PrismaClient:
                 await batcher.commit()
                 verbose_proxy_logger.info(
                     "\033[91m" + "DB Team Table Batch update succeeded" + "\033[0m"
+                )
+            elif (
+                table_name is not None
+                and table_name == "organization"
+                and query_type == "update_many"
+                and data_list is not None
+                and isinstance(data_list, list)
+            ):
+                """
+                Batch write update queries for organizations
+                """
+                batcher = self.db.batch_()
+                for organization in data_list:
+                    try:
+                        data_json = self.jsonify_object(
+                            data=organization.model_dump(exclude_none=True)
+                        )
+                    except Exception:
+                        data_json = self.jsonify_object(
+                            data=organization.dict(exclude_none=True)
+                        )
+                    batcher.litellm_organizationtable.upsert(
+                        where={"organization_id": organization.organization_id},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update organization-specified values, if it already exists
+                        },
+                    )
+                await batcher.commit()
+                verbose_proxy_logger.info(
+                    "\033[91m"
+                    + "DB Organization Table Batch update succeeded"
+                    + "\033[0m"
                 )
 
         except Exception as e:
