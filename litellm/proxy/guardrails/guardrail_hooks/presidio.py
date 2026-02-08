@@ -333,17 +333,33 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                         return []
 
+                # Handle unexpected types (str, None, etc.) - e.g. from malformed/error
+                if not isinstance(analyze_results, list):
+                    verbose_proxy_logger.warning(
+                        "Presidio analyzer returned unexpected type %s (expected list or dict), "
+                        "returning empty list. Response: %s",
+                        type(analyze_results).__name__,
+                        str(analyze_results)[:200],
+                    )
+                    return []
+
                 # Normal case: list of results
                 final_results = []
                 for item in analyze_results:
+                    if not isinstance(item, dict):
+                        verbose_proxy_logger.warning(
+                            "Skipping invalid Presidio result item (expected dict, got %s): %s",
+                            type(item).__name__,
+                            str(item)[:100],
+                        )
+                        continue
                     try:
                         final_results.append(PresidioAnalyzeResponseItem(**item))
-                    except TypeError as te:
-                        # Handle case where item is not a dict (shouldn't happen, but be defensive)
+                    except Exception as e:
                         verbose_proxy_logger.warning(
-                            "Skipping invalid Presidio result item: %s (error: %s)",
+                            "Failed to parse Presidio result item: %s (error: %s)",
                             item,
-                            te,
+                            e,
                         )
                         continue
                 return final_results
