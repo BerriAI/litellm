@@ -617,7 +617,7 @@ class LiteLLMCompletionResponsesConfig:
         if callable(getter):
             try:
                 return getter(key, default)
-            except Exception:
+            except (TypeError, AttributeError):
                 pass
 
         return getattr(obj, key, default)
