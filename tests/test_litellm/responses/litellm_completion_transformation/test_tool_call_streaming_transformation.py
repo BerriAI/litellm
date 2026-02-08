@@ -331,3 +331,62 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
 
     assert arguments_by_call_id["call_a"] == '{"x":1}'
     assert arguments_by_call_id["call_b"] == '{"y":2}'
+
+
+def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": '{"a":'},
+            }
+        ]
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_b",
+                "type": "function",
+                "function": {"name": "tool_b", "arguments": '{"b":'},
+            }
+        ]
+    )
+    # Ambiguous chunk: index reused and id missing. We should skip fallback rather than misroute.
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "type": "function",
+                "function": {"arguments": "1}"},
+            }
+        ]
+    )
+
+    all_events = []
+    while iterator._pending_tool_events:
+        all_events.append(iterator._pending_tool_events.pop(0))
+
+    delta_events = [
+        evt
+        for evt in all_events
+        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ]
+    arguments_by_call_id = {}
+    for evt in delta_events:
+        arguments_by_call_id.setdefault(evt.item_id, "")
+        arguments_by_call_id[evt.item_id] += evt.delta
+
+    assert arguments_by_call_id["call_a"] == '{"a":'
+    assert arguments_by_call_id["call_b"] == '{"b":'
+    assert arguments_by_call_id["call_a"] != '{"a":1}'
+    assert arguments_by_call_id["call_b"] != '{"b":1}'

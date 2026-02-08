@@ -89,6 +89,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
         self._tool_call_id_by_index: dict[int, str] = {}
+        self._ambiguous_tool_call_indexes: set[int] = set()
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0  
@@ -164,8 +165,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if call_id_raw:
                 call_id = str(call_id_raw)
                 if tc_index is not None:
+                    existing_call_id = self._tool_call_id_by_index.get(tc_index)
+                    if existing_call_id is not None and existing_call_id != call_id:
+                        # Reusing the same index for multiple call_ids is ambiguous for id-less deltas.
+                        # Guard against silent misrouting by disabling index fallback for this index.
+                        self._ambiguous_tool_call_indexes.add(tc_index)
                     self._tool_call_id_by_index[tc_index] = call_id
             elif tc_index is not None:
+                if tc_index in self._ambiguous_tool_call_indexes:
+                    continue
                 mapped_call_id = self._tool_call_id_by_index.get(tc_index)
                 if mapped_call_id:
                     call_id = mapped_call_id
