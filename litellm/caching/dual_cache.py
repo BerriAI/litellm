@@ -8,10 +8,8 @@ Has 4 primary methods:
     - async_get_cache
 """
 
-import asyncio
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 if TYPE_CHECKING:
@@ -167,33 +165,50 @@ class DualCache(BaseCache):
         local_only: bool = False,
         **kwargs,
     ):
-        received_args = locals()
-        received_args.pop("self")
-
-        def run_in_new_loop():
-            """Run the coroutine in a new event loop within this thread."""
-            new_loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(
-                    self.async_batch_get_cache(**received_args)
-                )
-            finally:
-                new_loop.close()
-                asyncio.set_event_loop(None)
-
         try:
-            # First, try to get the current event loop
-            _ = asyncio.get_running_loop()
-            # If we're already in an event loop, run in a separate thread
-            # to avoid nested event loop issues
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_in_new_loop)
-                return future.result()
+            result = [None] * len(keys)
+            if self.in_memory_cache is not None:
+                in_memory_result = self.in_memory_cache.batch_get_cache(keys, **kwargs)
 
-        except RuntimeError:
-            # No running event loop, we can safely run in this thread
-            return run_in_new_loop()
+                if in_memory_result is not None:
+                    result = in_memory_result
+
+            if None in result and self.redis_cache is not None and local_only is False:
+                current_time = time.time()
+                sublist_keys = self.get_redis_batch_keys(current_time, keys, result)
+
+                if len(sublist_keys) > 0:
+                    redis_result = self.redis_cache.batch_get_cache(
+                        key_list=sublist_keys,
+                        parent_otel_span=parent_otel_span,
+                    )
+
+                    # Update the last access time for ALL queried keys
+                    # This includes keys with None values to throttle repeated Redis queries
+                    for key in sublist_keys:
+                        self.last_redis_batch_access_time[key] = current_time
+
+                    if redis_result is None:
+                        return result
+
+                    # Redis cache batch get is expected to return Dict[key, value]
+                    if isinstance(redis_result, dict):
+                        if all(v is None for v in redis_result.values()):
+                            return result
+
+                        key_to_index = {key: i for i, key in enumerate(keys)}
+                        for key, value in redis_result.items():
+                            index = key_to_index.get(key)
+                            if index is None:
+                                continue
+
+                            result[index] = value
+                            if value is not None and self.in_memory_cache is not None:
+                                self.in_memory_cache.set_cache(key, value, **kwargs)
+
+            return result
+        except Exception:
+            verbose_logger.error(traceback.format_exc())
 
     async def async_get_cache(
         self,
