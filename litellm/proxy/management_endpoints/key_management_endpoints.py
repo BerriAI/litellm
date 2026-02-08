@@ -594,6 +594,13 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
+    elif _budget_id is not None and prisma_client is not None:
+        # Inherit budget_duration from linked budget tier if not explicitly set on the key
+        budget_row = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": _budget_id}
+        )
+        if budget_row is not None and budget_row.budget_duration is not None:
+            data_json["key_budget_duration"] = budget_row.budget_duration
 
     if user_api_key_dict.user_id is not None:
         data_json["created_by"] = user_api_key_dict.user_id

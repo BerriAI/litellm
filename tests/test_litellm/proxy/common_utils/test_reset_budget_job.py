@@ -25,9 +25,21 @@ class MockLiteLLMTeamMembership:
         return {"count": 1}
 
 
+class MockLiteLLMVerificationToken:
+    def __init__(self):
+        self.update_many_calls: List[Dict[str, Any]] = []
+
+    async def update_many(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self.update_many_calls.append({"where": where, "data": data})
+        return {"count": 1}
+
+
 class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
+        self.litellm_verificationtoken = MockLiteLLMVerificationToken()
 
 
 class MockPrismaClient:
@@ -320,3 +332,107 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     assert mock_prisma_client.updated_data["user"][0].spend == 0.0
     assert mock_prisma_client.updated_data["team"][0].spend == 0.0
     assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
+
+
+def test_reset_budget_for_keys_linked_to_budgets(reset_budget_job, mock_prisma_client):
+    """
+    Test that when a budget tier is reset, keys linked to that budget
+    (via budget_id) that don't have their own budget_duration also get
+    their spend reset.
+
+    This covers the case where keys were created with budget_id but
+    budget_duration was not inherited to the key (pre-fix keys).
+    """
+    from litellm.proxy._types import LiteLLM_BudgetTableFull
+
+    now = datetime.now(timezone.utc)
+
+    # Create a budget tier that is due for reset
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 10.0,
+            "budget_duration": "7d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "7d-budget-tier",
+            "created_at": now - timedelta(days=7),
+        },
+    )
+
+    budgets_to_reset = [test_budget]
+
+    # Run the method
+    asyncio.run(
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
+            budgets_to_reset=budgets_to_reset
+        )
+    )
+
+    # Verify that update_many was called on litellm_verificationtoken
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 1, f"Expected 1 update_many call, got {len(calls)}"
+
+    # Verify the where clause filters by budget_id and null budget_duration
+    call = calls[0]
+    assert call["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
+    assert call["where"]["budget_duration"] is None
+
+    # Verify spend is reset to 0
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_keys_linked_to_budgets_empty(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that when there are no budgets to reset, no update is performed
+    on the verification token table.
+    """
+    # Run with empty list
+    asyncio.run(
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
+            budgets_to_reset=[]
+        )
+    )
+
+    # Verify no update_many calls were made
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 0
+
+
+def test_budget_table_reset_also_resets_linked_keys(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Integration-style test: when reset_budget_for_litellm_budget_table runs,
+    it should also reset spend for keys linked to the expiring budget tiers
+    (in addition to end-users and team members).
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 10.0,
+            "budget_duration": "7d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "7d-budget-tier",
+            "created_at": now - timedelta(days=7),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    # Run the full budget table reset
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    # Verify that keys linked to the budget were also reset
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 1, (
+        "Expected reset_budget_for_litellm_budget_table to also reset keys "
+        f"linked to expiring budgets, but got {len(calls)} update_many calls"
+    )
+    assert calls[0]["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
+    assert calls[0]["data"]["spend"] == 0
