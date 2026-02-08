@@ -3,7 +3,6 @@ import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -853,6 +852,92 @@ def test_anthropic_structured_output_beta_header():
         "structured-outputs-2025-11-13"
         in response["raw_request_headers"]["anthropic-beta"]
     )
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-opus-4-6-20250918",
+        "claude-opus-4.6-20250918",
+        "claude-opus-4-5-20251101",
+        "claude-opus-4.5-20251101",
+    ],
+)
+def test_opus_uses_native_structured_output(model_name):
+    """
+    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
+    (output_format) rather than the tool-based workaround.
+    """
+    config = AnthropicConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+                "required": ["name", "age"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model=model_name,
+        drop_params=False,
+    )
+
+    # Should use output_format (native structured outputs)
+    assert "output_format" in optional_params
+    assert optional_params["output_format"]["type"] == "json_schema"
+
+    # Should NOT create a tool-based workaround
+    assert "tools" not in optional_params
+    assert "tool_choice" not in optional_params
+
+    # Should set json_mode
+    assert optional_params.get("json_mode") is True
+
+
+def test_non_structured_output_model_uses_tool_workaround():
+    """
+    Test that models NOT in the native structured output list still use the
+    tool-based workaround for response_format.
+    """
+    config = AnthropicConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+                "required": ["result"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="claude-3-5-sonnet-20241022",
+        drop_params=False,
+    )
+
+    # Should NOT use output_format
+    assert "output_format" not in optional_params
+
+    # Should use tool-based workaround
+    assert "tools" in optional_params
+    assert "tool_choice" in optional_params
 
 
 # ============ Tool Search Tests ============
