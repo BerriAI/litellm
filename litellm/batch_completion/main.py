@@ -245,9 +245,14 @@ def batch_completion_models_all_responses(*args, **kwargs):
     responses = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-        for idx, model in enumerate(models):
-            future = executor.submit(litellm.completion, *args, model=model, **kwargs)
-            if future.result() is not None:
-                responses.append(future.result())
+        futures = [
+            executor.submit(litellm.completion, *args, model=model, **kwargs)
+            for model in models
+        ]
+
+        for future in futures:
+            result = future.result()
+            if result is not None:
+                responses.append(result)
 
     return responses
