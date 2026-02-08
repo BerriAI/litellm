@@ -39,6 +39,10 @@ model_list:
       model: "bedrock/us.amazon.nova-premier-v1:0"
       aws_region_name: "us-east-1"
 
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+
   - model_name: auto
     litellm_params:
       model: "auto_router/auto_router_1"
@@ -59,11 +63,18 @@ mcp_servers:
 
 # General Settings
 general_settings:
-  master_key: sk-1234
+  forward_client_headers_to_llm_api: true  # Required: forwards OAuth token to Anthropic
   store_model_in_db: false
 
+
 # LiteLLM Settings
+router_settings:
+  model_group_alias:
+    "claude-sonnet-4-5-20250929": "claude-sonnet-4-5"
+    "claude-sonnet-4-5-20250514": "claude-sonnet-4-5"
+
 litellm_settings:
+  master_key: sk-1234
   drop_params: true
   # Enable MCP Semantic Tool Filter
   mcp_semantic_tool_filter:
