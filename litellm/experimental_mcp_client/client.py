@@ -35,12 +35,17 @@ from pydantic import AnyUrl
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
+from contextvars import ContextVar
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
+)
+
+disable_mcp_get_stream: ContextVar[bool] = ContextVar(
+    "disable_mcp_get_stream", default=False
 )
 
 
@@ -51,12 +56,23 @@ async def patched_handle_get_stream(*args, **kwargs):
     Patched to be a no-op to prevent anyio TaskGroup cancellation with external MCP backends.
     LiteLLM proxy only needs request/response (initialize -> list_tools -> call_tool).
     """
-    return
+    if disable_mcp_get_stream.get():
+        verbose_logger.debug("MCP GET stream disabled via ContextVar")
+        return
+    return await _old_handle_get_stream(*args, **kwargs)
 
 
 if streamable_http_client is not None:
+    _old_handle_get_stream = getattr(streamable_http_module, "handle_get_stream", None)
+
+    async def dummy_handle_get_stream(*args, **kwargs):
+        pass
+
+    if _old_handle_get_stream is None:
+        _old_handle_get_stream = dummy_handle_get_stream
+
     verbose_logger.debug(
-        "Applying patch for mcp.client.streamable_http.handle_get_stream"
+        "Applying scoped monkeypatch for mcp.client.streamable_http.handle_get_stream"
     )
     streamable_http_module.handle_get_stream = patched_handle_get_stream
 
@@ -87,6 +103,7 @@ class MCPClient:
         stdio_config: Optional[MCPStdioConfig] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
+        disable_get_stream: bool = True,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -96,6 +113,7 @@ class MCPClient:
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
+        self.disable_get_stream: bool = disable_get_stream
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -188,6 +206,7 @@ class MCPClient:
         self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up."""
+        token = disable_mcp_get_stream.set(self.disable_get_stream)
         http_client: Optional[httpx.AsyncClient] = None
         try:
             transport_ctx, http_client = self._create_transport_context()
@@ -198,6 +217,7 @@ class MCPClient:
             )
             raise
         finally:
+            disable_mcp_get_stream.reset(token)
             if http_client is not None:
                 try:
                     await http_client.aclose()

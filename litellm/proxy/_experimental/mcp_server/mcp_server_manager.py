@@ -14,6 +14,7 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -1427,8 +1428,9 @@ class MCPServerManager:
                 return []
 
         try:
-            return await _list_tools_task()
-        except asyncio.TimeoutError:
+            with anyio.fail_after(30.0):
+                return await _list_tools_task()
+        except (asyncio.TimeoutError, TimeoutError):
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
         except asyncio.CancelledError:
