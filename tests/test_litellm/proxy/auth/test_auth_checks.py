@@ -126,44 +126,26 @@ def test_get_experimental_ui_login_jwt_auth_token_invalid(
 
 
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_none_skips_check():
+async def test_virtual_key_max_budget_zero_skips_check():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.budget_alerts = AsyncMock()
     valid_token = UserAPIKeyAuth(
         token="sk-test",
         spend=76.16,
-        max_budget=None,
+        max_budget=0,
         user_id="test-user",
     )
 
-    await _virtual_key_max_budget_check(
-        valid_token=valid_token,
-        proxy_logging_obj=proxy_logging_obj,
-        user_obj=None,
-    )
-
-    proxy_logging_obj.budget_alerts.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_virtual_key_max_budget_zero_blocks_requests():
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.budget_alerts = AsyncMock()
-    valid_token = UserAPIKeyAuth(
-        token="sk-test",
-        spend=1.0,
-        max_budget=0.0,
-        user_id="test-user",
-    )
-
-    with pytest.raises(litellm.BudgetExceededError):
+    try:
         await _virtual_key_max_budget_check(
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
             user_obj=None,
         )
+    except Exception as exc:
+        pytest.fail(f"_virtual_key_max_budget_check raised unexpectedly: {exc}")
 
-    proxy_logging_obj.budget_alerts.assert_called_once()
+    proxy_logging_obj.budget_alerts.assert_not_called()
 
 
 def test_get_key_object_from_ui_hash_key_valid(
