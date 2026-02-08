@@ -122,7 +122,7 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
     """Test that GPT-5-Codex raises error for unsupported temperature when drop_params=False."""
     with pytest.raises(
         litellm.utils.UnsupportedParamsError,
-        match="gpt-5 models \\(including gpt-5-codex\\)",
+        match="gpt-5 reasoning models",
     ):
         config.map_openai_params(
             non_default_params={"temperature": 0.7},
@@ -414,3 +414,44 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
+
+
+# GPT-5 Chat model tests (intelligence models that support temperature)
+def test_gpt5_chat_model_detection(gpt5_config: OpenAIGPT5Config):
+    """Test that GPT-5 chat models are correctly detected."""
+    assert gpt5_config.is_model_gpt_5_chat_model("gpt-5-chat")
+    assert gpt5_config.is_model_gpt_5_chat_model("gpt-5-chat-latest")
+    assert gpt5_config.is_model_gpt_5_chat_model("openai/gpt-5-chat-latest")
+
+    # Non-chat models should not be detected as chat
+    assert not gpt5_config.is_model_gpt_5_chat_model("gpt-5")
+    assert not gpt5_config.is_model_gpt_5_chat_model("gpt-5-mini")
+    assert not gpt5_config.is_model_gpt_5_chat_model("gpt-5-nano")
+    assert not gpt5_config.is_model_gpt_5_chat_model("gpt-5-codex")
+
+
+def test_gpt5_chat_supports_temperature(config: OpenAIConfig):
+    """Test that GPT-5 chat models support any temperature value.
+
+    GPT-5 chat models are intelligence models (like gpt-4o) that support
+    temperature, unlike reasoning models (gpt-5, gpt-5-mini, etc.).
+    """
+    for temp in [0.0, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0]:
+        params = config.map_openai_params(
+            non_default_params={"temperature": temp},
+            optional_params={},
+            model="gpt-5-chat-latest",
+            drop_params=False,
+        )
+        assert params["temperature"] == temp
+
+
+def test_gpt5_chat_with_provider_prefix(config: OpenAIConfig):
+    """Test that GPT-5 chat works with provider prefix."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="openai/gpt-5-chat-latest",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.3
