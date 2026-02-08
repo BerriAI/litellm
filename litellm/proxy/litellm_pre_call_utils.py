@@ -173,12 +173,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    team_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -286,6 +286,16 @@ class LiteLLMProxyRequestSetup:
         stream_timeout_header = headers.get("x-litellm-stream-timeout", None)
         if stream_timeout_header is not None:
             return float(stream_timeout_header)
+        return None
+
+    @staticmethod
+    def _get_guardrails_from_request(headers: dict) -> Optional[list]:
+        """
+        Get the `guardrails` from the request headers.
+        """
+        guardrails_header = headers.get("x-litellm-guardrails", None)
+        if guardrails_header is not None:
+            return guardrails_header.split(",")
         return None
 
     @staticmethod
@@ -524,6 +534,7 @@ class LiteLLMProxyRequestSetup:
         stream_timeout = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
             headers
         )
+
         if stream_timeout is not None:
             data["stream_timeout"] = stream_timeout
 
@@ -562,11 +573,19 @@ class LiteLLMProxyRequestSetup:
         trace_id_from_header = headers.get("x-litellm-trace-id")
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
-            verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
-        
+            verbose_proxy_logger.debug(
+                f"Extracted agent_id from header: {agent_id_from_header}"
+            )
+
         if trace_id_from_header:
             metadata_from_headers["trace_id"] = trace_id_from_header
-            verbose_proxy_logger.debug(f"Extracted trace_id from header: {trace_id_from_header}")
+            verbose_proxy_logger.debug(
+                f"Extracted trace_id from header: {trace_id_from_header}"
+            )
+
+        guardrails = LiteLLMProxyRequestSetup._get_guardrails_from_request(headers)
+        if guardrails is not None:
+            metadata_from_headers["guardrails"] = guardrails
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -671,11 +690,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name][
-                "tags"
-            ] = LiteLLMProxyRequestSetup._merge_tags(
-                request_tags=data[_metadata_variable_name].get("tags"),
-                tags_to_add=key_metadata["tags"],
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
             )
         if "disable_global_guardrails" in key_metadata and isinstance(
             key_metadata["disable_global_guardrails"], bool
@@ -943,9 +962,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name][
-            "global_max_parallel_requests"
-        ] = general_settings.get("global_max_parallel_requests", None)
+        data[_metadata_variable_name]["global_max_parallel_requests"] = (
+            general_settings.get("global_max_parallel_requests", None)
+        )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata

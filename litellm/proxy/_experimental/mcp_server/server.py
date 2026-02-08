@@ -1,6 +1,7 @@
 """
 LiteLLM MCP Server Routes
 """
+
 # pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
@@ -140,8 +141,8 @@ if MCP_AVAILABLE:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
-        json_response=False, # enables SSE streaming
-        stateless=False, # enables session state
+        json_response=False,  # enables SSE streaming
+        stateless=False,  # enables session state
     )
 
     # Create SSE session manager
@@ -299,9 +300,9 @@ if MCP_AVAILABLE:
         host_progress_callback = None
         try:
             host_ctx = server.request_context
-            if host_ctx and hasattr(host_ctx, 'meta') and host_ctx.meta:
-                host_token = getattr(host_ctx.meta, 'progressToken', None)
-                if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
+            if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
+                host_token = getattr(host_ctx.meta, "progressToken", None)
+                if host_token and hasattr(host_ctx, "session") and host_ctx.session:
                     host_session = host_ctx.session
 
                     async def forward_progress(progress: float, total: float | None):
@@ -310,26 +311,44 @@ if MCP_AVAILABLE:
                             await host_session.send_progress_notification(
                                 progress_token=host_token,
                                 progress=progress,
-                                total=total
+                                total=total,
                             )
-                            verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                            verbose_logger.debug(
+                                f"Forwarded progress {progress}/{total} to Host"
+                            )
                         except Exception as e:
-                            verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                            verbose_logger.error(
+                                f"Failed to forward progress to Host: {e}"
+                            )
 
                     host_progress_callback = forward_progress
-                    verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+                    verbose_logger.debug(
+                        f"Host progressToken captured: {host_token[:8]}..."
+                    )
         except Exception as e:
             verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
             # Create a body date for logging
             body_data = {"name": name, "arguments": arguments}
 
+            # Convert raw_headers to ASGI format: list of (bytes, bytes) tuples
+            if raw_headers is not None and isinstance(raw_headers, dict):
+                scope_headers = [
+                    (
+                        k.encode("latin-1") if isinstance(k, str) else k,
+                        v.encode("latin-1") if isinstance(v, str) else v,
+                    )
+                    for k, v in raw_headers.items()
+                ]
+            else:
+                # Already list of tuples (e.g. from ASGI scope)
+                scope_headers: list = [(b"content-type", b"application/json")]
             request = Request(
                 scope={
                     "type": "http",
                     "method": "POST",
                     "path": "/mcp/tools/call",
-                    "headers": [(b"content-type", b"application/json")],
+                    "headers": scope_headers,
                 }
             )
             if user_api_key_auth is not None:
@@ -761,18 +780,15 @@ if MCP_AVAILABLE:
                 )
 
         allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth
-            )
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_server_ids = (
-            global_mcp_server_manager.filter_server_ids_by_ip(
-                allowed_mcp_server_ids, client_ip
-            )
+        allowed_mcp_server_ids = global_mcp_server_manager.filter_server_ids_by_ip(
+            allowed_mcp_server_ids, client_ip
         )
         verbose_logger.debug(
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
-            client_ip, allowed_mcp_server_ids,
+            client_ip,
+            allowed_mcp_server_ids,
         )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
@@ -1490,9 +1506,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
             litellm_logging_obj.model = f"MCP: {name}"
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
@@ -1518,9 +1534,9 @@ if MCP_AVAILABLE:
                 ).get("mcp_server_cost_info")
                 # Update model_call_details with the cost info
                 if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
+                    litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                        standard_logging_mcp_tool_call
+                    )
                 response = await _handle_managed_mcp_tool(
                     server_name=server_name,
                     name=original_tool_name,  # Pass the full name (potentially prefixed)
@@ -1563,6 +1579,8 @@ if MCP_AVAILABLE:
         """
         Call a specific tool with the provided arguments (handles prefixed tool names).
         """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
         start_time = datetime.now()
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
             "litellm_logging_obj", None
@@ -1599,6 +1617,12 @@ if MCP_AVAILABLE:
                     detail="User not allowed to call this tool.",
                 )
 
+            kwargs = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=cast(UserAPIKeyAuth, user_api_key_auth),
+                data=kwargs,
+                call_type=CallTypes.call_mcp_tool.value,
+            )
+
             # Delegate to execute_mcp_tool for execution
             response = await execute_mcp_tool(
                 name=name,
@@ -1611,6 +1635,12 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 **kwargs,
+            )
+
+            response = await proxy_logging_obj.post_call_success_hook(
+                data=kwargs,
+                response=response,
+                user_api_key_dict=user_api_key_auth,
             )
         except Exception as e:
             traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
@@ -1639,7 +1669,7 @@ if MCP_AVAILABLE:
             await litellm_logging_obj.async_success_handler(
                 result=response, start_time=start_time, end_time=end_time
             )
-        return response
+        return cast(CallToolResult, response)
 
     async def mcp_get_prompt(
         name: str,
@@ -1937,8 +1967,7 @@ if MCP_AVAILABLE:
                 _session_id,
             )
             scope["headers"] = [
-                (k, v) for k, v in scope["headers"]
-                if k != _mcp_session_header
+                (k, v) for k, v in scope["headers"] if k != _mcp_session_header
             ]
 
     async def handle_streamable_http_mcp(
@@ -2143,17 +2172,15 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> (
-        Tuple[
-            Optional[UserAPIKeyAuth],
-            Optional[str],
-            Optional[List[str]],
-            Optional[Dict[str, Dict[str, str]]],
-            Optional[Dict[str, str]],
-            Optional[Dict[str, str]],
-            Optional[str],
-        ]
-    ):
+    def get_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+        Optional[str],
+    ]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

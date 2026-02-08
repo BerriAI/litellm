@@ -149,32 +149,33 @@ def _get_additional_costs(
 ) -> Optional[dict]:
     """
     Calculate additional costs beyond standard token costs.
-    
+
     This function delegates to provider-specific config classes to calculate
     any additional costs like routing fees, infrastructure costs, etc.
-    
+
     Args:
         model: The model name
         custom_llm_provider: The provider name (optional)
         prompt_tokens: Number of prompt tokens
         completion_tokens: Number of completion tokens
-        
+
     Returns:
         Optional dictionary with cost names and amounts, or None if no additional costs
     """
     if not custom_llm_provider:
         return None
-        
+
     try:
         config_class = None
         if custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
             config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
         # Add more providers here as needed
         # elif custom_llm_provider == "other_provider":
         #     config_class = get_other_provider_config(model)
-        
-        if config_class and hasattr(config_class, 'calculate_additional_costs'):
+
+        if config_class and hasattr(config_class, "calculate_additional_costs"):
             return config_class.calculate_additional_costs(
                 model=model,
                 prompt_tokens=prompt_tokens,
@@ -182,7 +183,7 @@ def _get_additional_costs(
             )
     except Exception as e:
         verbose_logger.debug(f"Error calculating additional costs: {e}")
-    
+
     return None
 
 
@@ -747,7 +748,14 @@ def _infer_call_type(
         return "image_generation"
     elif isinstance(completion_response, TextCompletionResponse):
         return "text_completion"
+    else:
+        try:
+            from mcp.types import CallToolResult
 
+            if isinstance(completion_response, CallToolResult):
+                return "call_mcp_tool"
+        except ImportError:
+            pass
     return call_type
 
 
@@ -1030,9 +1038,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1386,7 +1394,7 @@ def completion_cost(  # noqa: PLR0915
                     service_tier=service_tier,
                     response=completion_response,
                 )
-                
+
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
                 additional_costs = _get_additional_costs(
                     model=model,
@@ -1394,7 +1402,7 @@ def completion_cost(  # noqa: PLR0915
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                 )
-                
+
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
