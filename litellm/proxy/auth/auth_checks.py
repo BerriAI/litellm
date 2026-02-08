@@ -270,7 +270,6 @@ async def common_checks(
             (team_object is None or team_object.team_id is None)
             and user_object is not None
             and user_object.max_budget is not None
-            and user_object.max_budget > 0
         ):
             user_budget = user_object.max_budget
             if user_budget < user_object.spend:
@@ -296,11 +295,7 @@ async def common_checks(
             and end_user_object.litellm_budget_table is not None
         ):
             end_user_budget = end_user_object.litellm_budget_table.max_budget
-            if (
-                end_user_budget is not None
-                and end_user_budget > 0
-                and end_user_object.spend > end_user_budget
-            ):
+            if end_user_budget is not None and end_user_object.spend > end_user_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=end_user_object.spend,
                     max_budget=end_user_budget,
@@ -734,11 +729,7 @@ def _check_end_user_budget(
         return
 
     end_user_budget = end_user_obj.litellm_budget_table.max_budget
-    if (
-        end_user_budget is not None
-        and end_user_budget > 0
-        and end_user_obj.spend > end_user_budget
-    ):
+    if end_user_budget is not None and end_user_obj.spend > end_user_budget:
         raise litellm.BudgetExceededError(
             current_cost=end_user_obj.spend,
             max_budget=end_user_budget,
@@ -2246,11 +2237,7 @@ async def _virtual_key_max_budget_check(
         Triggers a budget alert if the token is over it's max budget.
 
     """
-    if (
-        valid_token.spend is not None
-        and valid_token.max_budget is not None
-        and valid_token.max_budget > 0
-    ):
+    if valid_token.spend is not None and valid_token.max_budget is not None:
         ####################################
         # collect information for alerting #
         ####################################
@@ -2343,7 +2330,6 @@ async def _virtual_key_max_budget_alert_check(
 
     if (
         valid_token.max_budget is not None
-        and valid_token.max_budget > 0
         and valid_token.spend is not None
         and valid_token.spend > 0
     ):
@@ -2413,7 +2399,6 @@ async def _check_team_member_budget(
             team_membership is not None
             and team_membership.litellm_budget_table is not None
             and team_membership.litellm_budget_table.max_budget is not None
-            and team_membership.litellm_budget_table.max_budget > 0
         ):
             team_member_budget = team_membership.litellm_budget_table.max_budget
             team_member_spend = team_membership.spend or 0.0
@@ -2441,7 +2426,6 @@ async def _team_max_budget_check(
     if (
         team_object is not None
         and team_object.max_budget is not None
-        and team_object.max_budget > 0
         and team_object.spend is not None
         and team_object.spend > team_object.max_budget
     ):
@@ -2668,7 +2652,6 @@ async def _tag_max_budget_check(
         if (
             tag_object.litellm_budget_table is not None
             and tag_object.litellm_budget_table.max_budget is not None
-            and tag_object.litellm_budget_table.max_budget > 0
             and tag_object.spend is not None
             and tag_object.spend > tag_object.litellm_budget_table.max_budget
         ):
