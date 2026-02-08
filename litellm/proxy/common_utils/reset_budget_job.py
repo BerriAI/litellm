@@ -69,6 +69,38 @@ class ResetBudgetJob:
             },
         )
 
+    async def reset_budget_for_keys_linked_to_budgets(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets the spend for keys linked to budget tiers that are being reset.
+
+        This handles keys that have budget_id but no budget_duration set on the key
+        itself (e.g. keys created before the fix to inherit budget_duration from
+        the linked budget tier).
+
+        Keys that have their own budget_duration are already handled by
+        reset_budget_for_litellm_keys() and are excluded here to avoid
+        double-resetting.
+        """
+        budget_ids = [
+            budget.budget_id
+            for budget in budgets_to_reset
+            if budget.budget_id is not None
+        ]
+        if not budget_ids:
+            return
+
+        return await self.prisma_client.db.litellm_verificationtoken.update_many(
+            where={
+                "budget_id": {"in": budget_ids},
+                "budget_duration": None,  # only keys without their own reset schedule
+            },
+            data={
+                "spend": 0,
+            },
+        )
+
     async def reset_budget_for_litellm_budget_table(self):
         """
         Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
@@ -109,6 +141,10 @@ class ResetBudgetJob:
                 )
 
                 await self.reset_budget_for_litellm_team_members(
+                    budgets_to_reset=budgets_to_reset
+                )
+
+                await self.reset_budget_for_keys_linked_to_budgets(
                     budgets_to_reset=budgets_to_reset
                 )
 
