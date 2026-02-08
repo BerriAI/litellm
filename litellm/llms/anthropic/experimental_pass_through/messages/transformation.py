@@ -81,7 +81,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if api_key is None:
             api_key = os.getenv("ANTHROPIC_API_KEY")
 
-        if "x-api-key" not in headers and api_key:
+        # Don't set x-api-key if using OAuth (api_key="_oauth_" is the marker)
+        # The Authorization header is forwarded separately
+        if "x-api-key" not in headers and api_key and api_key != "_oauth_":
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION

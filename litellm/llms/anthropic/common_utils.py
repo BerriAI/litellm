@@ -22,14 +22,28 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import AllMessageValues
 
 
+def is_anthropic_oauth_key(value: Optional[str]) -> bool:
+    """Check if a value contains an Anthropic OAuth token (sk-ant-oat*)."""
+    if value is None:
+        return False
+    # Handle both raw token and "Bearer <token>" format
+    if value.startswith("Bearer "):
+        value = value[7:]
+    return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+
+
 def optionally_handle_anthropic_oauth(
     headers: dict, api_key: Optional[str]
 ) -> tuple[dict, Optional[str]]:
     """
     Handle Anthropic OAuth token detection and header setup.
 
-    If an OAuth token is detected in the Authorization header, extracts it
-    and sets the required OAuth headers.
+    If an OAuth token is detected in the Authorization header, sets the required
+    OAuth headers and returns a marker value for api_key.
+
+    The marker "_oauth_" indicates OAuth is being used. Callers should check for
+    this marker and NOT set x-api-key with the OAuth token to prevent leakage to
+    third-party providers. The Authorization header itself is forwarded separately.
 
     Args:
         headers: Request headers dict
@@ -40,7 +54,9 @@ def optionally_handle_anthropic_oauth(
     """
     auth_header = headers.get("authorization", "")
     if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.replace("Bearer ", "")
+        # For OAuth, use Authorization header only - do NOT set x-api-key
+        # Return api_key="_oauth_" as marker so callers know OAuth is used
+        api_key = "_oauth_"
         headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
         headers["anthropic-dangerous-direct-browser-access"] = "true"
     return headers, api_key
