@@ -1086,3 +1086,116 @@ def test_convert_tool_response_with_nested_file_object():
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "application/pdf"
     assert inline_data["data"] == test_pdf_base64
+
+
+def test_function_response_has_user_role():
+    """
+    Test that function_response ContentType entries have role='user'.
+
+    The Gemini API requires that function_response parts be sent with role='user',
+    not role='function' or without a role. This test verifies that tool/function
+    message responses are properly wrapped with role='user' in the Gemini format.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/20690
+    """
+    # Simulate a multi-turn conversation with tool call and response
+    messages = [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_weather_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Paris"}'
+                    }
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_weather_123",
+            "content": '{"temperature": 22, "condition": "sunny"}'
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    # Find the content entry that contains function_response
+    function_response_content = None
+    for content in contents:
+        for part in content.get("parts", []):
+            if "function_response" in part:
+                function_response_content = content
+                break
+
+    # Verify function_response content exists and has role='user'
+    assert function_response_content is not None, "function_response content not found"
+    assert function_response_content["role"] == "user", \
+        f"Expected role='user' for function_response, got role='{function_response_content.get('role')}'"
+
+
+def test_multiple_function_responses_have_user_role():
+    """
+    Test that multiple consecutive function_response entries all have role='user'.
+
+    When a model makes parallel tool calls, the responses should all be grouped
+    together with role='user'.
+    """
+    # Simulate parallel tool calls and their responses
+    messages = [
+        {"role": "user", "content": "What's the weather in Paris and London?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_paris",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Paris"}'
+                    }
+                },
+                {
+                    "id": "call_london",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "London"}'
+                    }
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_paris",
+            "content": '{"temperature": 22, "condition": "sunny"}'
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_london",
+            "content": '{"temperature": 15, "condition": "cloudy"}'
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    # Find all content entries that contain function_response
+    function_response_contents = []
+    for content in contents:
+        for part in content.get("parts", []):
+            if "function_response" in part:
+                function_response_contents.append(content)
+                break
+
+    # Verify we found at least one function_response content
+    assert len(function_response_contents) >= 1, "No function_response content found"
+
+    # Verify all function_response contents have role='user'
+    for content in function_response_contents:
+        assert content["role"] == "user", \
+            f"Expected role='user' for function_response, got role='{content.get('role')}'"
