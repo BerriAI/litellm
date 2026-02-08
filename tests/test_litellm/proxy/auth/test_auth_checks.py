@@ -136,14 +136,11 @@ async def test_virtual_key_max_budget_zero_skips_check():
         user_id="test-user",
     )
 
-    try:
-        await _virtual_key_max_budget_check(
-            valid_token=valid_token,
-            proxy_logging_obj=proxy_logging_obj,
-            user_obj=None,
-        )
-    except Exception as exc:
-        pytest.fail(f"_virtual_key_max_budget_check raised unexpectedly: {exc}")
+    await _virtual_key_max_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=None,
+    )
 
     proxy_logging_obj.budget_alerts.assert_not_called()
 
