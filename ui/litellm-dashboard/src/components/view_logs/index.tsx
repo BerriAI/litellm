@@ -822,7 +822,7 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
       ? row.original.messages.length > 0
       : Object.keys(row.original.messages).length > 0);
   const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
-  const missingData = !hasMessages && !hasResponse;
+  const missingData = !hasMessages && !hasResponse && !hasError;
 
   // Format the response with error details if present
   const formattedResponse = () => {
