@@ -1,4 +1,4 @@
-import threading
+import concurrent.futures
 
 import litellm
 from litellm.batch_completion.main import batch_completion_models_all_responses
@@ -10,30 +10,54 @@ def test_batch_completion_models_all_responses_submits_before_waiting(monkeypatc
     Ensures all model calls are submitted to the thread pool before waiting on results.
     """
     models = ["model-a", "model-b", "model-c"]
-    all_submitted = threading.Event()
-    lock = threading.Lock()
-    submitted_count = 0
+    called_models = []
+
+    class _AssertingFuture:
+        def __init__(self, result, executor, expected_submissions):
+            self._result = result
+            self._executor = executor
+            self._expected_submissions = expected_submissions
+
+        def result(self):
+            if self._executor.submit_count != self._expected_submissions:
+                raise AssertionError("Not all model calls were submitted before waiting")
+            return self._result
+
+    class _RecordingThreadPoolExecutor:
+        def __init__(self, max_workers, *args, **kwargs):
+            self.max_workers = max_workers
+            self.submit_count = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, *args, **kwargs):
+            self.submit_count += 1
+            result = fn(*args, **kwargs)
+            return _AssertingFuture(
+                result=result,
+                executor=self,
+                expected_submissions=len(models),
+            )
 
     def _mock_completion(*args, model, **kwargs):
-        nonlocal submitted_count
-        with lock:
-            submitted_count += 1
-            if submitted_count == len(models):
-                all_submitted.set()
-
-        # If the implementation blocks on the first future before submitting all tasks,
-        # this wait times out and the test fails with a clear assertion.
-        if not all_submitted.wait(timeout=15):
-            raise AssertionError("Not all model calls were submitted before waiting")
+        called_models.append(model)
         return {"model": model}
 
     monkeypatch.setattr(litellm, "completion", _mock_completion)
+    monkeypatch.setattr(
+        concurrent.futures, "ThreadPoolExecutor", _RecordingThreadPoolExecutor
+    )
 
     responses = batch_completion_models_all_responses(
         models=models,
         messages=[{"role": "user", "content": "hello"}],
     )
 
+    assert sorted(called_models) == sorted(models)
     assert len(responses) == len(models)
     assert sorted(response["model"] for response in responses) == sorted(models)
 
