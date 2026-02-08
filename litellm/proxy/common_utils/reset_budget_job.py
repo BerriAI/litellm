@@ -500,6 +500,18 @@ class ResetBudgetJob:
             )
 
             if budgets_to_reset is not None and len(budgets_to_reset) > 0:
+                # Update budget reset dates
+                for budget in budgets_to_reset:
+                    budget = await ResetBudgetJob._reset_budget_reset_at_date(
+                        budget, now
+                    )
+
+                await self.prisma_client.update_data(
+                    query_type="update_many",
+                    data_list=budgets_to_reset,
+                    table_name="budget",
+                )
+
                 # Get organizations associated with these budgets
                 organizations_to_reset = (
                     await self.prisma_client.db.litellm_organizationtable.find_many(
