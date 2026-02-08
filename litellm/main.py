@@ -6387,6 +6387,33 @@ def transcription(
             max_retries=max_retries,
             litellm_params=litellm_params_dict,
         )
+    elif custom_llm_provider == "mistral" and provider_config is not None:
+        response = base_llm_http_handler.audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            model_response=model_response,
+            atranscription=atranscription,
+            client=(
+                client
+                if client is not None
+                and (
+                    isinstance(client, HTTPHandler)
+                    or isinstance(client, AsyncHTTPHandler)
+                )
+                else None
+            ),
+            timeout=timeout,
+            max_retries=max_retries,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            custom_llm_provider=custom_llm_provider,
+            headers={},
+            provider_config=provider_config,
+            shared_session=shared_session,
+        )
     elif custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
     ):

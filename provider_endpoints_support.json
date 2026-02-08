@@ -1369,7 +1369,7 @@
         "responses": true,
         "embeddings": true,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,

@@ -842,6 +842,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.deepgram.audio_transcription.transformation",
         "DeepgramAudioTranscriptionConfig",
     ),
+    "MistralAudioTranscriptionConfig": (
+        ".llms.mistral.audio_transcription.transformation",
+        "MistralAudioTranscriptionConfig",
+    ),
     "TopazImageVariationConfig": (
         ".llms.topaz.image_variations.transformation",
         "TopazImageVariationConfig",

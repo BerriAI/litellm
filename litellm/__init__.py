@@ -1377,6 +1377,7 @@ if TYPE_CHECKING:
     from .llms.openai.openai import OpenAIConfig as OpenAIConfig, MistralEmbeddingConfig as MistralEmbeddingConfig
     from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig as OpenAIImageVariationConfig
     from .llms.deepgram.audio_transcription.transformation import DeepgramAudioTranscriptionConfig as DeepgramAudioTranscriptionConfig
+    from .llms.mistral.audio_transcription.transformation import MistralAudioTranscriptionConfig as MistralAudioTranscriptionConfig
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
