@@ -216,7 +216,14 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         field_name: Name of the metadata field being updated
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
+        value = updated_kv.get(field_name)
+        # Skip the premium check for empty collections ([] or {}).
+        # The UI sends these as defaults even when the user hasn't configured
+        # any enterprise features (see issue #20304).  However, we still
+        # proceed with the update so that users can intentionally clear a
+        # previously-set field by sending an empty list/dict.
+        if value is not None and value != [] and value != {}:
+            _premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
