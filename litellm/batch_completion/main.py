@@ -251,8 +251,14 @@ def batch_completion_models_all_responses(*args, **kwargs):
         ]
 
         for future in futures:
-            result = future.result()
-            if result is not None:
-                responses.append(result)
+            try:
+                result = future.result()
+                if result is not None:
+                    responses.append(result)
+            except Exception as e:
+                print_verbose(
+                    f"batch_completion_models_all_responses: model request failed: {str(e)}"
+                )
+                continue
 
     return responses
