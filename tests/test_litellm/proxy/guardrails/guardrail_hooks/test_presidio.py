@@ -923,6 +923,98 @@ async def test_analyze_text_error_dict_handling():
 
 
 @pytest.mark.asyncio
+async def test_analyze_text_string_response_handling():
+    """
+    Test that analyze_text handles string responses from Presidio API.
+
+    When Presidio returns a string (e.g. error message from websearch/hosted models),
+    should handle gracefully instead of crashing with TypeError about mapping vs str.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+    )
+
+    class MockResponse:
+        async def json(self):
+            return "Internal Server Error"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class MockSession:
+        def post(self, *args, **kwargs):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    with patch("aiohttp.ClientSession", return_value=MockSession()):
+        result = await presidio.analyze_text(
+            text="some text",
+            presidio_config=None,
+            request_data={},
+        )
+    assert result == [], "String response should be handled gracefully"
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_list_with_non_dict_items():
+    """
+    Test that analyze_text skips non-dict items in the result list.
+
+    When Presidio returns a list containing strings (malformed response),
+    should skip invalid items and return parsed valid ones.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+    )
+
+    class MockResponse:
+        async def json(self):
+            return [
+                {"entity_type": "PERSON", "start": 0, "end": 5, "score": 0.9},
+                "invalid_string_item",
+                {"entity_type": "EMAIL", "start": 10, "end": 25, "score": 0.85},
+            ]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class MockSession:
+        def post(self, *args, **kwargs):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    with patch("aiohttp.ClientSession", return_value=MockSession()):
+        result = await presidio.analyze_text(
+            text="some text",
+            presidio_config=None,
+            request_data={},
+        )
+    assert len(result) == 2, "Should parse 2 valid dict items and skip the string"
+    assert result[0].get("entity_type") == "PERSON"
+    assert result[1].get("entity_type") == "EMAIL"
+
+
+@pytest.mark.asyncio
 async def test_tool_calling_complete_scenario(
     presidio_guardrail, mock_user_api_key, mock_cache
 ):
