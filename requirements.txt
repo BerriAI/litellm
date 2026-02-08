@@ -1,4 +1,9 @@
 # LITELLM PROXY DEPENDENCIES #
+# Security: explicit pins for transitive deps (CVE fixes)
+urllib3>=2.6.0  # CVE-2025-66471, CVE-2025-66418, CVE-2026-21441
+tornado>=6.5.3  # CVE-2025-67725, CVE-2025-67726, CVE-2025-67724
+filelock>=3.20.1  # CVE-2025-68146
+
 anyio==4.8.0 # openai + http req.
 httpx==0.28.1
 openai==2.9.0  # openai req.

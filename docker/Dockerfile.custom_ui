@@ -6,7 +6,18 @@ WORKDIR /app
 
 # Install Node.js and npm (adjust version as needed)
 RUN apt-get update && apt-get install -y nodejs npm && \
-    npm install -g npm@latest tar@latest
+    npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
+    GLOBAL="$(npm root -g)" && \
+    find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    npm cache clean --force
 
 # Copy the UI source into the container
 COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
