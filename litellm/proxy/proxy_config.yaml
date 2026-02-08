@@ -43,6 +43,18 @@ model_list:
     litellm_params:
       model: anthropic/claude-sonnet-4-5-20250929
 
+  - model_name: chatgpt/gpt-5.2
+    model_info:
+      mode: responses
+    litellm_params:
+      model: chatgpt/gpt-5.2
+
+  - model_name: chatgpt/gpt-5.2-codex
+    model_info:
+      mode: responses
+    litellm_params:
+      model: chatgpt/gpt-5.2-codex
+
   - model_name: auto
     litellm_params:
       model: "auto_router/auto_router_1"

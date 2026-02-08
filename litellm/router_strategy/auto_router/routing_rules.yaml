@@ -13,7 +13,7 @@ tiers:
     model: "google/gemini-2.5-flash"
     max_cost_per_m_tokens: 5.0
   top:
-    model: "gpt-4o"
+    model: "chatgpt/gpt-5.2-codex"
     max_cost_per_m_tokens: 30.0
 
 # Category -> tier routing: which tier handles each task category
