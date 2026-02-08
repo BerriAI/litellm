@@ -1538,16 +1538,19 @@ if MCP_AVAILABLE:
                         standard_logging_mcp_tool_call
                     )
                 response = await _handle_managed_mcp_tool(
-                    server_name=server_name,
-                    name=original_tool_name,  # Pass the full name (potentially prefixed)
-                    arguments=arguments,
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    litellm_logging_obj=litellm_logging_obj,
-                    host_progress_callback=host_progress_callback,
+                    **{
+                        "server_name": server_name,
+                        "name": original_tool_name,  # Pass the full name (potentially prefixed)
+                        "arguments": arguments,
+                        "user_api_key_auth": user_api_key_auth,
+                        "mcp_auth_header": mcp_auth_header,
+                        "mcp_server_auth_headers": mcp_server_auth_headers,
+                        "oauth2_headers": oauth2_headers,
+                        "raw_headers": raw_headers,
+                        "litellm_logging_obj": litellm_logging_obj,
+                        "host_progress_callback": host_progress_callback,
+                        **kwargs,
+                    }
                 )
 
             # Fall back to local tool registry with original name (legacy support)
@@ -1616,12 +1619,6 @@ if MCP_AVAILABLE:
                     status_code=403,
                     detail="User not allowed to call this tool.",
                 )
-
-            kwargs = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=cast(UserAPIKeyAuth, user_api_key_auth),
-                data=kwargs,
-                call_type=CallTypes.call_mcp_tool.value,
-            )
 
             # Delegate to execute_mcp_tool for execution
             response = await execute_mcp_tool(
@@ -1810,22 +1807,27 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
         host_progress_callback: Optional[Callable] = None,
+        **kwargs: Any,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+
         call_tool_result = await global_mcp_server_manager.call_tool(
-            server_name=server_name,
-            name=name,
-            arguments=arguments,
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            proxy_logging_obj=proxy_logging_obj,
-            host_progress_callback=host_progress_callback,
+            **{
+                "server_name": server_name,
+                "name": name,
+                "arguments": arguments,
+                "user_api_key_auth": user_api_key_auth,
+                "mcp_auth_header": mcp_auth_header,
+                "mcp_server_auth_headers": mcp_server_auth_headers,
+                "oauth2_headers": oauth2_headers,
+                "raw_headers": raw_headers,
+                "proxy_logging_obj": proxy_logging_obj,
+                "host_progress_callback": host_progress_callback,
+                **kwargs,
+            }
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result

@@ -69,9 +69,7 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import (
-        SEP_986_URL,
-    )
+    from mcp.shared.tool_name_validation import SEP_986_URL
 except ImportError:
     from pydantic import BaseModel
 
@@ -1733,6 +1731,7 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
+        **kwargs: Any,
     ):
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
@@ -1782,7 +1781,10 @@ class MCPServerManager:
                 if user_api_key_auth
                 else None
             ),
+            "metadata": kwargs.get("metadata", {}),
+            "litellm_metadata": kwargs.get("litellm_metadata", {}),
         }
+
 
         # Create MCP request object for processing
         mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(
@@ -1996,6 +1998,7 @@ class MCPServerManager:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         host_progress_callback: Optional[Callable] = None,
+        **kwargs: Any,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -2028,12 +2031,15 @@ class MCPServerManager:
         #########################################################
         if proxy_logging_obj:
             await self.pre_call_tool_check(
-                name=name,
-                arguments=arguments,
-                server_name=server_name,
-                user_api_key_auth=user_api_key_auth,
-                proxy_logging_obj=proxy_logging_obj,
-                server=mcp_server,
+                **{
+                    "name": name,
+                    "arguments": arguments,
+                    "server_name": server_name,
+                    "user_api_key_auth": user_api_key_auth,
+                    "proxy_logging_obj": proxy_logging_obj,
+                    "server": mcp_server,
+                    **kwargs,
+                }
             )
 
         # Prepare tasks for during hooks
@@ -2234,6 +2240,7 @@ class MCPServerManager:
             from litellm.proxy.proxy_server import (
                 general_settings as proxy_general_settings,
             )
+
             return proxy_general_settings
         except ImportError:
             # Fallback if proxy_server not available

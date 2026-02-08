@@ -271,8 +271,13 @@ class CustomGuardrail(CustomLogger):
 
         if "guardrails" in data:
             return data["guardrails"]
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        return metadata.get("guardrails") or []
+        litellm_metadata = data.get("litellm_metadata")
+        if litellm_metadata and litellm_metadata.get("guardrails"):
+            return litellm_metadata.get("guardrails")
+        metadata = data.get("metadata", {})
+        if metadata and metadata.get("guardrails"):
+            return metadata.get("guardrails")
+        return []
 
     def _guardrail_is_in_requested_guardrails(
         self,
@@ -439,6 +444,7 @@ class CustomGuardrail(CustomLogger):
 
         eg. if `self.event_hook == "pre_call" and event_type == "pre_call"` -> then True
         eg. if `self.event_hook == "pre_call" and event_type == "post_call"` -> then False
+        pre_mcp_call is treated as matching pre_call so guardrails registered for pre_call run on MCP pre-call.
         """
 
         if self.event_hook is None:
@@ -447,6 +453,9 @@ class CustomGuardrail(CustomLogger):
             return event_type.value in self.event_hook
         if isinstance(self.event_hook, Mode):
             return event_type.value in self.event_hook.tags.values()
+        hook_val = getattr(self.event_hook, "value", self.event_hook)
+        if event_type == GuardrailEventHooks.pre_mcp_call and hook_val == "pre_call":
+            return True
         return self.event_hook == event_type.value
 
     def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:

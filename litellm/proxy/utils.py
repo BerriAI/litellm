@@ -516,13 +516,9 @@ class ProxyLogging:
 
         # Create synthetic LLM data that guardrails can process
         synthetic_data = {
+            **kwargs,
             "messages": [synthetic_message],
             "model": kwargs.get("model", "mcp-tool-call"),
-            "user_api_key_user_id": kwargs.get("user_api_key_user_id"),
-            "user_api_key_team_id": kwargs.get("user_api_key_team_id"),
-            "user_api_key_end_user_id": kwargs.get("user_api_key_end_user_id"),
-            "user_api_key_hash": kwargs.get("user_api_key_hash"),
-            "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
         }

@@ -6,12 +6,28 @@ import Image from '@theme/IdealImage';
 
 LiteLLM supports applying guardrails to MCP tool calls to ensure security and compliance. You can configure guardrails to run before or during MCP calls to validate inputs and block or mask sensitive information.
 
+:::warning Deprecation: MCP-specific modes
+The MCP-specific modes `pre_mcp_call` and `during_mcp_call` are **deprecated** from v1.81.8 onwards. Use the generic guardrail modes instead:
+- **`pre_call`** — Replaces `pre_mcp_call`. Guardrails with `mode: "pre_call"` run on MCP tool-call inputs as well as regular LLM requests.
+- **`post_call`** — Use for validation or masking on MCP responses.
+
+Configurations using `pre_mcp_call` or `during_mcp_call` continue to work but should be migrated to `pre_call` / `post_call`.
+:::
+
 ### Supported MCP Guardrail Modes
 
-MCP guardrails support the following modes:
+Use the generic modes (recommended):
 
-- `pre_mcp_call`: Run **before** MCP call, on **input**. Use this mode when you want to apply validation/masking/blocking for MCP requests
-- `during_mcp_call`: Run **during** MCP call execution. Use this mode for real-time monitoring and intervention
+- **`pre_call`**: Run **before** the call (including MCP tool calls), on **input**. Use for validation, masking, or blocking on MCP requests.
+- **`post_call`**: Run **after** the call, on **output**. Use for validation or masking on MCP responses.
+
+<details>
+<summary>Legacy MCP-specific modes (deprecated)</summary>
+
+- `pre_mcp_call`: Run **before** MCP call, on **input**. Deprecated — use `pre_call` instead.
+- `during_mcp_call`: Run **during** MCP call execution. Deprecated — use `pre_call` or `post_call` as appropriate.
+
+</details>
 
 ### Configuration Examples
 
@@ -22,7 +38,7 @@ guardrails:
   - guardrail_name: "mcp-input-validation"
     litellm_params:
       guardrail: presidio  # or other supported guardrails
-      mode: "pre_mcp_call" # or during_mcp_call
+      mode: "pre_call"  # runs before MCP and regular LLM calls (use instead of pre_mcp_call)
       pii_entities_config:
         CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
         EMAIL_ADDRESS: "MASK"  # Will mask email addresses

@@ -149,6 +149,27 @@ class TestCustomGuardrailShouldRunGuardrail:
 
         assert result is True
 
+    def test_should_run_guardrail_pre_mcp_call_with_pre_call_hook(self):
+        """Guardrail with event_hook=pre_call should run when event_type is pre_mcp_call (MCP pre-call)."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="block-mcp-input",
+            default_on=False,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        data = {
+            "guardrails": ["block-mcp-input"],
+        }
+
+        result = custom_guardrail.should_run_guardrail(
+            data=data,
+            event_type=GuardrailEventHooks.pre_mcp_call,
+        )
+
+        assert result is True
+
     def test_should_run_guardrail_no_matching_guardrail(self):
         """Test that should_run_guardrail returns False when guardrail name doesn't match"""
         from litellm.types.guardrails import GuardrailEventHooks
