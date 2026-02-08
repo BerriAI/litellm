@@ -608,7 +608,15 @@ class LiteLLMCompletionResponsesConfig:
     ) -> ChatCompletionToolCallChunk:
         """Create a ChatCompletionToolCallChunk from tool_use_definition."""
         function_raw = tool_use_definition.get("function")
-        function: Dict[str, Any] = function_raw if isinstance(function_raw, dict) else {}
+        if isinstance(function_raw, dict):
+            function: Dict[str, Any] = function_raw
+        elif hasattr(function_raw, "get"):
+            function = {
+                "name": function_raw.get("name") or "",
+                "arguments": function_raw.get("arguments") or "{}",
+            }
+        else:
+            function = {}
         tool_use_id_raw = tool_use_definition.get("id")
         tool_use_id: str = (
             str(tool_use_id_raw) if tool_use_id_raw is not None else str(tool_call_id)
@@ -626,6 +634,33 @@ class LiteLLMCompletionResponsesConfig:
             ),
             index=index,
         )
+
+    @staticmethod
+    def _normalize_tool_use_definition(
+        tool_use_definition: Any, tool_call_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Normalize cached tool_call definitions to a dict-like shape consumed by _create_tool_call_chunk.
+        """
+        if not tool_use_definition:
+            return None
+
+        if isinstance(tool_use_definition, dict):
+            normalized_definition: Dict[str, Any] = dict(tool_use_definition)
+        elif hasattr(tool_use_definition, "get"):
+            normalized_definition = {
+                "id": tool_use_definition.get("id"),
+                "type": tool_use_definition.get("type"),
+                "function": tool_use_definition.get("function"),
+            }
+        else:
+            return None
+
+        normalized_definition["id"] = normalized_definition.get("id") or tool_call_id
+        normalized_definition["type"] = (
+            normalized_definition.get("type") or "function"
+        )
+        return normalized_definition
 
     @staticmethod
     def _add_tool_call_to_assistant(
@@ -740,13 +775,19 @@ class LiteLLMCompletionResponsesConfig:
                                 tool_call_id, tools
                             )
                         )
-                    
-                    if _tool_use_definition:
-                        if not isinstance(_tool_use_definition, dict):
-                            _tool_use_definition = {}
+
+                    normalized_tool_use_definition = (
+                        LiteLLMCompletionResponsesConfig._normalize_tool_use_definition(
+                            _tool_use_definition, tool_call_id
+                        )
+                    )
+
+                    if normalized_tool_use_definition:
                         tool_call_chunk = (
                             LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
-                                _tool_use_definition, tool_call_id, len(tool_calls)
+                                normalized_tool_use_definition,
+                                tool_call_id,
+                                len(tool_calls),
                             )
                         )
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
