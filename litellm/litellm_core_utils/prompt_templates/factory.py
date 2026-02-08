@@ -1560,14 +1560,30 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
 
     # Recover name from last message with tool calls
     if last_message_with_tool_calls:
-        tools = last_message_with_tool_calls.get("tool_calls", [])
+        tools = (
+            last_message_with_tool_calls.get("tool_calls")
+            if isinstance(last_message_with_tool_calls, dict)
+            else None
+        )
+        if not isinstance(tools, list):
+            tools = []
         msg_tool_call_id = message.get("tool_call_id", None)
+        normalized_msg_tool_call_id: Optional[str] = None
+        if (
+            isinstance(msg_tool_call_id, str)
+            and THOUGHT_SIGNATURE_SEPARATOR in msg_tool_call_id
+        ):
+            normalized_msg_tool_call_id = msg_tool_call_id.split(
+                THOUGHT_SIGNATURE_SEPARATOR, 1
+            )[0]
         for tool in tools:
             prev_tool_call_id = tool.get("id", None)
-            if (
-                msg_tool_call_id
-                and prev_tool_call_id
-                and msg_tool_call_id == prev_tool_call_id
+            if prev_tool_call_id and (
+                (msg_tool_call_id and msg_tool_call_id == prev_tool_call_id)
+                or (
+                    normalized_msg_tool_call_id
+                    and normalized_msg_tool_call_id == prev_tool_call_id
+                )
             ):
                 name = tool.get("function", {}).get("name", "")
 

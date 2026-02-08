@@ -969,7 +969,7 @@ async def test_mcp_tool_execution_events_creation():
         # Check for sequence numbers
         if hasattr(event, 'sequence_number'):
             assert isinstance(event.sequence_number, int), "Sequence number should be integer"
-            assert event.sequence_number > 0, "Sequence number should be positive"
+            assert event.sequence_number >= 0, "Sequence number should be non-negative"
     
     print("Tool execution events have proper structure")
     

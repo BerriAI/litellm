@@ -70,6 +70,63 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
 
 
+def test_tool_call_output_index_shifts_after_reasoning():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    reasoning_chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    reasoning_content="Thinking...",
+                ),
+            )
+        ],
+    )
+    iterator._ensure_output_item_for_chunk(reasoning_chunk)
+
+    tool_chunk = ModelResponseStream(
+        id="chunk-2",
+        created=124,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "do_thing", "arguments": '{"x":1}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    evt1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(tool_chunk)
+    assert evt1 is not None
+    assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    assert evt1.output_index == 2
+
+
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
@@ -186,7 +243,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt.output_index == 1
-    assert hasattr(evt, '__dict__') and 'sequence_number' in evt.__dict__
+    assert getattr(evt, "sequence_number", None) is not None
     
     # Collect all remaining delta events from the pending queue by creating empty chunks
     delta_events = []
@@ -218,14 +275,13 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
         assert len(evt.delta) <= 10
         assert evt.item_id == "call_test"
         assert evt.output_index == 1
-        assert hasattr(evt, '__dict__') and 'sequence_number' in evt.__dict__
+        assert getattr(evt, "sequence_number", None) is not None
     
     # Verify all deltas concatenated equal the original arguments
     concatenated = ''.join(evt.delta for evt in delta_events)
     assert concatenated == large_arguments
     
     # Verify sequence numbers are increasing
-    sequence_numbers = [evt.__dict__['sequence_number'] for evt in delta_events]
+    sequence_numbers = [getattr(evt, "sequence_number") for evt in delta_events]
     assert sequence_numbers == sorted(sequence_numbers)
     assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
-
