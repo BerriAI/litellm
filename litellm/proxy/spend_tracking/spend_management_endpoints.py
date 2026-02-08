@@ -1856,8 +1856,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
-# NOTE: @lru_cache was removed here because it does not work correctly with async functions.
-# It caches the coroutine object, not the actual result, which can cause errors and memory issues.
+@lru_cache(maxsize=128)
 @router.get(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],

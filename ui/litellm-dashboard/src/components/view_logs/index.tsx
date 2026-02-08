@@ -24,6 +24,7 @@ import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
 import { getTimeRangeDisplay } from "./logs_utils";
+import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./RequestResponsePanel";
 import { SessionView } from "./SessionView";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
@@ -191,8 +192,6 @@ export default function SpendLogsTable({
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
       // Get base response from API
-      // NOTE: We only fetch the list of logs here (lightweight).
-      // Log details (messages/response) are fetched on-demand when user clicks a row.
       const response = await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
@@ -207,6 +206,25 @@ export default function SpendLogsTable({
         selectedStatus,
         selectedModel,
       );
+
+      // Trigger prefetch for all logs
+      await prefetchLogDetails(response.data, formattedStartTime, accessToken, queryClient);
+
+      // Update logs with prefetched data if available
+      response.data = response.data.map((log: LogEntry) => {
+        const prefetchedData = queryClient.getQueryData<PrefetchedLog>([
+          "logDetails",
+          log.request_id,
+          formattedStartTime,
+        ]);
+
+        if (prefetchedData?.messages && prefetchedData?.response) {
+          log.messages = prefetchedData.messages;
+          log.response = prefetchedData.response;
+          return log;
+        }
+        return log;
+      });
 
       return response;
     },
@@ -764,8 +782,6 @@ export default function SpendLogsTable({
         onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
         allLogs={filteredData}
         onSelectLog={handleSelectLog}
-        accessToken={accessToken}
-        startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
       />
     </div>
   );
