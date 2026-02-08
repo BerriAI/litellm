@@ -234,7 +234,7 @@ class DataDogLogger(
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
-            response = await self.async_send_compressed_data(self.log_queue)
+            response = await self.async_send_compressed_data(list(self.log_queue))
             if response.status_code == 413:
                 verbose_logger.exception(DD_ERRORS.DATADOG_413_ERROR.value)
                 return

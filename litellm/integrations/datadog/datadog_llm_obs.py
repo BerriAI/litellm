@@ -44,7 +44,7 @@ from litellm.types.utils import (
 )
 
 
-class DataDogLLMObsLogger(CustomBatchLogger):
+class DataDogLLMObsLogger(CustomBatchLogger[LLMObsPayload]):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
@@ -84,7 +84,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
-            self.log_queue: List[LLMObsPayload] = []
 
             #########################################################
             # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params
@@ -193,14 +192,14 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
-            # Prepare the payload
+            # Prepare the payload (use list() so serialization gets a list, not BoundedQueue)
             payload = {
                 "data": DDIntakePayload(
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
                         tags=[get_datadog_tags()],
-                        spans=self.log_queue,
+                        spans=list(self.log_queue),
                     ),
                 ),
             }

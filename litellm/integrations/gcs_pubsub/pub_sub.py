@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -28,7 +28,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 
-class GcsPubSubLogger(CustomBatchLogger):
+class GcsPubSubLogger(CustomBatchLogger[Union[SpendLogsPayload, StandardLoggingPayload]]):
     def __init__(
         self,
         project_id: Optional[str] = None,
@@ -64,7 +64,6 @@ class GcsPubSubLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[Union[SpendLogsPayload, StandardLoggingPayload]] = []
 
     async def construct_request_headers(self) -> Dict[str, str]:
         """Construct authorization headers using Vertex AI auth"""

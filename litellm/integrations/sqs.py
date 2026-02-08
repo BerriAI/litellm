@@ -11,7 +11,7 @@ import base64
 import json
 import re
 import traceback
-from typing import List, Optional
+from typing import Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -38,7 +38,7 @@ _BASE64_INLINE_PATTERN = re.compile(
 )
 
 
-class SQSLogger(CustomBatchLogger, BaseAWSLLM):
+class SQSLogger(CustomBatchLogger[StandardLoggingPayload], BaseAWSLLM):
     """Batching logger that writes logs to an AWS SQS queue, optionally encrypting the payload."""
 
     def __init__(
@@ -114,7 +114,6 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 batch_size=sqs_batch_size,
             )
 
-            self.log_queue: List[StandardLoggingPayload] = []
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
