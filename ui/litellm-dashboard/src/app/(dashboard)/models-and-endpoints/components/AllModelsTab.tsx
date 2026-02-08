@@ -242,7 +242,7 @@ const AllModelsTab = ({
                                 <Space direction="horizontal" align="center">
                                   <Badge color="green" size="small" />
                                   <Text style={{ fontSize: 16 }}>
-                                    {team.team_alias}
+                                    {team.team_alias ? team.team_alias : team.team_id}
                                   </Text>
                                 </Space>
                               ),
