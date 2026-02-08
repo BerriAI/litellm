@@ -27,7 +27,7 @@ try:
         get_custom_labels_from_metadata,
     )
 except Exception:
-    PrometheusLogger = None
+    PrometheusLogger = None  # type: ignore
 from litellm.proxy._types import UserAPIKeyAuth
 
 verbose_logger.setLevel(logging.DEBUG)
@@ -712,6 +712,36 @@ async def test_async_log_failure_event(prometheus_logger):
         ), f"Label {key}: expected {expected_val!r}, got {actual_total_labels[key]!r}"
     assert actual_total_labels.get("client_ip") == "127.0.0.1"
     prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_stop_async_iteration_not_counted_as_deployment_failure(
+    prometheus_logger,
+):
+    """
+    StopAsyncIteration is the normal end-of-stream signal for async iterators.
+    It must NOT increment litellm_deployment_failure_responses so SLIs/alerting
+    are not inflated by normal stream completions.
+    """
+    standard_logging_object = create_standard_logging_payload()
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {"custom_llm_provider": "openai"},
+        "start_time": datetime.now(),
+        "completion_start_time": datetime.now(),
+        "api_call_start_time": datetime.now(),
+        "end_time": datetime.now() + timedelta(seconds=1),
+        "standard_logging_object": standard_logging_object,
+        "exception": StopAsyncIteration(),
+    }
+    prometheus_logger.litellm_deployment_failure_responses = MagicMock()
+    prometheus_logger.litellm_deployment_total_requests = MagicMock()
+    prometheus_logger.set_deployment_partial_outage = MagicMock()
+
+    prometheus_logger.set_llm_deployment_failure_metrics(kwargs)
+
+    # Deployment failure metric must NOT be incremented for control-flow exceptions
+    prometheus_logger.litellm_deployment_failure_responses.labels().inc.assert_not_called()
 
 
 @pytest.mark.asyncio
