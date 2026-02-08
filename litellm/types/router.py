@@ -200,7 +200,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     auto_router_config_path: Optional[str] = None
     auto_router_config: Optional[str] = None
     auto_router_default_model: Optional[str] = None
-    auto_router_embedding_model: Optional[str] = None
+    auto_router_embedding_model: Optional[str] = None  # Deprecated: no longer used. Kept for backward compat.
 
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
@@ -259,7 +259,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         auto_router_config_path: Optional[str] = None,
         auto_router_config: Optional[str] = None,
         auto_router_default_model: Optional[str] = None,
-        auto_router_embedding_model: Optional[str] = None,
+        auto_router_embedding_model: Optional[str] = None,  # Deprecated: no-op
         # Batch/File API Params
         s3_bucket_name: Optional[str] = None,
         s3_encryption_key_id: Optional[str] = None,
@@ -856,4 +856,4 @@ class PreRoutingHookResponse(BaseModel):
     """
 
     model: str
-    messages: Optional[List[Dict[str, str]]]
+    messages: Optional[List[Dict[str, Any]]]

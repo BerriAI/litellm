@@ -1,0 +1,40 @@
+# Auto-Router Configuration
+# Controls how messages are classified and routed to model tiers.
+#
+# Usage: Set `auto_router_config_path` in your deployment's litellm_params
+# to the path of this file.
+
+# Model tiers: map each cost tier to a specific model
+tiers:
+  low:
+    model: "google/gemini-2.5-flash"
+    max_cost_per_m_tokens: 1.0
+  mid:
+    model: "google/gemini-2.5-flash"
+    max_cost_per_m_tokens: 5.0
+  top:
+    model: "gpt-4o"
+    max_cost_per_m_tokens: 30.0
+
+# Category -> tier routing: which tier handles each task category
+# Categories: heartbeat, simple-chat, lookup, translation,
+#             summarization, coding, creative, reasoning, analysis
+routing:
+  heartbeat: low
+  simple-chat: low
+  lookup: low
+  translation: mid
+  summarization: mid
+  coding: mid
+  creative: mid
+  reasoning: top
+  analysis: top
+
+# Custom regex patterns (evaluated before built-in patterns, first match wins)
+# Each entry needs a `pattern` (regex) and `category` (one of the categories above)
+custom_patterns: []
+  # Examples:
+  # - pattern: "kubernetes|k8s|helm|docker-compose"
+  #   category: "coding"
+  # - pattern: "security\\s+audit|penetration\\s+test"
+  #   category: "analysis"

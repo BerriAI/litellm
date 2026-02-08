@@ -9,6 +9,11 @@ model_list:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
 
+  - model_name: google/gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GOOGLE_API_KEY
+
   - model_name: bedrock-claude-sonnet-3.5
     litellm_params:
       model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
@@ -34,6 +39,12 @@ model_list:
       model: "bedrock/us.amazon.nova-premier-v1:0"
       aws_region_name: "us-east-1"
 
+  - model_name: auto
+    litellm_params:
+      model: "auto_router/auto_router_1"
+      auto_router_config_path: "/home/jtwittmayer/workspace/litellm/litellm/router_strategy/auto_router/routing_rules.yaml"
+      auto_router_default_model: "google/gemini-2.5-flash"
+
 # MCP Server Configuration
 mcp_servers:
   # Wikipedia MCP - reliable and works without external deps
@@ -53,6 +64,7 @@ general_settings:
 
 # LiteLLM Settings
 litellm_settings:
+  drop_params: true
   # Enable MCP Semantic Tool Filter
   mcp_semantic_tool_filter:
     enabled: true

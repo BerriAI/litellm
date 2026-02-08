@@ -5993,20 +5993,11 @@ class Router:
                 "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        embedding_model: Optional[
-            str
-        ] = deployment.litellm_params.auto_router_embedding_model
-        if embedding_model is None:
-            raise ValueError(
-                "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
-            )
-
         autor_router: AutoRouter = AutoRouter(
             model_name=deployment.model_name,
             auto_router_config_path=auto_router_config_path,
             auto_router_config=auto_router_config,
             default_model=default_model,
-            embedding_model=embedding_model,
             litellm_router_instance=self,
         )
         if deployment.model_name in self.auto_routers:
