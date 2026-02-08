@@ -141,6 +141,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type == CallTypes.call_mcp_tool.value:
             event_type = GuardrailEventHooks.pre_mcp_call
 
+
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
             is not True
