@@ -6338,6 +6338,30 @@ export const fetchMCPAccessGroups = async (accessToken: string) => {
   }
 };
 
+export const fetchMCPClientIp = async (accessToken: string): Promise<string | null> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/network/client-ip`
+      : `/v1/mcp/network/client-ip`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return data.ip || null;
+  } catch {
+    return null;
+  }
+};
+
 export const createMCPServer = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object
@@ -6685,11 +6709,16 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
+export interface CallMCPToolOptions {
+  guardrails?: string[];
+}
+
 export const callMCPTool = async (
   accessToken: string,
   serverId: string,
   toolName: string,
   toolArguments: Record<string, any>,
+  options?: CallMCPToolOptions,
 ) => {
   try {
     // Construct base URL
@@ -6702,14 +6731,19 @@ export const callMCPTool = async (
       "Content-Type": "application/json",
     };
 
+    const body: Record<string, any> = {
+      server_id: serverId,
+      name: toolName,
+      arguments: toolArguments,
+    };
+    if (options?.guardrails && options.guardrails.length > 0) {
+      body.litellm_metadata = { guardrails: options.guardrails };
+    }
+
     const response = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        server_id: serverId,
-        name: toolName,
-        arguments: toolArguments,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

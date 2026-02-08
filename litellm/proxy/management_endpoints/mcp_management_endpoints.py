@@ -59,18 +59,18 @@ except ImportError as e:
 
 if MCP_AVAILABLE:
     try:
-        from mcp.shared.tool_name_validation import (  # type: ignore
-            validate_tool_name,
+        from mcp.shared.tool_name_validation import (
+            validate_tool_name,  # pyright: ignore[reportAssignmentType]
         )
     except ImportError:
         from pydantic import BaseModel
 
-        class ToolNameValidationResult(BaseModel):
+        class _ToolNameValidationResult(BaseModel):
             is_valid: bool = True
             warnings: list = []
 
-        def validate_tool_name(name: str) -> ToolNameValidationResult:  # type: ignore[misc]
-            return ToolNameValidationResult()
+        def validate_tool_name(name: str) -> _ToolNameValidationResult:  # type: ignore[misc]
+            return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
@@ -333,6 +333,7 @@ if MCP_AVAILABLE:
             token_url=payload.token_url,
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
+            available_on_public_internet=payload.available_on_public_internet,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -422,6 +423,18 @@ if MCP_AVAILABLE:
         return {"access_groups": access_groups_list}
 
     @router.get(
+        "/network/client-ip",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+        description="Returns the caller's IP address as seen by the proxy.",
+    )
+    async def get_client_ip(request: Request):
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        return {"ip": client_ip}
+
+    @router.get(
         "/registry.json",
         tags=["mcp"],
         description="MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry",
@@ -433,11 +446,21 @@ if MCP_AVAILABLE:
                 detail="MCP registry is not enabled",
             )
 
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
+        verbose_proxy_logger.debug("MCP registry request from IP=%s", client_ip)
+
         base_url = get_request_base_url(request)
         registry_servers: List[Dict[str, Any]] = []
         registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
 
-        registered_servers = list(global_mcp_server_manager.get_registry().values())
+        # Centralized IP-based filtering: external callers only see public servers
+        registered_servers = list(
+            global_mcp_server_manager.get_filtered_registry(client_ip).values()
+        )
+
         registered_servers.sort(key=_build_mcp_registry_server_name)
 
         for server in registered_servers:

@@ -147,6 +147,7 @@ model LiteLLM_DeletedTeamTable {
     members_with_roles      Json     @default("{}")
     metadata                Json     @default("{}")
     max_budget              Float?
+    soft_budget             Float?
     spend                   Float    @default(0.0)
     models                  String[]
     max_parallel_requests   Int?
@@ -261,6 +262,7 @@ model LiteLLM_MCPServerTable {
   token_url          String?
   registration_url   String?
   allow_all_keys Boolean @default(false)
+  available_on_public_internet Boolean @default(false)
 }
 
 // Generate Tokens for Proxy

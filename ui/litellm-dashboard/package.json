@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbo",
+    "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -14,7 +14,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "e2e": "playwright test --config e2e_tests/playwright.config.ts",
-    "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts"
+    "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts",
+    "knip": "knip",
+    "knip:fix": "knip --fix"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
@@ -68,10 +70,11 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-unused-imports": "^4.2.0",
     "jsdom": "^27.0.0",
+    "knip": "^5.83.1",
     "postcss": "^8.4.33",
     "prettier": "3.2.5",
     "tailwindcss": "^3.4.1",
-    "typescript": "5.3.3",
+    "typescript": "^5.3.3",
     "vite": "^7.1.11",
     "vitest": "^3.2.4"
   },

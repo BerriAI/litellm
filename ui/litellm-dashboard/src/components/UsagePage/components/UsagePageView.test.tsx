@@ -54,9 +54,9 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
   default: () => <div>Endpoint Usage</div>,
 }));
 
-vi.mock("./UsageViewSelect/UsageViewSelect", () => ({
-  UsageViewSelect: ({ value, onChange }: any) => {
-    const React = require("react");
+vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
+  const React = await import("react");
+  const UsageViewSelect = ({ value, onChange }: any) => {
     return React.createElement(
       "select",
       {
@@ -73,15 +73,19 @@ vi.mock("./UsageViewSelect/UsageViewSelect", () => ({
       React.createElement("option", { value: "agent" }, "Agent Usage"),
       React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
     );
-  },
-}));
+  };
+  UsageViewSelect.displayName = "UsageViewSelect";
+  return { UsageViewSelect };
+});
 
-vi.mock("../../shared/advanced_date_picker", () => ({
-  default: ({ value, onValueChange }: any) => {
-    const React = require("react");
+vi.mock("../../shared/advanced_date_picker", async () => {
+  const React = await import("react");
+  const AdvancedDatePicker = () => {
     return React.createElement("div", { "data-testid": "advanced-date-picker" }, "Date Picker");
-  },
-}));
+  };
+  AdvancedDatePicker.displayName = "AdvancedDatePicker";
+  return { default: AdvancedDatePicker };
+});
 
 vi.mock("../../user_agent_activity", () => ({
   default: () => <div>User Agent Activity</div>,
