@@ -571,19 +571,20 @@ def test_eks_irsa_ambient_credentials_used():
     mock_sts_client.assume_role.return_value = mock_sts_response
     
     with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-        
+
         # Call with no explicit credentials (EKS/IRSA scenario)
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="test-session"
         )
-        
+
         # Should create STS client without explicit credentials (using ambient credentials)
-        # Note: verify parameter is passed for SSL verification
-        mock_boto3_client.assert_called_once_with("sts", verify=True)
+        # Note: verify parameter is passed for SSL verification, region_name now included
+        mock_boto3_client.assert_called_once_with("sts", region_name="us-west-2", verify=True)
         
         # Should call assume_role
         mock_sts_client.assume_role.assert_called_once_with(
@@ -627,20 +628,22 @@ def test_explicit_credentials_used_when_provided():
     mock_sts_client.assume_role.return_value = mock_sts_response
     
     with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-        
+
         # Call with explicit credentials
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id="explicit-access-key",
             aws_secret_access_key="explicit-secret-key",
             aws_session_token="assumed-session-token",
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="test-session"
         )
-        
+
         # Should create STS client with explicit credentials
-        # Note: verify parameter is passed for SSL verification
+        # Note: verify parameter is passed for SSL verification, region_name now included
         mock_boto3_client.assert_called_once_with(
             "sts",
+            region_name="us-west-2",
             aws_access_key_id="explicit-access-key",
             aws_secret_access_key="explicit-secret-key",
             aws_session_token="assumed-session-token",
@@ -688,19 +691,21 @@ def test_partial_credentials_still_use_ambient():
     mock_sts_client.assume_role.return_value = mock_sts_response
     
     with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-        
+
         # Call with only access key (missing secret key)
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id="AKIAEXAMPLE",
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="test-session"
         )
-        
+
         # Should still pass partial credentials to boto3.client
         mock_boto3_client.assert_called_once_with(
             "sts",
+            region_name="us-west-2",
             aws_access_key_id="AKIAEXAMPLE",
             aws_secret_access_key=None,
             aws_session_token=None,
@@ -741,18 +746,19 @@ def test_cross_account_role_assumption():
     mock_sts_client.assume_role.return_value = mock_sts_response
     
     with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-        
+
         # Assume role in different account (EKS/IRSA scenario)
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::999999999999:role/CrossAccountRole",
             aws_session_name="cross-account-session"
         )
-        
+
         # Should use ambient credentials
-        mock_boto3_client.assert_called_once_with("sts", verify=True)
+        mock_boto3_client.assert_called_once_with("sts", region_name="us-west-2", verify=True)
         
         # Should call assume_role with cross-account role
         mock_sts_client.assume_role.assert_called_once_with(
@@ -794,16 +800,17 @@ def test_role_assumption_with_custom_session_name():
     mock_sts_client.assume_role.return_value = mock_sts_response
     
     with patch("boto3.client", return_value=mock_sts_client):
-        
+
         # Use custom session name
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
             aws_session_name="evals-bedrock-session"
         )
-        
+
         # Should call assume_role with custom session name
         mock_sts_client.assume_role.assert_called_once_with(
             RoleArn="arn:aws:iam::1111111111111:role/LitellmRole",
@@ -839,11 +846,12 @@ def test_role_assumption_ttl_calculation():
     mock_sts_client.assume_role.return_value = mock_sts_response
     
     with patch("boto3.client", return_value=mock_sts_client):
-        
+
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
             aws_session_name="ttl-test-session"
         )
@@ -864,17 +872,18 @@ def test_role_assumption_error_handling():
     mock_sts_client.assume_role.side_effect = Exception("AccessDenied: User is not authorized to perform sts:AssumeRole")
     
     with patch("boto3.client", return_value=mock_sts_client):
-        
+
         # Should raise the exception
         with pytest.raises(Exception) as exc_info:
             base_aws_llm._auth_with_aws_role(
                 aws_access_key_id=None,
                 aws_secret_access_key=None,
                 aws_session_token=None,
+                aws_region_name="us-west-2",
                 aws_role_name="arn:aws:iam::1111111111111:role/UnauthorizedRole",
                 aws_session_name="error-test-session"
             )
-        
+
         assert "AccessDenied" in str(exc_info.value)
 
 
@@ -919,21 +928,23 @@ def test_multiple_role_assumptions_in_sequence():
     mock_sts_client.assume_role.side_effect = [mock_sts_response1, mock_sts_response2]
     
     with patch("boto3.client", return_value=mock_sts_client):
-        
+
         # First role assumption
         credentials1, ttl1 = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
             aws_session_name="session-1"
         )
-        
+
         # Second role assumption
         credentials2, ttl2 = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="session-2"
         )
@@ -996,6 +1007,7 @@ def test_auth_with_aws_role_irsa_environment():
                     aws_access_key_id=None,
                     aws_secret_access_key=None,
                     aws_session_token=None,
+                    aws_region_name='us-east-1',
                     aws_role_name='arn:aws:iam::222222222222:role/target-role',
                     aws_session_name='test-session'
                 )
@@ -1084,6 +1096,7 @@ def test_assume_role_with_external_id():
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::123456789012:role/ExampleRole",
             aws_session_name="test-session",
             aws_external_id="UniqueExternalID123"
@@ -1121,6 +1134,7 @@ def test_assume_role_without_external_id():
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
+            aws_region_name="us-west-2",
             aws_role_name="arn:aws:iam::123456789012:role/ExampleRole",
             aws_session_name="test-session"
         )
