@@ -9,7 +9,7 @@
 
 :::tip
 
-LiteLLM follows the [Anthropic Skills API](https://docs.anthropic.com/en/docs/build-with-claude/skills) for creating, managing, and using reusable AI capabilities.
+LiteLLM follows the [Anthropic Skills API](https://docs.anthropic.com/en/docs/build-with-claude/skills-guide) for creating, managing, and using reusable AI capabilities.
 
 :::
 
