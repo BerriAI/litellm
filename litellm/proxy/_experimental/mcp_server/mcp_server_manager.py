@@ -72,6 +72,7 @@ try:
     from mcp.shared.tool_name_validation import (
         SEP_986_URL,
     )
+    from mcp.shared.tool_name_validation import SEP_986_URL
 except ImportError:
     from pydantic import BaseModel
 

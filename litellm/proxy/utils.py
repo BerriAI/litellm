@@ -945,6 +945,7 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: CallTypesLiteral,
+        event_type: GuardrailEventHooks,
     ) -> Optional[dict]:
         """
         Process a guardrail callback during pre-call hook.
@@ -964,8 +965,10 @@ class ProxyLogging:
         from litellm.types.guardrails import GuardrailEventHooks
 
         # Determine the event type based on call type
-        event_type = GuardrailEventHooks.pre_call
-        if call_type == CallTypes.call_mcp_tool.value:
+        if (
+            event_type is GuardrailEventHooks.pre_call
+            and call_type == CallTypes.call_mcp_tool.value
+        ):
             event_type = GuardrailEventHooks.pre_mcp_call
 
         # Check if the guardrail should run for this request
@@ -1222,6 +1225,7 @@ class ProxyLogging:
                         data=data,  # type: ignore
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
+                        event_type=GuardrailEventHooks.pre_call,
                     )
                     if result is None:
                         continue
@@ -1375,11 +1379,11 @@ class ProxyLogging:
         # Note: user_info is a CallInfo that can represent user/team/org level info. For team budgets,
         # alert_emails is populated from team_object.metadata.soft_budget_alerting_emails (see auth_checks.py)
         is_soft_budget_with_alert_emails = (
-            type == "soft_budget" 
-            and user_info.alert_emails is not None 
+            type == "soft_budget"
+            and user_info.alert_emails is not None
             and len(user_info.alert_emails) > 0
         )
-        
+
         if self.alerting is None and not is_soft_budget_with_alert_emails:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
@@ -1395,10 +1399,9 @@ class ProxyLogging:
         # 1. "email" is in alerting config, OR
         # 2. It's a soft_budget alert with team-specific alert_emails (bypasses global alerting config)
         should_send_email = (
-            (self.alerting is not None and "email" in self.alerting) 
-            or is_soft_budget_with_alert_emails
-        )
-        
+            self.alerting is not None and "email" in self.alerting
+        ) or is_soft_budget_with_alert_emails
+
         if should_send_email and self.email_logging_instance is not None:
             await self.email_logging_instance.budget_alerts(
                 type=type,
@@ -1762,6 +1765,7 @@ class ProxyLogging:
 
         from litellm.types.guardrails import GuardrailEventHooks
 
+
         guardrail_callbacks: List[CustomGuardrail] = []
         other_callbacks: List[CustomLogger] = []
         try:
@@ -1867,6 +1871,10 @@ class ProxyLogging:
             )
         return merged_headers
 
+    def is_a2a_streaming_response(self, response: dict) -> bool:
+        expected_keys = ["jsonrpc", "id", "result"]
+        return all(key in response for key in expected_keys)
+
     async def async_post_call_streaming_hook(
         self,
         data: dict,
@@ -1887,6 +1895,10 @@ class ProxyLogging:
         response_str: Optional[str] = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
+        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+            from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+            response_str = extract_text_from_a2a_response(response)
         if response_str is not None:
             for callback in litellm.callbacks:
                 try:
