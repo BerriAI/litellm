@@ -85,7 +85,7 @@ export function LogDetailsDrawer({
   // Lazy-load log details (messages/response) only when drawer is open
   // This fetches data for a single log on-demand instead of prefetching all 50
   const logDetails = useQuery({
-    queryKey: ["logDetails", logEntry?.request_id, startTime],
+    queryKey: ["logDetails", logEntry?.request_id, startTime, accessToken],
     queryFn: async () => {
       if (!accessToken || !logEntry?.request_id || !startTime) return null;
       return await uiSpendLogDetailsCall(accessToken, logEntry.request_id, startTime);
