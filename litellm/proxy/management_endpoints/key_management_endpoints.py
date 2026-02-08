@@ -3348,6 +3348,20 @@ async def regenerate_key_fn(  # noqa: PLR0915
         )
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
+        # Save the old key record to deleted table before regeneration
+        # This preserves key_alias and team_id metadata for historical spend records
+        try:
+            await _persist_deleted_verification_tokens(
+                keys=[_key_in_db],
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Failed to persist old key record to deleted table during regeneration"
+            )
+
         new_token = get_new_token(data=data)
 
         new_token_hash = hash_token(new_token)
@@ -3794,7 +3808,7 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        if not user_id and user_api_key_dict.user_role not in [
+        if user_id is None and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]:
