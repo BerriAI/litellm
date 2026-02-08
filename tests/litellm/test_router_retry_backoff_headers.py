@@ -80,7 +80,9 @@ async def test_retry_backoff_uses_current_exception_headers():
                         messages=[{"role": "user", "content": "Hello"}],
                     )
 
-    assert len(captured_backoff_errors) == 3
+    # Router computes backoff once after the initial failure, then once per failed retry.
+    # With num_retries=2 and all attempts failing, that's 1 + 2 = 3 invocations.
+    assert len(captured_backoff_errors) == router.num_retries + 1
     assert captured_backoff_errors[0] is first_error
     assert captured_backoff_errors[1] is second_error
     assert captured_backoff_errors[2] is third_error
