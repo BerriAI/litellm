@@ -48,8 +48,12 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies (libsndfile needed for audio processing on ARM64)
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile ca-certificates && \
     npm install -g npm@latest tar@latest
+
+# Add AWS RDS CA bundle to system trust store
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/aws-rds-global-bundle.pem
+RUN cat /etc/ssl/certs/aws-rds-global-bundle.pem >> /etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
