@@ -51,11 +51,14 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
+    SPECIAL_MODEL_INFO_PARAMS,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+_MAX_REASONABLE_COST_PER_TOKEN = 1.0
 
 
 class UpdatePublicModelGroupsRequest(BaseModel):
@@ -142,6 +145,45 @@ def update_db_model(
     return prisma_compatible_model_dict
 
 
+def _validate_model_costs(
+    model_info: Optional[BaseModel],
+    litellm_params: Optional[BaseModel],
+) -> None:
+    cost_fields: Dict[str, float] = {}
+
+    if model_info is not None:
+        for field in SPECIAL_MODEL_INFO_PARAMS:
+            value = getattr(model_info, field, None)
+            if value is not None:
+                cost_fields[field] = value
+
+    if litellm_params is not None:
+        for field in SPECIAL_MODEL_INFO_PARAMS:
+            value = getattr(litellm_params, field, None)
+            if value is not None:
+                cost_fields[field] = value
+
+    for field, value in cost_fields.items():
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"{field} must be a number. Received: {value}"},
+            )
+        if numeric_value > _MAX_REASONABLE_COST_PER_TOKEN:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        f"{field} looks too high ({numeric_value}). "
+                        "Values should be in USD per token. "
+                        "If you're entering price per 1M tokens, divide by 1e6."
+                    )
+                },
+            )
+
+
 @router.patch(
     "/model/{model_id}/update",
     tags=["model management"],
@@ -217,6 +259,11 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        _validate_model_costs(
+            model_info=patch_data.model_info,
+            litellm_params=patch_data.litellm_params,
         )
 
         # Handle team model updates with proper alias management
@@ -881,6 +928,11 @@ async def add_new_model(
             premium_user=premium_user,
         )
 
+        _validate_model_costs(
+            model_info=model_params.model_info,
+            litellm_params=model_params.litellm_params,
+        )
+
         model_response: Optional[LiteLLM_ProxyModelTable] = None
         # update DB
         if store_model_in_db is True:
@@ -1045,6 +1097,11 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        _validate_model_costs(
+            model_info=model_params.model_info,
+            litellm_params=model_params.litellm_params,
         )
 
         # update DB
