@@ -1,16 +1,13 @@
 """
 HTTP client for the Qualifire Studio API.
-Handles sync and async calls to the /compile endpoint.
+Handles async calls to the /compile endpoint.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
-from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
-    get_async_httpx_client,
-)
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 
@@ -59,60 +56,22 @@ class QualifireClient:
         """Handle HTTP error responses with specific messages."""
         if response.status_code == 401:
             raise Exception(
-                f"Authentication failed for Qualifire API. "
-                f"Please check your API key."
+                "Authentication failed for Qualifire API. "
+                "Please check your API key."
             )
         elif response.status_code == 403:
             raise Exception(
                 f"Access denied to prompt '{prompt_id}'. "
-                f"Please check your permissions."
+                "Please check your permissions."
             )
         elif response.status_code == 404:
             raise Exception(
                 f"Prompt '{prompt_id}' not found in Qualifire. "
-                f"Please check the prompt ID."
+                "Please check the prompt ID."
             )
         response.raise_for_status()
 
-    def compile_prompt(
-        self,
-        prompt_id: str,
-        variables: Optional[Dict[str, Any]] = None,
-        revision: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Compile a prompt by calling the Qualifire API synchronously.
-
-        Args:
-            prompt_id: The Qualifire prompt CUID
-            variables: Variables for template substitution
-            revision: Optional revision CUID to pin a specific version
-
-        Returns:
-            The compiled prompt response from Qualifire
-        """
-        url = self._build_compile_url(prompt_id)
-        body = self._build_request_body(variables, revision)
-
-        http_client = _get_httpx_client()
-
-        try:
-            response = http_client.post(
-                url,
-                json=body,
-                headers=self._get_headers(),
-            )
-
-            if response.status_code >= 400:
-                self._handle_error_response(response, prompt_id)
-
-            return response.json()
-        except httpx.HTTPError as e:
-            raise Exception(
-                f"Failed to compile prompt '{prompt_id}' from Qualifire: {e}"
-            )
-
-    async def async_compile_prompt(
+    async def compile_prompt(
         self,
         prompt_id: str,
         variables: Optional[Dict[str, Any]] = None,

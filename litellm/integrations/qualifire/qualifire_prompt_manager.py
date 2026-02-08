@@ -126,22 +126,20 @@ class QualifirePromptManager(CustomPromptManagement):
         prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         """
-        Compile a prompt using the Qualifire /compile endpoint (sync).
+        Sync wrapper that delegates to the async compile prompt helper.
         """
-        if prompt_id is None:
-            raise ValueError("prompt_id is required for Qualifire prompt manager")
+        import asyncio
 
-        revision = self._extract_revision(prompt_spec)
-
-        try:
-            response = self.client.compile_prompt(
+        return asyncio.get_event_loop().run_until_complete(
+            self.async_compile_prompt_helper(
                 prompt_id=prompt_id,
-                variables=prompt_variables,
-                revision=revision,
+                prompt_variables=prompt_variables,
+                dynamic_callback_params=dynamic_callback_params,
+                prompt_spec=prompt_spec,
+                prompt_label=prompt_label,
+                prompt_version=prompt_version,
             )
-            return self._parse_compile_response(prompt_id, response)
-        except Exception as e:
-            raise ValueError(f"Error compiling prompt '{prompt_id}' from Qualifire: {e}")
+        )
 
     async def async_compile_prompt_helper(
         self,
@@ -161,7 +159,7 @@ class QualifirePromptManager(CustomPromptManagement):
         revision = self._extract_revision(prompt_spec)
 
         try:
-            response = await self.client.async_compile_prompt(
+            response = await self.client.compile_prompt(
                 prompt_id=prompt_id,
                 variables=prompt_variables,
                 revision=revision,
