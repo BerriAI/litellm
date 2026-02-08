@@ -642,6 +642,27 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
+
+def _safe_deepcopy(obj: Any) -> Any:
+    """
+    Safely deep copy an object, handling Pydantic v2 models that contain
+    non-picklable objects like _thread.RLock.
+
+    Uses Pydantic's model_dump() for BaseModel instances instead of
+    copy.deepcopy() to avoid pickle serialization failures.
+    """
+    if isinstance(obj, BaseModel):
+        return obj.model_dump()
+    if isinstance(obj, dict):
+        return {k: _safe_deepcopy(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_safe_deepcopy(item) for item in obj]
+    try:
+        return copy.deepcopy(obj)
+    except TypeError:
+        return obj
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
@@ -676,7 +697,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                 
                 # If redaction is enabled, deep copy request body before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = copy.deepcopy(_request_body)
+                    _request_body = _safe_deepcopy(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
             
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
@@ -738,7 +759,7 @@ def _get_response_for_spend_logs_payload(
             
             # If redaction is enabled, deep copy response before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
-                response_obj = copy.deepcopy(response_obj)
+                response_obj = _safe_deepcopy(response_obj)
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
