@@ -223,6 +223,7 @@ const sidebars = {
           label: "Configuration",
           items: [
             "set_keys",
+            "proxy_auth",
             "caching/all_caches",
           ],
         },
