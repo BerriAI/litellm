@@ -595,11 +595,30 @@ async def anthropic_proxy_route(
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
-    # Add or update query parameters
-    anthropic_api_key = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="anthropic",
-        region_name=None,
+    # Check for OAuth token in incoming request, otherwise use stored credentials
+    from litellm.llms.anthropic.common_utils import (
+        optionally_handle_anthropic_oauth,
+        set_anthropic_headers,
     )
+
+    incoming_headers = dict(request.headers)
+    oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(
+        headers=incoming_headers, api_key=None
+    )
+
+    if oauth_api_key:
+        # OAuth token found - use Authorization header with OAuth beta headers
+        custom_headers = set_anthropic_headers(oauth_api_key)
+        custom_headers["anthropic-dangerous-direct-browser-access"] = oauth_headers.get(
+            "anthropic-dangerous-direct-browser-access", "true"
+        )
+    else:
+        # No OAuth token - use stored API key with x-api-key
+        anthropic_api_key = passthrough_endpoint_router.get_credentials(
+            custom_llm_provider="anthropic",
+            region_name=None,
+        )
+        custom_headers = {"x-api-key": "{}".format(anthropic_api_key)}
 
     ## check for streaming
     is_streaming_request = await is_streaming_request_fn(request)
@@ -608,7 +627,7 @@ async def anthropic_proxy_route(
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={"x-api-key": "{}".format(anthropic_api_key)},
+        custom_headers=custom_headers,
         _forward_headers=True,
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path

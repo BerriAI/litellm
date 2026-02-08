@@ -33,7 +33,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         """Add Anthropic-specific headers"""
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo, set_anthropic_headers
 
         # Get API key
         api_key = None
@@ -45,7 +45,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             raise ValueError("ANTHROPIC_API_KEY is required for Skills API")
 
         # Add required headers
-        headers["x-api-key"] = api_key
+        headers.update(set_anthropic_headers(api_key))
         headers["anthropic-version"] = "2023-06-01"
         
         # Add beta header for skills API
