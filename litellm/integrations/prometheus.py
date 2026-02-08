@@ -1921,13 +1921,13 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_deployment_failure_responses.labels(**_labels).inc()
 
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_deployment_total_requests"
-                ),
-                enum_values=enum_values,
-            )
-            self.litellm_deployment_total_requests.labels(**_labels).inc()
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_deployment_total_requests"
+                    ),
+                    enum_values=enum_values,
+                )
+                self.litellm_deployment_total_requests.labels(**_labels).inc()
 
             pass
         except Exception as e:
