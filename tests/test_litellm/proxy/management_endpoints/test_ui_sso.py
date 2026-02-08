@@ -2676,6 +2676,58 @@ async def test_get_ui_settings_includes_api_doc_base_url():
         assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://custom.docs"
 
 
+@pytest.mark.asyncio
+async def test_get_ui_settings_api_doc_base_url_independent_of_proxy_base_url():
+    """
+    Test that LITELLM_UI_API_DOC_BASE_URL works independently from PROXY_BASE_URL.
+
+    Covers the scenario from GitHub issue #20590 where a user wants to set
+    LITELLM_UI_API_DOC_BASE_URL without needing to set PROXY_BASE_URL.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+
+    mock_request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/sso/get/ui_settings",
+            "query_string": b"",
+        }
+    )
+
+    # Case 1: Only LITELLM_UI_API_DOC_BASE_URL set, no PROXY_BASE_URL
+    env_only_doc_url = {"LITELLM_UI_API_DOC_BASE_URL": "https://docs.example.com"}
+    with patch.dict(os.environ, env_only_doc_url, clear=False):
+        # Remove PROXY_BASE_URL if it exists
+        os.environ.pop("PROXY_BASE_URL", None)
+        response = await get_ui_settings(mock_request)
+        assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://docs.example.com"
+        assert response["PROXY_BASE_URL"] is None
+
+    # Case 2: Both set independently
+    env_both = {
+        "LITELLM_UI_API_DOC_BASE_URL": "https://docs.example.com",
+        "PROXY_BASE_URL": "https://proxy.example.com",
+    }
+    with patch.dict(os.environ, env_both, clear=False):
+        response = await get_ui_settings(mock_request)
+        assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://docs.example.com"
+        assert response["PROXY_BASE_URL"] == "https://proxy.example.com"
+
+    # Case 3: Neither set
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("LITELLM_UI_API_DOC_BASE_URL", None)
+        os.environ.pop("PROXY_BASE_URL", None)
+        response = await get_ui_settings(mock_request)
+        assert response["LITELLM_UI_API_DOC_BASE_URL"] is None
+        assert response["PROXY_BASE_URL"] is None
+
+
 class TestGenericResponseConvertorNestedAttributes:
     """Test generic_response_convertor with nested attribute paths"""
 
