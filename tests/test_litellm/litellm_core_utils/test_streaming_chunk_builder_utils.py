@@ -168,16 +168,14 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
 
     def make_chunk(**delta_kwargs):
         return ModelResponseStream(
-            **{
-                **base_chunk,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": delta_kwargs,
-                        "finish_reason": None,
-                    }
-                ],
-            }
+            **base_chunk,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(**delta_kwargs),
+                    finish_reason=None,
+                )
+            ],
         )
 
     chunks = [
