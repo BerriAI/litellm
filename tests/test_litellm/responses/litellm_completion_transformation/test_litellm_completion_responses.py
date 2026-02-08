@@ -798,6 +798,58 @@ class TestFunctionCallTransformation:
         assert function.get("name") == "search_web"
         assert function.get("arguments") == '{"query": "python bugs"}'
 
+    def test_ensure_tool_results_preserves_cached_attr_object_tool_call(self):
+        """
+        Test cached attribute-only tool call objects are normalized correctly.
+        """
+
+        class AttrOnlyFunction:
+            def __init__(self, name: str, arguments: str):
+                self.name = name
+                self.arguments = arguments
+
+        class AttrOnlyToolCall:
+            def __init__(self, id: str, type: str, function: AttrOnlyFunction):
+                self.id = id
+                self.type = type
+                self.function = function
+
+        tool_call_id = "call_cached_attr_object"
+        TOOL_CALLS_CACHE.set_cache(
+            key=tool_call_id,
+            value=AttrOnlyToolCall(
+                id=tool_call_id,
+                type="function",
+                function=AttrOnlyFunction(
+                    name="search_web",
+                    arguments='{"query": "attribute objects"}',
+                ),
+            ),
+        )
+
+        messages_missing_tool_calls = [
+            {"role": "user", "content": "Search using attr object"},
+            {"role": "assistant", "content": None, "tool_calls": []},
+            {"role": "tool", "content": "Found 3 results", "tool_call_id": tool_call_id},
+        ]
+
+        try:
+            fixed_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+                messages=messages_missing_tool_calls,
+                tools=None,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        assistant_msg = fixed_messages[1]
+        tool_calls = assistant_msg.get("tool_calls", [])
+        assert len(tool_calls) == 1
+
+        tool_call = tool_calls[0]
+        function = tool_call.get("function", {})
+        assert function.get("name") == "search_web"
+        assert function.get("arguments") == '{"query": "attribute objects"}'
+
 
 class TestToolChoiceTransformation:
     """Test the tool_choice transformation fix for Cursor IDE bug"""

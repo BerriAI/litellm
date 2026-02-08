@@ -603,25 +603,52 @@ class LiteLLMCompletionResponsesConfig:
         return None
 
     @staticmethod
+    def _get_mapping_or_attr_value(obj: Any, key: str, default: Any = None) -> Any:
+        """
+        Safely read a field from dict-like or attribute-based objects.
+        """
+        if obj is None:
+            return default
+
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+
+        getter = getattr(obj, "get", None)
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                pass
+
+        return getattr(obj, key, default)
+
+    @staticmethod
     def _create_tool_call_chunk(
         tool_use_definition: Dict[str, Any], tool_call_id: str, index: int
     ) -> ChatCompletionToolCallChunk:
         """Create a ChatCompletionToolCallChunk from tool_use_definition."""
-        function_raw = tool_use_definition.get("function")
-        if isinstance(function_raw, dict):
-            function: Dict[str, Any] = function_raw
-        elif hasattr(function_raw, "get"):
-            function = {
-                "name": function_raw.get("name") or "",
-                "arguments": function_raw.get("arguments") or "{}",
-            }
-        else:
-            function = {}
-        tool_use_id_raw = tool_use_definition.get("id")
+        function_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            tool_use_definition, "function"
+        )
+        function_name_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            function_raw, "name"
+        )
+        function_arguments_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            function_raw, "arguments"
+        )
+        function: Dict[str, Any] = {
+            "name": function_name_raw or "",
+            "arguments": function_arguments_raw or "{}",
+        }
+        tool_use_id_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            tool_use_definition, "id"
+        )
         tool_use_id: str = (
             str(tool_use_id_raw) if tool_use_id_raw is not None else str(tool_call_id)
         )
-        tool_use_type_raw = tool_use_definition.get("type")
+        tool_use_type_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            tool_use_definition, "type"
+        )
         tool_use_type: str = (
             str(tool_use_type_raw) if tool_use_type_raw is not None else "function"
         )
@@ -647,14 +674,44 @@ class LiteLLMCompletionResponsesConfig:
 
         if isinstance(tool_use_definition, dict):
             normalized_definition: Dict[str, Any] = dict(tool_use_definition)
-        elif hasattr(tool_use_definition, "get"):
-            normalized_definition = {
-                "id": tool_use_definition.get("id"),
-                "type": tool_use_definition.get("type"),
-                "function": tool_use_definition.get("function"),
-            }
         else:
-            return None
+            tool_use_id_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                tool_use_definition, "id"
+            )
+            tool_use_type_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                tool_use_definition, "type"
+            )
+            function_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                tool_use_definition, "function"
+            )
+
+            # Object does not expose the expected tool_call fields.
+            if (
+                tool_use_id_raw is None
+                and tool_use_type_raw is None
+                and function_raw is None
+            ):
+                return None
+
+            normalized_definition = {
+                "id": tool_use_id_raw,
+                "type": tool_use_type_raw,
+                "function": function_raw,
+            }
+
+        function_raw = normalized_definition.get("function")
+        if function_raw is not None and not isinstance(function_raw, dict):
+            function_name_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                function_raw, "name"
+            )
+            function_arguments_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                function_raw, "arguments"
+            )
+            if function_name_raw is not None or function_arguments_raw is not None:
+                normalized_definition["function"] = {
+                    "name": function_name_raw,
+                    "arguments": function_arguments_raw,
+                }
 
         normalized_definition["id"] = normalized_definition.get("id") or tool_call_id
         normalized_definition["type"] = (
