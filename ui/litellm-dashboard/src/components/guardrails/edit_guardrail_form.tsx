@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Form, Typography, Select, Input, Switch, Modal } from "antd";
 import { Button, TextInput } from "@tremor/react";
-import { guardrail_provider_map, guardrailLogoMap, getGuardrailProviders } from "./guardrail_info_helpers";
+import {
+  guardrail_provider_map,
+  guardrailLogoMap,
+  getGuardrailProviders,
+  getAvailableModesForProvider,
+} from "./guardrail_info_helpers";
 import { getGuardrailUISettings, getGlobalLitellmHeaderName } from "../networking";
 import PiiConfiguration from "./pii_configuration";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -381,16 +386,11 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
           rules={[{ required: true, message: "Please select a mode" }]}
         >
           <Select>
-            {guardrailSettings?.supported_modes?.map((mode) => (
+            {getAvailableModesForProvider(selectedProvider, guardrailSettings?.supported_modes).map((mode) => (
               <Option key={mode} value={mode}>
                 {mode}
               </Option>
-            )) || (
-              <>
-                <Option value="pre_call">pre_call</Option>
-                <Option value="post_call">post_call</Option>
-              </>
-            )}
+            ))}
           </Select>
         </Form.Item>
 
