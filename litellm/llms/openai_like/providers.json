@@ -86,5 +86,12 @@
     "headers": {
       "api-subscription-key": "{api_key}"
     }
+  },
+  "neosantara": {
+    "base_url": "https://api.neosantara.xyz/v1",
+    "api_key_env": "NEOSANTARA_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
