@@ -235,9 +235,9 @@ def _update_metadata_fields(updated_kv: dict) -> None:
         updated_kv: The key-value dict being used for the update
     """
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if field in updated_kv and updated_kv[field] is not None:
+        if field in updated_kv and updated_kv[field] is not None and updated_kv[field] != [] and updated_kv[field] != {}:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
-        if field in updated_kv and updated_kv[field] is not None:
+        if field in updated_kv and updated_kv[field] is not None and updated_kv[field] != [] and updated_kv[field] != {}:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
