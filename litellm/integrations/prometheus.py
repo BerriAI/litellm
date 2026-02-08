@@ -2191,7 +2191,11 @@ class PrometheusLogger(CustomLogger):
 
     # Exceptions that signal normal control flow (e.g. end of iterator) and must
     # not be counted as deployment failures in litellm_deployment_failure_responses.
-    _CONTROL_FLOW_EXCEPTIONS: Tuple[type, ...] = (StopAsyncIteration, StopIteration)
+    _CONTROL_FLOW_EXCEPTIONS: Tuple[type, ...] = (
+        StopAsyncIteration,
+        StopIteration,
+        GeneratorExit,
+    )
 
     @staticmethod
     def _is_control_flow_exception(exception: Optional[Exception]) -> bool:
