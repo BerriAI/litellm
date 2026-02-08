@@ -55,3 +55,40 @@ def test_batch_completion_models_all_responses_continues_on_model_error(monkeypa
 
     assert len(responses) == 2
     assert sorted(response["model"] for response in responses) == ["model-a", "model-b"]
+
+
+def test_batch_completion_models_all_responses_returns_empty_for_empty_models(monkeypatch):
+    called = False
+
+    def _mock_completion(*args, model, **kwargs):
+        nonlocal called
+        called = True
+        return {"model": model}
+
+    monkeypatch.setattr(litellm, "completion", _mock_completion)
+
+    responses = batch_completion_models_all_responses(
+        models=[],
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert responses == []
+    assert called is False
+
+
+def test_batch_completion_models_all_responses_accepts_single_model_string(monkeypatch):
+    called_models = []
+
+    def _mock_completion(*args, model, **kwargs):
+        called_models.append(model)
+        return {"model": model}
+
+    monkeypatch.setattr(litellm, "completion", _mock_completion)
+
+    responses = batch_completion_models_all_responses(
+        models="model-a",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert called_models == ["model-a"]
+    assert responses == [{"model": "model-a"}]
