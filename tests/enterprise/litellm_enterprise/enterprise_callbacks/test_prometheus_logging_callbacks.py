@@ -742,6 +742,7 @@ async def test_stop_async_iteration_not_counted_as_deployment_failure(
 
     # Deployment failure metric must NOT be incremented for control-flow exceptions
     prometheus_logger.litellm_deployment_failure_responses.labels().inc.assert_not_called()
+    prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_not_called()
 
 
 @pytest.mark.asyncio
