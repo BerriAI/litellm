@@ -13,7 +13,8 @@
     "web-fetch-2025-09-10",
     "code-execution-2025-08-25",
     "skills-2025-10-02",
-    "files-api-2025-04-14"
+    "files-api-2025-04-14",
+    "fast-mode-2026-02-01"
   ],
   "bedrock": [
     "advanced-tool-use-2025-11-20",
@@ -22,7 +23,9 @@
     "web-fetch-2025-09-10",
     "code-execution-2025-08-25",
     "skills-2025-10-02",
-    "files-api-2025-04-14"
+    "files-api-2025-04-14",
+    "fast-mode-2026-02-01",
+    "mcp-servers-2025-12-04"
   ],
   "vertex_ai": [
     "prompt-caching-scope-2026-01-05"
