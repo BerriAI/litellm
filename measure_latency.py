@@ -33,8 +33,8 @@ KEY_MODES (add-on; can be combined with any user mode):
 BASE_URL = "http://localhost:4000"
 API_KEY = "sk-1234"
 MODEL = "gpt-o1"  # must match a model_name in your proxy config (e.g. test_config_123.yaml)
-NUM_REQUESTS = 10
-NUM_CONCURRENT = 1  # Concurrent users; each has one connection, reuses it for their requests
+NUM_REQUESTS = 1000
+NUM_CONCURRENT = 100  # Concurrent users; each has one connection, reuses it for their requests
 MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
 TIMEOUT = 30000.0
 # -----------------------------------------------------------------------------

@@ -1,0 +1,128 @@
+Creating 100 keys via /key/generate...
+Created 100 keys.
+Creating 100 end users via /customer/new...
+Created 100 end users.
+=== 100 requests, 100 users, fire-as-fast-as-possible ===
+User mode: created, Key mode: per_user
+Latency = time from request start until last byte of response received
+  [OK] User 33 request   1: 11.071s
+  [OK] User 9 request   1: 14.408s
+  [OK] User 55 request   1: 8.065s
+  [OK] User 18 request   1: 13.189s
+  [OK] User 31 request   1: 11.393s
+  [OK] User 6 request   1: 14.864s
+  [OK] User 23 request   1: 12.506s
+  [OK] User 10 request   1: 14.330s
+  [OK] User 17 request   1: 13.356s
+  [OK] User 67 request   1: 6.459s
+  [OK] User 24 request   1: 12.404s
+  [OK] User 8 request   1: 14.644s
+  [OK] User 13 request   1: 13.961s
+  [OK] User 2 request   1: 15.497s
+  [OK] User 3 request   1: 15.367s
+  [OK] User 12 request   1: 14.116s
+  [OK] User 15 request   1: 13.713s
+  [OK] User 71 request   1: 5.974s
+  [OK] User 22 request   1: 12.739s
+  [OK] User 30 request   1: 11.649s
+  [OK] User 35 request   1: 10.953s
+  [OK] User 28 request   1: 11.925s
+  [OK] User 70 request   1: 6.128s
+  [OK] User 29 request   1: 11.788s
+  [OK] User 57 request   1: 7.917s
+  [OK] User 52 request   1: 8.609s
+  [OK] User 79 request   1: 4.902s
+  [OK] User 11 request   1: 14.304s
+  [OK] User 78 request   1: 5.043s
+  [OK] User 32 request   1: 11.391s
+  [OK] User 77 request   1: 5.183s
+  [OK] User 73 request   1: 5.735s
+  [OK] User 86 request   1: 3.936s
+  [OK] User 84 request   1: 4.232s
+  [OK] User 90 request   1: 3.399s
+  [OK] User 82 request   1: 4.529s
+  [OK] User 4 request   1: 15.337s
+  [OK] User 26 request   1: 12.282s
+  [OK] User 72 request   1: 5.931s
+  [OK] User 34 request   1: 11.172s
+  [OK] User 20 request   1: 13.116s
+  [OK] User 1 request   1: 15.774s
+  [OK] User 25 request   1: 12.439s
+  [OK] User 27 request   1: 12.163s
+  [OK] User 54 request   1: 8.428s
+  [OK] User 14 request   1: 13.966s
+  [OK] User 99 request   1: 2.212s
+  [OK] User 97 request   1: 2.489s
+  [OK] User 21 request   1: 12.992s
+  [OK] User 96 request   1: 2.631s
+  [OK] User 91 request   1: 3.324s
+  [OK] User 7 request   1: 14.962s
+  [OK] User 89 request   1: 3.617s
+  [OK] User 68 request   1: 6.524s
+  [OK] User 60 request   1: 7.626s
+  [OK] User 38 request   1: 10.657s
+  [OK] User 59 request   1: 7.764s
+  [OK] User 69 request   1: 6.386s
+  [OK] User 44 request   1: 9.827s
+  [OK] User 63 request   1: 7.215s
+  [OK] User 45 request   1: 9.702s
+  [OK] User 88 request   1: 3.803s
+  [OK] User 19 request   1: 13.338s
+  [OK] User 40 request   1: 10.433s
+  [OK] User 49 request   1: 9.191s
+  [OK] User 75 request   1: 5.613s
+  [OK] User 56 request   1: 8.228s
+  [OK] User 39 request   1: 10.584s
+  [OK] User 53 request   1: 8.653s
+  [OK] User 58 request   1: 7.967s
+  [OK] User 48 request   1: 9.342s
+  [OK] User 41 request   1: 10.308s
+  [OK] User 37 request   1: 10.863s
+  [OK] User 74 request   1: 5.764s
+  [OK] User 61 request   1: 7.556s
+  [OK] User 16 request   1: 13.780s
+  [OK] User 85 request   1: 4.243s
+  [OK] User 43 request   1: 10.041s
+  [OK] User 36 request   1: 11.013s
+  [OK] User 46 request   1: 9.628s
+  [OK] User 51 request   1: 8.939s
+  [OK] User 47 request   1: 9.491s
+  [OK] User 42 request   1: 10.180s
+  [OK] User 81 request   1: 4.806s
+  [OK] User 62 request   1: 7.432s
+  [OK] User 94 request   1: 3.010s
+  [OK] User 66 request   1: 6.885s
+  [OK] User 92 request   1: 3.287s
+  [OK] User 95 request   1: 2.871s
+  [OK] User 98 request   1: 2.456s
+  [OK] User 80 request   1: 4.949s
+  [OK] User 87 request   1: 3.980s
+  [OK] User 83 request   1: 4.552s
+  [OK] User 64 request   1: 7.229s
+  [OK] User 5 request   1: 15.457s
+  [OK] User 100 request   1: 2.317s
+  [OK] User 76 request   1: 5.767s
+  [OK] User 50 request   1: 9.364s
+  [OK] User 65 request   1: 7.319s
+  [OK] User 93 request   1: 3.485s
+
+[OK] 100 succeeded, [FAIL] 0 failed
+
+Latency (successful):
+  min:  2.212s
+  avg:  8.923s
+  max:  15.774s
+  p95:  14.962s
+  p99:  15.497s
+
+Requests above threshold (successful only):
+  Above 1s: 100/100 (100.0%)
+  Above 2s: 100/100 (100.0%)
+  Above 3s: 94/100 (94.0%)
+  Above 4s: 85/100 (85.0%)
+  Above 5s: 78/100 (78.0%)
+  Above 6s: 70/100 (70.0%)
+  Above 7s: 65/100 (65.0%)
+  Above 8s: 56/100 (56.0%)
+  Above 9s: 50/100 (50.0%)
+  Above 10s: 43/100 (43.0%)

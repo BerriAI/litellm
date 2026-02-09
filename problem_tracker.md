@@ -1,4 +1,4 @@
-### Context
+### Context - Problem 1
 
 **Issue:** Prometheus configured as a callback causes orders-of-magnitude worse performance (reported by Zurich).
 
@@ -261,7 +261,7 @@ The issue was caused by hitting the database on every request when Prometheus wa
 
 ### Next Steps
 
-**Context:** Callbacks on vs off no longer affects latency (Prometheus fix). The remaining baseline spikes are likely from end_user lookups, provider latency, or other bottlenecks. Comparing user modes will isolate whether passing `user` (and cache behavior) contributes.
+**Context - Problem 2:** Callbacks on vs off no longer affects latency (Prometheus fix). The remaining baseline spikes are likely from end_user lookups, provider latency, or other bottlenecks. Comparing user modes will isolate whether passing `user` (and cache behavior) contributes.
 
 **Measure baseline latency with each user mode** (run `measure_latency.py`):
 
@@ -326,6 +326,16 @@ Passing `user` in the request payload spikes latency up to ~7×. Using a shared 
 - [x] Run with `--user-mode random`, 100 requests, 100 users (1 per user) → `callbacks_off_1_per_user.txt`
 - [x] Run with `--user-mode random`, 1000 requests, 100 users (10 per user) → `callbacks_off_10_per_user.txt`
 
+**Same scenarios with `--user-mode created --key-mode per_user`** (happy path: pre-created end users):
+
+| Scenario          | NUM_REQUESTS | NUM_CONCURRENT | Req/user | Output file                                 |
+|-------------------|--------------|----------------|----------|---------------------------------------------|
+| One per user      | 100          | 100            | 1        | `callbacks_off_1_per_user_created.txt`      |
+| Multiple per user | 1000         | 100            | 10       | `callbacks_off_10_per_user_created.txt`     |
+
+- [x] Run with `--user-mode created --key-mode per_user`, 100 requests, 100 users (1 per user) → `callbacks_off_1_per_user_created.txt`
+- [x] Run with `--user-mode created --key-mode per_user`, 1000 requests, 100 users (10 per user) → `callbacks_off_10_per_user_created.txt`
+
 #### Analysis (1 vs 10 requests per user, callbacks off, `--user-mode random`)
 
 | Scenario          | Requests | Users | Req/user | avg    | p95     | Above 1s |
@@ -336,6 +346,17 @@ Passing `user` in the request payload spikes latency up to ~7×. Using a shared 
 **Findings**
 
 With **1 request per user**, every request triggers an end_user cache miss → DB lookup. Latency is ~5.6× higher (avg 8.6s vs 1.5s) and 100% of requests exceed 1s vs 33% with 10 per user. With **10 requests per user**, the first request per user misses cache; the next 9 hit cache. Cache hits on subsequent requests dramatically reduce latency. This confirms that end_user lookups (especially cache misses) are a major driver of baseline latency spikes.
+
+#### Analysis (1 vs 10 requests per user, callbacks off, `--user-mode created --key-mode per_user`)
+
+| Scenario          | Requests | Users | Req/user | avg    | p95     | Above 1s |
+|-------------------|----------|-------|----------|--------|---------|----------|
+| One per user      | 100      | 100   | 1        | 8.923s | 14.962s | 100.0%   |
+| Multiple per user | 1000     | 100   | 10       | 1.198s | 8.839s  | 10.0%    |
+
+**Findings**
+
+Same pattern as random: 1 per user → all cache misses, ~7.5× higher avg latency and 100% above 1s; 10 per user → first request misses, next 9 hit, avg 1.2s and only 10% above 1s. **Created mode performs better than random** at 10 per user: avg 1.2s vs 1.5s, and 10% vs 33% above 1s. With pre-created end users, lookups succeed and cache; with random (non-existent) IDs, the negative path (no negative caching) keeps hitting DB. The 100 requests above 1s in created 10-per-user are the first request per user; the remaining 900 are cache hits with sub-second latency.
 
 ### Next Steps
 
