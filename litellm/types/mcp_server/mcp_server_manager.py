@@ -54,3 +54,8 @@ class MCPServer(BaseModel):
     available_on_public_internet: bool = False
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @property
+    def has_client_credentials(self) -> bool:
+        """True if this server has OAuth2 client_credentials config (client_id, client_secret, token_url)."""
+        return bool(self.client_id and self.client_secret and self.token_url)
