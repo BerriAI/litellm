@@ -2,6 +2,8 @@ import os
 import sys
 from typing import List, Literal
 
+from litellm.litellm_core_utils.env_utils import get_env_int
+
 DEFAULT_HEALTH_CHECK_PROMPT = str(
     os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm")
 )
@@ -98,6 +100,11 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
         "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512
     )
 )
+
+# Maximum number of callbacks that can be registered
+# This prevents callbacks from exponentially growing and consuming CPU resources
+# Override with LITELLM_MAX_CALLBACKS env var for large deployments (e.g., many teams with guardrails)
+MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 30)
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
