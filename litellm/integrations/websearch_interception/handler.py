@@ -17,6 +17,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool,
     is_web_search_tool,
+    is_web_search_tool_chat_completion,
 )
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
@@ -325,11 +326,11 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             return False, {}
 
-        # Check if tools include any web search tool
-        has_websearch_tool = any(is_web_search_tool(t) for t in (tools or []))
+        # Check if tools include any web search tool (strict check for chat completions)
+        has_websearch_tool = any(is_web_search_tool_chat_completion(t) for t in (tools or []))
         if not has_websearch_tool:
             verbose_logger.debug(
-                "WebSearchInterception: No web search tool in request"
+                "WebSearchInterception: No litellm_web_search tool in request"
             )
             return False, {}
 
