@@ -401,6 +401,8 @@ def generic_response_convertor(
 
     generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
 
+    generic_user_extra_attributes = os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
+
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
     )
@@ -473,6 +475,14 @@ def generic_response_convertor(
                     f"Found valid LitellmUserRoles '{role.value}' from SSO attribute '{generic_user_role_attribute_name}'"
                 )
 
+    # Build extra_fields dict from GENERIC_USER_EXTRA_ATTRIBUTES if specified
+    extra_fields = None
+    if generic_user_extra_attributes:
+        extra_fields = {}
+        for attr_name in generic_user_extra_attributes.split(","):
+            attr_name = attr_name.strip()
+            extra_fields[attr_name] = get_nested_value(response, attr_name)
+
     return CustomOpenID(
         id=get_nested_value(response, generic_user_id_attribute_name),
         display_name=get_nested_value(
@@ -484,6 +494,7 @@ def generic_response_convertor(
         provider=get_nested_value(response, generic_provider_attribute_name),
         team_ids=all_teams,
         user_role=user_role,
+        extra_fields=extra_fields,
     )
 
 

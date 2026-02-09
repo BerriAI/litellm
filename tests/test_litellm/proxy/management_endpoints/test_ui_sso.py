@@ -4071,3 +4071,123 @@ def test_process_sso_jwt_access_token_with_role_mappings():
 
     # Should get highest privilege role
     assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+def test_generic_response_convertor_with_extra_attributes(monkeypatch):
+    """Test that extra attributes are extracted when GENERIC_USER_EXTRA_ATTRIBUTES is set"""
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+    
+    monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
+    monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "custom_field1,custom_field2,custom_field3")
+    
+    mock_response = {
+        "sub": "user-id-123",
+        "email": "user@example.com",
+        "given_name": "John",
+        "family_name": "Doe",
+        "name": "John Doe",
+        "provider": "generic",
+        "custom_field1": "value1",
+        "custom_field2": ["item1", "item2"],
+        "custom_field3": {"nested": "data"},
+    }
+    
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+    
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+    
+    assert result.extra_fields is not None
+    assert result.extra_fields["custom_field1"] == "value1"
+    assert result.extra_fields["custom_field2"] == ["item1", "item2"]
+    assert result.extra_fields["custom_field3"] == {"nested": "data"}
+
+def test_generic_response_convertor_without_extra_attributes(monkeypatch):
+    """Test backward compatibility - extra_fields is None when env var not set"""
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+    
+    monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
+    # Don't set GENERIC_USER_EXTRA_ATTRIBUTES
+    
+    mock_response = {
+        "sub": "user-id-123",
+        "email": "user@example.com",
+        "given_name": "John",
+        "family_name": "Doe",
+        "name": "John Doe",
+        "provider": "generic",
+        "custom_field1": "value1",
+        "custom_field2": "value2",
+    }
+    
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+    
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+    
+    assert result.extra_fields is None
+
+def test_generic_response_convertor_extra_attributes_with_nested_paths(monkeypatch):
+    """Test that nested paths work with dot notation"""
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+    
+    monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
+    monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "org_info.department,org_info.manager")
+    
+    mock_response = {
+        "sub": "user-id-123",
+        "email": "user@example.com",
+        "org_info": {
+            "department": "Engineering",
+            "manager": "Jane Smith"
+        }
+    }
+    
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+    
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+    
+    assert result.extra_fields is not None
+    assert result.extra_fields["org_info.department"] == "Engineering"
+    assert result.extra_fields["org_info.manager"] == "Jane Smith"
+
+def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
+    """Test that missing fields return None"""
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+    
+    monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
+    monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "missing_field,another_missing")
+    
+    mock_response = {
+        "sub": "user-id-123",
+        "email": "user@example.com",
+    }
+    
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+    
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+    
+    assert result.extra_fields is not None
+    assert result.extra_fields["missing_field"] is None
+    assert result.extra_fields["another_missing"] is None
