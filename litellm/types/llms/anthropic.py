@@ -38,6 +38,7 @@ class AnthropicOutputSchema(TypedDict, total=False):
 
 class AnthropicOutputConfig(TypedDict, total=False):
     """Configuration for controlling Claude's output behavior."""
+
     effort: Literal["high", "medium", "low"]
 
 
@@ -109,12 +110,14 @@ class AnthropicMemoryTool(TypedDict, total=False):
 
 class AnthropicToolSearchToolRegex(TypedDict, total=False):
     """Tool search tool using regex patterns for tool discovery."""
+
     type: Required[Literal["tool_search_tool_regex_20251119"]]
     name: Required[str]
 
 
 class AnthropicToolSearchToolBM25(TypedDict, total=False):
     """Tool search tool using BM25 algorithm for tool discovery."""
+
     type: Required[Literal["tool_search_tool_bm25_20251119"]]
     name: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
@@ -125,17 +128,20 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
 
 class ToolReference(TypedDict, total=False):
     """Reference to a tool that should be expanded from deferred tools."""
+
     type: Required[Literal["tool_reference"]]
     tool_name: Required[str]
 
 
 class DirectToolCaller(TypedDict, total=False):
     """Indicates a tool was called directly by Claude."""
+
     type: Required[Literal["direct"]]
 
 
 class CodeExecutionToolCaller(TypedDict, total=False):
     """Indicates a tool was called programmatically from code execution."""
+
     type: Required[Literal["code_execution_20250825"]]
     tool_id: Required[str]  # ID of the code execution tool that made the call
 
@@ -145,6 +151,7 @@ ToolCaller = Union[DirectToolCaller, CodeExecutionToolCaller]
 
 class AnthropicContainer(TypedDict, total=False):
     """Container metadata for code execution."""
+
     id: Required[str]
     expires_at: Optional[str]  # ISO 8601 timestamp
 
@@ -358,8 +365,11 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
-    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
+    container: Optional[
+        Dict[str, Any]
+    ]  # Container config with skills for code execution
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
+    output_config: Optional[AnthropicOutputConfig]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -539,7 +549,7 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     input: dict
     provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    model_config = ConfigDict(extra="allow") # Allow provider_specific_fields
+    model_config = ConfigDict(extra="allow")  # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
@@ -630,6 +640,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
     """
+
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
     WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
