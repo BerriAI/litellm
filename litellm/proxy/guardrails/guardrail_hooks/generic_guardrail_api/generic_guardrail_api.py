@@ -9,6 +9,7 @@ import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
@@ -27,6 +28,95 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "generic_guardrail_api"
+
+_SENSITIVE_HEADER_DENYLIST = {
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    # common secret-bearing headers
+    "x-api-key",
+    "api-key",
+    "x-auth-token",
+    "x-authorization",
+}
+
+
+def _sanitize_inbound_headers(headers: Any) -> Optional[Dict[str, str]]:
+    """
+    Sanitize inbound headers before passing them to a 3rd party guardrail service.
+
+    - Drops sensitive headers (case-insensitive)
+    - Coerces values to str (for JSON serialization)
+    """
+    if not headers or not isinstance(headers, dict):
+        return None
+
+    sanitized: Dict[str, str] = {}
+    for k, v in headers.items():
+        if k is None:
+            continue
+        key = str(k)
+        if key.lower() in _SENSITIVE_HEADER_DENYLIST:
+            continue
+        # Coerce all values to strings for stable serialization
+        try:
+            sanitized[key] = str(v)
+        except Exception:
+            # non-blocking if it can't cast to a str
+            continue
+
+    return sanitized or None
+
+
+def _extract_inbound_headers(
+    request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
+) -> Optional[Dict[str, str]]:
+    """
+    Extract inbound headers from available request context.
+
+    We try multiple locations to support different call paths:
+    - proxy endpoints: request_data["proxy_server_request"]["headers"]
+    - if the guardrail is passed the proxy_server_request object directly
+    - metadata headers captured in litellm_pre_call_utils
+    - response hooks: fallback to logging_obj.model_call_details
+    """
+    # 1) Most common path (proxy): full request context in proxy_server_request
+    headers = request_data.get("proxy_server_request", {}).get("headers")
+    if headers:
+        return _sanitize_inbound_headers(headers)
+
+    # 2) Some guardrails pass proxy_server_request as request_data itself
+    headers = request_data.get("headers")
+    if headers:
+        return _sanitize_inbound_headers(headers)
+
+    # 3) Pre-call: headers stored in request metadata
+    metadata_headers = (request_data.get("metadata") or {}).get("headers")
+    if metadata_headers:
+        return _sanitize_inbound_headers(metadata_headers)
+
+    litellm_metadata_headers = (request_data.get("litellm_metadata") or {}).get(
+        "headers"
+    )
+    if litellm_metadata_headers:
+        return _sanitize_inbound_headers(litellm_metadata_headers)
+
+    # 4) Post-call: headers not present on response; fallback to logging object
+    if logging_obj and getattr(logging_obj, "model_call_details", None):
+        try:
+            details = logging_obj.model_call_details or {}
+            headers = (
+                details.get("litellm_params", {})
+                .get("metadata", {})
+                .get("headers", None)
+            )
+            if headers:
+                return _sanitize_inbound_headers(headers)
+        except Exception:
+            pass
+
+    return None
 
 
 class GenericGuardrailAPI(CustomGuardrail):
@@ -203,6 +293,7 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
+        inbound_headers = _extract_inbound_headers(request_data=request_data, logging_obj=logging_obj)
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
@@ -210,6 +301,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
             texts=texts,
             request_data=user_metadata,
+            request_headers=inbound_headers,
+            litellm_version=litellm_version,
             images=images,
             tools=tools,
             structured_messages=structured_messages,
