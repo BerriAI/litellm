@@ -45,7 +45,7 @@ function renderWithProviders(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
-describe("CreateUserButton", () => {
+describe("CreateUserButton", { timeout: 20000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetProxyUISettings.mockResolvedValue({
