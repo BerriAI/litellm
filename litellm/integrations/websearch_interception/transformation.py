@@ -190,7 +190,6 @@ class WebSearchTransformation:
                 LITELLM_WEB_SEARCH_TOOL_NAME, "WebSearch", "web_search"
             ):
                 # Parse arguments (might be JSON string)
-                import json
                 if isinstance(function_arguments, str):
                     try:
                         arguments = json.loads(function_arguments)
