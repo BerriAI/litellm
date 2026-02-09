@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -117,8 +118,16 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
-        if beta_set:
-            _anthropic_request["anthropic_beta"] = list(beta_set)
+        # Filter out beta headers that Bedrock Invoke doesn't support
+        # Uses centralized configuration from anthropic_beta_headers_config.json
+        beta_list = list(beta_set)
+        filtered_beta_list = filter_and_transform_beta_headers(
+            beta_headers=beta_list,
+            provider="bedrock",
+        )
+
+        if filtered_beta_list:
+            _anthropic_request["anthropic_beta"] = filtered_beta_list
 
         return _anthropic_request
 
