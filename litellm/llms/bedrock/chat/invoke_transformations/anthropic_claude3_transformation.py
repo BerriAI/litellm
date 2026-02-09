@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -133,27 +134,15 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 beta_set.add("tool-search-tool-2025-10-19")
 
         # Filter out beta headers that Bedrock Invoke doesn't support
-        # AWS Bedrock only supports a specific whitelist of beta flags
-        # Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
-        BEDROCK_SUPPORTED_BETAS = {
-            "computer-use-2024-10-22",  # Legacy computer use
-            "computer-use-2025-01-24",  # Current computer use (Claude 3.7 Sonnet)
-            "token-efficient-tools-2025-02-19",  # Tool use (Claude 3.7+ and Claude 4+)
-            "interleaved-thinking-2025-05-14",  # Interleaved thinking (Claude 4+)
-            "output-128k-2025-02-19",  # 128K output tokens (Claude 3.7 Sonnet)
-            "dev-full-thinking-2025-05-14",  # Developer mode for raw thinking (Claude 4+)
-            "context-1m-2025-08-07",  # 1 million tokens (Claude Sonnet 4)
-            "context-management-2025-06-27",  # Context management (Claude Sonnet/Haiku 4.5)
-            "effort-2025-11-24",  # Effort parameter (Claude Opus 4.5)
-            "tool-search-tool-2025-10-19",  # Tool search (Claude Opus 4.5)
-            "tool-examples-2025-10-29",  # Tool use examples (Claude Opus 4.5)
-        }
-        
-        # Only keep beta headers that Bedrock supports
-        beta_set = {beta for beta in beta_set if beta in BEDROCK_SUPPORTED_BETAS}
+        # Uses centralized configuration from anthropic_beta_headers_config.json
+        beta_list = list(beta_set)
+        filtered_beta_list = filter_and_transform_beta_headers(
+            beta_headers=beta_list,
+            provider="bedrock",
+        )
 
-        if beta_set:
-            _anthropic_request["anthropic_beta"] = list(beta_set)
+        if filtered_beta_list:
+            _anthropic_request["anthropic_beta"] = filtered_beta_list
 
         return _anthropic_request
 
