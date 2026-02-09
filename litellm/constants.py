@@ -99,6 +99,11 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
     )
 )
 
+# Maximum number of callbacks that can be registered
+# This prevents callbacks from exponentially growing and consuming CPU resources
+# Override with LITELLM_MAX_CALLBACKS env var for large deployments (e.g., many teams with guardrails)
+MAX_CALLBACKS = int(os.getenv("LITELLM_MAX_CALLBACKS", 30))
+
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
