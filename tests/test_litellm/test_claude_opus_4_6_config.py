@@ -112,17 +112,7 @@ def test_opus_4_6_bedrock_regional_model_pricing():
             "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
             "cache_read_input_token_cost_above_200k_tokens": 1.1e-06,
         },
-        "apac.anthropic.claude-opus-4-6-v1": {
-            "input_cost_per_token": 5.5e-06,
-            "output_cost_per_token": 2.75e-05,
-            "cache_creation_input_token_cost": 6.875e-06,
-            "cache_read_input_token_cost": 5.5e-07,
-            "input_cost_per_token_above_200k_tokens": 1.1e-05,
-            "output_cost_per_token_above_200k_tokens": 4.125e-05,
-            "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
-            "cache_read_input_token_cost_above_200k_tokens": 1.1e-06,
-        },
-        "apac.anthropic.claude-opus-4-6-v1": {
+        "au.anthropic.claude-opus-4-6-v1": {
             "input_cost_per_token": 5.5e-06,
             "output_cost_per_token": 2.75e-05,
             "cache_creation_input_token_cost": 6.875e-06,
@@ -180,4 +170,4 @@ def test_opus_4_6_bedrock_converse_registration():
     assert "global.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
     assert "us.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
     assert "eu.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
-    assert "apac.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
+    assert "au.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
