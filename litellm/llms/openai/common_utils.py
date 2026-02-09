@@ -14,6 +14,8 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
+import inspect
+
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -21,6 +23,14 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_ssl_configuration,
 )
+
+def _get_client_init_params(cls: type) -> List[str]:
+    """Extract __init__ parameter names (excluding 'self') from a class."""
+    return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+
+
+_OPENAI_INIT_PARAMS: List[str] = _get_client_init_params(OpenAI)
+_AZURE_OPENAI_INIT_PARAMS: List[str] = _get_client_init_params(AzureOpenAI)
 
 
 class OpenAIError(BaseLLMException):
@@ -183,18 +193,10 @@ class BaseOpenAILLM:
         client_type: Literal["openai", "azure"]
     ) -> List[str]:
         """Returns a list of fields that are used to initialize the OpenAI client"""
-        import inspect
-
-        from openai import AzureOpenAI, OpenAI
-
         if client_type == "openai":
-            signature = inspect.signature(OpenAI.__init__)
+            return _OPENAI_INIT_PARAMS
         else:
-            signature = inspect.signature(AzureOpenAI.__init__)
-
-        # Extract parameter names, excluding 'self'
-        param_names = [param for param in signature.parameters if param != "self"]
-        return param_names
+            return _AZURE_OPENAI_INIT_PARAMS
 
     @staticmethod
     def _get_async_http_client(
@@ -230,3 +232,5 @@ class BaseOpenAILLM:
             verify=ssl_config,
             follow_redirects=True,
         )
+
+
