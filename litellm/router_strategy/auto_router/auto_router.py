@@ -171,12 +171,22 @@ class AutoRouter(CustomLogger):
 
         decision = self.smart_router.resolve_route(messages)
 
-        verbose_router_logger.debug(
-            "Auto-router decision: model=%s, tier=%s, category=%s, confidence=%.2f",
+        # Build a short preview of the last user message for logging
+        _preview = ""
+        if messages:
+            for _m in reversed(messages):
+                if _m.get("role") == "user" and _m.get("content"):
+                    _preview = str(_m["content"])[:120].replace("\n", " ")
+                    break
+
+        verbose_router_logger.info(
+            "Auto-router: [%s] %s -> %s (tier=%s, confidence=%.2f) | %s",
+            decision.category,
+            model,
             decision.model,
             decision.tier,
-            decision.category,
             decision.confidence,
+            _preview + ("..." if len(_preview) >= 120 else ""),
         )
 
         return PreRoutingHookResponse(
