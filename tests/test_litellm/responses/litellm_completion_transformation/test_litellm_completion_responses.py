@@ -1424,6 +1424,47 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is None
         assert response_usage.output_tokens_details is None
 
+    def test_transform_usage_with_image_tokens(self):
+        """Test that image_tokens from Vertex AI/Gemini are properly transformed to output_tokens_details"""
+        # Setup: Simulate Vertex AI/Gemini usage with image_tokens in completion_tokens_details
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=150,
+            total_tokens=160,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=0,
+                text_tokens=50,
+                image_tokens=100,  # From Vertex AI candidatesTokensDetails with modality="IMAGE"
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Here is the generated image.", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.output_tokens == 150
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
+        assert response_usage.output_tokens_details.text_tokens == 50
+        assert response_usage.output_tokens_details.image_tokens == 100
+
 
 class TestStreamingIDConsistency:
     """Test cases for consistent IDs across streaming events (issue #14962)"""
