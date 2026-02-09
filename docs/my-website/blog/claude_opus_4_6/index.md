@@ -619,3 +619,93 @@ LiteLLM will automatically apply the 1.1× pricing multiplier for US-only infere
 
 </TabItem>
 </Tabs>
+
+### Fast Mode
+
+:::info
+Fast mode is **only supported on the Anthropic provider** (`anthropic/claude-opus-4-6`). It is not available on Azure AI, Vertex AI, or Bedrock.
+:::
+
+**Pricing:**
+- Standard: $5 input / $25 output per MTok
+- Fast: $30 input / $150 output per MTok (6× premium)
+
+<Tabs>
+<TabItem value="completions" label="/chat/completions">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Refactor this module..."
+    }
+  ],
+  "max_tokens": 4096,
+  "speed": "fast"
+}'
+```
+
+**Using OpenAI SDK:**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="your-litellm-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="claude-opus-4-6",
+    messages=[{"role": "user", "content": "Refactor this module..."}],
+    max_tokens=4096,
+    extra_body={"speed": "fast"}
+)
+```
+
+**Using LiteLLM SDK:**
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-opus-4-6",
+    messages=[{"role": "user", "content": "Refactor this module..."}],
+    max_tokens=4096,
+    speed="fast"
+)
+```
+
+LiteLLM automatically tracks the higher costs for fast mode in usage and cost calculations.
+
+</TabItem>
+<TabItem value="messages" label="/v1/messages">
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'x-api-key: sk-12345' \
+--header 'content-type: application/json' \
+--data '{
+    "model": "claude-opus-4-6",
+    "max_tokens": 4096,
+    "speed": "fast",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Refactor this module..."
+        }
+    ]
+}'
+```
+
+LiteLLM automatically:
+- Adds the `fast-mode-2026-02-01` beta header
+- Tracks the 6× premium pricing in cost calculations
+
+</TabItem>
+</Tabs>
