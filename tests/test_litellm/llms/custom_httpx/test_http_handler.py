@@ -263,6 +263,66 @@ async def test_create_aiohttp_transport_with_closed_session():
 
 
 @pytest.mark.asyncio
+async def test_create_aiohttp_transport_skips_shared_session_when_ssl_disabled():
+    """Test that _create_aiohttp_transport does NOT use shared session when ssl_verify=False.
+
+    The shared session is created with default SSL (verification ON). If a provider
+    needs ssl_verify=False (e.g. GigaChat with self-signed certs), the shared session
+    must be skipped so a new session with ssl=False in its connector is created instead.
+    """
+    from aiohttp import TCPConnector
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    # Create a mock shared session that is open (not closed)
+    mock_session = MockClientSession()
+    assert not mock_session.closed
+
+    # With ssl_verify=False AND a shared session provided, the shared session
+    # should be skipped in favour of a factory lambda
+    transport = AsyncHTTPHandler._create_aiohttp_transport(
+        ssl_verify=False,
+        shared_session=mock_session,  # type: ignore
+    )
+
+    # The transport must NOT use the shared session
+    assert transport.client is not mock_session
+
+    # It should hold a callable factory so sessions can be recreated with ssl=False
+    assert callable(transport.client)
+    assert hasattr(transport, "_client_factory") and callable(transport._client_factory)
+
+    # The factory-created session must have ssl=False on its connector
+    session = transport._client_factory()
+    assert isinstance(session.connector, TCPConnector)
+    assert session.connector._ssl is False  # type: ignore[attr-defined]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_create_aiohttp_transport_uses_shared_session_when_ssl_default():
+    """Test that _create_aiohttp_transport still uses the shared session when
+    ssl_verify is not explicitly False (the common case for most providers)."""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    mock_session = MockClientSession()
+
+    # ssl_verify=None (default) should use the shared session
+    transport = AsyncHTTPHandler._create_aiohttp_transport(
+        ssl_verify=None,
+        shared_session=mock_session,  # type: ignore
+    )
+    assert transport.client is mock_session
+
+    # ssl_verify=True should also use the shared session
+    transport2 = AsyncHTTPHandler._create_aiohttp_transport(
+        ssl_verify=True,
+        shared_session=mock_session,  # type: ignore
+    )
+    assert transport2.client is mock_session
+
+
+@pytest.mark.asyncio
 async def test_async_handler_with_shared_session():
     """Test AsyncHTTPHandler initialization with shared session"""
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler

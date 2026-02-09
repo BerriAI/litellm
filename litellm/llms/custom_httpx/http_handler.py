@@ -848,8 +848,14 @@ class AsyncHTTPHandler:
 
         verbose_logger.debug("Creating AiohttpTransport...")
 
-        # Use shared session if provided and valid
-        if shared_session is not None and not shared_session.closed:
+        # Use shared session if provided, valid, AND SSL settings are compatible.
+        # The shared session is created with default SSL (verification ON), so we
+        # cannot reuse it when ssl_verify is explicitly False (e.g. self-signed certs).
+        if (
+            shared_session is not None
+            and not shared_session.closed
+            and ssl_verify is not False
+        ):
             verbose_logger.debug(
                 f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})"
             )
