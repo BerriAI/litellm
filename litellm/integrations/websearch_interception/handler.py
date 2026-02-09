@@ -490,7 +490,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
         # Make follow-up request with search results
-        follow_up_messages = messages + [assistant_message, user_message]
+        # Type cast: user_message is a Dict for Anthropic format (default response_format)
+        follow_up_messages = messages + [assistant_message, cast(Dict, user_message)]
 
         verbose_logger.debug(
             "WebSearchInterception: Making follow-up request with search results"
@@ -702,10 +703,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Make follow-up request with search results
         # For OpenAI format, tool_messages_or_user is a list of tool messages
         if response_format == "openai":
-            follow_up_messages = messages + [assistant_message] + tool_messages_or_user
+            follow_up_messages = messages + [assistant_message] + cast(List[Dict], tool_messages_or_user)
         else:
             # For Anthropic format (shouldn't happen in this method, but handle it)
-            follow_up_messages = messages + [assistant_message, tool_messages_or_user]
+            follow_up_messages = messages + [assistant_message, cast(Dict, tool_messages_or_user)]
 
         verbose_logger.debug(
             "WebSearchInterception: Making follow-up chat completion request with search results"
