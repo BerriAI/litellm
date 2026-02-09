@@ -492,6 +492,205 @@ class TestAutoRouter:
         # Should route to LOW tier model
         assert result.model == "deepseek/deepseek-chat-v3-0324"
 
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_stores_tier_in_metadata(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test-auto-router",
+            default_model="gpt-4o-mini",
+            litellm_router_instance=mock_router_instance,
+        )
+        request_kwargs: Dict = {}
+        messages = [{"role": "user", "content": "hi"}]
+        await auto_router.async_pre_routing_hook(
+            model="auto", request_kwargs=request_kwargs, messages=messages
+        )
+        assert request_kwargs["metadata"]["auto_router_tier"] == "low"
+
+
+# ─── Tier prefix on response tests ──────────────────────────────────
+
+
+def _make_response(content: str):
+    """Build a minimal ModelResponse for testing."""
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    return ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content=content),
+            )
+        ],
+        model="test-model",
+    )
+
+
+class TestTierResponsePrefix:
+    """Test that responses are prefixed with the tier tag."""
+
+    @pytest.fixture
+    def mock_router_instance(self):
+        return MagicMock()
+
+    @pytest.mark.asyncio
+    async def test_response_prefixed_low(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        response = _make_response("Sure, hello!")
+        request_data = {"metadata": {"auto_router_tier": "low"}}
+        result = await auto_router.async_post_call_success_deployment_hook(
+            request_data, response
+        )
+        assert result.choices[0].message.content == "[low] Sure, hello!"
+
+    @pytest.mark.asyncio
+    async def test_response_prefixed_med(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        response = _make_response("Here is the code.")
+        request_data = {"metadata": {"auto_router_tier": "mid"}}
+        result = await auto_router.async_post_call_success_deployment_hook(
+            request_data, response
+        )
+        assert result.choices[0].message.content == "[med] Here is the code."
+
+    @pytest.mark.asyncio
+    async def test_response_prefixed_high(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        response = _make_response("Let me analyze this.")
+        request_data = {"metadata": {"auto_router_tier": "top"}}
+        result = await auto_router.async_post_call_success_deployment_hook(
+            request_data, response
+        )
+        assert result.choices[0].message.content == "[high] Let me analyze this."
+
+    @pytest.mark.asyncio
+    async def test_response_prefixed_via_litellm_params_metadata(self, mock_router_instance):
+        """Streaming path: metadata nested under litellm_params."""
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        response = _make_response("Hello!")
+        request_data = {"litellm_params": {"metadata": {"auto_router_tier": "top"}}}
+        result = await auto_router.async_post_call_success_deployment_hook(
+            request_data, response
+        )
+        assert result.choices[0].message.content == "[high] Hello!"
+
+    @pytest.mark.asyncio
+    async def test_no_prefix_without_tier_metadata(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        response = _make_response("Hello!")
+        request_data = {"metadata": {}}
+        result = await auto_router.async_post_call_success_deployment_hook(
+            request_data, response
+        )
+        assert result.choices[0].message.content == "Hello!"
+
+    @pytest.mark.asyncio
+    async def test_no_prefix_without_metadata_key(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        response = _make_response("Hello!")
+        request_data = {}
+        result = await auto_router.async_post_call_success_deployment_hook(
+            request_data, response
+        )
+        assert result.choices[0].message.content == "Hello!"
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_routing_and_prefix(self, mock_router_instance):
+        """Pre-routing stores tier, post-call prefixes it."""
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        request_kwargs: Dict = {}
+        messages = [{"role": "user", "content": "prove that 2+2=4"}]
+        await auto_router.async_pre_routing_hook(
+            model="auto", request_kwargs=request_kwargs, messages=messages
+        )
+        # Simulate model response
+        response = _make_response("Here is the proof.")
+        result = await auto_router.async_post_call_success_deployment_hook(
+            request_kwargs, response
+        )
+        assert result.choices[0].message.content.startswith("[")
+
+
+# ─── Streaming tier prefix tests ────────────────────────────────────
+
+
+def _make_stream_chunk(content: str):
+    """Build a minimal ModelResponseStream for testing."""
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(role="assistant", content=content),
+            )
+        ],
+        model="test-model",
+    )
+
+
+class TestTierStreamingPrefix:
+    """Test that streaming responses get tier prefix on first chunk."""
+
+    @pytest.fixture
+    def mock_router_instance(self):
+        return MagicMock()
+
+    @pytest.mark.asyncio
+    async def test_streaming_first_chunk_prefixed(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        request_data = {"litellm_params": {"metadata": {"auto_router_tier": "top"}}}
+        chunk = _make_stream_chunk("Hello")
+        result = await auto_router.async_post_call_streaming_deployment_hook(
+            request_data, chunk
+        )
+        assert result.choices[0].delta.content == "[high] Hello"
+
+    @pytest.mark.asyncio
+    async def test_streaming_second_chunk_not_prefixed(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        request_data = {"litellm_params": {"metadata": {"auto_router_tier": "low"}}}
+        chunk1 = _make_stream_chunk("Hello")
+        await auto_router.async_post_call_streaming_deployment_hook(
+            request_data, chunk1
+        )
+        chunk2 = _make_stream_chunk(" world")
+        result = await auto_router.async_post_call_streaming_deployment_hook(
+            request_data, chunk2
+        )
+        assert result.choices[0].delta.content == " world"
+
+    @pytest.mark.asyncio
+    async def test_streaming_no_prefix_without_metadata(self, mock_router_instance):
+        auto_router = AutoRouter(
+            model_name="test", default_model="m", litellm_router_instance=mock_router_instance
+        )
+        request_data = {}
+        chunk = _make_stream_chunk("Hello")
+        result = await auto_router.async_post_call_streaming_deployment_hook(
+            request_data, chunk
+        )
+        assert result.choices[0].delta.content == "Hello"
+
 
 # ─── _parse_inline_config tests ─────────────────────────────────────
 

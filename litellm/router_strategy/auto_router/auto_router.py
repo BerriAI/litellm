@@ -12,14 +12,23 @@ from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 from .smart_router import SmartRouter
-from .tiers import RoutingConfig, load_routing_config
+from .tiers import ModelTier, RoutingConfig, load_routing_config
 
 if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.types.router import PreRoutingHookResponse
+    from litellm.types.utils import LLMResponseTypes
 else:
     Router = Any
     PreRoutingHookResponse = Any
+    LLMResponseTypes = Any
+
+# Map internal tier names to user-facing prefixes
+_TIER_PREFIX: Dict[ModelTier, str] = {
+    ModelTier.LOW: "[low]",
+    ModelTier.MID: "[med]",
+    ModelTier.TOP: "[high]",
+}
 
 
 class AutoRouter(CustomLogger):
@@ -171,6 +180,10 @@ class AutoRouter(CustomLogger):
 
         decision = self.smart_router.resolve_route(messages)
 
+        # Store tier in request metadata so the post-call hook can prefix it
+        metadata = request_kwargs.setdefault("metadata", {})
+        metadata["auto_router_tier"] = decision.tier.value
+
         # Build a short preview of the last user message for logging
         _preview = ""
         if messages:
@@ -193,3 +206,87 @@ class AutoRouter(CustomLogger):
             model=decision.model,
             messages=messages,
         )
+
+    @staticmethod
+    def _get_tier_from_request_data(request_data: dict) -> Optional[ModelTier]:
+        """Extract the auto_router_tier from request data (handles both paths)."""
+        # Non-streaming path: metadata is at top level
+        tier_value = (request_data.get("metadata") or {}).get("auto_router_tier")
+        # Streaming path: metadata is nested under litellm_params
+        if not tier_value:
+            tier_value = (
+                (request_data.get("litellm_params") or {})
+                .get("metadata", {}) or {}
+            ).get("auto_router_tier")
+        if not tier_value:
+            return None
+        try:
+            return ModelTier(tier_value)
+        except ValueError:
+            return None
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: dict,
+        response: "LLMResponseTypes",
+        call_type: Optional[Any] = None,
+    ) -> Optional["LLMResponseTypes"]:
+        """Prepend a tier prefix (e.g. [high]) to the response content."""
+        tier = self._get_tier_from_request_data(request_data)
+        if not tier:
+            return response
+
+        prefix = _TIER_PREFIX.get(tier)
+        if not prefix:
+            return response
+
+        # Prepend to the first choice's message content
+        try:
+            choice = response.choices[0]  # type: ignore[union-attr]
+            msg = choice.message
+            if msg and msg.content:
+                msg.content = "%s %s" % (prefix, msg.content)
+        except (AttributeError, IndexError):
+            pass
+
+        return response
+
+    async def async_post_call_streaming_deployment_hook(
+        self,
+        request_data: dict,
+        response_chunk: Any,
+        call_type: Optional[Any] = None,
+    ) -> Optional[Any]:
+        """Prepend a tier prefix to the first streaming chunk with content."""
+        _top_meta = request_data.get("metadata")
+        _lp_meta = (request_data.get("litellm_params") or {}).get("metadata")
+        verbose_router_logger.info(
+            "AUTO-ROUTER STREAMING HOOK: prefix_added=%s, top_meta_type=%s, top_meta_tier=%s, lp_meta_tier=%s",
+            request_data.get("_auto_router_prefix_added"),
+            type(_top_meta).__name__,
+            _top_meta.get("auto_router_tier") if isinstance(_top_meta, dict) else "N/A",
+            _lp_meta.get("auto_router_tier") if isinstance(_lp_meta, dict) else "N/A",
+        )
+        # Only prefix once per request
+        if request_data.get("_auto_router_prefix_added"):
+            return response_chunk
+
+        tier = self._get_tier_from_request_data(request_data)
+        if not tier:
+            verbose_router_logger.info("AUTO-ROUTER STREAMING HOOK: no tier found")
+            return response_chunk
+
+        prefix = _TIER_PREFIX.get(tier)
+        if not prefix:
+            return response_chunk
+
+        try:
+            choice = response_chunk.choices[0]
+            delta = choice.delta
+            if delta and delta.content:
+                delta.content = "%s %s" % (prefix, delta.content)
+                request_data["_auto_router_prefix_added"] = True
+        except (AttributeError, IndexError):
+            pass
+
+        return response_chunk

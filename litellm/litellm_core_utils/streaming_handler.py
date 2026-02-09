@@ -1948,6 +1948,12 @@ class CustomStreamWrapper:
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
+                        # Call post-call streaming hook on first chunk (e.g. for tier prefix)
+                        processed_chunk = (
+                            await self._call_post_streaming_deployment_hook(
+                                processed_chunk
+                            )
+                        )
                         self.sent_first_chunk = True
                     if hasattr(
                         processed_chunk, "usage"
