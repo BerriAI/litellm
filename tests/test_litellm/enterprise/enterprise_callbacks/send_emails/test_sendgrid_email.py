@@ -2,9 +2,7 @@ import os
 import sys
 import unittest.mock as mock
 
-import httpx
 import pytest
-import respx
 from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../../.."))
@@ -54,26 +52,27 @@ def mock_env_vars():
 
 
 @pytest.fixture
-def mock_httpx_client():
-    with mock.patch(
-        "litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email.get_async_httpx_client"
-    ) as mock_client:
+def mock_async_client():
+    """
+    Create a mock async httpx client that can be injected directly
+    into the logger instance, bypassing any caching issues.
+    """
+    mock_response = mock.Mock(spec=Response)
+    mock_response.status_code = 202
+    mock_response.text = "accepted"
+    mock_response.raise_for_status.return_value = None
 
-        mock_response = mock.Mock(spec=Response)
-        mock_response.status_code = 202
-        mock_response.text = "accepted"
-        mock_response.raise_for_status.return_value = None
-
-        mock_async_client = mock.AsyncMock()
-        mock_async_client.post.return_value = mock_response
-
-        mock_client.return_value = mock_async_client
-        yield mock_async_client
+    mock_client = mock.AsyncMock()
+    mock_client.post.return_value = mock_response
+    return mock_client
 
 
 @pytest.mark.asyncio
-async def test_send_email_success(mock_env_vars, mock_httpx_client):
+async def test_send_email_success(mock_env_vars, mock_async_client):
     logger = SendGridEmailLogger()
+    # Directly replace the httpx client to ensure the mock is used
+    # This bypasses any caching or initialization timing issues
+    logger.async_httpx_client = mock_async_client
 
     from_email = "test@example.com"
     to_email = ["recipient@example.com"]
@@ -84,8 +83,8 @@ async def test_send_email_success(mock_env_vars, mock_httpx_client):
         from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
     )
 
-    mock_httpx_client.post.assert_called_once()
-    call_args = mock_httpx_client.post.call_args
+    mock_async_client.post.assert_called_once()
+    call_args = mock_async_client.post.call_args
     assert call_args[1]["url"] == "https://api.sendgrid.com/v3/mail/send"
 
     payload = call_args[1]["json"]
@@ -118,32 +117,23 @@ async def test_send_email_missing_api_key():
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_send_email_multiple_recipients(mock_env_vars, mock_httpx_client):
-    # Block all HTTP requests at network level to prevent real API calls
-    respx.post("https://api.sendgrid.com/v3/mail/send").mock(
-        return_value=httpx.Response(202, text="accepted")
-    )
-    
+async def test_send_email_multiple_recipients(mock_env_vars, mock_async_client):
     logger = SendGridEmailLogger()
+    # Directly replace the httpx client to ensure the mock is used
+    # This bypasses any caching or initialization timing issues
+    logger.async_httpx_client = mock_async_client
 
     from_email = "test@example.com"
     to_email = ["recipient1@example.com", "recipient2@example.com"]
     subject = "Test Subject"
     html_body = "<p>Test email body</p>"
 
-    mock_response = mock.Mock(spec=Response)
-    mock_response.status_code = 202
-    mock_response.text = "accepted"
-    mock_response.raise_for_status.return_value = None
-    mock_httpx_client.post.return_value = mock_response
-
     await logger.send_email(
         from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
     )
 
-    mock_httpx_client.post.assert_called_once()
-    payload = mock_httpx_client.post.call_args[1]["json"]
+    mock_async_client.post.assert_called_once()
+    payload = mock_async_client.post.call_args[1]["json"]
 
     assert payload["personalizations"][0]["to"] == [
         {"email": "recipient1@example.com"},

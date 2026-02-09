@@ -359,7 +359,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/vector_store/list",
         "/v1/vector_store/list",
-
         # search
         "/search",
         "/v1/search",
@@ -2232,13 +2231,22 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
     def __init__(self, **kwargs):
-        # Handle litellm_budget_table_* keys
+        # Handle litellm_budget_table_* keys (budget table overrides when key value is None or empty)
         for key, value in list(kwargs.items()):
             if key.startswith("litellm_budget_table_") and value is not None:
                 # Extract the corresponding attribute name
                 attr_name = key.replace("litellm_budget_table_", "")
-                # Check if the value is None and set the corresponding attribute
-                if getattr(self, attr_name, None) is None:
+                # Use key's value from kwargs (from DB view), not class default
+                current = kwargs.get(attr_name)
+                if current is None:
+                    current = getattr(self, attr_name, None)
+                # Apply budget value when key has no value, or for model_max_budget when key has empty dict
+                should_apply = current is None or (
+                    attr_name == "model_max_budget"
+                    and isinstance(current, dict)
+                    and len(current) == 0
+                )
+                if should_apply:
                     kwargs[attr_name] = value
             if key == "end_user_id" and value is not None and isinstance(value, int):
                 kwargs[key] = str(value)

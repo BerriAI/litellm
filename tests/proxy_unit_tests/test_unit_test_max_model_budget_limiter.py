@@ -1,30 +1,20 @@
-import json
 import os
 import sys
-from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
-from datetime import datetime as dt_object
-import time
-import pytest
-import litellm
 
-import json
-from litellm.types.utils import BudgetConfig as GenericBudgetInfo
-import os
-import sys
-from datetime import datetime
-from unittest.mock import AsyncMock, patch
 import pytest
+
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-import litellm
+from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 
 # Test class setup
@@ -123,3 +113,48 @@ async def test_get_virtual_key_spend_for_model(budget_limiter):
             key_budget_config=budget_config,
         )
         assert spend == 50.0
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_uses_per_model_budget_duration(budget_limiter):
+    """
+    async_log_success_event must use the per-model budget_duration for the cache key
+    so spend is tracked per model correctly. Regression test for per-model budget implementation.
+    """
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    virtual_key = "test-key-hash"
+    model = "gpt-4"
+    budget_duration = "1d"
+    user_api_key_model_max_budget = {
+        model: {"budget_limit": 100.0, "time_period": budget_duration},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.05,
+            "model": model,
+            "metadata": {"user_api_key_hash": virtual_key},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": user_api_key_model_max_budget
+            },
+        },
+    }
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+        mock_increment.assert_awaited_once()
+        call_kwargs = mock_increment.call_args.kwargs
+        spend_key = call_kwargs["spend_key"]
+        assert spend_key == (
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
+        )
+        assert call_kwargs["response_cost"] == 0.05

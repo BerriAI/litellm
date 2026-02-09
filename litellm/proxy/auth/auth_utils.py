@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from functools import lru_cache
 from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
@@ -311,10 +312,11 @@ def get_request_route(request: Request) -> str:
         return request.url.path
 
 
+@lru_cache(maxsize=256)
 def normalize_request_route(route: str) -> str:
     """
     Normalize request routes by replacing dynamic path parameters with placeholders.
-    
+
     This prevents high cardinality in Prometheus metrics by collapsing routes like:
     - /v1/responses/1234567890 -> /v1/responses/{response_id}
     - /v1/threads/thread_123 -> /v1/threads/{thread_id}

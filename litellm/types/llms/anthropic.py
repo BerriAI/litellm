@@ -355,11 +355,14 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     tool_choice: Optional[Union[AnthropicMessagesToolChoice, Dict]]
     tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
     top_k: Optional[int]
+    inference_geo: Optional[str]
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
     container: Optional[Dict[str, Any]]  # Container config with skills for code execution
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
+    speed: Optional[str]  # Fast mode support for Opus models
+    output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -636,6 +639,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     COMPACT_2026_01_12 = "compact-2026-01-12"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
+    FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

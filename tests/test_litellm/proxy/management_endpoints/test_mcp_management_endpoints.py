@@ -1130,6 +1130,8 @@ class TestMCPRegistryEndpoint:
 
         mock_manager = MagicMock()
         mock_manager.get_registry.return_value = {mock_server.server_id: mock_server}
+        # The registry endpoint uses get_filtered_registry (filters by client IP)
+        mock_manager.get_filtered_registry.return_value = {mock_server.server_id: mock_server}
 
         with patch_proxy_general_settings({"enable_mcp_registry": True}), patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",

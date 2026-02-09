@@ -1279,9 +1279,7 @@ class Router:
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
-            # No copy needed - data is only read and spread into new dict below
-            data = litellm_params.copy()  # Use the local copy of litellm_params
-            model_name = data["model"]
+            model_name = litellm_params["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
             )
@@ -1302,7 +1300,7 @@ class Router:
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
             input_kwargs = {
-                **data,
+                **litellm_params,
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
@@ -1690,10 +1688,8 @@ class Router:
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
-            # No copy needed - data is only read and spread into new dict below
-            data = litellm_params.copy()  # Use the local copy of litellm_params
 
-            model_name = data["model"]
+            model_name = litellm_params["model"]
 
             model_client = self._get_async_openai_model_client(
                 deployment=deployment,
@@ -1702,7 +1698,7 @@ class Router:
             self.total_calls[model_name] += 1
 
             input_kwargs = {
-                **data,
+                **litellm_params,
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
@@ -4816,7 +4812,8 @@ class Router:
                 )
             else:
                 response = await self.async_function_with_retries(*args, **kwargs)
-            verbose_router_logger.debug(f"Async Response: {response}")
+            if verbose_router_logger.isEnabledFor(logging.DEBUG):
+                verbose_router_logger.debug(f"Async Response: {response}")
             response = add_fallback_headers_to_response(
                 response=response,
                 attempted_fallbacks=0,
@@ -8013,9 +8010,10 @@ class Router:
             # check if the user sent in a deployment name instead
             healthy_deployments = self._get_deployment_by_litellm_model(model=model)
 
-        verbose_router_logger.debug(
-            f"initial list of deployments: {healthy_deployments}"
-        )
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug(
+                f"initial list of deployments: {healthy_deployments}"
+            )
 
         if len(healthy_deployments) == 0:
             # Check for default fallbacks if no deployments are found for the requested model
@@ -8086,18 +8084,20 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(
-            f"healthy_deployments after team filter: {healthy_deployments}"
-        )
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug(
+                f"healthy_deployments after team filter: {healthy_deployments}"
+            )
 
         healthy_deployments = filter_web_search_deployments(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(
-            f"healthy_deployments after web search filter: {healthy_deployments}"
-        )
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug(
+                f"healthy_deployments after web search filter: {healthy_deployments}"
+            )
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
@@ -8105,10 +8105,10 @@ class Router:
         cooldown_deployments = await _async_get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
-        verbose_router_logger.debug(
-            f"async cooldown deployments: {cooldown_deployments}"
-        )
-        verbose_router_logger.debug(f"cooldown_deployments: {cooldown_deployments}")
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug(
+                f"cooldown deployments: {cooldown_deployments}"
+            )
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
@@ -8784,7 +8784,8 @@ class Router:
         Returns:
             List of healthy deployments
         """
-        verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
         # Convert to set for O(1) lookup and use list comprehension for O(n) filtering
         cooldown_set = set(cooldown_deployments)
         return [
@@ -8947,3 +8948,4 @@ class Router:
         litellm._async_failure_callback = []
         self.retry_policy = None
         self.flush_cache()
+

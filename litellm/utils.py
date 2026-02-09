@@ -2081,6 +2081,14 @@ def _is_async_request(
     return False
 
 
+_STREAMING_CALL_TYPES = frozenset({
+    CallTypes.generate_content_stream,
+    CallTypes.agenerate_content_stream,
+    CallTypes.generate_content_stream.value,
+    CallTypes.agenerate_content_stream.value,
+})
+
+
 def _is_streaming_request(
     kwargs: Dict[str, Any],
     call_type: Union[CallTypes, str],
@@ -2093,23 +2101,7 @@ def _is_streaming_request(
     """
     if "stream" in kwargs and kwargs["stream"] is True:
         return True
-
-    #########################################################
-    # Check if it's a google genai streaming request
-    if isinstance(call_type, str):
-        # check if it can be casted to CallTypes
-        try:
-            call_type = CallTypes(call_type)
-        except ValueError:
-            return False
-
-    if (
-        call_type == CallTypes.generate_content_stream
-        or call_type == CallTypes.agenerate_content_stream
-    ):
-        return True
-    #########################################################
-    return False
+    return call_type in _STREAMING_CALL_TYPES
 
 
 def _select_tokenizer(
@@ -5809,7 +5801,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             if value is not None:
                 _model_info[key] = value  # type: ignore
 
-    verbose_logger.debug(f"model_info: {_model_info}")
+    if verbose_logger.isEnabledFor(logging.DEBUG):
+        verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params

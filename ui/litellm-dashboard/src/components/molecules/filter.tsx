@@ -164,7 +164,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                     placeholder={`Search ${option.label || option.name}...`}
                     value={tempValues[option.name] || undefined}
                     onChange={(value) => handleFilterChange(option.name, value)}
-                    onDropdownVisibleChange={(open) => handleDropdownVisibleChange(open, option)}
+                    onOpenChange={(open) => handleDropdownVisibleChange(open, option)}
                     onSearch={(value) => {
                       setSearchInputValueMap((prev) => ({
                         ...prev,

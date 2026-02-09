@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type, Uni
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_CALLBACKS
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
@@ -23,9 +24,6 @@ class LoggingCallbackManager:
     - Prevent adding duplicate callbacks / success_callback / failure_callback
     - Keep a reasonable MAX_CALLBACKS limit (this ensures callbacks don't exponentially grow and consume CPU Resources)
     """
-
-    # healthy maximum number of callbacks - unlikely someone needs more than 20
-    MAX_CALLBACKS = 30
 
     def add_litellm_input_callback(self, callback: Union[CustomLogger, str]):
         """
@@ -155,9 +153,9 @@ class LoggingCallbackManager:
         Check if adding another callback would exceed MAX_CALLBACKS
         Returns True if safe to add, False if would exceed limit
         """
-        if len(parent_list) >= self.MAX_CALLBACKS:
+        if len(parent_list) >= MAX_CALLBACKS:
             verbose_logger.warning(
-                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {self.MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
+                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
             )
             return False
         return True
