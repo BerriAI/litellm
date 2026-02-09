@@ -76,7 +76,7 @@ def _route_has_dependency(route, dependency) -> bool:
 class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
     async def test_redacts_stack_trace(self, monkeypatch):
-        def fake_create_client(*args, **kwargs):
+        async def fake_create_client(*args, **kwargs):
             return object()
 
         monkeypatch.setattr(
@@ -114,7 +114,7 @@ class TestExecuteWithMcpClient:
         def fake_build_stdio_env(server, raw_headers):
             return None
 
-        def fake_create_client(*args, **kwargs):
+        async def fake_create_client(*args, **kwargs):
             captured["extra_headers"] = kwargs.get("extra_headers")
             return object()
 
