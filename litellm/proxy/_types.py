@@ -477,8 +477,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/list",
         "/team/available",
         "/user/info",
-        "/model/info",
-        "/v1/model/info",
+    ] + model_info_routes + [
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
