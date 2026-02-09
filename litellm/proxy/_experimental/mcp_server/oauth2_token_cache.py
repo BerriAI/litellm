@@ -76,10 +76,13 @@ class MCPOAuth2TokenCache(InMemoryCache):
         """
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
+        assert server.client_id is not None, "client_id must be set"
+        assert server.client_secret is not None, "client_secret must be set"
+
         data: Dict[str, str] = {
             "grant_type": "client_credentials",
-            "client_id": server.client_id,  # type: ignore[arg-type]
-            "client_secret": server.client_secret,  # type: ignore[arg-type]
+            "client_id": server.client_id,
+            "client_secret": server.client_secret,
         }
         if server.scopes:
             data["scope"] = " ".join(server.scopes)
