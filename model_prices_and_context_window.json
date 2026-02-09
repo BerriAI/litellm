@@ -28763,7 +28763,8 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "vercel_ai_gateway/cohere/command-r": {
         "input_cost_per_token": 1.5e-07,
