@@ -3,6 +3,9 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 """
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -66,6 +69,12 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers = self._update_headers_with_optional_anthropic_beta(
             headers=headers,
             context_management=optional_params.get("context_management"),
+        )
+
+        # Filter out unsupported beta headers for Azure AI
+        headers = update_headers_with_filtered_beta(
+            headers=headers,
+            provider="azure_ai",
         )
 
         return headers, api_base
