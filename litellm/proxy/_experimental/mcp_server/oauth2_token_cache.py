@@ -13,6 +13,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
     MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
+    MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
     MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -101,7 +102,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
             )
 
         expires_in = int(body.get("expires_in", 3600))
-        ttl = max(expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS, 0)
+        ttl = max(expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS, MCP_OAUTH2_TOKEN_CACHE_MIN_TTL)
 
         verbose_logger.info(
             "Fetched OAuth2 token for MCP server %s (expires in %ds)",
