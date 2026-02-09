@@ -1,0 +1,34 @@
+=== 10 requests, 1 users, fire-as-fast-as-possible ===
+User mode: random, Key mode: shared
+Latency = time from request start until last byte of response received
+  [OK] User 1 request   1: 0.808s
+  [OK] User 1 request   2: 0.044s
+  [OK] User 1 request   3: 0.043s
+  [OK] User 1 request   4: 0.043s
+  [OK] User 1 request   5: 0.043s
+  [OK] User 1 request   6: 0.043s
+  [OK] User 1 request   7: 0.043s
+  [OK] User 1 request   8: 0.043s
+  [OK] User 1 request   9: 0.044s
+  [OK] User 1 request  10: 0.043s
+
+[OK] 10 succeeded, [FAIL] 0 failed
+
+Latency (successful):
+  min:  0.043s
+  avg:  0.120s
+  max:  0.808s
+  p95:  0.044s
+  p99:  0.044s
+
+Requests above threshold (successful only):
+  Above 1s: 0/10 (0.0%)
+  Above 2s: 0/10 (0.0%)
+  Above 3s: 0/10 (0.0%)
+  Above 4s: 0/10 (0.0%)
+  Above 5s: 0/10 (0.0%)
+  Above 6s: 0/10 (0.0%)
+  Above 7s: 0/10 (0.0%)
+  Above 8s: 0/10 (0.0%)
+  Above 9s: 0/10 (0.0%)
+  Above 10s: 0/10 (0.0%)
