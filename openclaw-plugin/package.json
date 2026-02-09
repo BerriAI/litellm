@@ -1,0 +1,12 @@
+{
+  "name": "clawrouter",
+  "version": "0.1.0",
+  "description": "ClawRouter: smart model routing plugin for OpenClaw",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  }
+}
