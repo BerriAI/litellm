@@ -4,7 +4,7 @@ WebSearch Tool Transformation
 Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
@@ -224,7 +224,7 @@ class WebSearchTransformation:
         tool_calls: List[Dict],
         search_results: List[str],
         response_format: str = "anthropic",
-    ) -> Tuple[Dict, Dict]:
+    ) -> Tuple[Dict, Union[Dict, List[Dict]]]:
         """
         Transform LiteLLM search results to Anthropic/OpenAI tool_result format.
 
