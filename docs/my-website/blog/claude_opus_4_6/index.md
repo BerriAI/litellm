@@ -223,11 +223,16 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
-## Compaction
+## Advanced Features
+
+### Compaction
+
+<Tabs>
+<TabItem value="completions" label="/chat/completions">
 
 Litellm supports enabling compaction for the new claude-opus-4-6.
 
-### Enabling Compaction
+**Enabling Compaction**
 
 To enable compaction, add the `context_management` parameter with the `compact_20260112` edit type:
 
@@ -255,8 +260,43 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 All the parameters supported for context_management by anthropic are supported and can be directly added. Litellm automatically adds the `compact-2026-01-12` beta header in the request.
 
+</TabItem>
+<TabItem value="messages" label="/v1/messages">
 
-### Response with Compaction Block
+Enable compaction to reduce context size while preserving key information. LiteLLM automatically adds the `compact-2026-01-12` beta header when compaction is enabled.
+
+:::info
+**Provider Support:** Compaction is supported on Anthropic, Azure AI, and Vertex AI. It is **not supported** on Bedrock (Invoke or Converse APIs).
+:::
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'x-api-key: sk-12345' \
+--header 'content-type: application/json' \
+--data '{
+    "model": "claude-opus-4-6",
+    "max_tokens": 4096,
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hi"
+        }
+    ],
+    "context_management": {
+        "edits": [
+            {
+                "type": "compact_20260112"
+            }
+        ]
+    }
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Response with Compaction Block**
 
 The response will include the compaction summary in `provider_specific_fields.compaction_blocks`:
 
@@ -292,7 +332,7 @@ The response will include the compaction summary in `provider_specific_fields.co
 }
 ```
 
-### Using Compaction Blocks in Follow-up Requests
+**Using Compaction Blocks in Follow-up Requests**
 
 To continue the conversation with compaction, include the compaction block in the assistant message's `provider_specific_fields`:
 
@@ -340,15 +380,17 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-### Streaming Support
+**Streaming Support**
 
 Compaction blocks are also supported in streaming mode. You'll receive:
 - `compaction_start` event when a compaction block begins
 - `compaction_delta` events with the compaction content
 - The accumulated `compaction_blocks` in `provider_specific_fields`
 
+### Adaptive Thinking
 
-## Adaptive Thinking
+<Tabs>
+<TabItem value="completions" label="/chat/completions">
 
 LiteLLM supports adaptive thinking through the `reasoning_effort` parameter:
 
@@ -368,81 +410,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-## Effort Levels
-
-Four effort levels available: `low`, `medium`, `high` (default), and `max`. Pass directly via the `output_config` parameter:
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
---header 'Content-Type: application/json' \
---header 'Authorization: Bearer $LITELLM_KEY' \
---data '{
-  "model": "claude-opus-4-6",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Explain quantum computing"
-    }
-  ],
-  "output_config": {
-        "effort": "medium"
-    }
-
-}'
-```
-
-You can use reasoning effort plus output_config to have more control on the model.
-
-## 1M Token Context (Beta)
-
-Opus 4.6 supports 1M token context. Premium pricing applies for prompts exceeding 200k tokens ($10/$37.50 per million input/output tokens). LiteLLM supports cost calculations for 1M token contexts.
-
-## US-Only Inference
-
-Available at 1.1× token pricing. LiteLLM supports this pricing model.
-
-## Using `/v1/messages` Endpoint
-
-LiteLLM supports the Anthropic `/v1/messages` API format across all providers. This allows you to use Anthropic-specific features like adaptive thinking, compaction, and 1M token context with consistent syntax across Anthropic, Azure AI, Vertex AI, and Bedrock.
-
-
-```yaml
-model_list:
-  # Anthropic
-  - model_name: claude-opus-4-6
-    litellm_params:
-      model: anthropic/claude-opus-4-6
-  
-  # Azure AI
-  - model_name: claude-azure-opus-4-6
-    litellm_params:
-      model: azure_ai/claude-opus-4-6
-      api_base: https://your-resource.services.ai.azure.com/anthropic
-  
-  # Vertex AI
-  - model_name: claude-vertex-opus-4-6
-    litellm_params:
-      model: vertex_ai/claude-opus-4-6
-      vertex_project: your-project-id
-      vertex_location: us-east5
-  
-  # Bedrock
-  - model_name: claude-bedrock-opus-4-6
-    litellm_params:
-      model: bedrock/anthropic.claude-opus-4-6-v1:0
-      aws_region_name: us-east-1
-```
-
-### Feature Support Matrix
-
-| Feature | Anthropic | Bedrock Invoke | Bedrock Converse | Vertex AI | Azure AI |
-|---------|-----------|----------------|------------------|-----------|----------|
-| `/v1/messages` Compaction | ✅ | ❌ Not supported | ❌ Not supported | ✅ | ✅ |
-| 1M Token Context | ✅ | ✅ | ✅ | ✅ | ✅ |
-| US-Only Inference - cost tracking | ✅ | Not applicable | Not applicable | Not applicable | Not applicable |
-| Adaptive Thinking | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-### Adaptive Thinking
+</TabItem>
+<TabItem value="messages" label="/v1/messages">
 
 Use the `thinking` parameter with `type: "adaptive"` to enable adaptive thinking mode:
 
@@ -465,13 +434,40 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
 }'
 ```
 
-### Context Management - Compaction
+</TabItem>
+</Tabs>
 
-Enable compaction to reduce context size while preserving key information. LiteLLM automatically adds the `compact-2026-01-12` beta header when compaction is enabled.
+### Effort Levels
 
-:::info
-**Provider Support:** Compaction is supported on Anthropic, Bedrock Invoke Azure AI, and Vertex AI. It is **not supported** on Bedrock Converse API.
-:::
+<Tabs>
+<TabItem value="completions" label="/chat/completions">
+
+Four effort levels available: `low`, `medium`, `high` (default), and `max`. Pass directly via the `output_config` parameter:
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain quantum computing"
+    }
+  ],
+  "output_config": {
+        "effort": "medium"
+    }
+}'
+```
+
+You can use reasoning effort plus output_config to have more control on the model.
+
+</TabItem>
+<TabItem value="messages" label="/v1/messages">
+
+Four effort levels available: `low`, `medium`, `high` (default), and `max`. Pass directly via the `output_config` parameter:
 
 ```bash
 curl --location 'http://0.0.0.0:4000/v1/messages' \
@@ -483,22 +479,54 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
     "messages": [
         {
             "role": "user",
-            "content": "Hi"
+            "content": "Explain quantum computing"
         }
     ],
-    "context_management": {
-        "edits": [
-            {
-                "type": "compact_20260112"
-            }
-        ]
+    "output_config": {
+        "effort": "medium"
     }
 }'
 ```
 
-LiteLLM automatically adds the `compact-2026-01-12` beta header when compaction is enabled.
+</TabItem>
+</Tabs>
 
-### 1M Token Context Window
+### 1M Token Context (Beta)
+
+Opus 4.6 supports 1M token context. Premium pricing applies for prompts exceeding 200k tokens ($10/$37.50 per million input/output tokens). LiteLLM supports cost calculations for 1M token contexts.
+
+<Tabs>
+<TabItem value="completions" label="/chat/completions">
+
+To use the 1M token context window, you need to forward the `anthropic-beta` header from your client to the LLM provider.
+
+**Step 1: Enable header forwarding in your config**
+
+```yaml
+general_settings:
+  forward_client_headers_to_llm_api: true
+```
+
+**Step 2: Send requests with the beta header**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--header 'anthropic-beta: context-1m-2025-08-07' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Analyze this large document..."
+    }
+  ]
+}'
+```
+
+</TabItem>
+<TabItem value="messages" label="/v1/messages">
 
 To use the 1M token context window, you need to forward the `anthropic-beta` header from your client to the LLM provider.
 
@@ -522,9 +550,72 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
     "messages": [
         {
             "role": "user",
-            "content": "Explain why the sum of two even numbers is always even."
+            "content": "Analyze this large document..."
         }
     ]
 }'
 ```
 
+:::tip
+You can combine multiple beta headers by separating them with commas:
+```bash
+--header 'anthropic-beta: context-1m-2025-08-07,compact-2026-01-12'
+```
+:::
+
+</TabItem>
+</Tabs>
+
+### US-Only Inference
+
+Available at 1.1× token pricing. LiteLLM automatically tracks costs for US-only inference.
+
+<Tabs>
+<TabItem value="completions" label="/chat/completions">
+
+Use the `inference_geo` parameter to specify US-only inference:
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data '{
+  "model": "claude-opus-4-6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the capital of France?"
+    }
+  ],
+  "inference_geo": "us"
+}'
+```
+
+LiteLLM will automatically apply the 1.1× pricing multiplier for US-only inference in cost tracking.
+
+</TabItem>
+<TabItem value="messages" label="/v1/messages">
+
+Use the `inference_geo` parameter to specify US-only inference:
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'x-api-key: sk-12345' \
+--header 'content-type: application/json' \
+--data '{
+    "model": "claude-opus-4-6",
+    "max_tokens": 4096,
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the capital of France?"
+        }
+    ],
+    "inference_geo": "us"
+}'
+```
+
+LiteLLM will automatically apply the 1.1× pricing multiplier for US-only inference in cost tracking.
+
+</TabItem>
+</Tabs>
