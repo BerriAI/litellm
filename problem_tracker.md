@@ -242,3 +242,17 @@ We now have a concrete reproduction. To maximize the chance of fixing Zurich's p
 The issue was caused by hitting the database on every request when Prometheus was used as a callback. Commit `30534d7e82` fixes this by setting `check_db_only` to `False`.
 
 > It was hard to diagnose because Prometheus was catching database errors and only logging them at debug level. Fixed by commit `d37796662` (adds `_log_budget_lookup_failure` to surface errors). This error is very important—it stops the cache from working properly.
+
+### Baseline Latency Spikes (Separate from Prometheus)
+
+**Issue:** Zurich reports huge latency spikes even when callbacks are off. Unlike the Prometheus callback issue (which adds ~2.6× latency when enabled), this baseline behavior affects both configs roughly equally.
+
+**Reference data:** 42 requests, 42 users, fire-as-fast-as-possible
+
+| Config          | avg    | p95    | Above 1s | Above 5s |
+|-----------------|--------|--------|----------|----------|
+| Callbacks off   | 4.034s | 6.345s | 100%     | 33.3%    |
+| Callbacks on    | 4.183s | 6.620s | 100%     | 35.7%    |
+
+
+**Reference files:** `callbacks_off_baseline.txt`, `callbacks_on_baseline.txt`
