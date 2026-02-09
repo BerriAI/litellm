@@ -259,12 +259,12 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
                   <SelectItem key={role} value={role} title={ui_label}>
-                    <div className="flex">
-                      {ui_label}{" "}
-                      <Text className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
-                        {description}
-                      </Text>
-                    </div>
+                    <Text>
+                      {ui_label}
+                    </Text>
+                    <Text type="secondary">
+                      {" - "}{description}
+                    </Text>
                   </SelectItem>
                 ))}
             </Select2>
