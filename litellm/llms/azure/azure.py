@@ -1164,6 +1164,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             ## BASE MODEL CHECK
             if (
                 model_response is not None
+                and litellm_params is not None
                 and litellm_params.get("base_model", None) is not None
             ):
                 model_response._hidden_params["model"] = litellm_params.get("base_model", None)
@@ -1172,7 +1173,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             extra_body = optional_params.pop("extra_body", {})
             flattened_params = {**optional_params, **extra_body}
             
-            data = {"model": litellm_params.get("base_model", None) or model, "prompt": prompt, **flattened_params}
+            base_model = litellm_params.get("base_model", None) if litellm_params else None
+            data = {"model": base_model or model, "prompt": prompt, **flattened_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(

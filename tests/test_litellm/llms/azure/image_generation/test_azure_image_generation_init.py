@@ -315,22 +315,18 @@ def test_azure_image_generation_base_model_vs_deployment_name():
         logging_obj.post_call = MagicMock()
         
         # Call the image_generation method
-        try:
-            response = azure_chat_completion.image_generation(
-                prompt=prompt,
-                timeout=60.0,
-                optional_params=optional_params,
-                logging_obj=logging_obj,
-                headers={},
-                model=model,
-                api_key=api_key,
-                api_base=api_base,
-                api_version=api_version,
-                litellm_params=litellm_params,
-            )
-        except Exception as e:
-            # If there's an error, we still want to check the mock calls
-            pass
+        response = azure_chat_completion.image_generation(
+            prompt=prompt,
+            timeout=60.0,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            headers={},
+            model=model,
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params=litellm_params,
+        )
         
         # Verify the mock was called
         assert mock_request.called, "HTTP request should have been made"
@@ -417,21 +413,17 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
         logging_obj.post_call = MagicMock()
         
         # Call the aimage_generation method
-        try:
-            response = await azure_chat_completion.aimage_generation(
-                data=data,
-                model_response=None,
-                azure_client_params=azure_client_params,
-                api_key=api_key,
-                input=[],
-                logging_obj=logging_obj,
-                headers={},
-                model=model,  # Pass the deployment name
-                timeout=60.0,
-            )
-        except Exception as e:
-            # If there's an error, we still want to check the mock calls
-            pass
+        response = await azure_chat_completion.aimage_generation(
+            data=data,
+            model_response=None,
+            azure_client_params=azure_client_params,
+            api_key=api_key,
+            input=[],
+            logging_obj=logging_obj,
+            headers={},
+            model=model,  # Pass the deployment name
+            timeout=60.0,
+        )
         
         # Verify the mock was called
         assert mock_request.called, "HTTP request should have been made"
