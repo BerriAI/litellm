@@ -10,7 +10,7 @@ vi.mock("@/components/networking", () => ({
   fetchMCPServers: vi.fn(),
 }));
 
-vi.mock("../useAuthorized", () => ({
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
     accessToken: "test-token-123",
   })),
@@ -31,6 +31,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) => {
   return React.createElement(QueryClientProvider, { client: queryClient }, children);
 };
 
+const mockAccessToken = "test-token-123";
 const mockServers = [
   {
     server_id: "server-1",
@@ -46,10 +47,22 @@ const mockServers = [
 describe("useMCPServers", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const useAuthorizedModule = await import("../useAuthorized");
+    const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
     vi.mocked(useAuthorizedModule.default).mockReturnValue({
-      accessToken: "test-token-123",
+      accessToken: mockAccessToken,
     } as any);
+  });
+
+  it("should return hook result without errors", () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    const { result } = renderHook(() => useMCPServers(), { wrapper });
+
+    expect(result.current).toBeDefined();
+    expect(result.current).toHaveProperty("data");
+    expect(result.current).toHaveProperty("isSuccess");
+    expect(result.current).toHaveProperty("isError");
+    expect(result.current).toHaveProperty("status");
   });
 
   it("should return MCP servers when access token is present", async () => {
@@ -61,19 +74,35 @@ describe("useMCPServers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith("test-token-123");
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken);
     expect(result.current.data).toEqual(mockServers);
   });
 
-  it("should not fetch when access token is not available", async () => {
-    const useAuthorizedModule = await import("../useAuthorized");
+  it("should not fetch when access token is null", async () => {
+    const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
     vi.mocked(useAuthorizedModule.default).mockReturnValue({
       accessToken: null,
     } as any);
 
     const { result } = renderHook(() => useMCPServers(), { wrapper });
 
-    expect(result.current.status).toBe("pending");
+    expect(result.current.isFetching).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
+    expect(networking.fetchMCPServers).not.toHaveBeenCalled();
+  });
+
+  it("should not fetch when access token is empty string", async () => {
+    const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
+    vi.mocked(useAuthorizedModule.default).mockReturnValue({
+      accessToken: "",
+    } as any);
+
+    const { result } = renderHook(() => useMCPServers(), { wrapper });
+
+    expect(result.current.isFetching).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
     expect(networking.fetchMCPServers).not.toHaveBeenCalled();
   });
 
@@ -88,6 +117,7 @@ describe("useMCPServers", () => {
     });
 
     expect(result.current.error).toEqual(mockError);
+    expect(result.current.data).toBeUndefined();
   });
 
   it("should return empty array when API returns empty list", async () => {
