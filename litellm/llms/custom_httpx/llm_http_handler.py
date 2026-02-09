@@ -302,7 +302,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             signed_json_body=signed_json_body,
         )
-        return provider_config.transform_response(
+        initial_response = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -315,6 +315,20 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=json_mode,
         )
+
+        # Call agentic chat completion hooks
+        final_response = await self._call_agentic_chat_completion_hooks(
+            response=initial_response,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            stream=False,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=litellm_params,
+        )
+
+        return final_response if final_response is not None else initial_response
 
     def completion(
         self,
@@ -411,6 +425,11 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
+
+        # Check if stream was converted for WebSearch interception
+        # This is set by the async_pre_request_hook in WebSearchInterceptionLogger
+        if litellm_params.get("_websearch_interception_converted_stream", False):
+            logging_obj.model_call_details["websearch_interception_converted_stream"] = True
 
         if acompletion is True:
             if stream is True:
@@ -4361,10 +4380,10 @@ class BaseLLMHTTPHandler:
         kwargs: Dict,
     ) -> Optional[Any]:
         """
-        Call agentic completion hooks for all custom loggers.
+        Call agentic completion hooks for all custom loggers (Anthropic Messages API).
 
-        1. Call async_should_run_agentic_completion to check if agentic loop is needed
-        2. If yes, call async_run_agentic_completion to execute the loop
+        1. Call async_should_run_agentic_loop to check if agentic loop is needed
+        2. If yes, call async_run_agentic_loop to execute the loop
 
         Returns the response from agentic loop, or None if no hook runs.
         """
@@ -4449,6 +4468,105 @@ class BaseLLMHTTPHandler:
                 fake_stream = FakeAnthropicMessagesStreamIterator(
                     response=cast(AnthropicMessagesResponse, response)
                 )
+                return fake_stream
+        
+        return None
+
+    async def _call_agentic_chat_completion_hooks(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        optional_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict,
+    ) -> Optional[Any]:
+        """
+        Call agentic chat completion hooks for all custom loggers (Chat Completions API).
+
+        1. Call async_should_run_chat_completion_agentic_loop to check if agentic loop is needed
+        2. If yes, call async_run_chat_completion_agentic_loop to execute the loop
+
+        Returns the response from agentic loop, or None if no hook runs.
+        """
+        from litellm._logging import verbose_logger
+        from litellm.integrations.custom_logger import CustomLogger
+
+        callbacks = litellm.callbacks + (
+            logging_obj.dynamic_success_callbacks or []
+        )
+        tools = optional_params.get("tools", [])
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    # Check if callback has the chat completion agentic loop method
+                    if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
+                        continue
+
+                    # First: Check if agentic loop should run
+                    should_run, tool_calls = (
+                        await callback.async_should_run_chat_completion_agentic_loop(
+                            response=response,
+                            model=model,
+                            messages=messages,
+                            tools=tools,
+                            stream=stream,
+                            custom_llm_provider=custom_llm_provider,
+                            kwargs=kwargs,
+                        )
+                    )
+
+                    if should_run:
+                        # Second: Execute agentic loop
+                        # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
+                        kwargs_with_provider = kwargs.copy() if kwargs else {}
+                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                        agentic_response = await callback.async_run_chat_completion_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            optional_params=optional_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        )
+                        # First hook that runs agentic loop wins
+                        return agentic_response
+
+            except Exception as e:
+                verbose_logger.exception(
+                    f"LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: {str(e)}"
+                )
+
+        # Check if we need to convert response to fake stream for chat completions
+        # This happens when:
+        # 1. Stream was originally True but converted to False for WebSearch interception
+        # 2. No agentic loop ran (LLM didn't use the tool)
+        # 3. We have a non-streaming response that needs to be converted to streaming
+        websearch_converted_stream = (
+            logging_obj.model_call_details.get("websearch_interception_converted_stream", False)
+            if logging_obj is not None
+            else False
+        )
+        
+        if websearch_converted_stream:
+            from litellm._logging import verbose_logger
+            from litellm.llms.base_llm.base_model_iterator import (
+                convert_model_response_to_streaming,
+            )
+            
+            verbose_logger.debug(
+                "WebSearchInterception: No tool call made, converting non-streaming chat completion to fake stream"
+            )
+            
+            # Convert the non-streaming ModelResponse to a fake stream
+            if hasattr(response, "choices"):
+                # Use the existing converter for ModelResponse
+                fake_stream = convert_model_response_to_streaming(response)
                 return fake_stream
         
         return None
