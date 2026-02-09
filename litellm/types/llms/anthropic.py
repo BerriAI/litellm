@@ -355,6 +355,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     tool_choice: Optional[Union[AnthropicMessagesToolChoice, Dict]]
     tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
     top_k: Optional[int]
+    inference_geo: Optional[str]
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
