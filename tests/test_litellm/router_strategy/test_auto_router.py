@@ -333,6 +333,86 @@ class TestSmartRouter:
         assert router._infer_tier_from_model("deepseek/deepseek-chat") == ModelTier.LOW
         assert router._infer_tier_from_model("some/random-model") == ModelTier.MID
 
+    # ─── Tier override tag tests ─────────────────────────────────────
+
+    def test_tier_override_low(self):
+        router = SmartRouter()
+        decision = router.resolve_route(
+            [{"role": "user", "content": "[low] prove that P = NP"}]
+        )
+        assert decision.tier == ModelTier.LOW
+        assert decision.confidence == 1.0
+
+    def test_tier_override_medium(self):
+        router = SmartRouter()
+        decision = router.resolve_route(
+            [{"role": "user", "content": "[medium] hi"}]
+        )
+        assert decision.tier == ModelTier.MID
+
+    def test_tier_override_med(self):
+        router = SmartRouter()
+        decision = router.resolve_route(
+            [{"role": "user", "content": "[med] hi"}]
+        )
+        assert decision.tier == ModelTier.MID
+
+    def test_tier_override_high(self):
+        router = SmartRouter()
+        decision = router.resolve_route(
+            [{"role": "user", "content": "[high] hello"}]
+        )
+        assert decision.tier == ModelTier.TOP
+        assert decision.confidence == 1.0
+
+    def test_tier_override_case_insensitive(self):
+        router = SmartRouter()
+        decision = router.resolve_route(
+            [{"role": "user", "content": "[HIGH] hello"}]
+        )
+        assert decision.tier == ModelTier.TOP
+
+    def test_tier_override_strips_tag_from_message(self):
+        router = SmartRouter()
+        messages = [{"role": "user", "content": "[high] explain quantum computing"}]
+        router.resolve_route(messages)
+        assert "[high]" not in messages[0]["content"]
+        assert "explain quantum computing" in messages[0]["content"]
+
+    def test_tier_override_strips_tag_multipart(self):
+        router = SmartRouter()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[low] summarize this"},
+                    {"type": "image_url", "image_url": {"url": "http://example.com"}},
+                ],
+            }
+        ]
+        decision = router.resolve_route(messages)
+        assert decision.tier == ModelTier.LOW
+        assert "[low]" not in messages[0]["content"][0]["text"]
+
+    def test_tier_override_selects_correct_model(self):
+        config = RoutingConfig()
+        config.tier_models[ModelTier.TOP] = TierConfig(
+            model="custom/top-model", max_cost_per_m_tokens=50.0
+        )
+        router = SmartRouter(routing_config=config)
+        decision = router.resolve_route(
+            [{"role": "user", "content": "[high] hello"}]
+        )
+        assert decision.model == "custom/top-model"
+
+    def test_no_tier_override_routes_normally(self):
+        router = SmartRouter()
+        decision = router.resolve_route(
+            [{"role": "user", "content": "prove that P = NP"}]
+        )
+        assert decision.tier == ModelTier.TOP
+        assert decision.confidence < 1.0
+
 
 # ─── AutoRouter integration tests ───────────────────────────────────
 

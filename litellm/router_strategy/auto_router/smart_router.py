@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from litellm._logging import verbose_router_logger
 
@@ -78,6 +78,29 @@ class SmartRouter:
                 )
         return rules
 
+    # Regex for user tier override tags: [low], [medium], [high]
+    _TIER_OVERRIDE_RE = re.compile(
+        r"\[(low|med|medium|high)\]", re.IGNORECASE
+    )
+    _TIER_OVERRIDE_MAP: Dict[str, ModelTier] = {
+        "low": ModelTier.LOW,
+        "med": ModelTier.MID,
+        "medium": ModelTier.MID,
+        "high": ModelTier.TOP,
+    }
+
+    def _extract_tier_override(self, text: str) -> Tuple[Optional[ModelTier], str]:
+        """Check for a [low]/[medium]/[high] tag in the message.
+
+        Returns the forced tier (or None) and the message with the tag stripped.
+        """
+        match = self._TIER_OVERRIDE_RE.search(text)
+        if not match:
+            return None, text
+        tier = self._TIER_OVERRIDE_MAP[match.group(1).lower()]
+        cleaned = text[: match.start()] + text[match.end() :]
+        return tier, cleaned.strip()
+
     # Known bare model name -> canonical "provider/model" mappings.
     _MODEL_ALIASES: Dict[str, str] = {
         # Claude 4.x family
@@ -138,6 +161,23 @@ class SmartRouter:
         """
         # Extract the last user message for classification
         user_text = self._extract_user_text(messages)
+
+        # Check for explicit tier override tag (e.g. [low], [med], [high])
+        forced_tier, user_text = self._extract_tier_override(user_text)
+        if forced_tier is not None:
+            # Strip the tag from the message so downstream models don't see it
+            self._strip_tier_tag_from_messages(messages)
+
+            classification = classify_task(user_text, self._custom_rules or None)
+            verbose_router_logger.info(
+                "Auto-router: tier forced to %s via message tag", forced_tier.value
+            )
+            return self._route_to_tier(
+                forced_tier,
+                classification.category,
+                1.0,
+                requested_model,
+            )
 
         # If a specific model was requested (not "auto"), use it directly
         if requested_model != "auto":
@@ -211,6 +251,22 @@ class SmartRouter:
             confidence=confidence,
             original_model=original_model,
         )
+
+    def _strip_tier_tag_from_messages(self, messages: List[Dict[str, Any]]) -> None:
+        """Remove the tier override tag from the last user message in-place."""
+        for msg in reversed(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                msg["content"] = self._TIER_OVERRIDE_RE.sub("", content).strip()
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        part["text"] = self._TIER_OVERRIDE_RE.sub(
+                            "", part.get("text", "")
+                        ).strip()
+            break
 
     def _extract_user_text(self, messages: List[Dict[str, Any]]) -> str:
         """Extract the last user message text for classification."""
