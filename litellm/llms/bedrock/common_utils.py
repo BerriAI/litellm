@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Common utilities used across bedrock chat/embedding/image generation
 """
@@ -34,7 +36,7 @@ _get_model_info = None
 def get_cached_model_info():
     """
     Lazy import and cache get_model_info to avoid circular imports.
-    
+
     This function is used by bedrock transformation classes that need get_model_info
     but cannot import it at module level due to circular import issues.
     The function is cached after first use to avoid performance impact.
@@ -42,6 +44,7 @@ def get_cached_model_info():
     global _get_model_info
     if _get_model_info is None:
         from litellm import get_model_info
+
         _get_model_info = get_model_info
     return _get_model_info
 
@@ -135,33 +138,15 @@ def add_custom_header(headers):
 def _get_bedrock_client_ssl_verify() -> Union[bool, str]:
     """
     Get SSL verification setting for Bedrock client.
-    
+
     Returns the SSL verification setting which can be:
     - True: Use default SSL verification
     - False: Disable SSL verification
     - str: Path to a custom CA bundle file
     """
-    from litellm.secret_managers.main import str_to_bool
-    
-    ssl_verify: Union[bool, str, None] = os.getenv("SSL_VERIFY", litellm.ssl_verify)
-    
-    # Convert string "False"/"True" to boolean
-    if isinstance(ssl_verify, str):
-        # Check if it's a file path
-        if os.path.exists(ssl_verify):
-            return ssl_verify  # Keep the file path
-        # Otherwise try to convert to boolean
-        ssl_verify_bool = str_to_bool(ssl_verify)
-        if ssl_verify_bool is not None:
-            ssl_verify = ssl_verify_bool
-    
-    # Check SSL_CERT_FILE environment variable for custom CA bundle
-    if ssl_verify is True or ssl_verify == "True":
-        ssl_cert_file = os.getenv("SSL_CERT_FILE")
-        if ssl_cert_file and os.path.exists(ssl_cert_file):
-            return ssl_cert_file
-    
-    return ssl_verify if ssl_verify is not None else True
+    from litellm.llms.custom_httpx.http_handler import get_ssl_verify
+
+    return get_ssl_verify()
 
 
 def init_bedrock_client(
@@ -287,7 +272,7 @@ def init_bedrock_client(
             "sts",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            verify=ssl_verify
+            verify=ssl_verify,
         )
 
         sts_response = sts_client.assume_role(
@@ -425,6 +410,15 @@ def strip_bedrock_routing_prefix(model: str) -> str:
     return model
 
 
+def strip_bedrock_throughput_suffix(model: str) -> str:
+    """Strip throughput tier suffixes from Bedrock model names."""
+    import re
+
+    # Pattern matches model:version:throughput where throughput is like 51k, 18k, etc.
+    # Keep the model:version part, strip the :throughput suffix
+    return re.sub(r"(:\d+):\d+k$", r"\1", model)
+
+
 def get_bedrock_base_model(model: str) -> str:
     """
     Get the base model from the given model name.
@@ -432,9 +426,11 @@ def get_bedrock_base_model(model: str) -> str:
     Handle model names like:
     - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
     - "bedrock/converse/model" -> "model"
+    - "anthropic.claude-3-5-sonnet-20241022-v2:0:51k" -> "anthropic.claude-3-5-sonnet-20241022-v2:0"
     """
     model = strip_bedrock_routing_prefix(model)
     model = extract_model_name_from_bedrock_arn(model)
+    model = strip_bedrock_throughput_suffix(model)
 
     potential_region = model.split(".", 1)[0]
     alt_potential_region = model.split("/", 1)[0]
@@ -448,6 +444,29 @@ def get_bedrock_base_model(model: str) -> str:
         return model.split("/", 1)[1]
 
     return model
+
+
+def is_claude_4_5_on_bedrock(model: str) -> bool:
+    """
+    Check if the model is a Claude 4.5 model on Bedrock.
+    Claude 4.5 models support prompt caching with '5m' and '1h' TTL on Bedrock.
+    """
+    model_lower = model.lower()
+    claude_4_5_patterns = [
+        "sonnet-4.5",
+        "sonnet_4.5",
+        "sonnet-4-5",
+        "sonnet_4_5",
+        "haiku-4.5",
+        "haiku_4.5",
+        "haiku-4-5",
+        "haiku_4_5",
+        "opus-4.5",
+        "opus_4.5",
+        "opus-4-5",
+        "opus_4_5",
+    ]
+    return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
 
 # Import after standalone functions to avoid circular imports
@@ -489,6 +508,22 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> List[str]:
         return []
 
+    # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
+    #     """
+    #     Handles Bedrock throughput suffixes like ":28k", ":51k".
+    #     """
+    #     import re
+
+    #     overrides: ProviderSpecificModelInfo = {}
+
+    #     # Parse context window suffix (e.g., :28k, :51k)
+    #     match = re.search(r":(\d+)k$", model)
+    #     if match:
+    #         throughput_value = int(match.group(1)) * 1000
+    #         overrides["max_input_tokens"] = throughput_value
+
+    #     return overrides if overrides else None
+
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create a Bedrock token counter.
@@ -521,12 +556,29 @@ class BedrockModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_bedrock_route(
         model: str,
-    ) -> Literal["converse", "invoke", "converse_like", "agent", "agentcore", "async_invoke", "openai"]:
+    ) -> Literal[
+        "converse",
+        "invoke",
+        "converse_like",
+        "agent",
+        "agentcore",
+        "async_invoke",
+        "openai",
+    ]:
         """
         Get the bedrock route for the given model.
         """
         route_mappings: Dict[
-            str, Literal["invoke", "converse_like", "converse", "agent", "agentcore", "async_invoke", "openai"]
+            str,
+            Literal[
+                "invoke",
+                "converse_like",
+                "converse",
+                "agent",
+                "agentcore",
+                "async_invoke",
+                "openai",
+            ],
         ] = {
             "invoke/": "invoke",
             "converse_like/": "converse_like",
@@ -634,10 +686,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
 def get_bedrock_chat_config(model: str):
     """
     Helper function to get the appropriate Bedrock chat config based on model and route.
-    
+
     Args:
         model: The model name/identifier
-        
+
     Returns:
         The appropriate Bedrock config class instance
     """
@@ -656,11 +708,13 @@ def get_bedrock_chat_config(model: str):
         from litellm.llms.bedrock.chat.invoke_agent.transformation import (
             AmazonInvokeAgentConfig,
         )
+
         return AmazonInvokeAgentConfig()
     elif bedrock_route == "agentcore":
         from litellm.llms.bedrock.chat.agentcore.transformation import (
             AmazonAgentCoreConfig,
         )
+
         return AmazonAgentCoreConfig()
 
     # Handle provider-specific configs
@@ -766,7 +820,7 @@ class BedrockEventStreamDecoderBase:
 def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
-    Supports comma-separated values from user headers.
+    Supports both JSON array format and comma-separated values from user headers.
 
     Used by both converse and invoke transformations for consistent handling
     of anthropic-beta headers that should be passed to AWS Bedrock.
@@ -781,8 +835,27 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     if not anthropic_beta_header:
         return []
 
-    # Split comma-separated values and strip whitespace
-    return [beta.strip() for beta in anthropic_beta_header.split(",")]
+    # If it's already a list, return it
+    if isinstance(anthropic_beta_header, list):
+        return anthropic_beta_header
+
+    # Try to parse as JSON array first (e.g., '["interleaved-thinking-2025-05-14", "claude-code-20250219"]')
+    if isinstance(anthropic_beta_header, str):
+        anthropic_beta_header = anthropic_beta_header.strip()
+        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith(
+            "]"
+        ):
+            try:
+                parsed = json.loads(anthropic_beta_header)
+                if isinstance(parsed, list):
+                    return [str(beta).strip() for beta in parsed]
+            except json.JSONDecodeError:
+                pass  # Fall through to comma-separated parsing
+
+        # Fall back to comma-separated values
+        return [beta.strip() for beta in anthropic_beta_header.split(",")]
+
+    return []
 
 
 class CommonBatchFilesUtils:

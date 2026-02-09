@@ -10,11 +10,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.types.llms.vertex_ai import UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
@@ -74,6 +74,10 @@ def test_get_model_name_from_gemini_spec_model():
 
 
 def test_vertex_ai_response_schema_dict():
+    """
+    Test that older Gemini models (1.5) use responseSchema (OpenAPI format).
+    responseSchema requires propertyOrdering and doesn't support additionalProperties.
+    """
     v = VertexGeminiConfig()
     non_default_params = {
         "messages": [{"role": "user", "content": "Hello, world!"}],
@@ -109,7 +113,7 @@ def test_vertex_ai_response_schema_dict():
     transformed_request = v.map_openai_params(
         non_default_params=non_default_params,
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema (OpenAPI format)
         drop_params=False,
     )
 
@@ -160,6 +164,9 @@ class Step(BaseModel):
 
 
 def test_vertex_ai_response_schema_defs():
+    """
+    Test that $defs are unpacked for older Gemini models using responseSchema.
+    """
     v = VertexGeminiConfig()
 
     schema = cast(dict, v.get_json_schema_from_pydantic_object(MathReasoning))
@@ -173,7 +180,7 @@ def test_vertex_ai_response_schema_defs():
             "response_format": schema,
         },
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema (OpenAPI format)
         drop_params=False,
     )
 
@@ -203,7 +210,93 @@ def test_vertex_ai_response_schema_defs():
     }
 
 
+def test_vertex_ai_response_json_schema_for_gemini_2():
+    """
+    Test that Gemini 2.0+ models automatically use responseJsonSchema.
+
+    responseJsonSchema uses standard JSON Schema format:
+    - lowercase types (string, object, etc.)
+    - no propertyOrdering required
+    - supports additionalProperties
+    """
+    v = VertexGeminiConfig()
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "age": {"type": "integer"},
+                        },
+                        "required": ["name"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model="gemini-2.0-flash",  # Gemini 2.0+ automatically uses responseJsonSchema
+        drop_params=False,
+    )
+
+    # Should use response_json_schema, not response_schema
+    assert "response_json_schema" in transformed_request
+    assert "response_schema" not in transformed_request
+
+    # Types should be lowercase (standard JSON Schema format)
+    assert transformed_request["response_json_schema"]["type"] == "object"
+    assert transformed_request["response_json_schema"]["properties"]["name"]["type"] == "string"
+    assert transformed_request["response_json_schema"]["properties"]["age"]["type"] == "integer"
+
+    # Should NOT have propertyOrdering (not needed for responseJsonSchema)
+    assert "propertyOrdering" not in transformed_request["response_json_schema"]
+
+    # additionalProperties should be preserved (supported by responseJsonSchema)
+    assert transformed_request["response_json_schema"].get("additionalProperties") == False
+
+
+def test_vertex_ai_response_schema_for_old_models():
+    """
+    Test that older models (Gemini 1.5) automatically use responseSchema.
+    """
+    v = VertexGeminiConfig()
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model="gemini-1.5-flash",  # Old model automatically uses responseSchema
+        drop_params=False,
+    )
+
+    # Should use response_schema for older models
+    assert "response_schema" in transformed_request
+    assert "response_json_schema" not in transformed_request
+
+
 def test_vertex_ai_retain_property_ordering():
+    """
+    Test that existing propertyOrdering is preserved for older models using responseSchema.
+    """
     v = VertexGeminiConfig()
     transformed_request = v.map_openai_params(
         non_default_params={
@@ -224,7 +317,7 @@ def test_vertex_ai_retain_property_ordering():
             },
         },
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema which needs propertyOrdering
         drop_params=False,
     )
 
@@ -511,6 +604,38 @@ def test_check_finish_reason():
             )
             == v
         )
+
+
+def test_finish_reason_unspecified_and_malformed_function_call():
+    """
+    Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL 
+    return their lowercase values instead of being mapped to 'stop'
+    since we don't have good mappings for these.
+    """
+    finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
+    
+    # Test FINISH_REASON_UNSPECIFIED returns lowercase version
+    assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "finish_reason_unspecified"
+    assert (
+        VertexGeminiConfig._check_finish_reason(
+            chat_completion_message=None, finish_reason="FINISH_REASON_UNSPECIFIED"
+        )
+        == "finish_reason_unspecified"
+    )
+    
+    # Test MALFORMED_FUNCTION_CALL returns lowercase version
+    assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "malformed_function_call"
+    assert (
+        VertexGeminiConfig._check_finish_reason(
+            chat_completion_message=None, finish_reason="MALFORMED_FUNCTION_CALL"
+        )
+        == "malformed_function_call"
+    )
+    
+    # Ensure these values are in the OpenAI finish reasons constant
+    from litellm import OPENAI_FINISH_REASONS
+    assert "finish_reason_unspecified" in OPENAI_FINISH_REASONS
+    assert "malformed_function_call" in OPENAI_FINISH_REASONS
 
 
 def test_vertex_ai_usage_metadata_response_token_count():
@@ -1887,6 +2012,71 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     assert result["thinkingConfig"]["includeThoughts"] is False
 
 
+def test_reasoning_effort_dict_format_gemini_3():
+    """
+    Test that reasoning_effort works when passed as dict format from OpenAI Agents SDK.
+
+    The OpenAI Agents SDK passes reasoning_effort as {"effort": "high", "summary": "auto"}
+    instead of just a string. This test verifies that we correctly extract the effort value.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/19411
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    model = "gemini-3-pro-preview"
+
+    # Test dict format with effort="high" (OpenAI Agents SDK format)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "high", "summary": "auto"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format with effort="low"
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "low"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format with effort="medium"
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "medium"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format without effort key - should fall back to Gemini 3 default (low)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"summary": "auto"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    # Gemini 3 defaults to thinkingLevel="low" when no explicit effort is set
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+
 def test_temperature_default_for_gemini_3():
     """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -2473,6 +2663,111 @@ def test_vertex_ai_single_tool_type_still_works():
     assert tools[0]["code_execution"] == {}
 
 
+def test_vertex_ai_openai_web_search_tool_transformation():
+    """
+    Test that OpenAI-style web_search and web_search_preview tools are transformed to googleSearch.
+
+    This fixes the issue where passing OpenAI-style web search tools like:
+        {"type": "web_search"} or {"type": "web_search_preview"}
+    would be silently ignored (the request succeeds but grounding is not applied).
+
+    The fix transforms these to Gemini's googleSearch tool.
+
+    Input:
+        value=[{"type": "web_search"}]
+
+    Expected Output:
+        tools=[{"googleSearch": {}}]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test web_search transformation
+    tools = v._map_function(
+        value=[{"type": "web_search"}],
+        optional_params=optional_params
+    )
+
+    assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}"
+    assert "googleSearch" in tools[0], f"Expected googleSearch in tool, got {tools[0].keys()}"
+    assert tools[0]["googleSearch"] == {}, f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
+
+
+def test_vertex_ai_openai_web_search_preview_tool_transformation():
+    """
+    Test that OpenAI-style web_search_preview tool is transformed to googleSearch.
+
+    Input:
+        value=[{"type": "web_search_preview"}]
+
+    Expected Output:
+        tools=[{"googleSearch": {}}]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test web_search_preview transformation
+    tools = v._map_function(
+        value=[{"type": "web_search_preview"}],
+        optional_params=optional_params
+    )
+
+    assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}"
+    assert "googleSearch" in tools[0], f"Expected googleSearch in tool, got {tools[0].keys()}"
+    assert tools[0]["googleSearch"] == {}, f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
+
+
+def test_vertex_ai_openai_web_search_with_function_tools():
+    """
+    Test that OpenAI-style web_search tool works alongside function tools.
+
+    Input:
+        value=[
+            {"type": "web_search"},
+            {"type": "function", "function": {"name": "get_weather", "description": "Get weather"}},
+        ]
+
+    Expected Output:
+        tools=[
+            {"googleSearch": {}},
+            {"function_declarations": [{"name": "get_weather", "description": "Get weather"}]},
+        ]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = v._map_function(
+        value=[
+            {"type": "web_search"},
+            {"type": "function", "function": {"name": "get_weather", "description": "Get weather"}},
+        ],
+        optional_params=optional_params
+    )
+
+    # Should have 2 separate Tool objects
+    assert len(tools) == 2, f"Expected 2 Tool objects, got {len(tools)}"
+
+    # Find each tool type
+    search_tool = None
+    func_tool = None
+
+    for tool in tools:
+        if "googleSearch" in tool:
+            search_tool = tool
+        elif "function_declarations" in tool:
+            func_tool = tool
+
+    # Verify both tools are present
+    assert search_tool is not None, "googleSearch Tool should be present"
+    assert func_tool is not None, "function_declarations Tool should be present"
+
+    # Verify googleSearch is empty config
+    assert search_tool["googleSearch"] == {}
+
+    # Verify function declaration content
+    assert func_tool["function_declarations"][0]["name"] == "get_weather"
+
+
 def test_vertex_ai_multiple_function_declarations_grouped():
     """
     Test that multiple function declarations are grouped in ONE Tool object.
@@ -2587,3 +2882,459 @@ def test_gemini_token_usage_standard_response():
     assert result.completion_tokens == 50
     assert result.completion_tokens_details.text_tokens == 40
     assert result.completion_tokens_details.image_tokens == 10
+
+
+def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
+    """
+    Test that image generation models correctly separate prompt and completion token details.
+    
+    This is a regression test for the bug where prompt_tokens_details.image_tokens
+    was incorrectly set to the completion's image token count instead of 0.
+    
+    Scenario: Text-only prompt generates an image response
+    - Input: Text prompt (no images)
+    - Output: Generated image + text description
+    
+    Expected behavior:
+    - prompt_tokens_details.image_tokens should be 0 (text-only input)
+    - completion_tokens_details.image_tokens should be 1290 (generated image)
+    
+    Bug behavior (before fix):
+    - prompt_tokens_details.image_tokens was 1290 (incorrect!)
+    - completion_tokens_details.image_tokens was 1290 (correct)
+    
+    The bug was caused by reusing the same variables (image_tokens, audio_tokens, text_tokens)
+    for both prompt and completion token details.
+    """
+    v = VertexGeminiConfig()
+    
+    # Simulate Gemini image generation model response metadata
+    # User sends text-only prompt, model generates image + text
+    usage_metadata_dict = {
+        "promptTokenCount": 101,
+        "candidatesTokenCount": 1290,
+        "totalTokenCount": 1391,
+        # Prompt is text-only (no image tokens in input)
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 101}
+        ],
+        # Response contains generated image + text
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1290}
+        ],
+    }
+    
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+    
+    # Verify basic token counts
+    assert result.prompt_tokens == 101
+    assert result.completion_tokens == 1290
+    assert result.total_tokens == 1391
+    
+    # CRITICAL: Prompt tokens details should show NO image tokens (text-only input)
+    assert result.prompt_tokens_details.text_tokens == 101, \
+        "Prompt text tokens should be 101"
+    assert result.prompt_tokens_details.image_tokens is None, \
+        "Prompt image tokens should be None (text-only input, no images in prompt)"
+    assert result.prompt_tokens_details.audio_tokens is None, \
+        "Prompt audio tokens should be None"
+    
+    # Completion tokens details should show the generated image tokens
+    assert result.completion_tokens_details.image_tokens == 1290, \
+        "Completion image tokens should be 1290 (generated image)"
+    
+    # Verify text_tokens is auto-calculated for completion
+    # candidatesTokenCount (1290) - image_tokens (1290) = 0
+    assert result.completion_tokens_details.text_tokens == 0, \
+        "Completion text tokens should be 0 (image-only response)"
+
+
+def test_file_object_detail_parameter():
+    """Test that detail parameter works for type: file objects (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this video?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "low"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Verify media_resolution is set for file objects
+    assert len(contents) == 1
+    assert len(contents[0]["parts"]) == 2  # text + file
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None, "File part should exist"
+    assert "media_resolution" in file_part, "media_resolution should be set for file objects"
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
+
+
+def test_video_metadata_fps():
+    """Test fps parameter in video_metadata (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {"fps": 5}
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "video_metadata" in file_part, "video_metadata should be present"
+    assert file_part["video_metadata"]["fps"] == 5
+
+
+def test_video_metadata_complete():
+    """Test all video_metadata fields: fps, start_offset, end_offset (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "start_offset": "10s",
+                            "end_offset": "60s",
+                            "fps": 5
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "video_metadata" in file_part
+
+    # Verify field name conversion: snake_case -> camelCase
+    vm = file_part["video_metadata"]
+    assert vm["startOffset"] == "10s", "start_offset should be converted to startOffset"
+    assert vm["endOffset"] == "60s", "end_offset should be converted to endOffset"
+    assert vm["fps"] == 5, "fps should remain unchanged"
+
+
+def test_detail_and_video_metadata_combined():
+    """Test using both detail and video_metadata together (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze video"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",
+                        "video_metadata": {"fps": 10}
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "media_resolution" in file_part
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert "video_metadata" in file_part
+    assert file_part["video_metadata"]["fps"] == 10
+
+
+def test_new_detail_levels():
+    """Test new detail levels: medium and ultra_high (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _convert_detail_to_media_resolution_enum,
+        _gemini_convert_messages_with_history,
+    )
+
+    # Test mapping function
+    assert _convert_detail_to_media_resolution_enum("low") == {"level": "MEDIA_RESOLUTION_LOW"}
+    assert _convert_detail_to_media_resolution_enum("medium") == {"level": "MEDIA_RESOLUTION_MEDIUM"}
+    assert _convert_detail_to_media_resolution_enum("high") == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert _convert_detail_to_media_resolution_enum("ultra_high") == {"level": "MEDIA_RESOLUTION_ULTRA_HIGH"}
+
+    # Test with actual message transformation
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "medium"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_MEDIUM"}
+
+
+def test_video_metadata_only_for_gemini_3():
+    """Test that video_metadata is only applied for Gemini 3+ models (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",
+                        "video_metadata": {"fps": 5}
+                    }
+                }
+            ]
+        }
+    ]
+
+    # Test with Gemini 1.5 (should not have video_metadata or media_resolution)
+    contents_1_5 = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-1.5-pro"
+    )
+
+    file_part_1_5 = None
+    for part in contents_1_5[0]["parts"]:
+        if "file_data" in part:
+            file_part_1_5 = part
+            break
+
+    assert file_part_1_5 is not None
+    assert "media_resolution" not in file_part_1_5, "Gemini 1.5 should not have media_resolution"
+    assert "video_metadata" not in file_part_1_5, "Gemini 1.5 should not have video_metadata"
+
+    # Test with Gemini 3 (should have both)
+    contents_3 = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    file_part_3 = None
+    for part in contents_3[0]["parts"]:
+        if "file_data" in part:
+            file_part_3 = part
+            break
+
+    assert file_part_3 is not None
+    assert "media_resolution" in file_part_3, "Gemini 3 should have media_resolution"
+    assert "video_metadata" in file_part_3, "Gemini 3 should have video_metadata"
+
+
+
+def test_chunk_parser_handles_prompt_feedback_block():
+    """Test chunk_parser correctly handles promptFeedback.blockReason"""
+    from unittest.mock import Mock
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Arrange - mock a blocked response
+    blocked_chunk = {
+        "promptFeedback": {
+            "blockReason": "PROHIBITED_CONTENT",
+            "blockReasonMessage": "The prompt is blocked due to prohibited contents"
+        },
+        "responseId": "test_response_id",
+        "modelVersion": "gemini-3-pro-preview"
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj
+    )
+
+    # Act
+    result = streaming_obj.chunk_parser(blocked_chunk)
+
+    # Assert
+    assert result is not None, "Result should not be None"
+    assert len(result.choices) == 1, "Should have exactly one choice"
+    assert result.choices[0].finish_reason == "content_filter", f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].delta.content is None, "content should be None"
+
+
+def test_chunk_parser_handles_prompt_feedback_safety_block():
+    """Test chunk_parser handles different blockReason types (SAFETY)"""
+    from unittest.mock import Mock
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Arrange - mock a SAFETY blocked response
+    blocked_chunk = {
+        "promptFeedback": {
+            "blockReason": "SAFETY",
+            "blockReasonMessage": "The prompt is blocked due to safety concerns"
+        },
+        "responseId": "test_safety_response_id",
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj
+    )
+
+    # Act
+    result = streaming_obj.chunk_parser(blocked_chunk)
+
+    # Assert
+    assert result is not None
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "content_filter"
+
+
+def test_chunk_parser_handles_prompt_feedback_block_with_usage():
+    """Test chunk_parser correctly extracts usageMetadata when promptFeedback.blockReason is present"""
+    from unittest.mock import Mock
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Arrange - 模拟一个包含 usageMetadata 的 blocked response
+    blocked_chunk = {
+        "promptFeedback": {
+            "blockReason": "PROHIBITED_CONTENT",
+            "blockReasonMessage": "The prompt is blocked due to prohibited contents"
+        },
+        "responseId": "test_response_id_with_usage",
+        "modelVersion": "gemini-3-pro-preview",
+        "usageMetadata": {
+            "promptTokenCount": 8175,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 8175
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj
+    )
+
+    # Act
+    result = streaming_obj.chunk_parser(blocked_chunk)
+
+    # Assert - 验证 content_filter 响应和 usage 都被正确处理
+    assert result is not None, "Result should not be None"
+    assert len(result.choices) == 1, "Should have exactly one choice"
+    assert result.choices[0].finish_reason == "content_filter", f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].delta.content is None, "content should be None"
+
+    # 验证 usage 信息被正确提取
+    assert hasattr(result, "usage"), "result should have usage attribute"
+    assert result.usage is not None, "usage should not be None"
+    assert result.usage.prompt_tokens == 8175, f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
+    assert result.usage.completion_tokens == 0, f"completion_tokens should be 0, got {result.usage.completion_tokens}"
+    assert result.usage.total_tokens == 8175, f"total_tokens should be 8175, got {result.usage.total_tokens}"
+

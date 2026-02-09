@@ -2,14 +2,18 @@ import json
 import os
 import sys
 import types
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from litellm._uuid import uuid
+from litellm.proxy.management_endpoints import (
+    mcp_management_endpoints as mgmt_endpoints,
+)
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -726,8 +730,6 @@ class TestTemporaryMCPSessionEndpoints:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
             return_value=None,
         ):
-            from fastapi import HTTPException
-
             with pytest.raises(HTTPException) as exc_info:
                 _get_cached_temporary_mcp_server_or_404("missing")
 
@@ -1128,6 +1130,8 @@ class TestMCPRegistryEndpoint:
 
         mock_manager = MagicMock()
         mock_manager.get_registry.return_value = {mock_server.server_id: mock_server}
+        # The registry endpoint uses get_filtered_registry (filters by client IP)
+        mock_manager.get_filtered_registry.return_value = {mock_server.server_id: mock_server}
 
         with patch_proxy_general_settings({"enable_mcp_registry": True}), patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
@@ -1194,6 +1198,25 @@ class TestMCPRegistryEndpoint:
             assert len(result) == 1
             assert result[0]["server_id"] == "server-1"
             assert result[0]["status"] == "healthy"
+
+
+class TestManagementPayloadValidation:
+    def test_rejects_invalid_alias(self):
+        payload = SimpleNamespace(server_name="valid_server", alias="bad/name")
+
+        with pytest.raises(HTTPException) as exc_info:
+            mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload)
+
+        assert exc_info.value.status_code == 400
+        error_message = exc_info.value.detail["error"]
+        assert "bad/name" in error_message
+
+    def test_accepts_valid_names(self):
+        payload = SimpleNamespace(server_name="valid_server", alias=None)
+
+        mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload)
+
+        assert payload.alias == "valid_server"
 
     @pytest.mark.asyncio
     async def test_health_check_view_all_mode(self):

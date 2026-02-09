@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -131,7 +131,6 @@ else:
 
 unified_guardrail = UnifiedLLMGuardrails()
 
-_anthropic_async_clients = {}
 
 def print_verbose(print_statement):
     """
@@ -961,8 +960,8 @@ class ProxyLogging:
         Returns:
             Updated data dictionary if guardrail passes, None if guardrail should be skipped
         """
-        from litellm.types.guardrails import GuardrailEventHooks
         from litellm.integrations.prometheus import PrometheusLogger
+        from litellm.types.guardrails import GuardrailEventHooks
 
         # Determine the event type based on call type
         event_type = GuardrailEventHooks.pre_call
@@ -983,7 +982,9 @@ class ProxyLogging:
 
         try:
             # Check if load balancing should be used
-            if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
+            if guardrail_name and self._should_use_guardrail_load_balancing(
+                guardrail_name
+            ):
                 response = await self._execute_guardrail_with_load_balancing(
                     guardrail_name=guardrail_name,
                     hook_type="pre_call",
@@ -1018,7 +1019,11 @@ class ProxyLogging:
             latency_seconds = guardrail_end_time - guardrail_start_time
 
             # Get guardrail name for metrics (fallback if not set)
-            metrics_guardrail_name = guardrail_name or getattr(callback, "guardrail_name", callback.__class__.__name__) or "unknown"
+            metrics_guardrail_name = (
+                guardrail_name
+                or getattr(callback, "guardrail_name", callback.__class__.__name__)
+                or "unknown"
+            )
 
             # Find PrometheusLogger in callbacks and record metrics
             for prom_callback in litellm.callbacks:
@@ -1365,17 +1370,36 @@ class ProxyLogging:
         ],
         user_info: CallInfo,
     ):
-        if self.alerting is None:
-            # do nothing if alerting is not switched on
+        # For soft_budget alerts with alert_emails set, allow email sending even if alerting is None
+        # This enables team-specific soft budget email alerts via metadata.soft_budget_alerting_emails
+        # Note: user_info is a CallInfo that can represent user/team/org level info. For team budgets,
+        # alert_emails is populated from team_object.metadata.soft_budget_alerting_emails (see auth_checks.py)
+        is_soft_budget_with_alert_emails = (
+            type == "soft_budget" 
+            and user_info.alert_emails is not None 
+            and len(user_info.alert_emails) > 0
+        )
+        
+        if self.alerting is None and not is_soft_budget_with_alert_emails:
+            # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if "slack" in self.alerting:
-            await self.slack_alerting_instance.budget_alerts(
-                type=type,
-                user_info=user_info,
-            )
+        if self.alerting is not None and "slack" in self.alerting:
+            if self.slack_alerting_instance is not None:
+                await self.slack_alerting_instance.budget_alerts(
+                    type=type,
+                    user_info=user_info,
+                )
 
-        if "email" in self.alerting and self.email_logging_instance is not None:
+        # Call email_logging_instance if:
+        # 1. "email" is in alerting config, OR
+        # 2. It's a soft_budget alert with team-specific alert_emails (bypasses global alerting config)
+        should_send_email = (
+            (self.alerting is not None and "email" in self.alerting) 
+            or is_soft_budget_with_alert_emails
+        )
+        
+        if should_send_email and self.email_logging_instance is not None:
             await self.email_logging_instance.budget_alerts(
                 type=type,
                 user_info=user_info,
@@ -1794,12 +1818,54 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                await callback.async_post_call_success_hook(
+                callback_response = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
+                if callback_response is not None:
+                    response = callback_response
         except Exception as e:
             raise e
         return response
+
+    async def post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """
+        Calls async_post_call_response_headers_hook on all CustomLogger callbacks.
+        Merges all returned header dicts (later callbacks override earlier ones).
+
+        Returns:
+            Dict[str, str]: Merged headers from all callbacks.
+        """
+        merged_headers: Dict[str, str] = {}
+        try:
+            for callback in litellm.callbacks:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is not None and isinstance(_callback, CustomLogger):
+                    result = await _callback.async_post_call_response_headers_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_headers=request_headers,
+                    )
+                    if result is not None:
+                        merged_headers.update(result)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error in post_call_response_headers_hook: %s", str(e)
+            )
+        return merged_headers
 
     async def async_post_call_streaming_hook(
         self,
@@ -1853,16 +1919,14 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        potential_error_response = (
+                        callback_response = (
                             await _callback.async_post_call_streaming_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=complete_response,
                             )
                         )
-                        if isinstance(
-                            potential_error_response, str
-                        ) and potential_error_response.startswith("data: "):
-                            return potential_error_response
+                        if callback_response is not None:
+                            response = callback_response
                 except Exception as e:
                     raise e
         return response
@@ -1896,7 +1960,18 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-                    if "apply_guardrail" in type(callback).__dict__:
+                    if (
+                        "async_post_call_streaming_iterator_hook"
+                        in type(callback).__dict__
+                    ):
+                        current_response = (
+                            _callback.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=current_response,
+                                request_data=request_data,
+                            )
+                        )
+                    elif "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
                         current_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
@@ -2214,6 +2289,45 @@ class PrismaClient:
 
             raise e
 
+    async def _query_first_with_cached_plan_fallback(
+        self, sql_query: str
+    ) -> Optional[dict]:
+        """
+        Execute a query with automatic fallback for PostgreSQL cached plan errors.
+
+        This handles the "cached plan must not change result type" error that occurs
+        during rolling deployments when schema changes are applied while old pods
+        still have cached query plans expecting the old schema.
+
+        Args:
+            sql_query: SQL query string to execute
+
+        Returns:
+            Query result or None
+
+        Raises:
+            Original exception if not a cached plan error
+        """
+        try:
+            return await self.db.query_first(query=sql_query)
+        except Exception as e:
+            error_str = str(e)
+            if "cached plan must not change result type" in error_str:
+                # Force PostgreSQL to re-plan by invalidating the cache
+                # Add a unique comment to make the query different
+                sql_query_retry = sql_query.replace(
+                    "SELECT",
+                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */",
+                )
+                verbose_proxy_logger.warning(
+                    "PostgreSQL cached plan error detected for token lookup, "
+                    "retrying with fresh plan. This may occur during rolling deployments "
+                    "when schema changes are applied."
+                )
+                return await self.db.query_first(query=sql_query_retry)
+            else:
+                raise
+
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff
@@ -2512,7 +2626,8 @@ class PrismaClient:
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
-                            t.max_budget AS team_max_budget, 
+                            t.max_budget AS team_max_budget,
+                            t.soft_budget AS team_soft_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.models AS team_models,
@@ -2545,7 +2660,9 @@ class PrismaClient:
                         WHERE v.token = '{token}'
                     """
 
-                    response = await self.db.query_first(query=sql_query)
+                    response = await self._query_first_with_cached_plan_fallback(
+                        sql_query
+                    )
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -3853,11 +3970,15 @@ def _raise_failed_update_spend_exception(
     raise e
 
 
+def _get_month_end_date(today: date) -> date:
+    if today.month == 12:
+        return date(today.year + 1, 1, 1) - timedelta(days=1)
+    return date(today.year, today.month + 1, 1) - timedelta(days=1)
+
+
 def _is_projected_spend_over_limit(
     current_spend: float, soft_budget_limit: Optional[float]
 ):
-    from datetime import date
-
     if soft_budget_limit is None:
         # If there's no limit, we can't exceed it.
         return False
@@ -3865,10 +3986,7 @@ def _is_projected_spend_over_limit(
     today = date.today()
 
     # Finding the first day of the next month, then subtracting one day to get the end of the current month.
-    if today.month == 12:  # December edge case
-        end_month = date(today.year + 1, 1, 1) - timedelta(days=1)
-    else:
-        end_month = date(today.year, today.month + 1, 1) - timedelta(days=1)
+    end_month = _get_month_end_date(today)
 
     remaining_days = (end_month - today).days
 
@@ -3890,25 +4008,30 @@ def _is_projected_spend_over_limit(
 def _get_projected_spend_over_limit(
     current_spend: float, soft_budget_limit: Optional[float]
 ) -> Optional[tuple]:
-    import datetime
-
     if soft_budget_limit is None:
         return None
 
-    today = datetime.date.today()
-    end_month = datetime.date(today.year, today.month + 1, 1) - datetime.timedelta(
-        days=1
-    )
+    today = date.today()
+    end_month = _get_month_end_date(today)
     remaining_days = (end_month - today).days
 
-    daily_spend = current_spend / (
-        today.day - 1
-    )  # assuming the current spend till today (not including today)
-    projected_spend = daily_spend * remaining_days
+    # assuming the current spend till today (not including today)
+    if today.day == 1:
+        daily_spend = current_spend
+    else:
+        daily_spend = current_spend / (today.day - 1)
+    projected_spend = current_spend + (daily_spend * remaining_days)
 
     if projected_spend > soft_budget_limit:
-        approx_days = soft_budget_limit / daily_spend
-        limit_exceed_date = today + datetime.timedelta(days=approx_days)
+        if daily_spend <= 0:
+            limit_exceed_date = today
+        else:
+            remaining_budget = soft_budget_limit - current_spend
+            if remaining_budget <= 0:
+                limit_exceed_date = today
+            else:
+                approx_days = remaining_budget / daily_spend
+                limit_exceed_date = today + timedelta(days=approx_days)
 
         # return the projected spend and the date it will exceeded
         return projected_spend, limit_exceed_date
@@ -4183,7 +4306,7 @@ def get_server_root_path() -> str:
     - If SERVER_ROOT_PATH is set, return it.
     - Otherwise, default to "/".
     """
-    return os.getenv("SERVER_ROOT_PATH", "/")
+    return os.getenv("SERVER_ROOT_PATH", "")
 
 
 def get_prisma_client_or_throw(message: str):
@@ -4250,74 +4373,6 @@ def construct_database_url_from_env_vars() -> Optional[str]:
 
         return database_url
 
-    return None
-
-
-async def count_tokens_with_anthropic_api(
-    model_to_use: str,
-    messages: Optional[List[Dict[str, Any]]],
-    deployment: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    """
-    Helper function to count tokens using Anthropic API directly.
-
-    Args:
-        model_to_use: The model name to use for token counting
-        messages: The messages to count tokens for
-        deployment: Optional deployment configuration containing API key
-
-    Returns:
-        Optional dict with token count and tokenizer info, or None if failed
-    """
-    if not messages:
-        return None
-
-    try:
-        import os
-
-        import anthropic
-
-        # Get Anthropic API key from deployment config
-        anthropic_api_key = None
-        if deployment is not None:
-            anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
-
-        # Fallback to environment variable
-        if not anthropic_api_key:
-            anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-
-        if anthropic_api_key and messages:
-            # Call Anthropic API directly for more accurate token counting
-            
-            # Use cached client if available to avoid socket exhaustion
-            if anthropic_api_key not in _anthropic_async_clients:
-                _anthropic_async_clients[anthropic_api_key] = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
-            
-            client = _anthropic_async_clients[anthropic_api_key]
-
-            # Call with explicit parameters to satisfy type checking
-            # Type ignore for now since messages come from generic dict input
-            response = await client.beta.messages.count_tokens(
-                model=model_to_use,
-                messages=messages,  # type: ignore
-                betas=["token-counting-2024-11-01"],
-            )
-            total_tokens = response.input_tokens
-            tokenizer_used = "anthropic_api"
-
-            return {
-                "total_tokens": total_tokens,
-                "tokenizer_used": tokenizer_used,
-            }
-
-    except ImportError:
-        verbose_proxy_logger.warning(
-            "Anthropic library not available, falling back to LiteLLM tokenizer"
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer"
-        )
     return None
 
 

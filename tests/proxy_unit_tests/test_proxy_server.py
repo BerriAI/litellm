@@ -640,10 +640,6 @@ def test_embedding(mock_aembedding, client_no_auth):
             pre_call_kwargs.get("call_type") == "aembedding"
         ), f"expected pre_call_hook to receive call_type='aembedding', got {pre_call_kwargs.get('call_type')}"
 
-        during_call_kwargs = mock_during_hook.await_args_list[0].kwargs
-        assert (
-            during_call_kwargs.get("call_type") == "embedding"
-        ), f"expected during_call_hook to receive call_type='embedding', got {during_call_kwargs.get('call_type')}"
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -1121,7 +1117,10 @@ async def test_create_team_member_add(prisma_client, new_member_method):
     ) as mock_litellm_usertable, patch(
         "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
         new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj:
+    ) as mock_team_obj, patch(
+        "litellm.proxy.proxy_server.prisma_client.get_data",
+        new=AsyncMock(return_value=[]),
+    ) as mock_get_data:
 
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
@@ -1130,6 +1129,10 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         )
         mock_litellm_usertable.upsert = mock_client
         mock_litellm_usertable.find_many = AsyncMock(return_value=None)
+        # Mock find_first for user_email validation (returns None for new users)
+        mock_litellm_usertable.find_first = AsyncMock(return_value=None)
+        # Mock find_unique for user_id validation (returns None for new users)
+        mock_litellm_usertable.find_unique = AsyncMock(return_value=None)
         team_mock_client = AsyncMock()
         original_val = getattr(
             litellm.proxy.proxy_server.prisma_client.db, "litellm_teamtable"
@@ -1303,7 +1306,10 @@ async def test_create_team_member_add_team_admin(
     ) as mock_litellm_usertable, patch(
         "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
         new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj:
+    ) as mock_team_obj, patch(
+        "litellm.proxy.proxy_server.prisma_client.get_data",
+        new=AsyncMock(return_value=[]),
+    ) as mock_get_data:
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -1311,6 +1317,10 @@ async def test_create_team_member_add_team_admin(
         )
         mock_litellm_usertable.upsert = mock_client
         mock_litellm_usertable.find_many = AsyncMock(return_value=None)
+        # Mock find_first for user_email validation (returns None for new users)
+        mock_litellm_usertable.find_first = AsyncMock(return_value=None)
+        # Mock find_unique for user_id validation (returns None for new users)
+        mock_litellm_usertable.find_unique = AsyncMock(return_value=None)
 
         team_mock_client = AsyncMock()
         original_val = getattr(

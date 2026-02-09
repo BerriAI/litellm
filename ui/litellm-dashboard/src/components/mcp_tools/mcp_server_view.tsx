@@ -36,6 +36,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const [editing, setEditing] = useState(isEditing);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
     onBack();
@@ -72,11 +74,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               size="small"
               icon={copiedStates["mcp-server_name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(mcpServer.server_name, "mcp-server_name")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["mcp-server_name"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["mcp-server_name"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
             {mcpServer.alias && (
               <>
@@ -87,11 +88,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   size="small"
                   icon={copiedStates["mcp-alias"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
                   onClick={() => copyToClipboard(mcpServer.alias, "mcp-alias")}
-                  className={`left-2 z-10 transition-all duration-200 ${
-                    copiedStates["mcp-alias"]
-                      ? "text-green-600 bg-green-50 border-green-200"
-                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                  }`}
+                  className={`left-2 z-10 transition-all duration-200 ${copiedStates["mcp-alias"]
+                    ? "text-green-600 bg-green-50 border-green-200"
+                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                    }`}
                 />
               </>
             )}
@@ -103,18 +103,17 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               size="small"
               icon={copiedStates["mcp-server-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(mcpServer.server_id, "mcp-server-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["mcp-server-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["mcp-server-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
           </div>
         </div>
       </div>
 
       {/* TODO: magic number for index */}
-      <TabGroup defaultIndex={editing ? 2 : 0}>
+      <TabGroup index={selectedTabIndex} onIndexChange={setSelectedTabIndex}>
         <TabList className="mb-4">
           {[
             <Tab key="overview">Overview</Tab>,
@@ -244,6 +243,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       {mcpServer.allow_all_keys && (
                         <Text className="text-xs text-gray-500">
                           All keys can access this MCP server
+                        </Text>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Available on Public Internet</Text>
+                    <div className="flex items-center gap-2">
+                      {mcpServer.available_on_public_internet ? (
+                        <span className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-sm">
+                          Public
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md text-sm">
+                          Internal
+                        </span>
+                      )}
+                      {mcpServer.available_on_public_internet && (
+                        <Text className="text-xs text-gray-500">
+                          Accessible from external/public IPs
                         </Text>
                       )}
                     </div>

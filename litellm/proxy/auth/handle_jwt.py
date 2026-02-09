@@ -659,7 +659,7 @@ class JWTHandler:
                     token,
                     public_key_obj,  # type: ignore
                     algorithms=algorithms,
-                    options=decode_options,
+                    options=decode_options,  # type: ignore[arg-type]
                     audience=audience,
                     leeway=self.leeway,  # allow testing of expired tokens
                 )
@@ -975,6 +975,9 @@ class JWTAuthManager:
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                        )
+                        verbose_proxy_logger.debug(
+                            f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
                         )
                         if is_allowed:
                             return team_id, team_object

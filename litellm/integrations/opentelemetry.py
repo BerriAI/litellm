@@ -17,6 +17,10 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes,
+)
 
 # OpenTelemetry imports moved to individual functions to avoid import errors when not installed
 
@@ -140,6 +144,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
+        self._tracer_provider_cache: Dict[str, Any] = {}
         self._init_tracing(tracer_provider)
 
         _debug_otel = str(os.getenv("DEBUG_OTEL", "False")).lower()
@@ -611,11 +616,21 @@ class OpenTelemetry(CustomLogger):
         """Create a temporary tracer with dynamic headers for this request only."""
         from opentelemetry.sdk.trace import TracerProvider
 
+        # Prevents thread exhaustion by reusing providers for the same credential sets (e.g. per-team keys)
+        cache_key = str(sorted(dynamic_headers.items()))
+        if cache_key in self._tracer_provider_cache:
+            return self._tracer_provider_cache[cache_key].get_tracer(
+                LITELLM_TRACER_NAME
+            )
+
         # Create a temporary tracer provider with dynamic headers
         temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
         temp_provider.add_span_processor(
             self._get_span_processor(dynamic_headers=dynamic_headers)
         )
+
+        # Store in cache for reuse
+        self._tracer_provider_cache[cache_key] = temp_provider
 
         return temp_provider.get_tracer(LITELLM_TRACER_NAME)
 
@@ -660,6 +675,12 @@ class OpenTelemetry(CustomLogger):
             self._maybe_log_raw_request(
                 kwargs, response_obj, start_time, end_time, span
             )
+            # Ensure proxy-request parent span is annotated with the actual operation kind
+            if (
+                parent_span is not None
+                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+            ):
+                self.set_attributes(parent_span, kwargs, response_obj)
         else:
             # Do not create primary span (keep hierarchy shallow when parent exists)
             from opentelemetry.trace import Status, StatusCode
@@ -797,7 +818,7 @@ class OpenTelemetry(CustomLogger):
                 and self._token_usage_histogram
             ):
                 in_attrs = {**common_attrs, "gen_ai.token.type": "input"}
-                out_attrs = {**common_attrs, "gen_ai.token.type": "completion"}
+                out_attrs = {**common_attrs, "gen_ai.token.type": "output"}
                 self._token_usage_histogram.record(
                     usage.get("prompt_tokens", 0), attributes=in_attrs
                 )
@@ -987,7 +1008,11 @@ class OpenTelemetry(CustomLogger):
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
-        from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
+
+        try:
+            from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore[attr-defined]  # OTEL < 1.39.0
+        except ImportError:
+            from opentelemetry.sdk._logs._internal import LogRecord as SdkLogRecord  # type: ignore[attr-defined, no-redef]  # OTEL >= 1.39.0
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
@@ -1101,6 +1126,12 @@ class OpenTelemetry(CustomLogger):
                 name="guardrail",
                 start_time=self._to_ns(start_time_datetime),
                 context=context,
+            )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                value=OpenInferenceSpanKindValues.GUARDRAIL.value,
             )
 
             self.safe_set_attribute(
@@ -1488,21 +1519,21 @@ class OpenTelemetry(CustomLogger):
             if usage:
                 self.safe_set_attribute(
                     span=span,
-                    key=SpanAttributes.LLM_USAGE_TOTAL_TOKENS.value,
+                    key=SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS.value,
                     value=usage.get("total_tokens"),
                 )
 
                 # The number of tokens used in the LLM response (completion).
                 self.safe_set_attribute(
                     span=span,
-                    key=SpanAttributes.LLM_USAGE_COMPLETION_TOKENS.value,
+                    key=SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS.value,
                     value=usage.get("completion_tokens"),
                 )
 
                 # The number of tokens used in the LLM prompt.
                 self.safe_set_attribute(
                     span=span,
-                    key=SpanAttributes.LLM_USAGE_PROMPT_TOKENS.value,
+                    key=SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS.value,
                     value=usage.get("prompt_tokens"),
                 )
 
@@ -1520,54 +1551,75 @@ class OpenTelemetry(CustomLogger):
                 self.set_tools_attributes(span, tools)
 
             if kwargs.get("messages"):
-                for idx, prompt in enumerate(kwargs.get("messages")):
-                    if prompt.get("role"):
-                        self.safe_set_attribute(
-                            span=span,
-                            key=f"{SpanAttributes.LLM_PROMPTS.value}.{idx}.role",
-                            value=prompt.get("role"),
-                        )
+                transformed_messages = (
+                    self._transform_messages_to_otel_semantic_conventions(
+                        kwargs.get("messages")
+                    )
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.GEN_AI_INPUT_MESSAGES.value,
+                    value=safe_dumps(transformed_messages),
+                )
 
-                    if prompt.get("content"):
-                        if not isinstance(prompt.get("content"), str):
-                            prompt["content"] = str(prompt.get("content"))
-                        self.safe_set_attribute(
-                            span=span,
-                            key=f"{SpanAttributes.LLM_PROMPTS.value}.{idx}.content",
-                            value=prompt.get("content"),
-                        )
+            if kwargs.get("system_instructions"):
+                transformed_system_instructions = (
+                    self._transform_messages_to_otel_semantic_conventions(
+                        kwargs.get("system_instructions")
+                    )
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
+                    value=safe_dumps(transformed_system_instructions),
+                )
+
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
+                value=(
+                    "chat"
+                    if standard_logging_payload.get("call_type") == "completion"
+                    else standard_logging_payload.get("call_type") or "chat"
+                ),
+            )
+
+            if standard_logging_payload.get("request_id"):
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.GEN_AI_REQUEST_ID.value,
+                    value=standard_logging_payload.get("request_id"),
+                )
             #############################################
             ########## LLM Response Attributes ##########
             #############################################
             if response_obj is not None:
                 if response_obj.get("choices"):
+                    transformed_choices = (
+                        self._transform_choices_to_otel_semantic_conventions(
+                            response_obj.get("choices")
+                        )
+                    )
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                        value=safe_dumps(transformed_choices),
+                    )
+
+                    finish_reasons = []
                     for idx, choice in enumerate(response_obj.get("choices")):
                         if choice.get("finish_reason"):
-                            self.safe_set_attribute(
-                                span=span,
-                                key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.finish_reason",
-                                value=choice.get("finish_reason"),
-                            )
-                        if choice.get("message"):
-                            if choice.get("message").get("role"):
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.role",
-                                    value=choice.get("message").get("role"),
-                                )
-                            if choice.get("message").get("content"):
-                                if not isinstance(
-                                    choice.get("message").get("content"), str
-                                ):
-                                    choice["message"]["content"] = str(
-                                        choice.get("message").get("content")
-                                    )
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.content",
-                                    value=choice.get("message").get("content"),
-                                )
+                            finish_reasons.append(choice.get("finish_reason"))
 
+                    if finish_reasons:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                            value=safe_dumps(finish_reasons),
+                        )
+
+                    for idx, choice in enumerate(response_obj.get("choices")):
+                        if choice.get("finish_reason"):
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
@@ -1580,6 +1632,9 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
+            self.handle_callback_failure(
+                callback_name=self.callback_name or "opentelemetry"
+            )
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
@@ -1608,8 +1663,69 @@ class OpenTelemetry(CustomLogger):
         primitive_value = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
+    def _transform_messages_to_otel_semantic_conventions(
+        self, messages: Union[List[dict], str]
+    ) -> List[dict]:
+        """
+        Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
+        OTEL expects a 'parts' array instead of a single 'content' string.
+        """
+        if isinstance(messages, str):
+            # Handle system_instructions passed as a string
+            return [
+                {"role": "system", "parts": [{"type": "text", "content": messages}]}
+            ]
+
+        transformed = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            parts = []
+
+            if isinstance(content, str):
+                parts.append({"type": "text", "content": content})
+            elif isinstance(content, list):
+                # Handle multi-modal content if necessary
+                for part in content:
+                    if isinstance(part, dict):
+                        parts.append(part)
+                    else:
+                        parts.append({"type": "text", "content": str(part)})
+
+            transformed_msg = {"role": role, "parts": parts}
+            if "id" in msg:
+                transformed_msg["id"] = msg["id"]
+            if "tool_calls" in msg:
+                transformed_msg["tool_calls"] = msg["tool_calls"]
+            if "tool_call_id" in msg:
+                transformed_msg["tool_call_id"] = msg["tool_call_id"]
+            transformed.append(transformed_msg)
+
+        return transformed
+
+    def _transform_choices_to_otel_semantic_conventions(
+        self, choices: List[dict]
+    ) -> List[dict]:
+        """
+        Transforms choices into OTEL GenAI 1.38 compliant format for output.messages.
+        """
+        transformed = []
+        for choice in choices:
+            message = choice.get("message") or {}
+            finish_reason = choice.get("finish_reason")
+
+            transformed_msg = self._transform_messages_to_otel_semantic_conventions(
+                [message]
+            )[0]
+            if finish_reason:
+                transformed_msg["finish_reason"] = finish_reason
+
+            transformed.append(transformed_msg)
+        return transformed
+
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
         try:
+            self.set_attributes(span, kwargs, response_obj)
             kwargs.get("optional_params", {})
             litellm_params = kwargs.get("litellm_params", {}) or {}
             custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
@@ -1744,12 +1860,6 @@ class OpenTelemetry(CustomLogger):
         return None, None
 
     def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter as OTLPSpanExporterGRPC,
-        )
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter as OTLPSpanExporterHTTP,
-        )
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,
@@ -1787,6 +1897,16 @@ class OpenTelemetry(CustomLogger):
             or self.OTEL_EXPORTER == "http/protobuf"
             or self.OTEL_EXPORTER == "http/json"
         ):
+            try:
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter as OTLPSpanExporterHTTP,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP HTTP exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` to enable OTLP HTTP."
+                ) from exc
+
             verbose_logger.debug(
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
@@ -1800,6 +1920,16 @@ class OpenTelemetry(CustomLogger):
                 ),
             )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                    OTLPSpanExporter as OTLPSpanExporterGRPC,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP gRPC exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+                ) from exc
+
             verbose_logger.debug(
                 "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
@@ -1876,9 +2006,15 @@ class OpenTelemetry(CustomLogger):
                 endpoint=normalized_endpoint, headers=_split_otel_headers
             )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
-            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
-                OTLPLogExporter,
-            )
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                    OTLPLogExporter,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP gRPC log exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+                ) from exc
 
             verbose_logger.debug(
                 "OpenTelemetry: Using gRPC log exporter. Value of OTEL_EXPORTER: %s, endpoint: %s",
@@ -1941,9 +2077,15 @@ class OpenTelemetry(CustomLogger):
             return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                OTLPMetricExporter,
-            )
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                    OTLPMetricExporter,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP gRPC metric exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+                ) from exc
 
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,

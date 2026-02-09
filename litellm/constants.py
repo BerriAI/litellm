@@ -48,6 +48,11 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 DEFAULT_IMAGE_WIDTH = int(os.getenv("DEFAULT_IMAGE_WIDTH", 300))
 DEFAULT_IMAGE_HEIGHT = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
+# Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
+# This prevents memory issues from downloading very large images
+# Maps to OpenAI's 50 MB payload limit - requests with images exceeding this size will be rejected
+# Set MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0 to disable image URL handling entirely
+MAX_IMAGE_URL_DOWNLOAD_SIZE_MB = float(os.getenv("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50))
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
     os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024)
 )  # 1MB = 1024KB
@@ -61,6 +66,25 @@ DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS = int(
 DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
 )
+
+# MCP Semantic Tool Filter Defaults
+DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_MCP_SEMANTIC_FILTER_TOP_K = int(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_TOP_K", 10)
+)
+DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
+)
+MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
+    os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
+LITELLM_UI_ALLOW_HEADERS = [
+    "x-litellm-semantic-filter",
+    "x-litellm-semantic-filter-tools",
+]
 
 # Gemini model-specific minimal thinking budget constants
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH = int(
@@ -79,6 +103,9 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
 )
+
+# Provider-specific API base URLs
+XAI_API_BASE = "https://api.x.ai/v1"
 
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
@@ -279,6 +306,22 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+# Patterns that indicate a localhost/internal URL in A2A agent cards that should be
+# replaced with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
@@ -318,12 +361,20 @@ EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)) 
 EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8))  # 80% of max budget
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
+ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv(
+    "ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01"
+)
 ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
     "high": 10,
 }
+
+# LiteLLM standard web search tool name
+# Used for web search interception across providers
+LITELLM_WEB_SEARCH_TOOL_NAME = "litellm_web_search"
+
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
 
@@ -405,6 +456,7 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
     "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
+    "chatgpt",  # ChatGPT subscription API
     "novita",
     "meta_llama",
     "featherless_ai",
@@ -532,6 +584,10 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "web_search_options": None,
     "service_tier": None,
     "safety_identifier": None,
+    "prompt_cache_key": None,
+    "prompt_cache_retention": None,
+    "store": None,
+    "metadata": None,
 }
 
 openai_compatible_endpoints: List = [
@@ -603,6 +659,7 @@ openai_compatible_providers: List = [
     "lm_studio",
     "galadriel",
     "github_copilot",  # GitHub Copilot Chat API
+    "chatgpt",  # ChatGPT subscription API
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
@@ -929,6 +986,8 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-6-v1:0",
+    "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -961,6 +1020,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-90b-instruct-v1:0",
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
+    "amazon.nova-2-pro-preview-20251202-v1:0",
     "amazon.nova-pro-v1:0",
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
@@ -1048,7 +1108,7 @@ known_tokenizer_config = {
 }
 
 
-OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null"]
+OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null", "finish_reason_unspecified", "malformed_function_call", "guardrail_intervened", "eos"]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
 )  # 1 minute
@@ -1073,6 +1133,13 @@ LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
+
+# Standard headers that are always checked for customer/end-user ID (no configuration required)
+# These headers work out-of-the-box for tools like Claude Code that support custom headers
+STANDARD_CUSTOMER_ID_HEADERS = [
+    "x-litellm-customer-id",
+    "x-litellm-end-user-id",
+]
 MAX_SPENDLOG_ROWS_TO_QUERY = int(
     os.getenv("MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000)
 )  # if spendLogs has more than 1M rows, do not query the DB
@@ -1096,6 +1163,20 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "generateQuery/",
     "optimize-prompt/",
 ]
+
+
+# Headers that are safe to forward from incoming requests to Vertex AI
+# Using an allowlist approach for security - only forward headers we explicitly trust
+ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS = {
+    "anthropic-beta",  # Required for Anthropic features like extended context windows
+    "content-type",  # Required for request body parsing
+}
+
+# Prefix for headers that should be forwarded to the provider with the prefix stripped
+# e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
+# Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
+PASS_THROUGH_HEADER_PREFIX = "x-pass-"
+
 BASE_MCP_ROUTE = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS = int(
@@ -1125,6 +1206,12 @@ LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
+# Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
+CLI_JWT_EXPIRATION_HOURS = int(
+    os.getenv("CLI_JWT_EXPIRATION_HOURS") 
+    or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS") 
+    or 24
+)
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
@@ -1285,3 +1372,27 @@ COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
 ########################### RAG Text Splitter Constants ###########################
 DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+
+########################### S3 Vectors RAG Constants ###########################
+S3_VECTORS_DEFAULT_DIMENSION = int(os.getenv("S3_VECTORS_DEFAULT_DIMENSION", 1024))
+S3_VECTORS_DEFAULT_DISTANCE_METRIC = str(
+    os.getenv("S3_VECTORS_DEFAULT_DISTANCE_METRIC", "cosine")
+)
+S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS = ["source_text"]
+
+########################### Microsoft SSO Constants ###########################
+MICROSOFT_USER_EMAIL_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_EMAIL_ATTRIBUTE", "userPrincipalName")
+)
+MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "displayName")
+)
+MICROSOFT_USER_ID_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_ID_ATTRIBUTE", "id")
+)
+MICROSOFT_USER_FIRST_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "givenName")
+)
+MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "surname")
+)

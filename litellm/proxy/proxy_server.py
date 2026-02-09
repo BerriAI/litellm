@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import enum
 import inspect
 import io
 import os
@@ -11,7 +12,7 @@ import sys
 import time
 import traceback
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,6 +30,8 @@ from typing import (
     get_type_hints,
 )
 
+from pydantic import BaseModel, Json
+
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -44,8 +47,45 @@ from litellm.constants import (
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+    LITELLM_UI_ALLOW_HEADERS,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import (
+    CallbackDelete,
+    CallInfo,
+    CommonProxyErrors,
+    ConfigFieldDelete,
+    ConfigFieldInfo,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigList,
+    ConfigYAML,
+    EnterpriseLicenseData,
+    FieldDetail,
+    InvitationClaim,
+    InvitationDelete,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    PassThroughGenericEndpoint,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    SupportedDBObjectType,
+    TeamDefaultSettings,
+    TokenCountRequest,
+    TransformRequestBody,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -57,7 +97,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import load_credentials_from_list
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    load_credentials_from_list,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -197,8 +240,15 @@ from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.a2a_endpoints import router as a2a_router
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
+from litellm.proxy.agent_endpoints.model_list_helpers import (
+    append_agents_to_model_group,
+    append_agents_to_model_info,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
+)
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
+    claude_code_marketplace_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
@@ -220,6 +270,7 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
+    _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -294,10 +345,15 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
+from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+    router as fallback_management_router,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -323,6 +379,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -351,7 +408,9 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -367,6 +426,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -446,7 +506,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -530,7 +592,7 @@ except ImportError:
     enterprise_proxy_config = None
 ###################
 
-server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional[
@@ -736,6 +798,21 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         redis_usage_cache=redis_usage_cache,
     )
 
+    ## SEMANTIC TOOL FILTER ##
+    # Read litellm_settings from config for semantic filter initialization
+    try:
+        verbose_proxy_logger.debug("About to initialize semantic tool filter")
+        _config = proxy_config.get_config_state()
+        _litellm_settings = _config.get("litellm_settings", {})
+        verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
+        await ProxyStartupEvent._initialize_semantic_tool_filter(
+            llm_router=llm_router,
+            litellm_settings=_litellm_settings,
+        )
+        verbose_proxy_logger.debug("After semantic tool filter initialization")
+    except Exception as e:
+        verbose_proxy_logger.error(f"Semantic filter init failed: {e}", exc_info=True)
+
     ## JWT AUTH ##
     ProxyStartupEvent._initialize_jwt_auth(
         general_settings=general_settings,
@@ -750,6 +827,13 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
+        )
+        asyncio.create_task(
+            ProxyStartupEvent._warm_global_spend_cache(
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
         )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -808,7 +892,7 @@ app = FastAPI(
     title=_title,
     description=_description,
     version=version,
-    root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
+    root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
 )
 
@@ -885,6 +969,10 @@ def get_openapi_schema():
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
@@ -906,6 +994,10 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -1093,8 +1185,13 @@ try:
     # In development, we restructure directly in _experimental/out.
     # In non-root Docker, we restructure in /var/lib/litellm/ui.
     try:
-        _restructure_ui_html_files(ui_path)
-        verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
+        if is_non_root and ui_path == "/var/lib/litellm/ui":
+            verbose_proxy_logger.info(
+                f"Skipping runtime UI restructuring for non-root Docker. UI at {ui_path} is pre-restructured."
+            )
+        else:
+            _restructure_ui_html_files(ui_path)
+            verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"
@@ -1118,6 +1215,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
@@ -1194,6 +1292,7 @@ redis_usage_cache: Optional[
     RedisCache
 ] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
+native_background_mode: List[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -1765,6 +1864,7 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
+        self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -2116,6 +2216,12 @@ class ProxyConfig:
         """
         search_tools_raw = config.get("search_tools", None)
         if not search_tools_raw:
+            # Check in general_settings
+            general_settings = config.get("general_settings", {})
+            if general_settings:
+                search_tools_raw = general_settings.get("search_tools", None)
+
+        if not search_tools_raw:
             return None
 
         search_tools_parsed: List[SearchToolTypedDict] = []
@@ -2426,14 +2532,17 @@ class ProxyConfig:
                     pass
                 elif key == "responses":
                     # Initialize global polling via cache settings
-                    global polling_via_cache_enabled, polling_cache_ttl
+                    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
                     background_mode = value.get("background_mode", {})
                     polling_via_cache_enabled = background_mode.get(
                         "polling_via_cache", False
                     )
+                    native_background_mode = background_mode.get(
+                        "native_background_mode", []
+                    )
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
-                        f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, ttl={polling_cache_ttl}{reset_color_code}"
+                        f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, native_background_mode={native_background_mode}, ttl={polling_cache_ttl}{reset_color_code}"
                     )
                 elif key == "default_team_settings":
                     for idx, team_setting in enumerate(
@@ -2465,7 +2574,12 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
-
+                elif key == "json_logs" and value is True:
+                    litellm.json_logs = True
+                    litellm._turn_on_json()
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} Enabled JSON logging via config{reset_color_code}"
+                    )
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -2692,19 +2806,27 @@ class ProxyConfig:
         router_settings = config.get("router_settings", None)
 
         if router_settings and isinstance(router_settings, dict):
-            arg_spec = inspect.getfullargspec(litellm.Router)
             # model list and search_tools already set
             exclude_args = {
-                "self",
                 "model_list",
                 "search_tools",
             }
 
-            available_args = [x for x in arg_spec.args if x not in exclude_args]
+            available_args = [
+                x for x in litellm.Router.get_valid_args() if x not in exclude_args
+            ]
 
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
+                elif k == "health_check_interval":
+                    raise ValueError(
+                        f"'{k}' is NOT a valid router_settings parameter. Please move it to 'general_settings'."
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Key '{k}' is not a valid argument for Router.__init__(). Ignoring this key."
+                    )
         router = litellm.Router(
             **router_params,
             assistants_config=assistants_config,
@@ -2729,6 +2851,13 @@ class ProxyConfig:
                 config_file_path=config_file_path,
                 llm_router=router,
             )
+
+        # Policy Engine settings
+        await self._init_policy_engine(
+            config=config,
+            prisma_client=prisma_client,
+            llm_router=router,
+        )
 
         ## Prompt settings
         prompts: Optional[List[Dict]] = None
@@ -2790,13 +2919,52 @@ class ProxyConfig:
             )
         pass
 
+    async def _init_policy_engine(
+        self,
+        config: Optional[dict],
+        prisma_client: Optional["PrismaClient"],
+        llm_router: Optional["Router"],
+    ):
+        """
+        Initialize the policy engine from config.
+
+        Args:
+            config: The proxy configuration dictionary
+            prisma_client: Optional Prisma client for DB validation
+            llm_router: Optional LLM router for model validation
+        """
+
+        from litellm.proxy.policy_engine.init_policies import init_policies
+        from litellm.proxy.policy_engine.policy_validator import PolicyValidator
+
+        if config is None:
+            verbose_proxy_logger.debug("Policy engine: config is None, skipping")
+            return
+
+        policies_config = config.get("policies", None)
+        if not policies_config:
+            verbose_proxy_logger.debug("Policy engine: no policies in config, skipping")
+            return
+
+        policy_attachments_config = config.get("policy_attachments", None)
+
+        verbose_proxy_logger.info(
+            f"Policy engine: found {len(policies_config)} policies in config"
+        )
+
+        # Initialize policies
+        await init_policies(
+            policies_config=policies_config,
+            policy_attachments_config=policy_attachments_config,
+            prisma_client=prisma_client,
+            validate_db=prisma_client is not None,
+            fail_on_error=True,
+        )
+
     def _load_alerting_settings(self, general_settings: dict):
         """
         Initialize alerting settings
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            _init_custom_logger_compatible_class,
-        )
 
         _alerting_callbacks = general_settings.get("alerting", None)
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
@@ -3067,35 +3235,42 @@ class ProxyConfig:
 
     async def _update_llm_router(
         self,
-        new_models: list,
+        new_models: Optional[Json],
         proxy_logging_obj: ProxyLogging,
     ):
         global llm_router, llm_model_list, master_key, general_settings
-
+        config_data = await proxy_config.get_config()
+        search_tools = self.parse_search_tools(config_data)
         try:
+            models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
-                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
 
                 _model_list: list = self.decrypt_model_list_from_db(
-                    new_models=new_models
+                    new_models=models_list
                 )
-                if len(_model_list) > 0:
+                # Only create router if we have models or search_tools to route
+                # Router can function with model_list=[] if search_tools are configured
+                if len(_model_list) > 0 or search_tools:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
                     llm_router = litellm.Router(
                         model_list=_model_list,
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
                         ),
+                        search_tools=search_tools,
                         ignore_invalid_deployments=True,
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
-                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
+                if search_tools is not None and llm_router is not None:
+                    llm_router.search_tools = search_tools
                 ## DELETE MODEL LOGIC
-                await self._delete_deployment(db_models=new_models)
+                await self._delete_deployment(db_models=models_list)
 
                 ## ADD MODEL LOGIC
-                self._add_deployment(db_models=new_models)
+                self._add_deployment(db_models=models_list)
 
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -3106,7 +3281,6 @@ class ProxyConfig:
             llm_model_list = llm_router.get_model_list()
 
         # check if user set any callbacks in Config Table
-        config_data = await proxy_config.get_config()
         self._add_callbacks_from_db_config(config_data)
 
         # router settings
@@ -3230,82 +3404,84 @@ class ProxyConfig:
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
 
+    @staticmethod
+    def _parse_router_settings_value(value: Any) -> Optional[dict]:
+        """
+        Parse a router_settings value that may be a dict or a JSON/YAML string.
+
+        Returns a non-empty dict if valid, otherwise None.
+        """
+        if value is None:
+            return None
+
+        parsed: Optional[dict] = None
+        if isinstance(value, dict):
+            parsed = value
+        elif isinstance(value, str):
+            import json
+
+            import yaml
+
+            try:
+                parsed = yaml.safe_load(value)
+            except (yaml.YAMLError, json.JSONDecodeError):
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+        return None
+
     async def _get_hierarchical_router_settings(
         self,
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         prisma_client: Optional[PrismaClient],
+        proxy_logging_obj: Optional["ProxyLogging"] = None,
     ) -> Optional[dict]:
         """
-        Get router_settings in priority order: Key > Team > Global
-        
+        Get router_settings in priority order: Key > Team
+
+        Uses the already-cached key object and the cached team lookup
+        (get_team_object) to avoid direct DB queries on the hot path.
+
+        Global router_settings are NOT looked up here — they are already
+        applied to the Router object at config-load / DB-sync time.
+
         Returns:
-            dict: Combined router_settings, or None if no settings found
+            dict: router_settings, or None if no settings found
         """
-        if prisma_client is None:
-            return None
-        
-        import json
-        import yaml
-        
         # 1. Try key-level router_settings
+        # user_api_key_dict is already the cached/authenticated key object —
+        # no DB call needed.
         if user_api_key_dict is not None:
-            # Check if router_settings is available on the key object
-            key_router_settings_value = getattr(user_api_key_dict, "router_settings", None)
-            if key_router_settings_value is not None:
-                key_router_settings = None
-                if isinstance(key_router_settings_value, str):
-                    try:
-                        key_router_settings = yaml.safe_load(key_router_settings_value)
-                    except (yaml.YAMLError, json.JSONDecodeError):
-                        try:
-                            key_router_settings = json.loads(key_router_settings_value)
-                        except json.JSONDecodeError:
-                            pass
-                elif isinstance(key_router_settings_value, dict):
-                    key_router_settings = key_router_settings_value
-                
-                # If key has router_settings (non-empty dict), use it
-                if key_router_settings is not None and isinstance(key_router_settings, dict) and key_router_settings:
-                    return key_router_settings
-        
-        # 2. Try team-level router_settings
+            key_settings = self._parse_router_settings_value(
+                getattr(user_api_key_dict, "router_settings", None)
+            )
+            if key_settings is not None:
+                return key_settings
+
+        # 2. Try team-level router_settings using cached team lookup
+        # get_team_object checks in-memory cache / Redis first, only falls
+        # back to DB on a cache miss.
         if user_api_key_dict is not None and user_api_key_dict.team_id is not None:
             try:
-                team_obj = await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": user_api_key_dict.team_id}
+                team_obj = await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
-                if team_obj is not None:
-                    team_router_settings_value = getattr(team_obj, "router_settings", None)
-                    if team_router_settings_value is not None:
-                        team_router_settings = None
-                        if isinstance(team_router_settings_value, str):
-                            try:
-                                team_router_settings = yaml.safe_load(team_router_settings_value)
-                            except (yaml.YAMLError, json.JSONDecodeError):
-                                try:
-                                    team_router_settings = json.loads(team_router_settings_value)
-                                except json.JSONDecodeError:
-                                    pass
-                        elif isinstance(team_router_settings_value, dict):
-                            team_router_settings = team_router_settings_value
-                        
-                        # If team has router_settings (non-empty dict), use it
-                        if team_router_settings is not None and isinstance(team_router_settings, dict) and team_router_settings:
-                            return team_router_settings
+                team_settings = self._parse_router_settings_value(
+                    getattr(team_obj, "router_settings", None)
+                )
+                if team_settings is not None:
+                    return team_settings
             except Exception:
-                # If team lookup fails, continue to global settings
+                # If team lookup fails, no team-level settings available
                 pass
-        
-        # 3. Try global router_settings
-        try:
-            db_router_settings = await prisma_client.db.litellm_config.find_first(
-                where={"param_name": "router_settings"}
-            )
-            if db_router_settings is not None and isinstance(db_router_settings.param_value, dict) and db_router_settings.param_value:
-                return db_router_settings.param_value
-        except Exception:
-            pass
-        
+
         return None
 
     async def _add_router_settings_from_db_config(
@@ -3425,6 +3601,81 @@ class ProxyConfig:
                 llm_router=llm_router,
             )
 
+    async def _reschedule_spend_log_cleanup_job(self):
+        """
+        Reschedule the spend log cleanup job based on current general_settings.
+        This is called when maximum_spend_logs_retention_period is updated dynamically.
+        If the retention period is None, the job will be removed.
+        """
+        global scheduler, general_settings, prisma_client
+        if scheduler is None:
+            return
+
+        # Remove existing job if it exists
+        try:
+            scheduler.remove_job("spend_log_cleanup_job")
+            verbose_proxy_logger.info("Removed existing spend log cleanup job")
+        except Exception:
+            pass  # Job might not exist, which is fine
+
+        # Schedule new job if retention period is set (not None)
+        retention_period = general_settings.get("maximum_spend_logs_retention_period")
+        if retention_period is not None:
+            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+                SpendLogCleanup,
+            )
+
+            spend_log_cleanup = SpendLogCleanup()
+            cleanup_cron = general_settings.get("maximum_spend_logs_cleanup_cron")
+
+            if cleanup_cron:
+                from apscheduler.triggers.cron import CronTrigger
+
+                try:
+                    cron_trigger = CronTrigger.from_crontab(cleanup_cron)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        cron_trigger,
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup rescheduled with cron: {cleanup_cron}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        f"Invalid maximum_spend_logs_cleanup_cron value: {cleanup_cron}"
+                    )
+            else:
+                # Interval-based scheduling (existing behavior)
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
+
+                retention_interval = general_settings.get(
+                    "maximum_spend_logs_retention_interval", "1d"
+                )
+                try:
+                    interval_seconds = duration_in_seconds(retention_interval)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        "interval",
+                        seconds=interval_seconds + random.randint(0, 60),
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup rescheduled with interval: {retention_interval}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value"
+                    )
+
     async def _update_general_settings(self, db_general_settings: Optional[Json]):
         """
         Pull from DB, read general settings value
@@ -3463,6 +3714,32 @@ class ProxyConfig:
         ## UI ACCESS MODE ##
         if "ui_access_mode" in _general_settings:
             general_settings["ui_access_mode"] = _general_settings["ui_access_mode"]
+
+        ## STORE PROMPTS IN SPEND LOGS ##
+        if "store_prompts_in_spend_logs" in _general_settings:
+            value = _general_settings["store_prompts_in_spend_logs"]
+            # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
+            if value is None:
+                general_settings["store_prompts_in_spend_logs"] = None
+            elif isinstance(value, bool):
+                general_settings["store_prompts_in_spend_logs"] = value
+            elif isinstance(value, str):
+                # Case-insensitive string comparison
+                general_settings["store_prompts_in_spend_logs"] = (
+                    value.lower() == "true"
+                )
+            else:
+                # For other types, convert to bool
+                general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
+        if "maximum_spend_logs_retention_period" in _general_settings:
+            old_value = general_settings.get("maximum_spend_logs_retention_period")
+            new_value = _general_settings["maximum_spend_logs_retention_period"]
+            general_settings["maximum_spend_logs_retention_period"] = new_value
+            # Reschedule cleanup job if value changed (including when set to None)
+            if old_value != new_value:
+                await self._reschedule_spend_log_cleanup_job()
 
     def _update_config_fields(
         self,
@@ -3691,6 +3968,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="guardrails"):
             await self._init_guardrails_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="policies"):
+            await self._init_policies_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
@@ -3725,6 +4005,93 @@ class ProxyConfig:
                 prisma_client=prisma_client, proxy_config=self
             )
 
+        if self._should_load_db_object(object_type="semantic_filter_settings"):
+            await self._init_semantic_filter_settings_in_db(
+                prisma_client=prisma_client
+            )
+
+    async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize MCP semantic filter settings from database.
+        Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
+        """
+        import json
+
+        import litellm
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        try:
+            # Load litellm_settings from DB
+            config_record = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "litellm_settings"}
+            )
+
+            if config_record is None or config_record.param_value is None:
+                return
+
+            litellm_settings = config_record.param_value
+            if isinstance(litellm_settings, str):
+                litellm_settings = json.loads(litellm_settings)
+
+            mcp_semantic_filter_config = litellm_settings.get(
+                "mcp_semantic_tool_filter", None
+            )
+
+            if mcp_semantic_filter_config is None:
+                return
+
+            # Check if settings have changed (compare with in-memory state)
+            if hasattr(self, "_last_semantic_filter_config"):
+                if self._last_semantic_filter_config == mcp_semantic_filter_config:
+                    # If hook is missing or router isn't built yet, reinitialize anyway
+                    active_hooks = (
+                        litellm.logging_callback_manager.get_custom_loggers_for_type(
+                            SemanticToolFilterHook
+                        )
+                    )
+                    if active_hooks:
+                        for active_hook in active_hooks:
+                            if isinstance(active_hook, SemanticToolFilterHook):
+                                if (
+                                    active_hook.filter is not None
+                                    and active_hook.filter.tool_router is not None
+                                ):
+                                    verbose_proxy_logger.debug(
+                                        "Semantic filter settings unchanged, skipping reinitialization"
+                                    )
+                                    return
+                    verbose_proxy_logger.info(
+                        "Semantic filter settings unchanged, but hook is missing or uninitialized. Reinitializing."
+                    )
+
+            # Remove old hooks using logging callback manager
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                litellm.callbacks, SemanticToolFilterHook
+            )
+
+            # Initialize new hook if enabled
+            if mcp_semantic_filter_config.get("enabled", False):
+                global llm_router
+                hook = await SemanticToolFilterHook.initialize_from_config(
+                    config=mcp_semantic_filter_config,
+                    llm_router=llm_router,
+                )
+                if hook:
+                    litellm.logging_callback_manager.add_litellm_callback(hook)
+                    verbose_proxy_logger.info(
+                        "MCP Semantic Filter reinitialized from DB"
+                    )
+            else:
+                verbose_proxy_logger.info("MCP Semantic Filter disabled")
+
+            # Store current config for comparison next time
+            self._last_semantic_filter_config = mcp_semantic_filter_config.copy()
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error initializing semantic filter settings from DB: {e}"
+            )
+
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
         Initialize SSO settings from database into the router on startup.
@@ -3735,8 +4102,9 @@ class ProxyConfig:
                 where={"id": "sso_config"}
             )
             if sso_settings is not None:
-                # Capitalize all keys in sso_settings dictionary
                 sso_settings.sso_settings.pop("role_mappings", None)
+                sso_settings.sso_settings.pop("team_mappings", None)
+                sso_settings.sso_settings.pop("ui_access_mode", None)
                 uppercase_sso_settings = {
                     key.upper(): value
                     for key, value in sso_settings.sso_settings.items()
@@ -3822,6 +4190,8 @@ class ProxyConfig:
                 model_cost_map_url = litellm.model_cost_map_url
                 new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
                 litellm.model_cost = new_model_cost_map
+                # Invalidate case-insensitive lookup map since model_cost was replaced
+                _invalidate_model_cost_lowercase_map()
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -3908,6 +4278,38 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_policies_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize policies and policy attachments from database into the in-memory registries.
+        """
+        from litellm.proxy.policy_engine.attachment_registry import (
+            get_attachment_registry,
+        )
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        try:
+            # Get the global singleton instances
+            policy_registry = get_policy_registry()
+            attachment_registry = get_attachment_registry()
+
+            # Sync policies from DB to in-memory registry
+            await policy_registry.sync_policies_from_db(prisma_client=prisma_client)
+
+            # Sync attachments from DB to in-memory registry
+            await attachment_registry.sync_attachments_from_db(
+                prisma_client=prisma_client
+            )
+
+            verbose_proxy_logger.debug(
+                "Successfully synced policies and attachments from DB"
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_policies_in_db - {}".format(
                     str(e)
                 )
             )
@@ -4316,6 +4718,68 @@ async def async_assistants_data_generator(
         yield f"data: {error_returned}\n\n"
 
 
+def _get_client_requested_model_for_streaming(request_data: dict) -> str:
+    """
+    Prefer the original client-requested model (pre-alias mapping) when available.
+
+    Pre-call processing can rewrite `request_data["model"]` for aliasing/routing purposes.
+    The OpenAI-compatible public `model` field should reflect what the client sent.
+    """
+    requested_model = request_data.get("_litellm_client_requested_model")
+    if isinstance(requested_model, str):
+        return requested_model
+
+    requested_model = request_data.get("model")
+    return requested_model if isinstance(requested_model, str) else ""
+
+
+def _restamp_streaming_chunk_model(
+    *,
+    chunk: Any,
+    requested_model_from_client: str,
+    request_data: dict,
+    model_mismatch_logged: bool,
+) -> Tuple[Any, bool]:
+    # Always return the client-requested model name (not provider-prefixed internal identifiers)
+    # on streaming chunks.
+    #
+    # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
+    # internal provider/deployment identifier is leaking into the public API, and helps
+    # maintainers/operators catch regressions while preserving OpenAI-compatible output.
+    if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+        return chunk, model_mismatch_logged
+
+    downstream_model = (
+        chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
+    )
+    if not model_mismatch_logged and downstream_model != requested_model_from_client:
+        verbose_proxy_logger.warning(
+            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+            request_data.get("litellm_call_id"),
+            requested_model_from_client,
+            downstream_model,
+        )
+        model_mismatch_logged = True
+
+    if isinstance(chunk, dict):
+        chunk["model"] = requested_model_from_client
+        return chunk, model_mismatch_logged
+
+    try:
+        setattr(chunk, "model", requested_model_from_client)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
+            request_data.get("litellm_call_id"),
+            requested_model_from_client,
+            type(chunk),
+            str(e),
+            exc_info=True,
+        )
+
+    return chunk, model_mismatch_logged
+
+
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -4324,6 +4788,10 @@ async def async_data_generator(
         # Use a list to accumulate response segments to avoid O(n^2) string concatenation
         str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
+        requested_model_from_client = _get_client_requested_model_for_streaming(
+            request_data=request_data
+        )
+        model_mismatch_logged = False
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -4344,6 +4812,13 @@ async def async_data_generator(
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
                 str_so_far_parts.append(response_str)
+
+            chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
+                chunk=chunk,
+                requested_model_from_client=requested_model_from_client,
+                request_data=request_data,
+                model_mismatch_logged=model_mismatch_logged,
+            )
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
@@ -4459,6 +4934,39 @@ class ProxyStartupEvent:
         )
 
     @classmethod
+    async def _initialize_semantic_tool_filter(
+        cls,
+        llm_router: Optional[Router],
+        litellm_settings: Dict[str, Any],
+    ):
+        """Initialize MCP semantic tool filter if configured"""
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+        
+        mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
+        
+        # Only proceed if the feature is configured and enabled
+        if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get("enabled", False):
+            verbose_proxy_logger.debug("Semantic tool filter not configured or not enabled, skipping initialization")
+            return
+        
+        verbose_proxy_logger.debug(
+            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
+            f"config={mcp_semantic_filter_config}"
+        )
+        
+        hook = await SemanticToolFilterHook.initialize_from_config(
+            config=mcp_semantic_filter_config,
+            llm_router=llm_router,
+        )
+        
+        if hook:
+            verbose_proxy_logger.debug("Semantic tool filter hook registered")
+            litellm.logging_callback_manager.add_litellm_callback(hook)
+        else:
+            # Only warn if the feature was configured but failed to initialize
+            verbose_proxy_logger.warning("Semantic tool filter hook was configured but failed to initialize")
+
+    @classmethod
     def _initialize_jwt_auth(
         cls,
         general_settings: dict,
@@ -4509,6 +5017,26 @@ class ProxyStartupEvent:
         )
 
     @classmethod
+    async def _warm_global_spend_cache(
+        cls,
+        litellm_proxy_admin_name: str,
+        user_api_key_cache: DualCache,
+        prisma_client: PrismaClient,
+    ) -> None:
+        """Warm global spend cache once at startup to reduce impact of first wave of requests."""
+        try:
+            cache_key = "{}:spend".format(litellm_proxy_admin_name)
+            await _fetch_global_spend_with_event_coordination(
+                cache_key=cache_key,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Global spend cache warm-up at startup skipped or failed: %s", e
+            )
+
+    @classmethod
     async def _update_default_team_member_budget(cls):
         """Update the default team member budget"""
         if litellm.default_internal_user_params is None:
@@ -4536,7 +5064,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ):
         """Initializes scheduled background jobs"""
-        global store_model_in_db
+        global store_model_in_db, scheduler
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -4670,27 +5198,48 @@ class ProxyStartupEvent:
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
             spend_log_cleanup = SpendLogCleanup()
-            # Get the interval from config or default to 1 day
-            retention_interval = general_settings.get(
-                "maximum_spend_logs_retention_interval", "1d"
-            )
-            try:
-                interval_seconds = duration_in_seconds(retention_interval)
-                scheduler.add_job(
-                    spend_log_cleanup.cleanup_old_spend_logs,
-                    "interval",
-                    seconds=interval_seconds
-                    + random.randint(0, 60),  # Add small random offset
-                    # REMOVED jitter parameter - major cause of memory leak
-                    args=[prisma_client],
-                    id="spend_log_cleanup_job",
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            cleanup_cron = general_settings.get("maximum_spend_logs_cleanup_cron")
+
+            if cleanup_cron:
+                from apscheduler.triggers.cron import CronTrigger
+
+                try:
+                    cron_trigger = CronTrigger.from_crontab(cleanup_cron)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        cron_trigger,
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup scheduled with cron: {cleanup_cron}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        f"Invalid maximum_spend_logs_cleanup_cron value: {cleanup_cron}"
+                    )
+            else:
+                # Interval-based scheduling (existing behavior)
+                retention_interval = general_settings.get(
+                    "maximum_spend_logs_retention_interval", "1d"
                 )
-            except ValueError:
-                verbose_proxy_logger.error(
-                    "Invalid maximum_spend_logs_retention_interval value"
-                )
+                try:
+                    interval_seconds = duration_in_seconds(retention_interval)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        "interval",
+                        seconds=interval_seconds + random.randint(0, 60),
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value"
+                    )
         ### CHECK BATCH COST ###
         if llm_router is not None:
             try:
@@ -4925,7 +5474,20 @@ class ProxyStartupEvent:
                 except Exception as e:
                     raise e
 
-                await prisma_client.connect()
+                try:
+                    await prisma_client.connect()
+                except Exception as e:
+                    if "P3018" in str(e) or "P3009" in str(e):
+                        verbose_proxy_logger.debug(
+                            "CRITICAL: DATABASE MIGRATION FAILED"
+                        )
+                        verbose_proxy_logger.debug(
+                            "Your database is in a 'dirty' state."
+                        )
+                        verbose_proxy_logger.debug(
+                            "FIX: Run 'prisma migrate resolve --applied <migration_name>'"
+                        )
+                    raise e
 
                 ## Start RDS IAM token refresh background task if enabled ##
                 # This proactively refreshes IAM tokens before they expire,
@@ -4996,6 +5558,7 @@ async def model_list(
     only_model_access_groups: Optional[bool] = False,
     include_metadata: Optional[bool] = False,
     fallback_type: Optional[str] = None,
+    scope: Optional[str] = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -5006,14 +5569,87 @@ async def model_list(
     - include_metadata: Include additional metadata in the response with fallback information
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
+    - scope: Optional scope parameter. Currently only accepts "expand".
+             When scope=expand is passed, proxy admins, team admins, and org admins
+             will receive all proxy models as if they are a proxy admin.
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_admin_privileges,
+    )
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
     )
 
+    # Validate scope parameter if provided
+    if scope is not None and scope != "expand":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid scope parameter. Only 'expand' is currently supported. Received: {scope}",
+        )
+
+    # Check if scope=expand is requested and user has admin privileges
+    should_expand_scope = False
+    if scope == "expand":
+        should_expand_scope = await _user_has_admin_privileges(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    # If scope=expand and user has admin privileges, return all proxy models
+    if should_expand_scope:
+        # Get all proxy models as if user is a proxy admin
+        if llm_router is None:
+            proxy_model_list = []
+            model_access_groups = {}
+        else:
+            proxy_model_list = llm_router.get_model_names()
+            model_access_groups = llm_router.get_model_access_groups()
+
+        # Include model access groups if requested
+        if include_model_access_groups:
+            proxy_model_list = list(
+                set(proxy_model_list + list(model_access_groups.keys()))
+            )
+
+        # Get complete model list including wildcard routes if requested
+        from litellm.proxy.auth.model_checks import get_complete_model_list
+
+        all_models = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=proxy_model_list,
+            user_model=None,
+            infer_model_from_keys=False,
+            return_wildcard_routes=return_wildcard_routes or False,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups or False,
+            only_model_access_groups=only_model_access_groups or False,
+        )
+
+        # Build response data with all proxy models
+        model_data = []
+        for model in all_models:
+            model_info = create_model_info_response(
+                model_id=model,
+                provider="openai",
+                include_metadata=include_metadata or False,
+                fallback_type=fallback_type,
+                llm_router=llm_router,
+            )
+            model_data.append(model_info)
+
+        return dict(
+            data=model_data,
+            object="list",
+        )
+
+    # Otherwise, use the normal behavior (current implementation)
     # Get available models for the user
     all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
@@ -5173,6 +5809,24 @@ async def chat_completion(  # noqa: PLR0915
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)
+    if user_api_key_dict is not None:
+        if data.get("metadata") is None:
+            data["metadata"] = {}
+        if (
+            hasattr(user_api_key_dict, "user_id")
+            and user_api_key_dict.user_id is not None
+        ):
+            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        if (
+            hasattr(user_api_key_dict, "team_id")
+            and user_api_key_dict.team_id is not None
+        ):
+            data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+        if (
+            hasattr(user_api_key_dict, "org_id")
+            and user_api_key_dict.org_id is not None
+        ):
+            data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
@@ -5324,6 +5978,24 @@ async def completion(  # noqa: PLR0915
     data = {}
     try:
         data = await _read_request_body(request=request)
+        if user_api_key_dict is not None:
+            if data.get("metadata") is None:
+                data["metadata"] = {}
+            if (
+                hasattr(user_api_key_dict, "user_id")
+                and user_api_key_dict.user_id is not None
+            ):
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            if (
+                hasattr(user_api_key_dict, "team_id")
+                and user_api_key_dict.team_id is not None
+            ):
+                data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+            if (
+                hasattr(user_api_key_dict, "org_id")
+                and user_api_key_dict.org_id is not None
+            ):
+                data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         return await base_llm_response_processor.base_process_llm_request(
             request=request,
@@ -5542,6 +6214,25 @@ async def embeddings(  # noqa: PLR0915
                                 litellm.decode(model="gpt-3.5-turbo", tokens=i)
                             )
                         data["input"] = input_list
+
+        if user_api_key_dict is not None:
+            if data.get("metadata") is None:
+                data["metadata"] = {}
+            if (
+                hasattr(user_api_key_dict, "user_id")
+                and user_api_key_dict.user_id is not None
+            ):
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            if (
+                hasattr(user_api_key_dict, "team_id")
+                and user_api_key_dict.team_id is not None
+            ):
+                data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+            if (
+                hasattr(user_api_key_dict, "org_id")
+                and user_api_key_dict.org_id is not None
+            ):
+                data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
 
         # Use unified request processor (same as chat/completions and responses)
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -7062,8 +7753,32 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             #########################################################
             # Transfrom the Response to the well known format
             #########################################################
-            if result is not None:
+            if result is not None and result.error is True:
+                # If disable_token_counter is enabled, raise HTTP error
+                if litellm.disable_token_counter is True:
+                    raise ProxyException(
+                        message=result.error_message or "Token counting failed",
+                        type="token_counting_error",
+                        param="model",
+                        code=result.status_code or 500,
+                    )
+                # Otherwise, log warning and fall back to local counter
+                verbose_proxy_logger.warning(
+                    f"Provider token counting failed ({result.status_code}): {result.error_message}. "
+                    "Falling back to local tokenizer."
+                )
+            elif result is not None:
+                # Success - return the result (only if not None)
                 return result
+
+    # Check if token counter is disabled before fallback
+    if litellm.disable_token_counter is True:
+        raise ProxyException(
+            message="Token counting is disabled and no provider API result available",
+            type="token_counting_disabled",
+            param="model",
+            code=503,
+        )
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
@@ -7405,6 +8120,532 @@ async def get_all_team_and_direct_access_models(
     return all_models
 
 
+def _enrich_model_info_with_litellm_data(
+    model: Dict[str, Any], debug: bool = False, llm_router: Optional[Router] = None
+) -> Dict[str, Any]:
+    """
+    Enrich a model dictionary with litellm model info (pricing, context window, etc.)
+    and remove sensitive information.
+
+    Args:
+        model: Model dictionary to enrich
+        debug: Whether to include debug information like openai_client
+        llm_router: Optional router instance for debug info
+
+    Returns:
+        Enriched model dictionary with sensitive info removed
+    """
+    # provided model_info in config.yaml
+    model_info = model.get("model_info", {})
+    if debug is True:
+        _openai_client = "None"
+        if llm_router is not None:
+            _openai_client = (
+                llm_router._get_client(deployment=model, kwargs={}, client_type="async")
+                or "None"
+            )
+        else:
+            _openai_client = "llm_router_is_None"
+        openai_client = str(_openai_client)
+        model["openai_client"] = openai_client
+
+    # read litellm model_prices_and_context_window.json to get the following:
+    # input_cost_per_token, output_cost_per_token, max_tokens
+    litellm_model_info = get_litellm_model_info(model=model)
+
+    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
+    if litellm_model_info == {}:
+        # use litellm_param model_name to get model_info
+        litellm_params = model.get("litellm_params", {})
+        litellm_model = litellm_params.get("model", None)
+        try:
+            litellm_model_info = litellm.get_model_info(model=litellm_model)
+        except Exception:
+            litellm_model_info = {}
+    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
+    if litellm_model_info == {}:
+        # use litellm_param model_name to get model_info
+        litellm_params = model.get("litellm_params", {})
+        litellm_model = litellm_params.get("model", None)
+        if litellm_model:
+            split_model = litellm_model.split("/")
+            if len(split_model) > 0:
+                litellm_model = split_model[-1]
+            try:
+                litellm_model_info = litellm.get_model_info(
+                    model=litellm_model, custom_llm_provider=split_model[0]
+                )
+            except Exception:
+                litellm_model_info = {}
+    for k, v in litellm_model_info.items():
+        if k not in model_info:
+            model_info[k] = v
+    model["model_info"] = model_info
+    # don't return the api key / vertex credentials
+    # don't return the llm credentials
+    model = remove_sensitive_info_from_deployment(
+        model, excluded_keys={"litellm_credential_name"}
+    )
+    return model
+
+
+async def _apply_search_filter_to_models(
+    all_models: List[Dict[str, Any]],
+    search: str,
+    page: int,
+    size: int,
+    prisma_client: Optional[Any],
+    proxy_config: Any,
+    sort_by: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], Optional[int]]:
+    """
+    Apply search filter to models, querying database for additional matching models.
+
+    Args:
+        all_models: List of models to filter
+        search: Search term (case-insensitive)
+        page: Current page number
+        size: Page size
+        prisma_client: Prisma client for database queries
+        proxy_config: Proxy config for decrypting models
+        sort_by: Optional sort field - if provided, fetch all matching models instead of paginating at DB level
+
+    Returns:
+        Tuple of (filtered_models, total_count). total_count is None if not searching.
+    """
+    if not search or not search.strip():
+        return all_models, None
+
+    search_lower = search.lower().strip()
+
+    # Filter models in router by search term
+    filtered_router_models = [
+        m for m in all_models if search_lower in m.get("model_name", "").lower()
+    ]
+
+    # Separate filtered models into config vs db models, and track db model IDs
+    filtered_config_models = []
+    db_model_ids_in_router = set()
+
+    for m in filtered_router_models:
+        model_info = m.get("model_info", {})
+        is_db_model = model_info.get("db_model", False)
+        model_id = model_info.get("id")
+
+        if is_db_model and model_id:
+            db_model_ids_in_router.add(model_id)
+        else:
+            filtered_config_models.append(m)
+
+    config_models_count = len(filtered_config_models)
+    db_models_in_router_count = len(db_model_ids_in_router)
+    router_models_count = config_models_count + db_models_in_router_count
+
+    # Query database for additional models with search term
+    db_models = []
+    db_models_total_count = 0
+    models_needed_for_page = size * page
+
+    # Only query database if prisma_client is available
+    if prisma_client is not None:
+        try:
+            # Build where condition for database query
+            db_where_condition: Dict[str, Any] = {
+                "model_name": {
+                    "contains": search_lower,
+                    "mode": "insensitive",
+                }
+            }
+            # Exclude models already in router if we have any
+            if db_model_ids_in_router:
+                db_where_condition["model_id"] = {
+                    "not": {"in": list(db_model_ids_in_router)}
+                }
+
+            # Get total count of matching database models
+            db_models_total_count = (
+                await prisma_client.db.litellm_proxymodeltable.count(
+                    where=db_where_condition
+                )
+            )
+
+            # Calculate total count for search results
+            search_total_count = router_models_count + db_models_total_count
+
+            # If sorting is requested, we need to fetch ALL matching models to sort correctly
+            # Otherwise, we can optimize by only fetching what's needed for the current page
+            if sort_by:
+                # Fetch all matching database models for sorting
+                if db_models_total_count > 0:
+                    db_models_raw = (
+                        await prisma_client.db.litellm_proxymodeltable.find_many(
+                            where=db_where_condition,
+                            take=db_models_total_count,  # Fetch all matching models
+                        )
+                    )
+
+                    # Convert database models to router format
+                    for db_model in db_models_raw:
+                        decrypted_models = proxy_config.decrypt_model_list_from_db(
+                            [db_model]
+                        )
+                        if decrypted_models:
+                            db_models.extend(decrypted_models)
+            else:
+                # Fetch database models if we need more for the current page
+                if router_models_count < models_needed_for_page:
+                    models_to_fetch = min(
+                        models_needed_for_page - router_models_count, db_models_total_count
+                    )
+
+                    if models_to_fetch > 0:
+                        db_models_raw = (
+                            await prisma_client.db.litellm_proxymodeltable.find_many(
+                                where=db_where_condition,
+                                take=models_to_fetch,
+                            )
+                        )
+
+                        # Convert database models to router format
+                        for db_model in db_models_raw:
+                            decrypted_models = proxy_config.decrypt_model_list_from_db(
+                                [db_model]
+                            )
+                            if decrypted_models:
+                                db_models.extend(decrypted_models)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error querying database models with search: {str(e)}"
+            )
+            # If error, use router models count as fallback
+            search_total_count = router_models_count
+    else:
+        # If no prisma_client, only use router models
+        search_total_count = router_models_count
+
+    # Combine all models
+    filtered_models = filtered_router_models + db_models
+    return filtered_models, search_total_count
+
+
+def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
+    """
+    Normalize a datetime value to a timezone-aware UTC datetime for sorting.
+    
+    This function handles:
+    - None values: returns None
+    - String values: parses ISO format strings and converts to UTC-aware datetime
+    - Datetime objects: converts naive datetimes to UTC-aware, and aware datetimes to UTC
+    
+    Args:
+        dt: Datetime value (None, str, or datetime object)
+        
+    Returns:
+        UTC-aware datetime object, or None if input is None or cannot be parsed
+    """
+    if dt is None:
+        return None
+    
+    if isinstance(dt, str):
+        try:
+            # Handle ISO format strings, including 'Z' suffix
+            dt_str = dt.replace("Z", "+00:00") if dt.endswith("Z") else dt
+            parsed_dt = datetime.fromisoformat(dt_str)
+            # Ensure it's UTC-aware
+            if parsed_dt.tzinfo is None:
+                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+            else:
+                parsed_dt = parsed_dt.astimezone(timezone.utc)
+            return parsed_dt
+        except (ValueError, AttributeError):
+            return None
+    
+    if isinstance(dt, datetime):
+        # If naive, assume UTC and make it aware
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        # If aware, convert to UTC
+        return dt.astimezone(timezone.utc)
+    
+    return None
+
+
+def _sort_models(
+    all_models: List[Dict[str, Any]],
+    sort_by: Optional[str],
+    sort_order: str = "asc",
+) -> List[Dict[str, Any]]:
+    """
+    Sort models by the specified field and order.
+
+    Args:
+        all_models: List of models to sort
+        sort_by: Field to sort by (model_name, created_at, updated_at, costs, status)
+        sort_order: Sort order (asc or desc)
+
+    Returns:
+        Sorted list of models
+    """
+    if not sort_by or sort_by not in ["model_name", "created_at", "updated_at", "costs", "status"]:
+        return all_models
+
+    reverse = sort_order.lower() == "desc"
+
+    def get_sort_key(model: Dict[str, Any]) -> Any:
+        model_info = model.get("model_info", {})
+        
+        if sort_by == "model_name":
+            return model.get("model_name", "").lower()
+        
+        elif sort_by == "created_at":
+            created_at = model_info.get("created_at")
+            normalized_dt = _normalize_datetime_for_sorting(created_at)
+            if normalized_dt is None:
+                # Put None values at the end for asc, at the start for desc
+                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+            return normalized_dt
+        
+        elif sort_by == "updated_at":
+            updated_at = model_info.get("updated_at")
+            normalized_dt = _normalize_datetime_for_sorting(updated_at)
+            if normalized_dt is None:
+                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+            return normalized_dt
+        
+        elif sort_by == "costs":
+            input_cost = model_info.get("input_cost_per_token", 0) or 0
+            output_cost = model_info.get("output_cost_per_token", 0) or 0
+            total_cost = input_cost + output_cost
+            # Put 0 or None costs at the end for asc, at the start for desc
+            if total_cost == 0:
+                return (float("inf") if not reverse else float("-inf"))
+            return total_cost
+        
+        elif sort_by == "status":
+            # False (config) comes before True (db) for asc
+            db_model = model_info.get("db_model", False)
+            return db_model
+        
+        return None
+
+    try:
+        sorted_models = sorted(all_models, key=get_sort_key, reverse=reverse)
+        return sorted_models
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error sorting models by {sort_by}: {str(e)}")
+        return all_models
+
+
+def _paginate_models_response(
+    all_models: List[Dict[str, Any]],
+    page: int,
+    size: int,
+    total_count: Optional[int],
+    search: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Paginate models and return response dictionary.
+
+    Args:
+        all_models: List of all models
+        page: Current page number
+        size: Page size
+        total_count: Total count (if None, uses len(all_models))
+        search: Search term (for logging)
+
+    Returns:
+        Paginated response dictionary
+    """
+    if total_count is None:
+        total_count = len(all_models)
+
+    skip = (page - 1) * size
+    total_pages = -(-total_count // size) if total_count > 0 else 0
+    paginated_models = all_models[skip : skip + size]
+
+    verbose_proxy_logger.debug(
+        f"Pagination: skip={skip}, take={size}, total_count={total_count}, total_pages={total_pages}, search={search}"
+    )
+
+    return {
+        "data": paginated_models,
+        "total_count": total_count,
+        "current_page": page,
+        "total_pages": total_pages,
+        "size": size,
+    }
+
+
+async def _filter_models_by_team_id(
+    all_models: List[Dict[str, Any]],
+    team_id: str,
+    prisma_client: PrismaClient,
+    llm_router: Router,
+) -> List[Dict[str, Any]]:
+    """
+    Filter models by team ID. Returns models where:
+    - direct_access is True, OR
+    - team_id is in access_via_team_ids
+
+    Also searches config and database for models accessible to the team.
+
+    Args:
+        all_models: List of models to filter
+        team_id: Team ID to filter by
+        prisma_client: Prisma client for database queries
+        llm_router: Router instance for config queries
+
+    Returns:
+        Filtered list of models
+    """
+    # Get team from database
+    try:
+        team_db_object = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
+        )
+        if team_db_object is None:
+            verbose_proxy_logger.warning(f"Team {team_id} not found in database")
+            # If team doesn't exist, return empty list
+            return []
+
+        team_object = LiteLLM_TeamTable(**team_db_object.model_dump())
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
+        return []
+
+    # Get models accessible to this team (similar to _add_team_models_to_all_models)
+    team_accessible_model_ids: Set[str] = set()
+
+    if (
+        len(team_object.models) == 0  # empty list = all model access
+        or SpecialModelNames.all_proxy_models.value in team_object.models
+    ):
+        # Team has access to all models
+        model_list = llm_router.get_model_list() if llm_router else []
+        if model_list is not None:
+            for model in model_list:
+                model_id = model.get("model_info", {}).get("id", None)
+                if model_id is None:
+                    continue
+                # if team model id set, check if team id matches
+                team_model_id = model.get("model_info", {}).get("team_id", None)
+                can_add_model = False
+                if team_model_id is None:
+                    can_add_model = True
+                elif team_model_id == team_id:
+                    can_add_model = True
+
+                if can_add_model:
+                    team_accessible_model_ids.add(model_id)
+    else:
+        # Team has access to specific models
+        for model_name in team_object.models:
+            _models = (
+                llm_router.get_model_list(model_name=model_name, team_id=team_id)
+                if llm_router
+                else []
+            )
+            if _models is not None:
+                for model in _models:
+                    model_id = model.get("model_info", {}).get("id", None)
+                    if model_id is not None:
+                        team_accessible_model_ids.add(model_id)
+
+    # Also search database for models accessible to this team
+    # This complements the config search done above
+    try:
+        if (
+            team_object.models
+            and SpecialModelNames.all_proxy_models.value not in team_object.models
+        ):
+            # Team has specific models - check database for those model names
+            db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
+                where={"model_name": {"in": team_object.models}}
+            )
+            for db_model in db_models:
+                model_id = db_model.model_id
+                if model_id:
+                    team_accessible_model_ids.add(model_id)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Error querying database models for team {team_id}: {str(e)}"
+        )
+
+    # Filter models based on direct_access or access_via_team_ids
+    # Models are already enriched with these fields before this function is called
+    filtered_models = []
+    for _model in all_models:
+        model_info = _model.get("model_info", {})
+        model_id = model_info.get("id", None)
+
+        # Include if direct_access is True
+        if model_info.get("direct_access", False):
+            filtered_models.append(_model)
+            continue
+
+        # Include if team_id is in access_via_team_ids
+        access_via_team_ids = model_info.get("access_via_team_ids", [])
+        if isinstance(access_via_team_ids, list) and team_id in access_via_team_ids:
+            filtered_models.append(_model)
+            continue
+
+        # Also include if model_id is in team_accessible_model_ids (from config/db search)
+        # This catches models that might not have been enriched with access_via_team_ids yet
+        if model_id and model_id in team_accessible_model_ids:
+            filtered_models.append(_model)
+
+    return filtered_models
+
+
+async def _find_model_by_id(
+    model_id: str,
+    search: Optional[str],
+    llm_router,
+    prisma_client,
+    proxy_config,
+) -> tuple[list, Optional[int]]:
+    """Find a model by its ID and optionally filter by search term."""
+    found_model = None
+
+    # First, search in config
+    if llm_router is not None:
+        found_model = llm_router.get_model_info(id=model_id)
+        if found_model:
+            found_model = copy.deepcopy(found_model)
+
+    # If not found in config, search in database
+    if found_model is None:
+        try:
+            db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+                where={"model_id": model_id}
+            )
+            if db_model:
+                # Convert database model to router format
+                decrypted_models = proxy_config.decrypt_model_list_from_db(
+                    [db_model]
+                )
+                if decrypted_models:
+                    found_model = decrypted_models[0]
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error querying database for modelId {model_id}: {str(e)}"
+            )
+
+    # If model found, verify search filter if provided
+    if found_model is not None:
+        if search is not None and search.strip():
+            search_lower = search.lower().strip()
+            model_name = found_model.get("model_name", "")
+            if search_lower not in model_name.lower():
+                # Model found but doesn't match search filter
+                found_model = None
+
+    # Set all_models to the found model or empty list
+    all_models = [found_model] if found_model is not None else []
+    search_total_count: Optional[int] = len(all_models)
+    return all_models, search_total_count
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -7424,6 +8665,26 @@ async def model_info_v2(
         False, description="Return all models across all teams user is in."
     ),
     debug: Optional[bool] = False,
+    page: int = Query(1, description="Page number", ge=1),
+    size: int = Query(50, description="Page size", ge=1),
+    search: Optional[str] = fastapi.Query(
+        None, description="Search model names (case-insensitive partial match)"
+    ),
+    modelId: Optional[str] = fastapi.Query(
+        None, description="Search for a specific model by its unique ID"
+    ),
+    teamId: Optional[str] = fastapi.Query(
+        None,
+        description="Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids",
+    ),
+    sortBy: Optional[str] = fastapi.Query(
+        None,
+        description="Field to sort by. Options: model_name, created_at, updated_at, costs, status",
+    ),
+    sortOrder: Optional[str] = fastapi.Query(
+        "asc",
+        description="Sort order. Options: asc, desc",
+    ),
 ):
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
@@ -7432,7 +8693,13 @@ async def model_info_v2(
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_router is None or not llm_router.model_list:
-        return {"data": []}
+        return {
+            "data": [],
+            "total_count": 0,
+            "current_page": page,
+            "total_pages": 0,
+            "size": size,
+        }
 
     if prisma_client is None:
         raise HTTPException(
@@ -7442,14 +8709,37 @@ async def model_info_v2(
 
     # Load existing config
     await proxy_config.get_config()
-    all_models = copy.deepcopy(llm_router.model_list)
 
-    if user_model is not None:
-        # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
-        all_models += [user_model]
+    # If modelId is provided, search for the specific model
+    if modelId is not None:
+        all_models, search_total_count = await _find_model_by_id(
+            model_id=modelId,
+            search=search,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            proxy_config=proxy_config,
+        )
+    else:
+        # Normal flow when modelId is not provided
+        all_models = copy.deepcopy(llm_router.model_list)
 
-    if model is not None:
-        all_models = [m for m in all_models if m["model_name"] == model]
+        if user_model is not None:
+            # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
+            all_models += [user_model]
+
+        if model is not None:
+            all_models = [m for m in all_models if m["model_name"] == model]
+
+        # Apply search filter if provided
+        all_models, search_total_count = await _apply_search_filter_to_models(
+            all_models=all_models,
+            search=search or "",
+            page=page,
+            size=size,
+            prisma_client=prisma_client,
+            proxy_config=proxy_config,
+            sort_by=sortBy,
+        )
 
     if user_models_only:
         all_models = await non_admin_all_models(
@@ -7466,63 +8756,64 @@ async def model_info_v2(
             llm_router=llm_router,
             all_models=all_models,
         )
-    # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
-    for _model in all_models:
-        # provided model_info in config.yaml
-        model_info = _model.get("model_info", {})
-        if debug is True:
-            _openai_client = "None"
-            if llm_router is not None:
-                _openai_client = (
-                    llm_router._get_client(
-                        deployment=_model, kwargs={}, client_type="async"
-                    )
-                    or "None"
-                )
-            else:
-                _openai_client = "llm_router_is_None"
-            openai_client = str(_openai_client)
-            _model["openai_client"] = openai_client
 
-        # read litellm model_prices_and_context_window.json to get the following:
-        # input_cost_per_token, output_cost_per_token, max_tokens
-        litellm_model_info = get_litellm_model_info(model=_model)
+    # Fill in model info based on config.yaml and litellm model_prices_and_context_window.json
+    # This must happen before teamId filtering so that direct_access and access_via_team_ids are populated
+    for i, _model in enumerate(all_models):
+        all_models[i] = _enrich_model_info_with_litellm_data(
+            model=_model,
+            debug=debug if debug is not None else False,
+            llm_router=llm_router,
+        )
 
-        # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-        if litellm_model_info == {}:
-            # use litellm_param model_name to get model_info
-            litellm_params = _model.get("litellm_params", {})
-            litellm_model = litellm_params.get("model", None)
-            try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model)
-            except Exception:
-                litellm_model_info = {}
-        # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-        if litellm_model_info == {}:
-            # use litellm_param model_name to get model_info
-            litellm_params = _model.get("litellm_params", {})
-            litellm_model = litellm_params.get("model", None)
-            split_model = litellm_model.split("/")
-            if len(split_model) > 0:
-                litellm_model = split_model[-1]
-            try:
-                litellm_model_info = litellm.get_model_info(
-                    model=litellm_model, custom_llm_provider=split_model[0]
-                )
-            except Exception:
-                litellm_model_info = {}
-        for k, v in litellm_model_info.items():
-            if k not in model_info:
-                model_info[k] = v
-        _model["model_info"] = model_info
-        # don't return the api key / vertex credentials
-        # don't return the llm credentials
-        _model = remove_sensitive_info_from_deployment(
-            _model, excluded_keys={"litellm_credential_name"}
+    # Apply teamId filter if provided
+    if teamId is not None and teamId.strip():
+        all_models = await _filter_models_by_team_id(
+            all_models=all_models,
+            team_id=teamId.strip(),
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+        )
+        # Update search_total_count after teamId filter is applied
+        search_total_count = len(all_models)
+
+    # If modelId was provided, update search_total_count after filters are applied
+    # to ensure pagination reflects the final filtered result (0 or 1)
+    if modelId is not None:
+        search_total_count = len(all_models)
+
+    # Apply sorting before pagination
+    if sortBy:
+        # Validate sortOrder
+        if sortOrder and sortOrder.lower() not in ["asc", "desc"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid sortOrder: {sortOrder}. Must be 'asc' or 'desc'",
+            )
+        all_models = _sort_models(
+            all_models=all_models,
+            sort_by=sortBy,
+            sort_order=sortOrder or "asc",
         )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
-    return {"data": all_models}
+    
+    # Append A2A agents to models list
+    all_models = await append_agents_to_model_info(
+        models=all_models,
+        user_api_key_dict=user_api_key_dict,
+    )
+    
+    # Update total count to include agents
+    search_total_count = len(all_models)
+
+    return _paginate_models_response(
+        all_models=all_models,
+        page=page,
+        size=size,
+        total_count=search_total_count,
+        search=search,
+    )
 
 
 @router.get(
@@ -8355,6 +9646,12 @@ async def model_group_info(
     model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
+    
+    # Append A2A agents to model groups
+    model_groups = await append_agents_to_model_group(
+        model_groups=model_groups,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     return {"data": model_groups}
 
@@ -8978,7 +10275,7 @@ def get_logo_url():
 
 
 @app.get("/get_image", include_in_schema=False)
-def get_image():
+async def get_image():
     """Get logo to show on admin UI"""
 
     # get current_dir
@@ -8997,25 +10294,41 @@ def get_image():
     if is_non_root and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
+    cache_dir = assets_dir if is_non_root else current_dir
+    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
+
+    # [OPTIMIZATION] Check if the cached image exists first
+    if os.path.exists(cache_path):
+        return FileResponse(cache_path, media_type="image/jpeg")
+
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
-        # Download the image and cache it
-        client = HTTPHandler()
-        response = client.get(logo_path)
-        if response.status_code == 200:
-            # Save the image to a local file
-            cache_dir = assets_dir if is_non_root else current_dir
-            cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-            with open(cache_path, "wb") as f:
-                f.write(response.content)
+        try:
+            # Download the image and cache it
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+            from litellm.types.llms.custom_http import httpxSpecialProvider
 
-            # Return the cached image as a FileResponse
-            return FileResponse(cache_path, media_type="image/jpeg")
-        else:
-            # Handle the case when the image cannot be downloaded
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
+            response = await async_client.get(logo_path)
+            if response.status_code == 200:
+                # Save the image to a local file
+                with open(cache_path, "wb") as f:
+                    f.write(response.content)
+
+                # Return the cached image as a FileResponse
+                return FileResponse(cache_path, media_type="image/jpeg")
+            else:
+                # Handle the case when the image cannot be downloaded
+                return FileResponse(default_logo, media_type="image/jpeg")
+        except Exception as e:
+            # Handle any exceptions during the download (e.g., timeout, connection error)
+            verbose_proxy_logger.debug(f"Error downloading logo from {logo_path}: {e}")
             return FileResponse(default_logo, media_type="image/jpeg")
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
@@ -9595,6 +10908,10 @@ async def get_config_list(
         "max_request_size_mb": {"type": "Integer"},
         "max_response_size_mb": {"type": "Integer"},
         "pass_through_endpoints": {"type": "PydanticModel"},
+        "store_prompts_in_spend_logs": {"type": "Boolean"},
+        "maximum_spend_logs_retention_period": {"type": "String"},
+        "mcp_internal_ip_ranges": {"type": "List"},
+        "mcp_trusted_proxy_ranges": {"type": "List"},
     }
 
     return_val = []
@@ -9664,11 +10981,15 @@ async def get_config_list(
                 elif field_name in general_settings:
                     _stored_in_db = False
 
+                _field_value = general_settings.get(field_name, None)
+                if _field_value is None and field_name in db_general_settings_dict:
+                    _field_value = db_general_settings_dict[field_name]
+
                 _response_obj = ConfigList(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=general_settings.get(field_name, None),
+                    field_value=_field_value,
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
@@ -9880,7 +11201,9 @@ async def get_config():  # noqa: PLR0915
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)
-        _success_and_failure_callbacks = normalize_callback(_success_and_failure_callbacks)
+        _success_and_failure_callbacks = normalize_callback(
+            _success_and_failure_callbacks
+        )
 
         _data_to_return = []
         """
@@ -10074,6 +11397,8 @@ async def reload_model_cost_map(
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
         litellm.model_cost = new_model_cost_map
+        # Invalidate case-insensitive lookup map since model_cost was replaced
+        _invalidate_model_cost_lowercase_map()
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
@@ -10402,6 +11727,7 @@ app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
 app.include_router(anthropic_skills_router)
+app.include_router(claude_code_marketplace_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)
@@ -10418,6 +11744,8 @@ app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
+app.include_router(policy_router)
+app.include_router(policy_crud_router)
 app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
@@ -10431,6 +11759,7 @@ app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
+app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
@@ -10454,9 +11783,13 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
         from litellm.types.mcp import MCPAuth
 
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
         if mcp_server is None:
             raise HTTPException(
                 status_code=404, detail=f"MCP server '{mcp_server_name}' not found"

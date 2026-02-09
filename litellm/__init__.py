@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 warnings.filterwarnings(
     "ignore", message=".*Accessing the.*attribute on the instance is deprecated.*"
 )
-### INIT VARIABLES ########################
+### INIT VARIABLES #########################
 import threading
 import os
 from typing import (
@@ -80,6 +80,8 @@ import dotenv
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
+
+
 ####################################################
 if set_verbose:
     _turn_on_debug()
@@ -254,10 +256,13 @@ disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
+disable_anthropic_gemini_context_caching_transform: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
+# Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
+proxy_auth: Optional[Any] = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -348,7 +353,7 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
-max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessions
+max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
@@ -377,6 +382,9 @@ priority_reservation: Optional[
     Dict[str, Union[float, "PriorityReservationDict"]]
 ] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
+# Only declare for type checking - at runtime __getattr__ handles it
+if TYPE_CHECKING:
+    priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
 ######## Networking Settings ########
@@ -391,6 +399,9 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+
+####### STOP SEQUENCE LIMIT #######
+disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
@@ -557,6 +568,7 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+chatgpt_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
@@ -812,6 +824,8 @@ def add_known_models():
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "chatgpt":
+            chatgpt_models.add(key)
         elif value.get("litellm_provider") == "minimax":
             minimax_models.add(key)
         elif value.get("litellm_provider") == "aws_polly":
@@ -1025,6 +1039,7 @@ models_by_provider: dict = {
     "amazon_nova": amazon_nova_models,
     "stability": stability_models,
     "github_copilot": github_copilot_models,
+    "chatgpt": chatgpt_models,
     "minimax": minimax_models,
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
@@ -1266,9 +1281,10 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
+    from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
-    
+
     # Type stubs for lazy-loaded configs to help mypy
     from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig as AmazonConverseConfig
     from .llms.openai_like.chat.handler import OpenAILikeChatConfig as OpenAILikeChatConfig
@@ -1364,6 +1380,7 @@ if TYPE_CHECKING:
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
+    from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
@@ -1374,6 +1391,7 @@ if TYPE_CHECKING:
     from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig
     from .llms.xai.responses.transformation import XAIResponsesAPIConfig as XAIResponsesAPIConfig
     from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
+    from .llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
@@ -1387,7 +1405,7 @@ if TYPE_CHECKING:
     from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as OpenAIGPTAudioConfig
     from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as NvidiaNimConfig
     from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig
-    
+
     # Type stubs for lazy-loaded config instances
     openaiOSeriesConfig: OpenAIOSeriesConfig
     openAIGPTConfig: OpenAIGPTConfig
@@ -1395,7 +1413,7 @@ if TYPE_CHECKING:
     openAIGPT5Config: OpenAIGPT5Config
     nvidiaNimConfig: NvidiaNimConfig
     nvidiaNimEmbeddingConfig: NvidiaNimEmbeddingConfig
-    
+
     # Import config classes that need type stubs (for mypy) - import with _ prefix to avoid circular reference
     from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
     from .llms.deepseek.chat.transformation import DeepSeekChatConfig as _DeepSeekChatConfig
@@ -1413,7 +1431,7 @@ if TYPE_CHECKING:
     from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig as _LmStudioEmbeddingConfig
     from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig as _IBMWatsonXEmbeddingConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
-    
+
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
@@ -1431,7 +1449,7 @@ if TYPE_CHECKING:
     LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
     IBMWatsonXEmbeddingConfig: Type[_IBMWatsonXEmbeddingConfig]
     VertexAIConfig: Type[_VertexGeminiConfig]  # Alias for VertexGeminiConfig
-    
+
     from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
@@ -1455,9 +1473,12 @@ if TYPE_CHECKING:
     from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config as AzureOpenAIGPT5Config
     from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
     from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
+    from .llms.hosted_vllm.embedding.transformation import HostedVLLMEmbeddingConfig as HostedVLLMEmbeddingConfig
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig
+    from .llms.chatgpt.chat.transformation import ChatGPTConfig as ChatGPTConfig
+    from .llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig as ChatGPTResponsesAPIConfig
     from .llms.gigachat.chat.transformation import GigaChatConfig as GigaChatConfig
     from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig as GigaChatEmbeddingConfig
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
@@ -1551,14 +1572,14 @@ if TYPE_CHECKING:
 
     # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
-    
+
     # Datadog LLM observability params (lazy-loaded)
     from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
-    
+
     # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
     logging_callback_manager: LoggingCallbackManager
-    
+
     # provider_list is lazy-loaded
     from litellm.types.utils import LlmProviders
     provider_list: List[Union[LlmProviders, str]]
@@ -1588,12 +1609,12 @@ def __getattr__(name: str) -> Any:
         from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
         register_async_client_cleanup()
         _async_client_cleanup_registered = True
-    
+
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
-    
+
     registry = _get_lazy_import_registry()
-    
+
     # Check if name is in registry and call the cached handler function
     if name in registry:
         handler_func = registry[name]
@@ -1608,7 +1629,7 @@ def __getattr__(name: str) -> Any:
             from .main import encoding as _encoding
             _globals["encoding"] = _encoding
         return _globals["encoding"]
-    
+
     # Lazy load bedrock_tool_name_mappings instance
     if name == "bedrock_tool_name_mappings":
         from ._lazy_imports import _get_litellm_globals
@@ -1618,7 +1639,7 @@ def __getattr__(name: str) -> Any:
             from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
             _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
         return _globals["bedrock_tool_name_mappings"]
-    
+
     # Lazy load AzureOpenAIError exception class
     if name == "AzureOpenAIError":
         from ._lazy_imports import _get_litellm_globals
@@ -1628,7 +1649,7 @@ def __getattr__(name: str) -> Any:
             from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
             _globals["AzureOpenAIError"] = _AzureOpenAIError
         return _globals["AzureOpenAIError"]
-    
+
     # Lazy load openaiOSeriesConfig instance
     if name == "openaiOSeriesConfig":
         from ._lazy_imports import _get_litellm_globals
@@ -1638,7 +1659,7 @@ def __getattr__(name: str) -> Any:
             config_class = __getattr__("OpenAIOSeriesConfig")
             _globals["openaiOSeriesConfig"] = config_class()
         return _globals["openaiOSeriesConfig"]
-    
+
     # Lazy load other config instances
     _config_instances = {
         "openAIGPTConfig": "OpenAIGPTConfig",
@@ -1655,11 +1676,11 @@ def __getattr__(name: str) -> Any:
             config_class = __getattr__(_config_instances[name])
             _globals[name] = config_class()
         return _globals[name]
-    
+
     # Handle OpenAIO1Config alias
     if name == "OpenAIO1Config":
         return __getattr__("OpenAIOSeriesConfig")
-    
+
     # Lazy load provider_list
     if name == "provider_list":
         from ._lazy_imports import _get_litellm_globals
@@ -1670,7 +1691,7 @@ def __getattr__(name: str) -> Any:
             from litellm.types.utils import LlmProviders
             _globals["provider_list"] = list(LlmProviders)
         return _globals["provider_list"]
-    
+
     # Lazy load priority_reservation_settings instance
     if name == "priority_reservation_settings":
         from ._lazy_imports import _get_litellm_globals
@@ -1681,7 +1702,7 @@ def __getattr__(name: str) -> Any:
             PriorityReservationSettings = __getattr__("PriorityReservationSettings")
             _globals["priority_reservation_settings"] = PriorityReservationSettings()
         return _globals["priority_reservation_settings"]
-    
+
     # Lazy load logging_callback_manager instance
     if name == "logging_callback_manager":
         from ._lazy_imports import _get_litellm_globals
@@ -1692,7 +1713,7 @@ def __getattr__(name: str) -> Any:
             LoggingCallbackManager = __getattr__("LoggingCallbackManager")
             _globals["logging_callback_manager"] = LoggingCallbackManager()
         return _globals["logging_callback_manager"]
-    
+
     # Lazy load _service_logger module
     if name == "_service_logger":
         from ._lazy_imports import _get_litellm_globals

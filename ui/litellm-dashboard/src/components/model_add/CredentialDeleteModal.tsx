@@ -43,7 +43,7 @@ const CredentialDeleteModal: React.FC<CredentialDeleteModalProps> = ({
       footer={null}
       onCancel={handleCancel}
       closable={true}
-      destroyOnClose={true}
+      destroyOnHidden={true}
       maskClosable={false}
     >
       <div className="mt-4">

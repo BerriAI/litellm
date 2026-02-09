@@ -15,6 +15,7 @@ USER root
 RUN for i in 1 2 3; do \
     apk add --no-cache \
     python3 \
+    python3-dev \
     py3-pip \
     clang \
     llvm \
@@ -46,7 +47,6 @@ RUN mkdir -p /var/lib/litellm/ui && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
     fi && \
-    rm -f package-lock.json && \
     npm install --legacy-peer-deps && \
     npm run build && \
     cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
@@ -103,13 +103,16 @@ RUN for i in 1 2 3; do \
     done \
   && for i in 1 2 3; do \
     apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
-    done
+    done \
+  && npm install -g npm@latest tar@latest
 
 # Copy artifacts from builder
 COPY --from=builder /app/requirements.txt /app/requirements.txt
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
 COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/
+# Copy prisma_migration.py for Helm migrations job compatibility
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
@@ -143,6 +146,10 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
       fi; \
     fi
 
+# Replace the nodejs-wheel-binaries bundled node with the system node (fixes CVE-2025-55130)
+RUN NODEJS_WHEEL_NODE=$(find /usr/lib -path "*/nodejs_wheel/bin/node" 2>/dev/null) && \
+    if [ -n "$NODEJS_WHEEL_NODE" ]; then cp /usr/bin/node "$NODEJS_WHEEL_NODE"; fi
+
 # Permissions, cleanup, and Prisma prep
 # Convert Windows line endings to Unix for entrypoint scripts
 RUN sed -i 's/\r$//' docker/entrypoint.sh && \
@@ -167,11 +174,13 @@ RUN sed -i 's/\r$//' docker/entrypoint.sh && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true && \
     chmod -R g+rX $PRISMA_PATH && \
     chmod -R g+rX /app/.cache && \
-    mkdir -p /tmp/.npm /nonexistent /.npm && \
-    prisma generate
+    mkdir -p /tmp/.npm /nonexistent /.npm
 
 # Switch to non-root user for runtime
 USER nobody
+
+# Generate Prisma client as nobody user to ensure correct file ownership
+RUN prisma generate
 
 # Prisma runtime knobs for offline containers
 ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1 \

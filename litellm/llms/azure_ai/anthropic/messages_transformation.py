@@ -62,10 +62,10 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
 
-        # Update headers with optional anthropic beta features
-        headers = self._update_headers_with_optional_anthropic_beta(
+        # Update headers with anthropic beta features (context management, tool search, etc.)
+        headers = self._update_headers_with_anthropic_beta(
             headers=headers,
-            context_management=optional_params.get("context_management"),
+            optional_params=optional_params,
         )
 
         return headers, api_base

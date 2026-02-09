@@ -10,18 +10,19 @@ uvicorn==0.31.1 # server dep
 gunicorn==23.0.0 # server dep
 fastuuid==0.13.5 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
-boto3==1.36.0 # aws bedrock/sagemaker calls
+boto3==1.40.53 # aws bedrock/sagemaker calls (has bedrock-agentcore-control, compatible with aioboto3)
 redis==5.2.1 # redis caching
+redisvl==0.4.1 ## redis semantic caching
 prisma==0.11.0 # for db
 nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.6.2 # for encrypting keys
-google-cloud-aiplatform==1.47.0 # for vertex ai calls
+google-cloud-aiplatform==1.133.0 # for vertex ai calls
 google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
-google-genai==1.22.0
+google-genai==1.37.0
 anthropic[vertex]==0.54.0
 mcp==1.25.0 ; python_version >= "3.10"    # for MCP server
-google-generativeai==0.5.0 # for vertex ai calls
+# google-generativeai removed - deprecated, replaced by google-genai (line 21)
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
@@ -31,15 +32,17 @@ polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.19.0 # admin UI, SSO
 pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
-python-multipart==0.0.18 # admin UI
+python-multipart==0.0.22 # admin UI
 Pillow==11.0.0
+jaraco.context>=6.1.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 ; python_version >= "3.9" # for azure content safety
 azure-keyvault==4.2.0 # for azure KMS integration
 azure-storage-file-datalake==12.20.0 # for azure buck storage logging
-opentelemetry-api==1.25.0
-opentelemetry-sdk==1.25.0
-opentelemetry-exporter-otlp==1.25.0
+opentelemetry-api==1.28.0
+opentelemetry-sdk==1.28.0
+opentelemetry-exporter-otlp==1.28.0
+a2a-sdk>=0.3.22 ; python_version >= "3.10"
 # grpcio: 1.68.0-1.68.1 has reconnect bug (#38290), 1.75+ has Python 3.14 wheels + fix
 grpcio>=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0; python_version < "3.14"
 grpcio>=1.75.0; python_version >= "3.14"
@@ -47,7 +50,7 @@ sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.21 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.33 # for proxy extras - e.g. prisma migrations
 llm-sandbox==0.3.31 # for skill execution in sandbox
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
@@ -57,16 +60,17 @@ tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli
 rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
+aioboto3==15.5.0 # for async sagemaker calls (updated to match boto3 1.40.73)
 aiohttp==3.13.3 # for network calls
-aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic>=2.11,<3 # proxy + openai req. + mcp
 jsonschema>=4.23.0,<5.0.0 # validating json schema - aligned with openapi-core + mcp
-websockets==13.1.0 # for realtime API
+websockets==15.0.1 # for realtime API
 soundfile==0.12.1 # for audio file processing
 openapi-core==0.21.0 # for OpenAPI compliance tests
+pypdf>=6.6.2 # for PDF text extraction in RAG ingestion
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.27
+litellm-enterprise==0.1.31

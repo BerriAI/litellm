@@ -81,10 +81,10 @@ run_trivy_scans() {
     echo "Running Trivy scans..."
     
     echo "Scanning LiteLLM Docs..."
-    trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
+    trivy fs --ignorefile .trivyignore --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
     
     echo "Scanning LiteLLM UI..."
-    trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
+    trivy fs --ignorefile .trivyignore --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
     
     echo "Trivy scans completed successfully"
 }
@@ -101,12 +101,12 @@ run_grype_scans() {
     # Build and scan Dockerfile.database
     echo "Building and scanning Dockerfile.database..."
     docker build --no-cache -t litellm-database:latest -f ./docker/Dockerfile.database .
-    grype litellm-database:latest --fail-on critical
+    grype litellm-database:latest --config ci_cd/.grype.yaml --fail-on critical
     
     # Build and scan main Dockerfile
     echo "Building and scanning main Dockerfile..."
     docker build --no-cache -t litellm:latest .
-    grype litellm:latest --fail-on critical
+    grype litellm:latest --config ci_cd/.grype.yaml --fail-on critical
     
     # Restore original .dockerignore
     echo "Restoring original .dockerignore..."
@@ -129,6 +129,36 @@ run_grype_scans() {
         "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
         "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
         "CVE-2025-60876" # BusyBox wget HTTP request splitting - no fix available in Chainguard Wolfi base image
+        "CVE-2026-0861" # Wolfi glibc still flagged even on 2.42-r5; upstream patched build unavailable yet
+        "CVE-2010-4756" # glibc glob DoS - awaiting patched Wolfi glibc build
+        "CVE-2019-1010022" # glibc stack guard bypass - awaiting patched Wolfi glibc build
+        "CVE-2019-1010023" # glibc ldd remap issue - awaiting patched Wolfi glibc build
+        "CVE-2019-1010024" # glibc ASLR mitigation bypass - awaiting patched Wolfi glibc build
+        "CVE-2019-1010025" # glibc pthread heap address leak - awaiting patched Wolfi glibc build
+        "CVE-2026-22184" # zlib untgz buffer overflow - untgz unused + no fixed Wolfi build yet
+        "GHSA-58pv-8j8x-9vj2" # jaraco.context path traversal - setuptools vendored only (v5.3.0), not used in application code (using v6.1.0+)
+        "GHSA-34x7-hfp2-rc4v" # node-tar hardlink path traversal - not applicable, tar CLI not exposed in application code
+        "GHSA-r6q2-hw4h-h46w" # node-tar not used by application runtime, Linux-only container, not affect by macOS APFS-specific exploit
+        "GHSA-8rrh-rw8j-w5fx" # wheel is from chainguard and will be handled by then TODO: Remove this after Chainguard updates the wheel
+        "CVE-2025-59465" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-55131" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59466" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-55130" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59467" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2026-21637" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-15281" # No fix available yet
+        "CVE-2026-0865" # No fix available yet
+        "CVE-2025-15282" # No fix available yet
+        "CVE-2026-0672" # No fix available yet
+        "CVE-2025-15366" # No fix available yet
+        "CVE-2025-15367" # No fix available yet
+        "CVE-2025-12781" # No fix available yet
+        "CVE-2025-11468" # No fix available yet
+        "CVE-2026-1299" # Python 3.13 email module header injection - not applicable, LiteLLM doesn't use BytesGenerator for email serialization
+        "GHSA-7h2j-956f-4vf2" # @isaacs/brace-expansion ReDoS - npm tooling dependency, not used in application runtime
+        "GHSA-hx9q-6w63-j58v" # orjson deep recursion - no fix available yet
+        "GHSA-8qq5-rm4j-mr97" # node-tar symlink poisoning - npm tooling dependency, tar CLI not exposed in application code
+        "GHSA-29xp-372q-xqph" # node-tar race condition - npm tooling dependency, tar CLI not exposed in application code
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

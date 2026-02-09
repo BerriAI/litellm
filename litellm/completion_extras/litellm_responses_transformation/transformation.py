@@ -277,6 +277,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
                 responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+            elif key == "web_search_options":
+                self._add_web_search_tool(responses_api_request, value)
 
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -326,6 +328,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         request_data["user"] = value
                 else:
                     request_data[key] = value
+
+        if headers:
+            request_data["extra_headers"] = headers
 
         return request_data
 
@@ -727,6 +732,34 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
         return None
 
+    def _add_web_search_tool(
+        self,
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+        web_search_options: Any,
+    ) -> None:
+        """
+        Add web search tool to responses API request.
+
+        Args:
+            responses_api_request: The responses API request dict to modify
+            web_search_options: Web search configuration (dict or other value)
+        """
+        if "tools" not in responses_api_request or responses_api_request["tools"] is None:
+            responses_api_request["tools"] = []
+
+        # Get the tools list with proper type narrowing
+        tools = responses_api_request["tools"]
+        if tools is None:
+            tools = []
+            responses_api_request["tools"] = tools
+
+        web_search_tool: Dict[str, Any] = {"type": "web_search"}
+        if isinstance(web_search_options, dict):
+            web_search_tool.update(web_search_options)
+
+        # Cast to Any to match the expected union type for tools list items
+        tools.append(cast(Any, web_search_tool))
+
     def _transform_response_format_to_text_format(
         self, response_format: Union[Dict[str, Any], Any]
     ) -> Optional[Dict[str, Any]]:
@@ -779,10 +812,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     @staticmethod
     def _convert_annotations_to_chat_format(
         annotations: Optional[List[Any]],
-    ) -> Optional[List["ChatCompletionAnnotation"]]:
+    ) -> Optional[List[ChatCompletionAnnotation]]:
         """
         Convert annotations from Responses API to Chat Completions format.
-        
+
         Annotations are already in compatible format between both APIs,
         so we just need to convert Pydantic models to dicts.
         """

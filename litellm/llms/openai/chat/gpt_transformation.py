@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
 )
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -586,8 +587,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 enhancements=None,
             )
 
-            translated_choice.finish_reason = self._get_finish_reason(
-                translated_message, choice["finish_reason"]
+            translated_choice.finish_reason = map_finish_reason(
+                self._get_finish_reason(
+                    translated_message, choice["finish_reason"]
+                )
             )
             transformed_choices.append(translated_choice)
 

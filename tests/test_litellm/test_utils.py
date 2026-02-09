@@ -18,15 +18,42 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
+from litellm.types.utils import CallTypes
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
+    _check_provider_match,
+    _is_streaming_request,
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
 )
 
 # Adds the parent directory to the system path
+
+
+def test_check_provider_match_azure_ai_allows_openai_and_azure():
+    """
+    Test that azure_ai provider can match openai and azure models.
+    This is needed for Azure Model Router which can route to OpenAI models.
+    """
+    # azure_ai should match openai models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "openai"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should match azure models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "azure"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should NOT match other providers
+    assert _check_provider_match(
+        model_info={"litellm_provider": "anthropic"},
+        custom_llm_provider="azure_ai"
+    ) is False
 
 
 def test_get_optional_params_image_gen():
@@ -514,6 +541,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
@@ -614,6 +642,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "rpd": {"type": "number"},
                 "rpm": {"type": "number"},
                 "source": {"type": "string"},
+                "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
@@ -816,6 +845,7 @@ def test_get_model_info_gemini():
             and not "learnlm" in model
             and not "imagen" in model
             and not "veo" in model
+            and not "robotics" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -2255,8 +2285,19 @@ def test_register_model_with_scientific_notation():
     """
     Test that the register_model function can handle scientific notation in the model name.
     """
+    import uuid
+    
+    # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
+    test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
+    
+    # Clear LRU caches that might have stale data
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map,
+    )
+    _invalidate_model_cost_lowercase_map()
+    
     model_cost_dict = {
-        "my-custom-model": {
+        test_model_name: {
             "max_tokens": 8192,
             "input_cost_per_token": "3e-07",
             "output_cost_per_token": "6e-07",
@@ -2267,12 +2308,17 @@ def test_register_model_with_scientific_notation():
 
     litellm.register_model(model_cost_dict)
 
-    registered_model = litellm.model_cost["my-custom-model"]
+    registered_model = litellm.model_cost[test_model_name]
     print(registered_model)
     assert registered_model["input_cost_per_token"] == 3e-07
     assert registered_model["output_cost_per_token"] == 6e-07
     assert registered_model["litellm_provider"] == "openai"
     assert registered_model["mode"] == "chat"
+    
+    # Clean up after test
+    if test_model_name in litellm.model_cost:
+        del litellm.model_cost[test_model_name]
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():
@@ -2516,6 +2562,48 @@ def test_model_info_for_vertex_ai_deepseek_model():
     assert model_info["input_cost_per_token"] is not None
     assert model_info["output_cost_per_token"] is not None
     print("vertex deepseek model info", model_info)
+
+
+def test_model_info_for_openrouter_kimi_k2_5():
+    """
+    Test that openrouter/moonshotai/kimi-k2.5 model info is correctly configured
+    in model_prices_and_context_window.json.
+
+    Model properties from OpenRouter API:
+    - context_length: 262144
+    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - modality: text+image->text (supports vision)
+    - supports: tool_choice, tools (function calling)
+    """
+    import json
+    from pathlib import Path
+
+    # Load directly from the local JSON file
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    model_info = model_cost.get("openrouter/moonshotai/kimi-k2.5")
+    assert model_info is not None, "Model not found in model_prices_and_context_window.json"
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["mode"] == "chat"
+
+    # Verify context window
+    assert model_info["max_input_tokens"] == 262144
+    assert model_info["max_output_tokens"] == 262144
+    assert model_info["max_tokens"] == 262144
+
+    # Verify pricing
+    assert model_info["input_cost_per_token"] == 6e-07
+    assert model_info["output_cost_per_token"] == 3e-06
+    assert model_info["cache_read_input_token_cost"] == 1e-07
+
+    # Verify capabilities
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_tool_choice"] is True
+
+    print("openrouter kimi-k2.5 model info", model_info)
 
 
 class TestGetValidModelsWithCLI:
@@ -2780,6 +2868,111 @@ class TestProxyLoggingBudgetAlerts:
             type=alert_type, user_info=user_info
         )
 
+    async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_alerting_none(self):
+        """
+        Test that soft_budget alerts with alert_emails bypass the alerting=None check
+        and send emails even when alerting is None.
+        
+        This tests the new logic that allows team-specific soft budget email alerts
+        via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None  # Global alerting is disabled
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo with alert_emails set (simulating team metadata extraction)
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=["team1@example.com", "team2@example.com"],
+        )
+
+        # Should send email even though alerting is None (because of alert_emails)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify slack was NOT called (alerting is None)
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+
+        # Verify email WAS called (bypasses alerting=None check)
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="soft_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_soft_budget_without_alert_emails_respects_alerting_none(self):
+        """
+        Test that soft_budget alerts WITHOUT alert_emails still respect alerting=None
+        and do not send emails when alerting is None.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo WITHOUT alert_emails
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=None,  # No alert emails
+        )
+
+        # Should NOT send email (alerting is None and no alert_emails)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+    async def test_budget_alerts_soft_budget_with_empty_alert_emails_respects_alerting_none(self):
+        """
+        Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo with empty alert_emails list
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=[],  # Empty list
+        )
+
+        # Should NOT send email (alert_emails is empty)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
 
 def test_azure_ai_claude_provider_config():
     """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
@@ -2920,3 +3113,194 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
         and not any_assistant_message_has_thinking_blocks(messages)
     )
     assert should_drop_thinking is False
+
+
+class TestAdditionalDropParamsForNonOpenAIProviders:
+    """
+    Test additional_drop_params functionality for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    The bug was that additional_drop_params only filtered params for OpenAI/Azure
+    providers, but not for other providers like Bedrock. This caused OpenAI-specific
+    params like prompt_cache_key to be passed to Bedrock, resulting in errors.
+    """
+
+    def test_additional_drop_params_filters_for_bedrock(self):
+        """
+        Test that additional_drop_params correctly filters params for Bedrock provider.
+
+        Before the fix, prompt_cache_key would be passed through to Bedrock even when
+        specified in additional_drop_params, causing:
+        'BedrockException - {"message":"The model returned the following errors:
+        prompt_cache_key: Extra inputs are not permitted"}'
+        """
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key_123",
+            "temperature": 0.7,
+            "model": "bedrock/anthropic.claude-v2",
+        }
+        openai_params = ["temperature", "max_tokens", "top_p", "model"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key"],
+        )
+
+        # prompt_cache_key should be filtered out
+        assert "prompt_cache_key" not in result
+        # temperature should still be there (it's in openai_params, not filtered)
+        # Note: temperature is in openai_params so it won't be added by this function
+        # The function only adds params NOT in openai_params
+
+    def test_additional_drop_params_filters_multiple_params_for_non_openai(self):
+        """Test filtering multiple params for non-OpenAI providers."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "some_openai_only_param": "value1",
+            "another_openai_param": "value2",
+            "keep_this_param": "keep_me",
+        }
+        openai_params = ["temperature", "max_tokens"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="anthropic",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key", "some_openai_only_param"],
+        )
+
+        # Filtered params should not be present
+        assert "prompt_cache_key" not in result
+        assert "some_openai_only_param" not in result
+        # Non-filtered params should be present
+        assert result.get("another_openai_param") == "value2"
+        assert result.get("keep_this_param") == "keep_me"
+
+    def test_additional_drop_params_none_keeps_all_params(self):
+        """Test that when additional_drop_params is None, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=None,
+        )
+
+        # All params should be present when additional_drop_params is None
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+    def test_additional_drop_params_empty_list_keeps_all_params(self):
+        """Test that when additional_drop_params is empty list, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=[],
+        )
+
+        # All params should be present when additional_drop_params is empty
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+
+class TestDropParamsWithPromptCacheKey:
+    """
+    Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    prompt_cache_key is an OpenAI-specific parameter that should be automatically
+    dropped when using providers like Bedrock that don't support it.
+    """
+
+    def test_prompt_cache_key_in_default_params(self):
+        """Verify prompt_cache_key is now in DEFAULT_CHAT_COMPLETION_PARAM_VALUES."""
+        from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+        assert "prompt_cache_key" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+        assert "prompt_cache_retention" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+    def test_drop_params_removes_prompt_cache_key_for_bedrock(self):
+        """
+        Test that get_optional_params with drop_params=True removes prompt_cache_key
+        for Bedrock provider since it's not in Bedrock's supported params.
+        """
+        from litellm.utils import get_optional_params
+
+        # Call get_optional_params for Bedrock with prompt_cache_key
+        # drop_params=True should remove it since Bedrock doesn't support it
+        result = get_optional_params(
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            custom_llm_provider="bedrock",
+            prompt_cache_key="test_cache_key",
+            temperature=0.7,
+            drop_params=True,
+        )
+
+        # prompt_cache_key should be dropped for Bedrock
+        assert "prompt_cache_key" not in result
+        # temperature should remain (it's supported by Bedrock)
+        assert result.get("temperature") == 0.7
+
+
+class TestIsStreamingRequest:
+    def test_stream_true_in_kwargs(self):
+        assert _is_streaming_request(kwargs={"stream": True}, call_type="acompletion") is True
+
+    def test_stream_false_in_kwargs(self):
+        assert _is_streaming_request(kwargs={"stream": False}, call_type="acompletion") is False
+
+    def test_no_stream_in_kwargs(self):
+        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
+
+    def test_generate_content_stream_string(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.generate_content_stream.value) is True
+
+    def test_agenerate_content_stream_string(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.agenerate_content_stream.value) is True
+
+    def test_generate_content_stream_enum(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.generate_content_stream) is True
+
+    def test_agenerate_content_stream_enum(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.agenerate_content_stream) is True
+
+    def test_non_streaming_call_type_string(self):
+        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
+
+    def test_non_streaming_call_type_enum(self):
+        assert _is_streaming_request(kwargs={}, call_type=CallTypes.acompletion) is False
+
+    def test_stream_true_overrides_non_streaming_call_type(self):
+        assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True

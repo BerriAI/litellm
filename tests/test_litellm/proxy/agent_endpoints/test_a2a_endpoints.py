@@ -49,18 +49,20 @@ async def test_invoke_agent_a2a_adds_litellm_data():
 
     # Mock request
     mock_request = MagicMock()
-    mock_request.json = AsyncMock(return_value={
-        "jsonrpc": "2.0",
-        "id": "test-id",
-        "method": "message/send",
-        "params": {
-            "message": {
-                "role": "user",
-                "parts": [{"kind": "text", "text": "Hello"}],
-                "messageId": "msg-123",
-            }
-        },
-    })
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "test-id",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "Hello"}],
+                    "messageId": "msg-123",
+                }
+            },
+        }
+    )
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         api_key="sk-test-key",
@@ -77,46 +79,52 @@ async def test_invoke_agent_a2a_adds_litellm_data():
             SendMessageRequest,
             SendStreamingMessageRequest,
         )
+
         # Real types available - use them
-        use_real_types = True
+        pass
     except ImportError:
         # Real types not available - create realistic mocks
-        use_real_types = False
-        
+        pass
+
         def make_mock_pydantic_class(name):
             """Create a mock class that behaves like a Pydantic model."""
+
             class MockPydanticClass:
                 def __init__(self, **kwargs):
                     self.__dict__.update(kwargs)
                     # Store kwargs for model_dump() if needed
                     self._kwargs = kwargs
-                
+
                 def model_dump(self, mode="json", exclude_none=False):
                     """Mock model_dump method."""
                     result = dict(self._kwargs)
                     if exclude_none:
                         result = {k: v for k, v in result.items() if v is not None}
                     return result
-            
+
             MockPydanticClass.__name__ = name
             return MockPydanticClass
-        
+
         MessageSendParams = make_mock_pydantic_class("MessageSendParams")
         SendMessageRequest = make_mock_pydantic_class("SendMessageRequest")
-        SendStreamingMessageRequest = make_mock_pydantic_class("SendStreamingMessageRequest")
-    
+        SendStreamingMessageRequest = make_mock_pydantic_class(
+            "SendStreamingMessageRequest"
+        )
+
     # Create a mock module for a2a.types
     mock_a2a_types = MagicMock()
     mock_a2a_types.MessageSendParams = MessageSendParams
     mock_a2a_types.SendMessageRequest = SendMessageRequest
     mock_a2a_types.SendStreamingMessageRequest = SendStreamingMessageRequest
-    
+
     # Patch at the source modules
+    # Note: add_litellm_data_to_request is called from common_request_processing,
+    # so we need to patch it there, not at litellm_pre_call_utils
     with patch(
         "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
         return_value=mock_agent,
     ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
+        "litellm.proxy.common_request_processing.add_litellm_data_to_request",
         side_effect=mock_add_litellm_data,
     ) as mock_add_data, patch(
         "litellm.a2a_protocol.create_a2a_client",
@@ -137,12 +145,15 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     ), patch.dict(
         sys.modules,
         {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
+    ), patch(
+        "litellm.a2a_protocol.main.A2A_SDK_AVAILABLE",
+        True,
     ):
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
         mock_fastapi_response = MagicMock()
 
-        result = await invoke_agent_a2a(
+        await invoke_agent_a2a(
             agent_id="test-agent",
             request=mock_request,
             fastapi_response=mock_fastapi_response,

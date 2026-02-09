@@ -1,23 +1,60 @@
-import { waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { describe, expect, it, vi } from "vitest";
-import { KeyEditView } from "./key_edit_view";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { KeyEditView } from "./key_edit_view";
 
-// Mock window.matchMedia
-Object.defineProperty(window, "matchMedia", {
-  writable: true,
-  value: vi.fn().mockImplementation((query) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
+vi.mock("../networking", async () => {
+  const actual = await vi.importActual("../networking");
+  return {
+    ...actual,
+    getPromptsList: vi.fn().mockResolvedValue({
+      prompts: [{ prompt_id: "prompt-1" }, { prompt_id: "prompt-2" }],
+    }),
+    modelAvailableCall: vi.fn().mockResolvedValue({
+      data: [{ id: "gpt-4" }, { id: "gpt-3.5-turbo" }],
+    }),
+    tagListCall: vi.fn().mockResolvedValue({
+      tag1: { name: "tag1", description: "Test tag 1" },
+      tag2: { name: "tag2", description: "Test tag 2" },
+    }),
+    getGuardrailsList: vi.fn().mockResolvedValue({
+      guardrails: [{ guardrail_name: "guardrail-1" }],
+    }),
+    getPoliciesList: vi.fn().mockResolvedValue({
+      policies: [{ policy_name: "policy-1" }],
+    }),
+    getPassThroughEndpointsCall: vi.fn().mockResolvedValue({
+      endpoints: [],
+    }),
+    vectorStoreListCall: vi.fn().mockResolvedValue({
+      data: [],
+    }),
+    mcpToolsCall: vi.fn().mockResolvedValue({
+      data: [],
+    }),
+    agentListCall: vi.fn().mockResolvedValue({
+      data: [],
+    }),
+    fetchMCPServers: vi.fn().mockResolvedValue([]),
+    fetchMCPAccessGroups: vi.fn().mockResolvedValue([]),
+    listMCPTools: vi.fn().mockResolvedValue({
+      tools: [],
+      error: null,
+      message: null,
+      stack_trace: null,
+    }),
+    getAgentsList: vi.fn().mockResolvedValue({
+      agents: [],
+    }),
+    getAgentAccessGroups: vi.fn().mockResolvedValue([]),
+  };
 });
+
+vi.mock("../organisms/create_key_button", () => ({
+  fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
+}));
 
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
@@ -93,8 +130,8 @@ describe("KeyEditView", () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => {}}
-        onSubmit={async () => {}}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -111,8 +148,8 @@ describe("KeyEditView", () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => {}}
-        onSubmit={async () => {}}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -129,8 +166,8 @@ describe("KeyEditView", () => {
     const { getByLabelText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => {}}
-        onSubmit={async () => {}}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -142,5 +179,303 @@ describe("KeyEditView", () => {
     await waitFor(() => {
       expect(metadataTextarea).toHaveValue("{}");
     });
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should call onCancel when cancel button is clicked", async () => {
+    const onCancelMock = vi.fn();
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={onCancelMock}
+        onSubmit={async () => { }}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    });
+
+    const cancelButton = screen.getByRole("button", { name: /cancel/i });
+    await userEvent.click(cancelButton);
+
+    expect(onCancelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("should display key alias input field", async () => {
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Key Alias")).toBeInTheDocument();
+    });
+  });
+
+  it("should display models select field", async () => {
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Models")).toBeInTheDocument();
+    });
+  });
+
+  it("should display max budget input field", async () => {
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Max Budget (USD)")).toBeInTheDocument();
+    });
+  });
+
+  it("should display allowed routes input field", async () => {
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/allowed routes/i)).toBeInTheDocument();
+    });
+  });
+
+  it("should call onSubmit with form values when form is submitted", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+  });
+
+  it("should disable models field when management routes are selected", async () => {
+    const keyDataWithManagementRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["management_routes"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithManagementRoutes}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Models field is disabled for this key type")).toBeInTheDocument();
+    });
+  });
+
+  it("should disable models field when info routes are selected", async () => {
+    const keyDataWithInfoRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["info_routes"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithInfoRoutes}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Models field is disabled for this key type")).toBeInTheDocument();
+    });
+  });
+
+  it("should disable guardrails selector when user is not premium", async () => {
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={async () => { }}
+        accessToken={"test-token"}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Guardrails")).toBeInTheDocument();
+    });
+  });
+
+  it("should parse comma-separated allowed routes on submit", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/allowed routes/i)).toBeInTheDocument();
+    });
+
+    const allowedRoutesInput = screen.getByLabelText(/allowed routes/i);
+    await userEvent.clear(allowedRoutesInput);
+    await userEvent.type(allowedRoutesInput, "route1, route2, route3");
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(Array.isArray(callArgs.allowed_routes)).toBe(true);
+      expect(callArgs.allowed_routes).toEqual(["route1", "route2", "route3"]);
+    });
+  });
+
+  it("should handle empty allowed routes string on submit", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/allowed routes/i)).toBeInTheDocument();
+    });
+
+    const allowedRoutesInput = screen.getByLabelText(/allowed routes/i);
+    await userEvent.clear(allowedRoutesInput);
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.allowed_routes).toEqual([]);
+    });
+  });
+
+
+  it("should disable cancel button during submission", async () => {
+    let resolveSubmit: (() => void) | undefined;
+    const submitPromise = new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const onSubmitMock = vi.fn(() => submitPromise);
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => { }}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    // Wait for onSubmit to be called, which means handleSubmit has started and isKeySaving should be true
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+
+    // Wait for the cancel button to actually be disabled (state update may take a moment)
+    await waitFor(() => {
+      const cancelButton = screen.getByRole("button", { name: /cancel/i });
+      expect(cancelButton).toBeDisabled();
+    }, { timeout: 3000 });
+
+    // Clean up: resolve the promise to allow the form to complete
+    if (resolveSubmit) {
+      resolveSubmit();
+    }
   });
 });

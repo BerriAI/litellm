@@ -443,13 +443,21 @@ def update_messages_with_model_file_ids(
 
 def update_responses_input_with_model_file_ids(
     input: Any,
+    model_id: Optional[str] = None,
+    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Union[str, List[Dict[str, Any]]]:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
 
-    For managed files (unified file IDs), decodes the base64-encoded unified file ID
-    and extracts the llm_output_file_id directly.
+    For managed files (unified file IDs), uses model_file_id_mapping if provided,
+    otherwise decodes the base64-encoded unified file ID and extracts the llm_output_file_id directly.
+    
+    Args:
+        input: The responses API input parameter
+        model_id: The model ID to use for looking up provider-specific file IDs
+        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
+                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
@@ -479,22 +487,35 @@ def update_responses_input_with_model_file_ids(
                 ):
                     file_id = content_item.get("file_id")
                     if file_id:
-                        # Check if this is a managed file ID (base64-encoded unified file ID)
-                        is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-                        if is_unified_file_id:
-                            unified_file_id = convert_b64_uid_to_unified_uid(file_id)
-                            if "llm_output_file_id," in unified_file_id:
-                                provider_file_id = unified_file_id.split(
-                                    "llm_output_file_id,"
-                                )[1].split(";")[0]
-                            else:
-                                # Fallback: keep original if we can't extract
-                                provider_file_id = file_id
+                        provider_file_id = file_id  # Default to original
+                        
+                        # Check if we have a mapping for this file ID
+                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
+                            # Use the model-specific file ID from mapping
+                            provider_file_id = (
+                                model_file_id_mapping.get(file_id, {}).get(model_id)
+                                or file_id
+                            )
                             updated_content_item = content_item.copy()
                             updated_content_item["file_id"] = provider_file_id
                             updated_content.append(updated_content_item)
                         else:
-                            updated_content.append(content_item)
+                            # Check if this is a base64-encoded unified file ID without mapping
+                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+                            if is_unified_file_id:
+                                # Fallback: decode unified file ID
+                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
+                                if "llm_output_file_id," in unified_file_id:
+                                    provider_file_id = unified_file_id.split(
+                                        "llm_output_file_id,"
+                                    )[1].split(";")[0]
+                                
+                                updated_content_item = content_item.copy()
+                                updated_content_item["file_id"] = provider_file_id
+                                updated_content.append(updated_content_item)
+                            else:
+                                # Not a managed file, keep as-is
+                                updated_content.append(content_item)
                     else:
                         updated_content.append(content_item)
                 else:
@@ -504,6 +525,68 @@ def update_responses_input_with_model_file_ids(
         updated_input.append(updated_item)
 
     return updated_input
+
+
+def update_responses_tools_with_model_file_ids(
+    tools: Optional[List[Dict[str, Any]]],
+    model_id: Optional[str] = None,
+    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Updates responses API tools with provider-specific file IDs.
+    
+    Handles code_interpreter tools with container.file_ids.
+    
+    Args:
+        tools: The responses API tools parameter
+        model_id: The model ID to use for looking up provider-specific file IDs
+        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
+                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
+    """
+    if not tools or not isinstance(tools, list):
+        return tools
+    
+    if not model_file_id_mapping or not model_id:
+        return tools
+    
+    updated_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            updated_tools.append(tool)
+            continue
+        
+        updated_tool = tool.copy()
+        
+        # Handle code_interpreter with container file_ids
+        if tool.get("type") == "code_interpreter":
+            container = tool.get("container")
+            if isinstance(container, dict):
+                container_file_ids = container.get("file_ids")
+                if isinstance(container_file_ids, list):
+                    updated_file_ids = []
+                    for file_id in container_file_ids:
+                        if isinstance(file_id, str):
+                            # Check if we have a mapping for this file ID
+                            if file_id in model_file_id_mapping:
+                                # Map to provider-specific file ID
+                                provider_file_id = (
+                                    model_file_id_mapping.get(file_id, {}).get(model_id)
+                                    or file_id
+                                )
+                                updated_file_ids.append(provider_file_id)
+                            else:
+                                updated_file_ids.append(file_id)
+                        else:
+                            updated_file_ids.append(file_id)
+                    
+                    # Update the tool with new file IDs
+                    updated_container = container.copy()
+                    updated_container["file_ids"] = updated_file_ids
+                    updated_tool["container"] = updated_container
+        
+        updated_tools.append(updated_tool)
+    
+    return updated_tools
 
 
 def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
@@ -1071,9 +1154,9 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     """
     message_content = message.get("content")
     if "reasoning_content" in message:
-        return message["reasoning_content"], message["content"]
+        return message["reasoning_content"], message_content
     elif "reasoning" in message:
-        return message["reasoning"], message["content"]
+        return message["reasoning"], message_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content

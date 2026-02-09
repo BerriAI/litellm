@@ -49,7 +49,8 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+    npm install -g npm@latest tar@latest
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -62,6 +63,10 @@ COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+
+# Replace the nodejs-wheel-binaries bundled node with the system node (fixes CVE-2025-55130)
+RUN NODEJS_WHEEL_NODE=$(find /usr/lib -path "*/nodejs_wheel/bin/node" 2>/dev/null) && \
+    if [ -n "$NODEJS_WHEEL_NODE" ]; then cp /usr/bin/node "$NODEJS_WHEEL_NODE"; fi
 
 # Install semantic_router and aurelio-sdk using script
 # Convert Windows line endings to Unix and make executable
