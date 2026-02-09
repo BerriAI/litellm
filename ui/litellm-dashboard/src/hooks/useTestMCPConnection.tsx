@@ -52,7 +52,9 @@ export const useTestMCPConnection = ({
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
   // Check if we have the minimum required fields to fetch tools
-  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2;
+  const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2
+    && formValues.oauth_flow_type === "m2m";
+  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
   const canFetchTools = !!(
     formValues.url &&
     formValues.transport &&
