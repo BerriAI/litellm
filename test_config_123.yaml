@@ -1,26 +1,3605 @@
 ####################################################################
-### Simplified LiteLLM Proxy Configuration
+### EMEA PROD LiteLLM Proxy Configuration
 ####################################################################
 
+# Global API base for all model deployments (YAML anchor)
+x-api-base: &api_base http://localhost:8090
+
 general_settings:
-  master_key: sk-1234
-  disable_prisma_schema_update: true
-  database_url: <redacted>
+  master_key: REDACTED_MASTER_KEY  # set via env or replace for local use
+  background_health_checks: false
+  disable_spend_updates: true
+  health_check_interval: 300 # frequency of background health checks every 5 minutes (kept for reference)
+  health_check_details: false # Disable health check details for comprehensive testing
+
+  # NOTE: MANAGED BY CCoE. Set via env or replace with real URL.
+  database_url: postgresql://REDACTED_USER:REDACTED_PASSWORD@REDACTED_HOST/neondb?sslmode=require
+  disable_prisma_schema_update: true  # Disable Prisma migrations on startup
+
+  # TODO: The next two settings are in the best practices section, but they are not enabled by default.
+  # TODO: Discuss with Javier first, before you enable this
+  proxy_batch_write_at: 60 # Batch write spend updates every 60s
+  # database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
+  
+
+  use_redis_transaction_buffer: true # avoid deadlocks, see https://docs.litellm.ai/docs/proxy/db_deadlocks#stage-2-a-single-instance-flushes-the-redis-queue-to-the-db
+  
+  ## TODO: We might want to enable this in the future, but for now we disable it
+  store_model_in_db: true  # Disable DB storage to use file-based config only
+  supported_db_objects: []
+  # MS Teams Weboook 
+  # see also: https://docs.litellm.ai/docs/proxy/alerting#ms-teams-webhooks
+  alerting: ["slack"] 
+  alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
+  # See also: https://docs.litellm.ai/docs/proxy/alerting#all-possible-alert-types
+  alert_types: [
+    "llm_exceptions",
+    "llm_too_slow",
+    "llm_requests_hanging",
+    "budget_alerts",
+    "spend_reports",
+    "db_exceptions",
+    "daily_reports",
+    "cooldown_deployment",
+    "new_model_added",
+    "outage_alerts",
+    "new_virtual_key_created",
+    "failed_tracking_spend",
+    "db_deadlocks", # Critical for database issues
+    "memory_usage_high" # Critical for memory leak detection
+  ] 
 
 #################################
-### LiteLLM Settings
+### ADVANCED PROMETHEUS CONFIGURATION
+### Documentation: https://docs.litellm.ai/docs/proxy/prometheus
 #################################
 litellm_settings:
-  callbacks: ["prometheus"]
-  service_callback: ["prometheus_system"]
+  # Cache
+  cache: true
+  # NOTE: MANAGED BY CCoE. Set host/password via env or replace for local use.
+  cache_params:
+    type: redis
+    host: REDACTED_REDIS_HOST
+    port: 17950
+    username: default
+    password: REDACTED_REDIS_PASSWORD
+  
+  # =============================================================================
+  # PROMETHEUS CORE CONFIGURATION
+  # =============================================================================
+  
+  # # Enable Prometheus metrics collection, Langfuse integration, and OpenTelemetry
+  # # This exposes /metrics endpoint for Prometheus to scrape
+  # # Using standard langfuse callback for now - langfuse_otel has compatibility issues
+  # # Global Langfuse enabled for fallback when no team-specific settings
+  # # OpenTelemetry enabled for enterprise observability platform integration
+  # callbacks: ["prometheus", "langfuse"]
+
+  
+  
+  # # =============================================================================
+  # # SYSTEM HEALTH & INFRASTRUCTURE MONITORING
+  # # =============================================================================
+  
+  # # Enable system-level health monitoring for adjacent services
+  # # Monitors Redis latency, database performance, and LiteLLM self-performance
+  # # Metrics emitted: litellm_redis_latency, litellm_redis_fails, litellm_self_latency
+  # service_callback: ["prometheus_system"]
+  
+  # =============================================================================
+  # SECURITY & ACCESS CONTROL
+  # =============================================================================
+  
+  # Require authentication for /metrics endpoint access
+  # This prevents unauthorized access to sensitive usage and performance data
+  # Set to true in production environments
+  require_auth_for_metrics_endpoint: false
+  
+  # =============================================================================
+  # PERFORMANCE & DEBUGGING SETTINGS
+  # =============================================================================
+  
+  # Keep API key info visible for detailed tracking
+  redact_user_api_key_info: false
+  
+  # Enable comprehensive audit logging for compliance and debugging
+  store_audit_logs: true
+  
+  # Use structured JSON logs for better integration with log aggregation systems
+  json_logs: true # Better for log aggregation
+  
+  # =============================================================================
+  # DATABASE OPTIMIZATION (ADVANCED MONITORING FOCUS)
+  # =============================================================================
+  
+  # Disable detailed spend/error logs to reduce DB load while keeping Prometheus metrics
+  # This optimizes for metrics-based monitoring rather than detailed log analysis
+  disable_spend_logs: True    # Disable writing spend logs to DB - use Prometheus metrics instead
+  disable_error_logs: True    # Disable writing error logs to DB - use Prometheus alerts instead
+
+  # =============================================================================
+  # SELF-SERVE KEY GENERATION SETTINGS
+  # Documentation: https://docs.litellm.ai/docs/proxy/self_serve
+  # =============================================================================
+  
+  # Configure who can generate personal keys through the self-serve interface
+  # This enables controlled key generation for authorized users only
+  key_generation_settings:
+    team_key_generation:
+      allowed_team_member_roles: ["proxy_admin"]  # Only proxy admins and team admins can generate team keys
+    personal_key_generation:
+      allowed_user_roles: ["proxy_admin"]  # Only proxy admins can generate personal keys
+
+
+  # =============================================================================
+  # General LANGFUSE Settings - Standard Integration
+  # =============================================================================
+
+  # Enable Langfuse tracking for all teams with default tags using standard protocol
+  # Standard langfuse callback provides reliable trace collection for now
+  #
+  # Documentation: https://docs.litellm.ai/docs/observability/langfuse_integration
+  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"]
+
 
 #################################
-### Models - One model only
+### Router Settings - Fallbacks
 #################################
+
+router_settings:
+  # Simple string mapping (alias -> model)
+  model_group_alias: {
+    "gpt-o1": "gpt-o1-20241217",
+    "gpt-4o-global": "gpt-4o-20241120-global",
+    "gpt-4": "gpt-4",
+    "gpt-35-turbo": "gpt-35-turbo",
+    "eu-gpt-o1": "gpt-o1-20241217",
+    "na-gpt-o1": "gpt-o1-20241217",
+    "eu-gpt-4o": "gpt-4o-20241120-global",
+    "na-gpt-4o": "gpt-4o-20241120-global",
+    "gpt-4o-load-balanced": "gpt-4o-global-balanced"
+  }
+
+  enable_tag_filtering: True
+  routing_strategy: "simple-shuffle" # Best optimised for PROD environments
+  cooldown_time: 30 # Faster recovery than default
+  num_retries: 2 # Faster failure detection
+  
+  fallbacks:
+    - {"gpt-4o-20241120-global": ["gpt-4o-20241120-global"]}
+    - {"gpt-4": ["gpt-4"]}
+    - {"gpt-4o-global-balanced": ["gpt-4o-global-balanced"]}
+    - {"gpt-o1-20241217": ["gpt-o1-20241217"]}
+    - {"gpt-35-turbo": ["gpt-35-turbo"]}
+    - {"gpt-35-turbo-16k": ["gpt-35-turbo-16k"]}
+    - {"text-embedding-3-large": ["text-embedding-3-large"]}
+    - {"gpt-4o-realtime-preview": ["gpt-4o-realtime-preview"]}
+
+#################################
+###  Models - Azure OpenAI
+#################################
+
 model_list:
-  - model_name: "gpt-o1"
+  # TODO: Reconfigure the load balanced models with the new instances, as now we have more of them having this deployments names to be load-balanced
+  # Multi-Region - Load Balanced through routing strategy
+  - model_name: "gpt-o1-20241217"
     litellm_params:
-      model: openai/gpt-o1
-      api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
+      model: azure/gpt-o1-20241217
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
     model_info:
+      base_model: "o1-2024-12-17"
+      access_groups: ["Default", "EMEA"]
       context_length: 200000
+  - model_name: "gpt-o1-20241217"
+    litellm_params:
+      model: azure/gpt-o1-20241217
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "o1-2024-12-17"
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "gpt-4o-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20241120-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "NA"]
+      context_length: 65536
+  - model_name: "gpt-4o-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  
+  # ============================================
+  # Sweden Central (sc) - Chat Completion Models
+  # ============================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-o3-20250416-global"
+    litellm_params:
+      model: azure/gpt-o3-20250416-global
+      base_model: "o3"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o3"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "gpt-5.1-20251113-global"
+    litellm_params:
+      model: azure/gpt-5.1-20251113-global
+      base_model: "gpt-5.1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-5.1"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-5.1-20251113-datazone"
+    litellm_params:
+      model: azure/gpt-5.1-20251113-datazone
+      base_model: "gpt-5.1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-5.1"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-5.2-20251211-global"
+    litellm_params:
+      model: azure/gpt-5.2-20251211-global
+      base_model: "gpt-5.2"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-5.2"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-5-20250807-global"
+    litellm_params:
+      model: azure/gpt-5-20250807-global
+      base_model: "gpt-5"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-5"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-5-mini-20250807-global"
+    litellm_params:
+      model: azure/gpt-5-mini-20250807-global
+      base_model: "gpt-5-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-5-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-5-nano-20250807-global"
+    litellm_params:
+      model: azure/gpt-5-nano-20250807-global
+      base_model: "gpt-5-nano"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-5-nano"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-datazone
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "GPT-4o-20240513-standard"
+    litellm_params:
+      model: azure/GPT-4o-20240513-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240806-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20240806-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240806-standard"
+    litellm_params:
+      model: azure/gpt-4o-20240806-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-datazone"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-standard"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-standard
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-o1-20241217"
+    litellm_params:
+      model: azure/gpt-o1-20241217
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o1-2024-12-17"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "GPT-o1-mini-20240912"
+    litellm_params:
+      model: azure/GPT-o1-mini-20240912
+      base_model: "o1-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o1-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "gpt-o3-mini-20250131"
+    litellm_params:
+      model: azure/gpt-o3-mini-20250131
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o3-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o4-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o1-20241217-datazone"
+    litellm_params:
+      model: azure/o1-20241217-datazone
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o1-2024-12-17"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o1-mini-20240912-standard"
+    litellm_params:
+      model: azure/o1-mini-20240912-standard
+      base_model: "o1-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o1-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-20250416-datazone"
+    litellm_params:
+      model: azure/o3-20250416-datazone
+      base_model: "o3"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o3"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-datazone"
+    litellm_params:
+      model: azure/o3-mini-20250131-datazone
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o3-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o4-mini-20250416-datazone"
+    litellm_params:
+      model: azure/o4-mini-20250416-datazone
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "o4-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  
+  # =============================
+  # Sweden Central - Audio Models
+  # =============================
+  - model_name: "tts-1"
+    litellm_params:
+      model: azure/tts-001
+      base_model: "tts-1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio"
+  - model_name: "tts-1-hd"
+    litellm_params:
+      model: azure/tts-hd-001
+      base_model: "tts-1-hd"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio"
+  - model_name: "whisper-1"
+    litellm_params:
+      model: azure/whisper
+      base_model: "whisper-1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio"
+  - model_name: "gpt-4o-audio-preview-20241217"
+    litellm_params:
+      model: azure/gpt-4o-audio-preview-20241217
+      base_model: "gpt-4o"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio"
+  
+  # ========================================
+  # Sweden Central - Image Generation Models
+  # ========================================
+  - model_name: "dall-e-3"
+    litellm_params:
+      model: azure/dall-e-3
+      base_model: "dall-e-3"
+      api_version: 2023-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "image"
+  
+  # ==================================
+  # Sweden Central - Embeddings Models
+  # ==================================
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-large"
+    litellm_params:
+      model: azure/text-embedding-3-large
+      base_model: "text-embedding-3-large"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      base_model: "text-embedding-3-large"
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+
+  # =======================================
+  # Sweden Central (sc) - Transcribe Models
+  # =======================================
+  - model_name: "gpt-4o-transcribe-20250320-global"
+    litellm_params:
+      model: azure/gpt-4o-transcribe-20250320-global
+      base_model: "gpt-4o-transcribe"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio_transcription"
+  - model_name: "gpt-4o-mini-transcribe-20250320-global"
+    litellm_params:
+      model: azure/gpt-4o-mini-transcribe-20250320-global
+      base_model: "gpt-4o-mini-transcribe"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio_transcription"
+  - model_name: "gpt-4o-transcribe-diarize-20251015-global"
+    litellm_params:
+      model: azure/gpt-4o-transcribe-diarize-20251015-global
+      base_model: "gpt-4o-transcribe-diarize"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio_transcription"
+  
+  # =========================================
+  # East US 2 (eus2) - Chat Completion Models
+  # =========================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-o3-20250416-global"
+    litellm_params:
+      model: azure/gpt-o3-20250416-global
+      base_model: "o3"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "gpt-4.1-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-datazone
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-2024-08-06-Standard"
+    litellm_params:
+      model: azure/gpt-4o-2024-08-06-Standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "GPT-4o-20240513-standard"
+    litellm_params:
+      model: azure/GPT-4o-20240513-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-datazone"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-standard"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-standard
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-standard"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-standard
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-5.1-20251113-global"
+    litellm_params:
+      model: azure/gpt-5.1-20251113-global
+      base_model: "gpt-5.1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-5.1"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-5.1-20251113-datazone"
+    litellm_params:
+      model: azure/gpt-5.1-20251113-datazone
+      base_model: "gpt-5.1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-5.1"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-5.2-20251211-global"
+    litellm_params:
+      model: azure/gpt-5.2-20251211-global
+      base_model: "gpt-5.2"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-5.2"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-5-20250807-global"
+    litellm_params:
+      model: azure/gpt-5-20250807-global
+      base_model: "gpt-5"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-5"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-5-mini-20250807-global"
+    litellm_params:
+      model: azure/gpt-5-mini-20250807-global
+      base_model: "gpt-5-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-5-mini"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-5-nano-20250807-global"
+    litellm_params:
+      model: azure/gpt-5-nano-20250807-global
+      base_model: "gpt-5-nano"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "gpt-5-nano"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-o1-20241217"
+    litellm_params:
+      model: azure/gpt-o1-20241217
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "o1-2024-12-17"
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "GPT-o1-mini-20240912"
+    litellm_params:
+      model: azure/GPT-o1-mini-20240912
+      base_model: "o1-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "gpt-o3-mini-20250131"
+    litellm_params:
+      model: azure/gpt-o3-mini-20250131
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-20241217-datazone"
+    litellm_params:
+      model: azure/o1-20241217-datazone
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-mini-20240912-standard"
+    litellm_params:
+      model: azure/o1-mini-20240912-standard
+      base_model: "o1-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-20250416-datazone"
+    litellm_params:
+      model: azure/o3-20250416-datazone
+      base_model: "o3"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-datazone"
+    litellm_params:
+      model: azure/o3-mini-20250131-datazone
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-pro-20250610-global"
+    litellm_params:
+      model: azure/o3-pro-20250610-global
+      base_model: "o3"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o4-mini-20250416-datazone"
+    litellm_params:
+      model: azure/o4-mini-20250416-datazone
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  
+  # =============================
+  # East US 2 - Embeddings Models
+  # =============================
+  - model_name: "text-text-embedding-3-1-small-global"
+    litellm_params:
+      model: azure/text-embedding-3-1-small-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-large"
+    litellm_params:
+      model: azure/text-embedding-3-large
+      base_model: "text-embedding-3-large"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      base_model: "text-embedding-3-large"
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small"
+    litellm_params:
+      model: azure/text-embedding-3-small
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+
+  # ====================================
+  # East US 2 (eus2) - Transcribe Models
+  # ====================================
+  - model_name: "gpt-4o-mini-transcribe-20250320-global"
+    litellm_params:
+      model: azure/gpt-4o-mini-transcribe-20250320-global
+      base_model: "gpt-4o-mini-transcribe"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "audio_transcription"
+  - model_name: "gpt-4o-transcribe-20250320-global"
+    litellm_params:
+      model: azure/gpt-4o-transcribe-20250320-global
+      base_model: "gpt-4o-transcribe"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "audio_transcription"
+  - model_name: "gpt-4o-transcribe-diarize-20251015-global"
+    litellm_params:
+      model: azure/gpt-4o-transcribe-diarize-20251015-global
+      base_model: "gpt-4o-transcribe-diarize"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "audio_transcription"
+  
+  # ========================
+  # East US 2 - Audio Models
+  # ========================
+  - model_name: "gpt-4o-audio-preview-20241217"
+    litellm_params:
+      model: azure/gpt-4o-audio-preview-20241217
+      base_model: "gpt-4o"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "audio"
+  - model_name: "gpt-4o-mini-tts-20240320-global"
+    litellm_params:
+      model: azure/gpt-4o-mini-tts-20240320-global
+      base_model: "tts-1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "audio"
+  
+  # ===================
+  # Realtime API Models
+  # ===================
+  - model_name: "gpt-realtime-20250828-standard"
+    litellm_params:
+      model: azure/gpt-realtime-20250828-standard
+      base_model: "gpt-realtime-2025-08-28"
+      api_version: 2025-04-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "realtime"
+      context_length: 128000
+  - model_name: "gpt-realtime-20250828-standard"
+    litellm_params:
+      model: azure/gpt-realtime-20250828-standard
+      base_model: "gpt-realtime-2025-08-28"
+      api_version: 2025-04-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "realtime"
+      context_length: 128000
+  - model_name: "gpt-4o-realtime-preview-20241217-global"
+    litellm_params:
+      model: azure/gpt-4o-realtime-preview-20241217-global
+      base_model: "gpt-4o-realtime-preview-2024-12-17"
+      api_version: 2025-04-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "realtime"
+      context_length: 128000
+  - model_name: "gpt-4o-mini-realtime-preview-20241217-global"
+    litellm_params:
+      model: azure/gpt-4o-mini-realtime-preview-20241217-global
+      base_model: "gpt-4o-realtime-preview"
+      api_version: 2025-04-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "realtime"
+      context_length: 128000
+
+  # ================
+  # Video API Models
+  # ================
+  - model_name: "sora-2-20251006-global"
+    litellm_params:
+      model: azure/sora-2-20251006-global
+      base_model: "azure/sora-2"              
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "sweden-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+  - model_name: "sora-2-20251006-global"
+    litellm_params:
+      model: azure/sora-2-20251006-global
+      base_model: "azure/sora-2"              
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us-2", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+
+  # ============================================
+  # Australia East (ae) - Chat Completion Models
+  # ============================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  
+  # =============================================
+  # Australia East (ae) - Image Generation Models
+  # =============================================
+  - model_name: "dall-e-3"
+    litellm_params:
+      model: azure/dall-e-3
+      base_model: "dall-e-3"
+      api_version: 2023-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "image"
+  
+  # =======================================
+  # Australia East (ae) - Embeddings Models
+  # =======================================
+  - model_name: "text-embedding-3-large"
+    litellm_params:
+      model: azure/text-embedding-3-large
+      base_model: "text-embedding-3-large"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      base_model: "text-embedding-3-large"
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small"
+    litellm_params:
+      model: azure/text-embedding-3-small
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "australia-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+
+  # =========================================
+  # Canada East (ce) - Chat Completion Models
+  # =========================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-20241207-global"
+    litellm_params:
+      model: azure/o1-20241207-global
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  
+  # ====================================
+  # Canada East (ce) - Embeddings Models
+  # ====================================
+  - model_name: "text-embedding-3-large"
+    litellm_params:
+      model: azure/text-embedding-3-large
+      base_model: "text-embedding-3-large"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      base_model: "text-embedding-3-large"
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small"
+    litellm_params:
+      model: azure/text-embedding-3-small
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "canada-east", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+
+  # ======================================
+  # East US (eus) - Chat Completion Models
+  # ======================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20241120-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 65536
+  - model_name: "gpt-35-turbo-instruct"
+    litellm_params:
+      model: azure/gpt-35-turbo-instruct
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo-instruct"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-datazone
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "GPT-4o-20240513-standard"
+    litellm_params:
+      model: azure/GPT-4o-20240513-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240806-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20240806-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240806-standard"
+    litellm_params:
+      model: azure/gpt-4o-20240806-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-datazone"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-standard"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-standard
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-20241207-global"
+    litellm_params:
+      model: azure/o1-20241207-global
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-mini-20240912-global"
+    litellm_params:
+      model: azure/o1-mini-20240912-global
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-mini-20240912-standard"
+    litellm_params:
+      model: azure/o1-mini-20240912-standard
+      base_model: "o1-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-20250416-datazone"
+    litellm_params:
+      model: azure/o3-20250416-datazone
+      base_model: "o3"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-datazone"
+    litellm_params:
+      model: azure/o3-mini-20250131-datazone
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o4-mini-20250416-datazone"
+    litellm_params:
+      model: azure/o4-mini-20250416-datazone
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  
+  # =======================================
+  # East US (eus) - Image Generation Models
+  # =======================================
+  - model_name: "dall-e-3"
+    litellm_params:
+      model: azure/dall-e-3
+      base_model: "dall-e-3"
+      api_version: 2023-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "image"
+  
+  # =================================
+  # East US (eus) - Embeddings Models
+  # =================================
+  - model_name: "text-embedding-3-large"
+    litellm_params:
+      model: azure/text-embedding-3-large
+      base_model: "text-embedding-3-large"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      base_model: "text-embedding-3-large"
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small"
+    litellm_params:
+      model: azure/text-embedding-3-small
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "east-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+
+  # ============================================
+  # France Central (fc) - Chat Completion Models
+  # ============================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20241120-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 65536
+  - model_name: "gpt-4.1-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-datazone
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240806-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20240806-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-datazone"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o1-20241217-datazone"
+    litellm_params:
+      model: azure/o1-20241217-datazone
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o1-20241217-global"
+    litellm_params:
+      model: azure/o1-20241217-global
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-20250416-datazone"
+    litellm_params:
+      model: azure/o3-20250416-datazone
+      base_model: "o3"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-datazone"
+    litellm_params:
+      model: azure/o3-mini-20250131-datazone
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o4-mini-20250416-datazone"
+    litellm_params:
+      model: azure/o4-mini-20250416-datazone
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  
+  # =======================================
+  # France Central (fc) - Embeddings Models
+  # =======================================
+  - model_name: "text-embedding-3-large-1-standard"
+    litellm_params:
+      model: azure/text-embedding-3-large-1-standard
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "france-central", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+
+  # ========================================
+  # Japan East (je) - Chat Completion Models
+  # ========================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: "o1-20241217-global"
+    litellm_params:
+      model: azure/o1-20241217-global
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  
+  # ===================================
+  # Japan East (je) - Embeddings Models
+  # ===================================
+  - model_name: "text-embedding-3-large-1-standard"
+    litellm_params:
+      model: azure/text-embedding-3-large-1-standard
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-standard"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-standard
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["APAC", "japan-east", "azure"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      mode: "embedding"
+
+  # =======================================
+  # UK South (uks) - Chat Completion Models
+  # =======================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o1-20241217-global"
+    litellm_params:
+      model: azure/o1-20241217-global
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  
+  # ==================================
+  # UK South (uks) - Embeddings Models
+  # ==================================
+  - model_name: "text-embedding-3-large-1-standard"
+    litellm_params:
+      model: azure/text-embedding-3-large-1-standard
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "uk-south", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+
+  # =========================================
+  # West Europe (we) - Chat Completion Models
+  # =========================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20241120-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 65536
+  - model_name: "gpt-4.1-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-datazone
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240806-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20240806-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o1-20241217-datazone"
+    litellm_params:
+      model: azure/o1-20241217-datazone
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o1-20241217-global"
+    litellm_params:
+      model: azure/o1-20241217-global
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-20250416-datazone"
+    litellm_params:
+      model: azure/o3-20250416-datazone
+      base_model: "o3"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-datazone"
+    litellm_params:
+      model: azure/o3-mini-20250131-datazone
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: "o4-mini-20250416-datazone"
+    litellm_params:
+      model: azure/o4-mini-20250416-datazone
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  
+  # ===============================
+  # West Europe (we) - Audio Models
+  # ===============================
+  - model_name: "whisper-1"
+    litellm_params:
+      model: azure/whisper
+      base_model: "whisper-1"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "audio"
+
+  # ====================================
+  # West Europe (we) - Embeddings Models
+  # ====================================
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "west-europe", "azure"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      mode: "embedding"
+
+  # ======================================
+  # West US (wus) - Chat Completion Models
+  # ======================================
+  - model_name: "gpt-35-turbo"
+    litellm_params:
+      model: azure/gpt-35-turbo
+      base_model: "gpt-3.5-turbo"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      base_model: "gpt-3.5-turbo"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20241120-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 65536
+  - model_name: "gpt-4.1-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-datazone
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-20250414-global
+      base_model: "gpt-4"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      base_model: "gpt-4"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-mini-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-mini-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      base_model: "gpt-4o-mini"
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-datazone"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4.1-nano-20250414-global"
+    litellm_params:
+      model: azure/gpt-4.1-nano-20250414-global
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-2024-08-06-Standard"
+    litellm_params:
+      model: azure/gpt-4o-2024-08-06-Standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240513-global"
+    litellm_params:
+      model: azure/gpt-4o-20240513-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "GPT-4o-20240513-standard"
+    litellm_params:
+      model: azure/GPT-4o-20240513-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20240806-datazone"
+    litellm_params:
+      model: azure/gpt-4o-20240806-datazone
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-global"
+    litellm_params:
+      model: azure/gpt-4o-20241120-global
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-20241120-standard"
+    litellm_params:
+      model: azure/gpt-4o-20241120-standard
+      base_model: "gpt-4o"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-datazone"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-datazone
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-4o-mini-20240718-standard"
+    litellm_params:
+      model: azure/gpt-4o-mini-20240718-standard
+      base_model: "gpt-4o-mini"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 128000
+  - model_name: "gpt-o4-mini-20250416-global"
+    litellm_params:
+      model: azure/gpt-o4-mini-20250416-global
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-20241207-global"
+    litellm_params:
+      model: azure/o1-20241207-global
+      base_model: "o1-2024-12-17"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-mini-20240912-global"
+    litellm_params:
+      model: azure/o1-mini-20240912-global
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o1-mini-20240912-standard"
+    litellm_params:
+      model: azure/o1-mini-20240912-standard
+      base_model: "o1-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-20250416-datazone"
+    litellm_params:
+      model: azure/o3-20250416-datazone
+      base_model: "o3"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-datazone"
+    litellm_params:
+      model: azure/o3-mini-20250131-datazone
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o3-mini-20250131-global"
+    litellm_params:
+      model: azure/o3-mini-20250131-global
+      base_model: "o3-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: "o4-mini-20250416-datazone"
+    litellm_params:
+      model: azure/o4-mini-20250416-datazone
+      base_model: "o4-mini"
+      api_version: 2024-12-01-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  
+  # =================================
+  # West US (wus) - Embeddings Models
+  # =================================
+  - model_name: "text-embedding-3-small-1-global"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-global
+      base_model: "text-embedding-3-small"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-3-small-1-standard"
+    litellm_params:
+      model: azure/text-embedding-3-small-1-standard
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+  - model_name: "text-embedding-ada-002"
+    litellm_params:
+      model: azure/text-embedding-ada-002
+      base_model: "text-embedding-ada-002"
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us", "azure"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      mode: "embedding"
+
+  # =====================
+  # West US3 (wus3) - PTU
+  # =====================
+  - model_name: "GPT-4o-2024-05-13-PTU"
+    litellm_params:
+      model: azure/GPT-4o-2024-05-13-PTU
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["NA", "west-us-3", "azure"]
+    model_info:
+      access_groups: ["PTU"]
+      context_length: 128000
+
+  # ===========================
+  # AWS Frankfurt (fr) - Models
+  # ===========================
+  - model_name: eu.anthropic.claude-haiku-4-5-20251001-v1:0
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: amazon.titan-text-express-v1
+    litellm_params:
+      model: bedrock/amazon.titan-text-express-v1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: global.anthropic.claude-sonnet-4-5-20250929-v1:0
+    litellm_params:
+      model: bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: amazon.titan-embed-text-v1
+    litellm_params:
+      model: bedrock/amazon.titan-embed-text-v1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-sonnet-20240229-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-haiku-20240307-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-5-sonnet-20240620-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: eu.anthropic.claude-3-7-sonnet-20250219-v1:0
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-3-7-sonnet-20250219-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: eu.anthropic.claude-sonnet-4-20250514-v1:0
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  
+  # ========================================
+  # Ireland (eu-west-1) - AWS Bedrock Models
+  # ========================================
+  - model_name: anthropic.claude-3-sonnet-20240229-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: global.anthropic.claude-sonnet-4-5-20250929-v1:0
+    litellm_params:
+      model: bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-haiku-20240307-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: eu.anthropic.claude-3-7-sonnet-20250219-v1:0
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-3-7-sonnet-20250219-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: mistral.mistral-large-2402-v1:0
+    litellm_params:
+      model: bedrock/mistral.mistral-large-2402-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: mistral.mistral-7b-instruct-v0:2
+    litellm_params:
+      model: bedrock/mistral.mistral-7b-instruct-v0:2
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: mistral.mixtral-8x7b-instruct-v0:1
+    litellm_params:
+      model: bedrock/mistral.mixtral-8x7b-instruct-v0:1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  - model_name: eu.anthropic.claude-sonnet-4-20250514-v1:0
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["EMEA", "ireland", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 200000
+  
+  # ============================================
+  # Sydney (ap-southeast-2) - AWS Bedrock Models
+  # ============================================
+  - model_name: au.anthropic.claude-haiku-4-5-20251001-v1:0
+    litellm_params:
+      model: bedrock/au.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-haiku-20240307-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-sonnet-20240229-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: amazon.titan-embed-text-v1
+    litellm_params:
+      model: bedrock/amazon.titan-embed-text-v1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: amazon.titan-text-express-v1
+    litellm_params:
+      model: bedrock/amazon.titan-text-express-v1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: cohere.embed-english-v3
+    litellm_params:
+      model: bedrock/cohere.embed-english-v3
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: cohere.embed-multilingual-v3
+    litellm_params:
+      model: bedrock/cohere.embed-multilingual-v3
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: amazon.titan-embed-text-v2:0
+    litellm_params:
+      model: bedrock/amazon.titan-embed-text-v2:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-5-sonnet-20241022-v2:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: mistral.mistral-large-2402-v1:0
+    litellm_params:
+      model: bedrock/mistral.mistral-large-2402-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: mistral.mistral-7b-instruct-v0:2
+    litellm_params:
+      model: bedrock/mistral.mistral-7b-instruct-v0:2
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  - model_name: mistral.mixtral-8x7b-instruct-v0:1
+    litellm_params:
+      model: bedrock/mistral.mixtral-8x7b-instruct-v0:1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["APAC", "sydney", "aws"]
+    model_info:
+      access_groups: ["Default", "APAC"]
+      context_length: 200000
+  
+  # ===============================================
+  # North Virginia (us-east-1) - AWS Bedrock Models
+  # ===============================================
+  - model_name: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: amazon.titan-text-express-v1
+    litellm_params:
+      model: bedrock/amazon.titan-text-express-v1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: global.anthropic.claude-sonnet-4-5-20250929-v1:0
+    litellm_params:
+      model: bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: amazon.titan-embed-text-v1
+    litellm_params:
+      model: bedrock/amazon.titan-embed-text-v1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-sonnet-20240229-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-haiku-20240307-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: anthropic.claude-3-5-sonnet-20240620-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: us.anthropic.claude-3-5-sonnet-20241022-v2:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: us.anthropic.claude-3-7-sonnet-20250219-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: us.deepseek.r1-v1:0
+    litellm_params:
+      model: bedrock/us.deepseek.r1-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: mistral.mistral-large-2402-v1:0
+    litellm_params:
+      model: bedrock/mistral.mistral-large-2402-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: mistral.mistral-7b-instruct-v0:2
+    litellm_params:
+      model: bedrock/mistral.mistral-7b-instruct-v0:2
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: mistral.mixtral-8x7b-instruct-v0:1
+    litellm_params:
+      model: bedrock/mistral.mixtral-8x7b-instruct-v0:1
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: mistral.mistral-small-2402-v1:0
+    litellm_params:
+      model: bedrock/mistral.mistral-small-2402-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+  - model_name: us.anthropic.claude-opus-4-20250514-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-4-20250514-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["NA", "north-virginia", "aws"]
+    model_info:
+      access_groups: ["Default", "NA"]
+      context_length: 200000
+
+  # ===========================
+  # Global - AWS Bedrock Models
+  # ===========================
+  - model_name: global.anthropic.claude-haiku-4-5-20251001-v1:0
+    litellm_params:
+      model: bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_access_key_id: dummy-aws-access-key
+      aws_secret_access_key: dummy-aws-secret-key
+      api_base: *api_base
+      tags: ["Default", "frankfurt", "aws"]
+    model_info:
+      access_groups: ["Default", "EMEA", "APAC", "NA"]
+      context_length: 200000
+
+#################################
+### Models - Google Gemini (Europe West)
+#################################
+  
+  # ==================================
+  # Europe West - Google Gemini Models
+  # ==================================
+  - model_name: embedding-001
+    litellm_params:
+      model: gemini/embedding-001
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: text-embedding-004
+    litellm_params:
+      model: gemini/text-embedding-004
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: gemini-2.0-flash-001
+    litellm_params:
+      model: gemini/gemini-2.0-flash-001
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: gemini-2.0-flash-lite
+    litellm_params:
+      model: gemini/gemini-2.0-flash-lite
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: gemini-3-pro-preview
+    litellm_params:
+      model: gemini/gemini-3-pro-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: gemini-3-flash-preview
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+  - model_name: gemini-3-pro-image-preview
+    litellm_params:
+      model: gemini/gemini-3-pro-image-preview
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+
+  # ============================
+  # Video - Google Gemini Models
+  # ============================
+  - model_name: veo-3.1-generate-001
+    litellm_params:
+      model: gemini/veo-3.1-generate-001
+      api_key: REDACTED_MODEL_API_KEY
+      api_base: *api_base
+      tags: ["EMEA", "europe-west", "gcp"]
+    model_info:
+      access_groups: ["Default", "EMEA"]
+      context_length: 4000000
+
+#################################
+### Environment Variables
+#################################
+
+environment_variables:
+  SLACK_WEBHOOK_URL: "REDACTED"  # set via env or replace for alerting
+  # # Langfuse credentials (required for langfuse callback)
+  # LANGFUSE_PUBLIC_KEY: "REDACTED"
+  # LANGFUSE_SECRET_KEY: "REDACTED"
+  # LANGFUSE_HOST: "https://us.cloud.langfuse.com"
