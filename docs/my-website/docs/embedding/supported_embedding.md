@@ -632,7 +632,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
 </TabItem>
 </Tabs>
 
-## Nebius AI Studio Embedding Models
+## Nebius Token Factory Embedding Models
 
 ### Usage - Embedding
 ```python
@@ -648,7 +648,7 @@ print(response)
 ```
 
 ### Supported Models
-All supported models can be found here: https://studio.nebius.ai/models/embedding
+All supported models can be found here: https://tokenfactory.nebius.com/models
 
 | Model Name               | Function Call                                                   |
 |--------------------------|-----------------------------------------------------------------|

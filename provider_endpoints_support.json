@@ -1450,7 +1450,7 @@
       }
     },
     "nebius": {
-      "display_name": "Nebius AI Studio (`nebius`)",
+      "display_name": "Nebius Token Factory (`nebius`)",
       "url": "https://docs.litellm.ai/docs/providers/nebius",
       "endpoints": {
         "chat_completions": true,
