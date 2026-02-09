@@ -1,112 +1,14 @@
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: text-embedding-3-small
-    litellm_params:
-      model: openai/text-embedding-3-small
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: google/gemini-3-flash-preview
-    litellm_params:
-      model: gemini/gemini-3-flash-preview
-      api_key: os.environ/GOOGLE_API_KEY
-
-  - model_name: claude-sonnet-4-5
-    litellm_params:
-      model: anthropic/claude-sonnet-4-5-20250929
-
-  - model_name: chatgpt/gpt-5.2
-    model_info:
-      mode: responses
-    litellm_params:
-      model: chatgpt/gpt-5.2
-
-  - model_name: chatgpt/gpt-5.2-codex
-    model_info:
-      mode: responses
-    litellm_params:
-      model: chatgpt/gpt-5.2-codex
-
-
-  - model_name: google/gemini-3-pro-preview
-    litellm_params:
-      model: gemini/gemini-3-pro-preview
-      api_key: os.environ/GOOGLE_API_KEY
-
-  - model_name: google/gemini-2.5-flash-lite
-    litellm_params:
-      model: gemini/gemini-2.5-flash-lite
-      api_key: os.environ/GOOGLE_API_KEY
-
-  - model_name: openai/gpt-5
-    litellm_params:
-      model: openai/gpt-5
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: openai/gpt-5-mini
-    litellm_params:
-      model: openai/gpt-5-mini
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: openai/gpt-5.2
-    litellm_params:
-      model: openai/gpt-5.2
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: anthropic/claude-haiku-4-5
-    litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: anthropic/claude-sonnet-4-5
-    litellm_params:
-      model: anthropic/claude-sonnet-4-5-20250929
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: anthropic/claude-opus-4-5
-    litellm_params:
-      model: anthropic/claude-opus-4-5-20251101
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: zai/glm-4.7
-    litellm_params:
-      model: zai/glm-4.7
-      api_key: os.environ/ZAI_API_KEY
-  - model_name: auto
-    litellm_params:
-      model: "auto_router/auto_router_1"
-      auto_router_config_path: "/home/jtwittmayer/workspace/litellm/litellm/router_strategy/auto_router/routing_rules.yaml"
-      auto_router_default_model: "google/gemini-3-flash-preview"
-
-# MCP Server Configuration
-mcp_servers:
-  # Wikipedia MCP - reliable and works without external deps
-  wikipedia:
-    transport: "stdio"
-    command: "uvx"
-    args: ["mcp-server-fetch"]
-    description: "Fetch web pages and Wikipedia content"
-  deepwiki:
-    transport: "http"
-    url: "https://mcp.deepwiki.com/mcp"
+model_list: []
 
 # General Settings
 general_settings:
-  forward_client_headers_to_llm_api: true  # Required: forwards OAuth token to Anthropic
+  forward_client_headers_to_llm_api: true
   store_model_in_db: false
-
 
 # LiteLLM Settings
 router_settings:
-  model_group_alias:
-    "claude-sonnet-4-5-20250929": "claude-sonnet-4-5"
-    "claude-sonnet-4-5-20250514": "claude-sonnet-4-5"
-    "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4-5"
+  model_group_alias: {}
 
 litellm_settings:
   master_key: sk-1234
   drop_params: true
-  
