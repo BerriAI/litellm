@@ -243,6 +243,8 @@ The issue was caused by hitting the database on every request when Prometheus wa
 
 > It was hard to diagnose because Prometheus was catching database errors and only logging them at debug level. Fixed by commit `d37796662` (adds `_log_budget_lookup_failure` to surface errors). This error is very important—it stops the cache from working properly.
 
+
+
 ## Baseline Latency Spikes (Separate from Prometheus)
 
 **Issue:** Zurich reports huge latency spikes even when callbacks are off. Unlike the Prometheus callback issue (which adds ~2.6× latency when enabled), this baseline behavior affects both configs roughly equally.
@@ -281,24 +283,64 @@ The issue was caused by hitting the database on every request when Prometheus wa
 - [x] `--user-mode sequential` → `callbacks_off_user_sequential.txt`
 - [x] `--user-mode random` → `callbacks_off_user_random.txt`
 
-**Compare:** If `none` shows much lower latency than `random`/`sequential`, end_user DB lookups are a contributor. If all three are similar, the bottleneck is elsewhere.
+**Callbacks off + per_user keys** (one key per user via `/key/generate`; isolates key lookup vs shared-key cache):
+
+- [x] `--user-mode none --key-mode per_user` → `callbacks_off_user_none_key_per_user.txt`
+- [x] `--user-mode sequential --key-mode per_user` → `callbacks_off_user_sequential_key_per_user.txt`
+- [x] `--user-mode random --key-mode per_user` → `callbacks_off_user_random_key_per_user.txt`
 
 #### Analysis (1000 requests, 100 users)
 
 **Data summary**
 
-| Config        | User mode   | avg    | p95    | Above 1s |
-|---------------|-------------|--------|--------|----------|
-| Callbacks on  | none        | 1.099s | 7.767s | 10.0%    |
-| Callbacks on  | sequential  | 1.702s | 8.524s | 37.7%    |
-| Callbacks on  | random      | 1.773s | 8.598s | 42.5%    |
-| Callbacks off | none        | 0.998s | 7.966s | 10.0%    |
-| Callbacks off | sequential  | 1.532s | 8.626s | 31.8%    |
-| Callbacks off | random      | 1.556s | 8.036s | 34.3%    |
+| Config        | User mode   | Key mode  | avg    | p95    | Above 1s |
+|---------------|-------------|-----------|--------|--------|----------|
+| Callbacks on  | none        | shared    | 1.099s | 7.767s | 10.0%    |
+| Callbacks on  | sequential  | shared    | 1.702s | 8.524s | 37.7%    |
+| Callbacks on  | random      | shared    | 1.773s | 8.598s | 42.5%    |
+| Callbacks off | none        | shared    | 0.998s | 7.966s | 10.0%    |
+| Callbacks off | sequential  | shared    | 1.532s | 8.626s | 31.8%    |
+| Callbacks off | random      | shared    | 1.556s | 8.036s | 34.3%    |
+| Callbacks off | none        | per_user  | 1.137s | 8.371s | 10.0%    |
+| Callbacks off | sequential  | per_user  | 1.767s | 9.057s | 40.6%    |
+| Callbacks off | random      | per_user  | 1.590s | 8.724s | 30.9%    |
 
 **Findings**
 
-1. **Passing `user` adds significant latency.** `none` has ~10% of requests above 1s vs ~32–43% when `user` is passed. Avg latency with `none` (~1.0–1.1s) is ~35–55% lower than with `sequential`/`random` (~1.5–1.8s).
-2. **End_user lookups are a contributor.** The large gap between `none` and the other modes points to end_user DB/cache lookups adding measurable overhead.
-3. **Random vs sequential:** Random is slightly worse (avg +0.2s, Above 1s +3–8%), consistent with more cache misses for unique IDs.
-4. **Callbacks on vs off:** Small difference (~5–10%). Callbacks-on is marginally slower; callbacks-off is not the main driver of the baseline spikes.
+Passing `user` in the request payload spikes latency up to ~7×. Using a shared key vs per-user keys had no meaningful effect.
+
+
+### Next Step: One Request vs Multiple Requests per User
+
+**Config:** Callbacks off (Prometheus disabled in proxy config).
+
+**Goal:** Compare latency when each simulated user sends 1 request vs many requests. With multiple requests per user, the same end_user ID is reused → cache hits on subsequent requests. One request per user → all cache misses for end_user lookups.
+
+**How:** Edit `NUM_REQUESTS` and `NUM_CONCURRENT` in `measure_latency.py`, then run (`--user-mode random` recommended to stress end_user lookups):
+
+| Scenario          | NUM_REQUESTS | NUM_CONCURRENT | Req/user | Output file                           |
+|-------------------|--------------|----------------|----------|---------------------------------------|
+| One per user      | 100          | 100            | 1        | `callbacks_off_1_per_user.txt`        |
+| Multiple per user | 1000         | 100            | 10       | `callbacks_off_10_per_user.txt`       |
+
+- [x] Run with `--user-mode random`, 100 requests, 100 users (1 per user) → `callbacks_off_1_per_user.txt`
+- [x] Run with `--user-mode random`, 1000 requests, 100 users (10 per user) → `callbacks_off_10_per_user.txt`
+
+#### Analysis (1 vs 10 requests per user, callbacks off, `--user-mode random`)
+
+| Scenario          | Requests | Users | Req/user | avg    | p95     | Above 1s |
+|-------------------|----------|-------|----------|--------|---------|----------|
+| One per user      | 100      | 100   | 1        | 8.647s | 14.909s | 100.0%   |
+| Multiple per user | 1000     | 100   | 10       | 1.538s | 8.275s  | 33.2%    |
+
+**Findings**
+
+With **1 request per user**, every request triggers an end_user cache miss → DB lookup. Latency is ~5.6× higher (avg 8.6s vs 1.5s) and 100% of requests exceed 1s vs 33% with 10 per user. With **10 requests per user**, the first request per user misses cache; the next 9 hit cache. Cache hits on subsequent requests dramatically reduce latency. This confirms that end_user lookups (especially cache misses) are a major driver of baseline latency spikes.
+
+### Next Steps
+
+- [x] Run proxy + `measure_latency.py --user-mode random --key-mode shared`, capture proxy stdout → `end_user_profile_proxy_logs.txt`
+
+#### Findings
+
+Passing IDs of users that **don't exist** in the DB triggers repeated cache misses and DB lookups (no negative caching). Proxy logs show each non-existent user hits the DB on every request. Before optimizing this negative path, we should exercise the **happy path**: use `--user-mode created --key-mode per_user` to pre-create end users and verify latency with cache hits on subsequent requests.
