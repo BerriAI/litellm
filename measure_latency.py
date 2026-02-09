@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import random
 import time
+from dataclasses import dataclass
 
 import httpx
 
@@ -39,7 +40,20 @@ MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
 TIMEOUT = 30000.0
 # -----------------------------------------------------------------------------
 
-_results: list[tuple[float, bool]] = []  # shared; asyncio is single-threaded so no lock needed
+
+@dataclass(frozen=True)
+class SimulatedUser:
+    """A simulated user: identity, request count, and payload/headers for chat completions."""
+
+    idx: int
+    num_requests: int
+    headers: dict
+    payload: dict
+
+
+# -----------------------------------------------------------------------------
+# API setup (keys, end users)
+# -----------------------------------------------------------------------------
 
 
 async def create_keys_for_users(
@@ -88,28 +102,143 @@ async def create_end_users_for_test(
         return list(await asyncio.gather(*tasks))
 
 
+# -----------------------------------------------------------------------------
+# Build simulated users
+# -----------------------------------------------------------------------------
+
+
+def build_simulated_users(
+    user_mode: str,
+    key_mode: str,
+    api_keys: list[str] | None,
+    end_user_ids: list[str] | None,
+    base_per_user: int,
+    remainder: int,
+) -> list[SimulatedUser]:
+    """Build SimulatedUser instances for each active user."""
+    users: list[SimulatedUser] = []
+    active_idx = 0  # index into api_keys / end_user_ids (one per active user)
+
+    for user_idx in range(1, NUM_CONCURRENT + 1):
+        count = base_per_user + (1 if user_idx <= remainder else 0)
+        if count <= 0:
+            continue
+
+        if key_mode == "per_user" and api_keys is not None:
+            headers = {
+                "Authorization": f"Bearer {api_keys[active_idx]}",
+                "Content-Type": "application/json",
+            }
+        else:
+            headers = {
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json",
+            }
+
+        if user_mode == "none":
+            payload = {"model": MODEL, "messages": MESSAGES}
+        elif user_mode == "created" and end_user_ids is not None:
+            payload = {
+                "model": MODEL,
+                "messages": MESSAGES,
+                "user": end_user_ids[active_idx],
+            }
+        elif user_mode == "sequential":
+            payload = {"model": MODEL, "messages": MESSAGES, "user": str(user_idx)}
+        else:
+            payload = {
+                "model": MODEL,
+                "messages": MESSAGES,
+                "user": str(random.randint(1000000000, 9999999999)),
+            }
+
+        users.append(
+            SimulatedUser(
+                idx=user_idx,
+                num_requests=count,
+                headers=headers,
+                payload=payload,
+            )
+        )
+        active_idx += 1
+
+    return users
+
+
+# -----------------------------------------------------------------------------
+# Run user workload
+# -----------------------------------------------------------------------------
+
+
 async def run_user(
-    user_id: int,
-    num_requests: int,
+    user: SimulatedUser,
     base_url: str,
     path: str,
-    payload: dict,
-    headers: dict,
+    results: list[tuple[float, bool]],
 ) -> None:
     """One user: one client, fires requests as fast as possible."""
     async with httpx.AsyncClient(base_url=base_url, timeout=TIMEOUT) as client:
-        for req_num in range(1, num_requests + 1):
+        for req_num in range(1, user.num_requests + 1):
             start = time.perf_counter()
             try:
-                resp = await client.post(path, json=payload, headers=headers)
+                resp = await client.post(path, json=user.payload, headers=user.headers)
                 resp.read()  # consume full body - timer stops after last byte received
                 ok = resp.is_success
             except Exception:
                 ok = False
             lat = time.perf_counter() - start
-            _results.append((lat, ok))
+            results.append((lat, ok))
             status = "[OK]" if ok else "[FAIL]"
-            print(f"  {status} User {user_id} request {req_num:3d}: {lat:.3f}s", flush=True)
+            print(
+                f"  {status} User {user.idx} request {req_num:3d}: {lat:.3f}s",
+                flush=True,
+            )
+
+
+# -----------------------------------------------------------------------------
+# Results summary
+# -----------------------------------------------------------------------------
+
+
+def print_summary(results: list[tuple[float, bool]]) -> None:
+    """Print success/fail counts and latency statistics."""
+    if not results:
+        return
+
+    total = len(results)
+    success_count = sum(1 for _, ok in results if ok)
+    failed_count = total - success_count
+    all_latencies = [lat for lat, ok in results if ok]
+
+    if not all_latencies:
+        print(f"\n[OK] {success_count} succeeded, [FAIL] {failed_count} failed")
+        return
+
+    n = len(all_latencies)
+    avg = sum(all_latencies) / n
+    sorted_lat = sorted(all_latencies)
+    p95 = sorted_lat[int((n - 1) * 0.95)]
+    p99 = sorted_lat[int((n - 1) * 0.99)]
+
+    print(f"\n[OK] {success_count} succeeded, [FAIL] {failed_count} failed")
+    print(f"\nLatency (successful):")
+    print(f"  min:  {min(all_latencies):.3f}s")
+    print(f"  avg:  {avg:.3f}s")
+    print(f"  max:  {max(all_latencies):.3f}s")
+    print(f"  p95:  {p95:.3f}s")
+    print(f"  p99:  {p99:.3f}s")
+    print("\nRequests above threshold (successful only):")
+    for threshold in range(1, 11):
+        above = sum(1 for t in all_latencies if t > threshold)
+        print(
+            f"  Above {threshold}s: {above}/{len(all_latencies)} "
+            f"({100.0 * above / len(all_latencies):.1f}%)"
+        )
+
+
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,22 +264,31 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-async def main(
-    user_mode: str = "random", key_mode: str = "shared"
-) -> None:
-    base_url = BASE_URL.rstrip("/")
-    path = "/chat/completions"
+# -----------------------------------------------------------------------------
+# Main helpers
+# -----------------------------------------------------------------------------
 
+
+def compute_request_distribution() -> tuple[int, int, list[int]]:
+    """Return (base_per_user, remainder, active_user_indices)."""
     base_per_user = NUM_REQUESTS // NUM_CONCURRENT
     remainder = NUM_REQUESTS - base_per_user * NUM_CONCURRENT
-
-    # Count users that will send at least one request
-    active_user_indices = [
-        i for i in range(1, NUM_CONCURRENT + 1)
+    active_indices = [
+        i
+        for i in range(1, NUM_CONCURRENT + 1)
         if base_per_user + (1 if i <= remainder else 0) > 0
     ]
-    num_active = len(active_user_indices)
+    return base_per_user, remainder, active_indices
 
+
+async def setup_keys_and_end_users(
+    base_url: str,
+    user_mode: str,
+    key_mode: str,
+    active_user_indices: list[int],
+) -> tuple[list[str] | None, list[str] | None]:
+    """Create keys and/or end users as needed; return (api_keys, end_user_ids)."""
+    num_active = len(active_user_indices)
     api_keys: list[str] | None = None
     end_user_ids: list[str] | None = None
 
@@ -161,76 +299,65 @@ async def main(
 
     if user_mode == "created":
         run_prefix = f"latency-test-{int(time.time())}-"
-        end_user_ids = [
-            f"{run_prefix}{i}" for i in active_user_indices
-        ]
+        end_user_ids = [f"{run_prefix}{i}" for i in active_user_indices]
         print(f"Creating {len(end_user_ids)} end users via /customer/new...", flush=True)
         await create_end_users_for_test(base_url, API_KEY, end_user_ids)
         print(f"Created {len(end_user_ids)} end users.", flush=True)
 
-    print(f"=== {NUM_REQUESTS} requests, {NUM_CONCURRENT} users, fire-as-fast-as-possible ===", flush=True)
+    return api_keys, end_user_ids
+
+
+def print_run_banner(user_mode: str, key_mode: str) -> None:
+    """Print run configuration banner."""
+    print(
+        f"=== {NUM_REQUESTS} requests, {NUM_CONCURRENT} users, fire-as-fast-as-possible ===",
+        flush=True,
+    )
     print(f"User mode: {user_mode}, Key mode: {key_mode}", flush=True)
     print("Latency = time from request start until last byte of response received", flush=True)
 
-    _results.clear()
-    tasks = []
-    key_idx = 0
-    end_user_idx = 0
-    for user_idx in range(1, NUM_CONCURRENT + 1):
-        count = base_per_user + (1 if user_idx <= remainder else 0)
-        if count > 0:
-            if key_mode == "per_user" and api_keys is not None:
-                headers = {
-                    "Authorization": f"Bearer {api_keys[key_idx]}",
-                    "Content-Type": "application/json",
-                }
-                key_idx += 1
-            else:
-                headers = {
-                    "Authorization": f"Bearer {API_KEY}",
-                    "Content-Type": "application/json",
-                }
-            if user_mode == "none":
-                payload = {"model": MODEL, "messages": MESSAGES}
-            elif user_mode == "created" and end_user_ids is not None:
-                payload = {
-                    "model": MODEL,
-                    "messages": MESSAGES,
-                    "user": end_user_ids[end_user_idx],
-                }
-                end_user_idx += 1
-            elif user_mode == "sequential":
-                payload = {"model": MODEL, "messages": MESSAGES, "user": str(user_idx)}
-            else:  # random (default)
-                payload = {"model": MODEL, "messages": MESSAGES, "user": str(random.randint(1000000000, 9999999999))}
-            tasks.append(asyncio.create_task(run_user(user_idx, count, base_url, path, payload, headers)))
-    await asyncio.gather(*tasks)
 
-    all_results = _results
-    if all_results:
-        total = len(all_results)
-        success_count = sum(1 for _, ok in all_results if ok)
-        failed_count = total - success_count
-        all_latencies = [lat for lat, ok in all_results if ok]
-        if all_latencies:
-            n = len(all_latencies)
-            avg = sum(all_latencies) / n
-            sorted_lat = sorted(all_latencies)
-            p95 = sorted_lat[int((n - 1) * 0.95)]
-            p99 = sorted_lat[int((n - 1) * 0.99)]
-            print(f"\n[OK] {success_count} succeeded, [FAIL] {failed_count} failed")
-            print(f"\nLatency (successful):")
-            print(f"  min:  {min(all_latencies):.3f}s")
-            print(f"  avg:  {avg:.3f}s")
-            print(f"  max:  {max(all_latencies):.3f}s")
-            print(f"  p95:  {p95:.3f}s")
-            print(f"  p99:  {p99:.3f}s")
-            print("\nRequests above threshold (successful only):")
-            for threshold in range(1, 11):
-                above = sum(1 for t in all_latencies if t > threshold)
-                print(f"  Above {threshold}s: {above}/{len(all_latencies)} ({100.0 * above / len(all_latencies):.1f}%)")
-        else:
-            print(f"\n[OK] {success_count} succeeded, [FAIL] {failed_count} failed")
+async def run_all_users(
+    users: list[SimulatedUser],
+    base_url: str,
+    path: str,
+) -> list[tuple[float, bool]]:
+    """Run all simulated users concurrently; return list of (latency, success)."""
+    results: list[tuple[float, bool]] = []
+    tasks = [
+        asyncio.create_task(run_user(u, base_url, path, results)) for u in users
+    ]
+    await asyncio.gather(*tasks)
+    return results
+
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+
+
+async def main(
+    user_mode: str = "random", key_mode: str = "shared"
+) -> None:
+    base_url = BASE_URL.rstrip("/")
+    path = "/chat/completions"
+
+    base_per_user, remainder, active_user_indices = compute_request_distribution()
+    api_keys, end_user_ids = await setup_keys_and_end_users(
+        base_url, user_mode, key_mode, active_user_indices
+    )
+    users = build_simulated_users(
+        user_mode=user_mode,
+        key_mode=key_mode,
+        api_keys=api_keys,
+        end_user_ids=end_user_ids,
+        base_per_user=base_per_user,
+        remainder=remainder,
+    )
+
+    print_run_banner(user_mode, key_mode)
+    results = await run_all_users(users, base_url, path)
+    print_summary(results)
 
 
 if __name__ == "__main__":
