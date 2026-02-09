@@ -1,0 +1,65 @@
+=== 42 requests, 42 users, fire-as-fast-as-possible ===
+Latency = time from request start until last byte of response received
+  [OK] User 29 request   1: 2.908s
+  [OK] User 9 request   1: 5.687s
+  [OK] User 1 request   1: 6.917s
+  [OK] User 6 request   1: 6.203s
+  [OK] User 37 request   1: 1.901s
+  [OK] User 30 request   1: 2.907s
+  [OK] User 24 request   1: 3.728s
+  [OK] User 27 request   1: 3.315s
+  [OK] User 13 request   1: 5.271s
+  [OK] User 20 request   1: 4.310s
+  [OK] User 33 request   1: 2.524s
+  [OK] User 16 request   1: 4.879s
+  [OK] User 21 request   1: 4.187s
+  [OK] User 15 request   1: 5.039s
+  [OK] User 34 request   1: 2.427s
+  [OK] User 4 request   1: 6.620s
+  [OK] User 17 request   1: 4.806s
+  [OK] User 12 request   1: 5.502s
+  [OK] User 19 request   1: 4.533s
+  [OK] User 10 request   1: 5.799s
+  [OK] User 18 request   1: 4.686s
+  [OK] User 2 request   1: 6.928s
+  [OK] User 28 request   1: 3.304s
+  [OK] User 31 request   1: 2.909s
+  [OK] User 8 request   1: 6.099s
+  [OK] User 25 request   1: 3.730s
+  [OK] User 42 request   1: 1.367s
+  [OK] User 39 request   1: 1.795s
+  [OK] User 5 request   1: 6.533s
+  [OK] User 32 request   1: 2.786s
+  [OK] User 26 request   1: 3.628s
+  [OK] User 3 request   1: 6.839s
+  [OK] User 7 request   1: 6.277s
+  [OK] User 11 request   1: 5.723s
+  [OK] User 35 request   1: 2.396s
+  [OK] User 41 request   1: 1.551s
+  [OK] User 22 request   1: 4.204s
+  [OK] User 14 request   1: 5.325s
+  [OK] User 36 request   1: 2.279s
+  [OK] User 40 request   1: 1.715s
+  [OK] User 38 request   1: 2.001s
+  [OK] User 23 request   1: 4.138s
+
+[OK] 42 succeeded, [FAIL] 0 failed
+
+Latency (successful):
+  min:  1.367s
+  avg:  4.183s
+  max:  6.928s
+  p95:  6.620s
+  p99:  6.917s
+
+Requests above threshold (successful only):
+  Above 1s: 42/42 (100.0%)
+  Above 2s: 37/42 (88.1%)
+  Above 3s: 28/42 (66.7%)
+  Above 4s: 23/42 (54.8%)
+  Above 5s: 15/42 (35.7%)
+  Above 6s: 8/42 (19.0%)
+  Above 7s: 0/42 (0.0%)
+  Above 8s: 0/42 (0.0%)
+  Above 9s: 0/42 (0.0%)
+  Above 10s: 0/42 (0.0%)
