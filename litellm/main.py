@@ -5591,7 +5591,7 @@ def embedding(  # noqa: PLR0915
         elif custom_llm_provider == "gigachat":
             
             auth_url = (
-                litellm_params.get("auth_url")
+                optional_params.get("auth_url")
                 or get_secret_str("GIGACHAT_AUTH_URL")
             )
             
@@ -5609,7 +5609,6 @@ def embedding(  # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=api_key,
-                auth_url=auth_url,
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(),

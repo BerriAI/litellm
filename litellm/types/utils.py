@@ -2343,7 +2343,6 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     force_timeout: Optional[float]
     custom_llm_provider: Optional[str]
     api_base: Optional[str]
-    auth_url: Optional[str]
     litellm_call_id: Optional[str]
     model_alias_map: Optional[dict]
     metadata: Optional[dict]
@@ -2539,7 +2538,6 @@ class StandardLoggingHiddenParams(TypedDict):
     ]  # id of the model in the router, separates multiple models with the same name but different credentials
     cache_key: Optional[str]
     api_base: Optional[str]
-    auth_url: Optional[str]
     response_cost: Optional[str]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
@@ -3280,7 +3278,6 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
 
 class RawRequestTypedDict(TypedDict, total=False):
     raw_request_api_base: Optional[str]
-    raw_request_auth_url: Optional[str]
     raw_request_body: Optional[dict]
     raw_request_headers: Optional[dict]
     error: Optional[str]
