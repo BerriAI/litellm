@@ -321,21 +321,70 @@ if [ -n "$_PROVIDER_MODELS" ]; then
     done <<< "$_PROVIDER_MODELS"
 fi
 
-# Flush queued models into proxy_config.yaml (insert before the "auto" entry)
+# Flush queued models into proxy_config.yaml
 if [ -s "$_NEW_MODELS_FILE" ]; then
-    # Use awk to insert the new models before "- model_name: auto"
-    awk -v newfile="$_NEW_MODELS_FILE" '
-        /^  - model_name: auto$/ {
-            while ((getline line < newfile) > 0) print line
-            close(newfile)
-        }
-        { print }
-    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    # Convert empty YAML list to block-style so we can append entries
+    if grep -q 'model_list: \[\]' "$CONFIG_FILE"; then
+        sedi 's/model_list: \[\]/model_list:/' "$CONFIG_FILE"
+    fi
+
+    if grep -q '- model_name: auto' "$CONFIG_FILE"; then
+        # Insert before the "auto" entry
+        awk -v newfile="$_NEW_MODELS_FILE" '
+            /^  - model_name: auto$/ {
+                while ((getline line < newfile) > 0) print line
+                close(newfile)
+            }
+            { print }
+        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    else
+        # No auto entry — append after "model_list:" line
+        awk -v newfile="$_NEW_MODELS_FILE" '
+            /^model_list:/ {
+                print
+                while ((getline line < newfile) > 0) print line
+                close(newfile)
+                next
+            }
+            { print }
+        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    fi
     ok "Added model(s) to proxy_config.yaml for configured providers"
 else
     info "No new models to add to proxy_config.yaml"
 fi
 rm -f "$_NEW_MODELS_FILE"
+
+# Ensure the "auto" model entry exists (uses the auto-router)
+if ! grep -q 'model_name: auto' "$CONFIG_FILE"; then
+    # Pick a default model: use the mid tier if set, otherwise first available provider model
+    AUTO_DEFAULT="${MID_MODEL:-${LOW_MODEL:-${TOP_MODEL:-}}}"
+    if [ -z "$AUTO_DEFAULT" ] && [ -n "$_PROVIDER_MODELS" ]; then
+        AUTO_DEFAULT=$(echo "$_PROVIDER_MODELS" | head -1 | cut -d'|' -f2)
+    fi
+    AUTO_DEFAULT="${AUTO_DEFAULT:-gemini/gemini-3-flash-preview}"
+
+    # Convert empty YAML list if not already done
+    if grep -q 'model_list: \[\]' "$CONFIG_FILE"; then
+        sedi 's/model_list: \[\]/model_list:/' "$CONFIG_FILE"
+    fi
+
+    # Append the auto entry at the end of model_list (before the next top-level key)
+    awk -v routing="$ROUTING_RULES" -v default_model="$AUTO_DEFAULT" '
+        /^model_list:/ { in_models=1 }
+        in_models && (/^[a-z]/ || /^#/) && !/^model_list:/ {
+            printf "\n  - model_name: auto\n"
+            printf "    litellm_params:\n"
+            printf "      model: \"auto_router/auto_router_1\"\n"
+            printf "      auto_router_config_path: \"%s\"\n", routing
+            printf "      auto_router_default_model: \"%s\"\n", default_model
+            printf "\n"
+            in_models=0
+        }
+        { print }
+    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    ok "Added auto-router entry to proxy_config.yaml (default: $AUTO_DEFAULT)"
+fi
 
 # ---------- 6. Start proxy ---------------------------------------------------
 

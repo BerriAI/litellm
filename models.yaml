@@ -36,6 +36,10 @@ tier_candidates:
       model: openai/gpt-5-mini
       display: "GPT-5-Mini"
       cost: "$1.13/M"
+    - provider: anthropic
+      model: anthropic/claude-haiku-4-5-20251001
+      display: "Claude-Haiku-4.5"
+      cost: "$3.00/M"
 
   mid:
     - provider: deepseek
@@ -47,9 +51,9 @@ tier_candidates:
       display: "Kimi-K2.5"
       cost: "$1.80/M"
     - provider: anthropic
-      model: anthropic/claude-haiku-4-5-20251001
-      display: "Claude-Haiku-4.5"
-      cost: "$3.00/M"
+      model: anthropic/claude-sonnet-4-5-20250929
+      display: "Claude-Sonnet-4.5"
+      cost: "$9.00/M"
     - provider: google
       model: gemini/gemini-3-flash-preview
       display: "Gemini-3-Flash"
@@ -69,9 +73,9 @@ tier_candidates:
 
   top:
     - provider: anthropic
-      model: anthropic/claude-sonnet-4-5-20250929
-      display: "Claude-Sonnet-4.5"
-      cost: "$9.00/M"
+      model: anthropic/claude-opus-4-5-20251101
+      display: "Claude-Opus-4.5"
+      cost: "$15.00/M"
     - provider: openai
       model: openai/gpt-5.2
       display: "GPT-5.2"
@@ -88,10 +92,6 @@ tier_candidates:
       model: xai/grok-4
       display: "Grok-4"
       cost: "$9.00/M"
-    - provider: anthropic
-      model: anthropic/claude-opus-4-5-20251101
-      display: "Claude-Opus-4.5"
-      cost: "$15.00/M"
 
 # Models to register in proxy_config.yaml when the provider's API key is available.
 # key_env: the environment variable name for the API key
