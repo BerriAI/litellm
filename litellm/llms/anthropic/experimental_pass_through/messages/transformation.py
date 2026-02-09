@@ -46,12 +46,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "thinking",
             "context_management",
             "output_format",
-<<<<<<< litellm_v1_messages_claude_4_6
             "inference_geo",
             "speed",
-=======
             "output_config",
->>>>>>> main
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
