@@ -1,0 +1,162 @@
+# =============================================================================
+# Model Providers & Tier Configuration
+#
+# Used by setup.sh to:
+#   1. Suggest auto-router tier models based on available API keys
+#   2. Register model entries in proxy_config.yaml
+#
+# To add a new provider or model, edit this file — no changes to setup.sh needed.
+# =============================================================================
+
+# Tier candidates: ordered by preference for auto-router tier assignment.
+# For each tier, the first candidate whose provider key is available wins.
+tier_candidates:
+  low:
+    - provider: deepseek
+      model: deepseek/deepseek-chat
+      display: "DeepSeek-V3"
+      cost: "$0.35/M"
+    - provider: minimax
+      model: minimax/MiniMax-M2.1
+      display: "MiniMax-M2.1"
+      cost: "$0.75/M"
+    - provider: google
+      model: gemini/gemini-2.5-flash-lite
+      display: "Gemini-2.5-Flash-Lite"
+      cost: "$0.50/M"
+    - provider: xai
+      model: xai/grok-4-fast-non-reasoning
+      display: "Grok-4-Fast"
+      cost: "$0.35/M"
+    - provider: zai
+      model: zai/glm-4.7
+      display: "GLM-4.7"
+      cost: "$1.40/M"
+    - provider: openai
+      model: openai/gpt-5-mini
+      display: "GPT-5-Mini"
+      cost: "$1.13/M"
+
+  mid:
+    - provider: deepseek
+      model: deepseek/deepseek-reasoner
+      display: "DeepSeek-R1"
+      cost: "$2.74/M"
+    - provider: moonshot
+      model: moonshot/kimi-k2.5
+      display: "Kimi-K2.5"
+      cost: "$1.80/M"
+    - provider: anthropic
+      model: anthropic/claude-haiku-4-5-20251001
+      display: "Claude-Haiku-4.5"
+      cost: "$3.00/M"
+    - provider: google
+      model: gemini/gemini-3-flash-preview
+      display: "Gemini-3-Flash"
+      cost: "$1.75/M"
+    - provider: zai
+      model: zai/glm-4.7
+      display: "GLM-4.7"
+      cost: "$1.40/M"
+    - provider: xai
+      model: xai/grok-4
+      display: "Grok-4"
+      cost: "$9.00/M"
+    - provider: openai
+      model: openai/gpt-5
+      display: "GPT-5"
+      cost: "$5.63/M"
+
+  top:
+    - provider: anthropic
+      model: anthropic/claude-sonnet-4-5-20250929
+      display: "Claude-Sonnet-4.5"
+      cost: "$9.00/M"
+    - provider: openai
+      model: openai/gpt-5.2
+      display: "GPT-5.2"
+      cost: "$7.88/M"
+    - provider: openai
+      model: openai/gpt-5
+      display: "GPT-5"
+      cost: "$5.63/M"
+    - provider: google
+      model: gemini/gemini-3-pro-preview
+      display: "Gemini-3-Pro"
+      cost: "$7.00/M"
+    - provider: xai
+      model: xai/grok-4
+      display: "Grok-4"
+      cost: "$9.00/M"
+    - provider: anthropic
+      model: anthropic/claude-opus-4-5-20251101
+      display: "Claude-Opus-4.5"
+      cost: "$15.00/M"
+
+# Models to register in proxy_config.yaml when the provider's API key is available.
+# key_env: the environment variable name for the API key
+# models: list of {name, id} pairs — name is the model_name in config, id is the litellm model ID
+provider_models:
+  google:
+    key_env: GOOGLE_API_KEY
+    models:
+      - name: google/gemini-2.5-flash-lite
+        id: gemini/gemini-2.5-flash-lite
+      - name: google/gemini-3-flash-preview
+        id: gemini/gemini-3-flash-preview
+      - name: google/gemini-3-pro-preview
+        id: gemini/gemini-3-pro-preview
+
+  openai:
+    key_env: OPENAI_API_KEY
+    models:
+      - name: openai/gpt-5
+        id: openai/gpt-5
+      - name: openai/gpt-5-mini
+        id: openai/gpt-5-mini
+      - name: openai/gpt-5.2
+        id: openai/gpt-5.2
+
+  anthropic:
+    key_env: ANTHROPIC_API_KEY
+    models:
+      - name: anthropic/claude-haiku-4-5
+        id: anthropic/claude-haiku-4-5-20251001
+      - name: anthropic/claude-sonnet-4-5
+        id: anthropic/claude-sonnet-4-5-20250929
+      - name: anthropic/claude-opus-4-5
+        id: anthropic/claude-opus-4-5-20251101
+
+  deepseek:
+    key_env: DEEPSEEK_API_KEY
+    models:
+      - name: deepseek/deepseek-chat
+        id: deepseek/deepseek-chat
+      - name: deepseek/deepseek-reasoner
+        id: deepseek/deepseek-reasoner
+
+  moonshot:
+    key_env: MOONSHOT_API_KEY
+    models:
+      - name: moonshot/kimi-k2.5
+        id: moonshot/kimi-k2.5
+
+  zai:
+    key_env: ZAI_API_KEY
+    models:
+      - name: zai/glm-4.7
+        id: zai/glm-4.7
+
+  xai:
+    key_env: XAI_API_KEY
+    models:
+      - name: xai/grok-4
+        id: xai/grok-4
+      - name: xai/grok-4-fast-non-reasoning
+        id: xai/grok-4-fast-non-reasoning
+
+  minimax:
+    key_env: MINIMAX_API_KEY
+    models:
+      - name: minimax/MiniMax-M2.1
+        id: minimax/MiniMax-M2.1

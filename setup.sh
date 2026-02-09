@@ -29,6 +29,7 @@ CONFIG_FILE="$REPO_ROOT/litellm/proxy/proxy_config.yaml"
 ROUTING_RULES="$REPO_ROOT/litellm/router_strategy/auto_router/routing_rules.yaml"
 VENV_DIR="$REPO_ROOT/.venv"
 ENV_FILE="$REPO_ROOT/.env"
+MODELS_FILE="$REPO_ROOT/models.yaml"
 
 MIN_PY_MINOR=10  # Python 3.10+ required (mcp, python-multipart, polars need it)
 MAX_PY_MINOR=13  # Python 3.14+ breaks uvloop; cap at 3.13
@@ -148,21 +149,63 @@ ok "Disabled mcp_semantic_tool_filter (enable after: pip install 'litellm[semant
 
 # ---------- 5. API keys (.env) ----------------------------------------------
 
+# Initialize all key variables (may be populated by prompts or existing .env)
+GOOGLE_KEY="" OPENAI_KEY="" ANTHROPIC_KEY=""
+DEEPSEEK_KEY="" MOONSHOT_KEY="" ZAI_KEY="" XAI_KEY="" MINIMAX_KEY=""
+
 if [ -f "$ENV_FILE" ]; then
     ok ".env already exists — skipping API key prompts"
+    # Load existing keys so tier suggestions can use them
+    _getkey() { awk -F= "/^$1=/{print \$2}" "$ENV_FILE" | head -1; }
+    GOOGLE_KEY=$(_getkey GOOGLE_API_KEY)
+    OPENAI_KEY=$(_getkey OPENAI_API_KEY)
+    ANTHROPIC_KEY=$(_getkey ANTHROPIC_API_KEY)
+    DEEPSEEK_KEY=$(_getkey DEEPSEEK_API_KEY)
+    MOONSHOT_KEY=$(_getkey MOONSHOT_API_KEY)
+    ZAI_KEY=$(_getkey ZAI_API_KEY)
+    XAI_KEY=$(_getkey XAI_API_KEY)
+    MINIMAX_KEY=$(_getkey MINIMAX_API_KEY)
 else
     echo ""
     echo -e "${BOLD}API Key Setup${NC}"
-    echo "The proxy config includes models from several providers."
     echo "Enter the keys you have; press Enter to skip any you don't need."
     echo ""
 
+    # --- Core providers (always asked) ---
     read -rp "  Google API Key    (for Gemini — used by auto-router) : " GOOGLE_KEY
     read -rp "  OpenAI API Key    (for GPT models)                   : " OPENAI_KEY
     read -rp "  Anthropic API Key (for Claude via API)               : " ANTHROPIC_KEY
+
+    # --- Optional providers ---
+    echo ""
+    echo -e "${BOLD}Optional providers:${NC}"
+    echo "  1) DeepSeek"
+    echo "  2) Kimi (Moonshot)"
+    echo "  3) GLM (Zhipu/ZAI)"
+    echo "  4) Grok (xAI)"
+    echo "  5) MiniMax"
+    echo ""
+    read -rp "  Enter numbers to configure (e.g. 1 3 5), or press Enter to skip: " EXTRA_CHOICES
+
+    for choice in $EXTRA_CHOICES; do
+        case "$choice" in
+            1) read -rp "  DeepSeek API Key   : " DEEPSEEK_KEY ;;
+            2) read -rp "  Kimi API Key       : " MOONSHOT_KEY ;;
+            3) read -rp "  GLM (ZAI) API Key  : " ZAI_KEY ;;
+            4) read -rp "  Grok (xAI) API Key : " XAI_KEY ;;
+            5) read -rp "  MiniMax API Key    : " MINIMAX_KEY ;;
+            *) warn "Unknown option: $choice (skipping)" ;;
+        esac
+    done
+
     echo ""
 
-    if [ -z "$GOOGLE_KEY" ] && [ -z "$OPENAI_KEY" ] && [ -z "$ANTHROPIC_KEY" ]; then
+    ALL_EMPTY=true
+    for _k in "$GOOGLE_KEY" "$OPENAI_KEY" "$ANTHROPIC_KEY" \
+              "$DEEPSEEK_KEY" "$MOONSHOT_KEY" "$ZAI_KEY" "$XAI_KEY" "$MINIMAX_KEY"; do
+        if [ -n "$_k" ]; then ALL_EMPTY=false; break; fi
+    done
+    if $ALL_EMPTY; then
         warn "No API keys provided. The proxy will start but model calls will fail"
         warn "until you add keys to $ENV_FILE"
     fi
@@ -172,10 +215,127 @@ else
 OPENAI_API_KEY=${OPENAI_KEY:-}
 GOOGLE_API_KEY=${GOOGLE_KEY:-}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY:-}
+DEEPSEEK_API_KEY=${DEEPSEEK_KEY:-}
+MOONSHOT_API_KEY=${MOONSHOT_KEY:-}
+ZAI_API_KEY=${ZAI_KEY:-}
+XAI_API_KEY=${XAI_KEY:-}
+MINIMAX_API_KEY=${MINIMAX_KEY:-}
 EOF
 
     ok "Created .env with your API keys"
 fi
+
+# ---------- 5b. Suggest auto-router tier models ------------------------------
+
+# Collect providers that have keys
+AVAILABLE=""
+[ -n "$GOOGLE_KEY" ]    && AVAILABLE="$AVAILABLE google"
+[ -n "$OPENAI_KEY" ]    && AVAILABLE="$AVAILABLE openai"
+[ -n "$ANTHROPIC_KEY" ] && AVAILABLE="$AVAILABLE anthropic"
+[ -n "$DEEPSEEK_KEY" ]  && AVAILABLE="$AVAILABLE deepseek"
+[ -n "$MOONSHOT_KEY" ]  && AVAILABLE="$AVAILABLE moonshot"
+[ -n "$ZAI_KEY" ]       && AVAILABLE="$AVAILABLE zai"
+[ -n "$XAI_KEY" ]       && AVAILABLE="$AVAILABLE xai"
+[ -n "$MINIMAX_KEY" ]   && AVAILABLE="$AVAILABLE minimax"
+
+# Pick best available model per tier from models.yaml
+eval "$(MODELS_FILE="$MODELS_FILE" AVAILABLE="$AVAILABLE" python << 'PYEOF'
+import yaml, os
+providers = set(os.environ.get("AVAILABLE", "").split())
+with open(os.environ["MODELS_FILE"]) as f:
+    cfg = yaml.safe_load(f)
+for tier in ["low", "mid", "top"]:
+    found = False
+    for c in cfg["tier_candidates"].get(tier, []):
+        if c["provider"] in providers:
+            m, d, cost = c["model"], c["display"], c["cost"]
+            safe_cost = cost.replace("$", "\\$")
+            print(f'{tier.upper()}_MODEL="{m}"')
+            print(f'{tier.upper()}_DISPLAY="{d} ({safe_cost})"')
+            found = True
+            break
+    if not found:
+        print(f'{tier.upper()}_MODEL=""')
+        print(f'{tier.upper()}_DISPLAY=""')
+PYEOF
+)"
+
+if [ -n "$LOW_MODEL" ] || [ -n "$MID_MODEL" ] || [ -n "$TOP_MODEL" ]; then
+    echo ""
+    echo -e "${BOLD}Auto-Router Tier Suggestions${NC}  (based on your API keys)"
+    echo ""
+    [ -n "$LOW_MODEL" ]  && echo -e "  low : ${GREEN}$LOW_DISPLAY${NC}  ->  $LOW_MODEL"
+    [ -n "$MID_MODEL" ]  && echo -e "  mid : ${YELLOW}$MID_DISPLAY${NC}  ->  $MID_MODEL"
+    [ -n "$TOP_MODEL" ]  && echo -e "  top : ${CYAN}$TOP_DISPLAY${NC}  ->  $TOP_MODEL"
+    echo ""
+    read -rp "  Apply these to routing_rules.yaml? [Y/n] " APPLY_TIERS
+    if [ -z "$APPLY_TIERS" ] || [[ "$APPLY_TIERS" =~ ^[Yy] ]]; then
+        [ -n "$LOW_MODEL" ] && sedi "/^  low:/,/^  [a-z]/{s|model:.*|model: \"$LOW_MODEL\"|;}" "$ROUTING_RULES"
+        [ -n "$MID_MODEL" ] && sedi "/^  mid:/,/^  [a-z]/{s|model:.*|model: \"$MID_MODEL\"|;}" "$ROUTING_RULES"
+        [ -n "$TOP_MODEL" ] && sedi "/^  top:/,/^[a-z]/{s|model:.*|model: \"$TOP_MODEL\"|;}" "$ROUTING_RULES"
+        ok "Updated routing_rules.yaml with tier models"
+    else
+        info "Skipped — you can edit routing_rules.yaml manually later"
+    fi
+fi
+
+# ---------- 5c. Add provider models to proxy_config.yaml --------------------
+
+# Collect model entries to add, then insert them all at once before "auto".
+_NEW_MODELS_FILE=$(mktemp)
+trap 'rm -f "$_NEW_MODELS_FILE"' EXIT
+
+# Queue a model entry (written to temp file, inserted later in one pass).
+add_model() {
+    local model_name="$1" model_id="$2" api_key_env="$3"
+    # Skip if already in the config
+    if grep -q "model_name: $model_name" "$CONFIG_FILE" 2>/dev/null; then
+        return 0
+    fi
+    cat >> "$_NEW_MODELS_FILE" <<ENTRY
+
+  - model_name: $model_name
+    litellm_params:
+      model: $model_id
+      api_key: os.environ/$api_key_env
+ENTRY
+    return 0
+}
+
+# Read provider models from models.yaml and queue entries for available providers
+_PROVIDER_MODELS=$(MODELS_FILE="$MODELS_FILE" AVAILABLE="$AVAILABLE" python << 'PYEOF'
+import yaml, os
+providers = set(os.environ.get("AVAILABLE", "").split())
+with open(os.environ["MODELS_FILE"]) as f:
+    cfg = yaml.safe_load(f)
+for name, info in cfg["provider_models"].items():
+    if name in providers:
+        for m in info["models"]:
+            print(f'{m["name"]}|{m["id"]}|{info["key_env"]}')
+PYEOF
+)
+
+if [ -n "$_PROVIDER_MODELS" ]; then
+    while IFS='|' read -r _mname _mid _mkey; do
+        add_model "$_mname" "$_mid" "$_mkey"
+    done <<< "$_PROVIDER_MODELS"
+fi
+
+# Flush queued models into proxy_config.yaml (insert before the "auto" entry)
+if [ -s "$_NEW_MODELS_FILE" ]; then
+    # Use awk to insert the new models before "- model_name: auto"
+    awk -v newfile="$_NEW_MODELS_FILE" '
+        /^  - model_name: auto$/ {
+            while ((getline line < newfile) > 0) print line
+            close(newfile)
+        }
+        { print }
+    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    ok "Added model(s) to proxy_config.yaml for configured providers"
+else
+    info "No new models to add to proxy_config.yaml"
+fi
+rm -f "$_NEW_MODELS_FILE"
 
 # ---------- 6. Start proxy ---------------------------------------------------
 
