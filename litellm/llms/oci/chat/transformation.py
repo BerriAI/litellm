@@ -218,6 +218,7 @@ class OCIChatConfig(BaseConfig):
             "parallel_tool_calls": False,
             "audio": False,
             "web_search_options": False,
+            "response_format": "responseFormat",
         }
 
         # Cohere and Gemini use the same parameter mapping as GENERIC
@@ -268,6 +269,9 @@ class OCIChatConfig(BaseConfig):
                 continue
 
             adapted_params[alias] = value
+
+            if alias == "responseFormat":
+                adapted_params["response_format"] = value
 
         return adapted_params
 
@@ -673,6 +677,36 @@ class OCIChatConfig(BaseConfig):
                 selected_params["tools"] = adapt_tool_definition_to_oci_standard(  # type: ignore[assignment]
                     selected_params["tools"], vendor  # type: ignore[arg-type]
                 )
+
+        # Transform response_format type to OCI uppercase format
+        if "responseFormat" in selected_params:
+            rf = selected_params["responseFormat"]
+            if isinstance(rf, dict) and "type" in rf:
+                rf_payload = dict(rf)
+                selected_params["responseFormat"] = rf_payload
+
+                response_type = rf_payload["type"]
+                schema_payload: Optional[Any] = None
+
+                if "json_schema" in rf_payload:
+                    raw_schema_payload = rf_payload.pop("json_schema")
+                    if isinstance(raw_schema_payload, dict):
+                        schema_payload = dict(raw_schema_payload)
+                    else:
+                        schema_payload = raw_schema_payload
+
+                if schema_payload is not None:
+                    rf_payload["jsonSchema"] = schema_payload
+
+                if vendor == OCIVendors.COHERE:
+                    # Cohere expects lower-case type values
+                    rf_payload["type"] = response_type
+                else:
+                    format_type = response_type.upper()
+                    if format_type == "JSON":
+                        format_type = "JSON_OBJECT"
+                    rf_payload["type"] = format_type
+
         return selected_params
 
     def adapt_messages_to_cohere_standard(self, messages: List[AllMessageValues]) -> List[CohereMessage]:
@@ -806,11 +840,12 @@ class OCIChatConfig(BaseConfig):
 
 
             # Create Cohere-specific chat request
+            optional_cohere_params = self._get_optional_params(OCIVendors.COHERE, optional_params)
             chat_request = CohereChatRequest(
                 apiFormat="COHERE",
                 message=self._extract_text_content(user_messages[-1]["content"]),
                 chatHistory=self.adapt_messages_to_cohere_standard(messages),
-                **self._get_optional_params(OCIVendors.COHERE, optional_params)
+                **optional_cohere_params
             )
 
             data = OCICompletionPayload(

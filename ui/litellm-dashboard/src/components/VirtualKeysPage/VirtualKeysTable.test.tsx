@@ -542,3 +542,86 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
     expect(defaultProxyAdminElements.length).toBeGreaterThan(0);
   });
 });
+
+
+it("should render table without crashing when models is null", async () => {
+  const keyWithNullModels = {
+    ...mockKey,
+    models: null as unknown as string[],
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithNullModels],
+    allKeyAliases: ["test-key-alias"],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  // This should not throw an error
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+});
+
+it("should render table without crashing when models is undefined", async () => {
+  const keyWithUndefinedModels = {
+    ...mockKey,
+    models: undefined as unknown as string[],
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithUndefinedModels],
+    allKeyAliases: ["test-key-alias"],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  // This should not throw an error
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+});
