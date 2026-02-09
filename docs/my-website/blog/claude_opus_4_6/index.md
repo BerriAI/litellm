@@ -401,3 +401,130 @@ Opus 4.6 supports 1M token context. Premium pricing applies for prompts exceedin
 
 Available at 1.1× token pricing. LiteLLM supports this pricing model.
 
+## Using `/v1/messages` Endpoint
+
+LiteLLM supports the Anthropic `/v1/messages` API format across all providers. This allows you to use Anthropic-specific features like adaptive thinking, compaction, and 1M token context with consistent syntax across Anthropic, Azure AI, Vertex AI, and Bedrock.
+
+
+```yaml
+model_list:
+  # Anthropic
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+  
+  # Azure AI
+  - model_name: claude-azure-opus-4-6
+    litellm_params:
+      model: azure_ai/claude-opus-4-6
+      api_base: https://your-resource.services.ai.azure.com/anthropic
+  
+  # Vertex AI
+  - model_name: claude-vertex-opus-4-6
+    litellm_params:
+      model: vertex_ai/claude-opus-4-6
+      vertex_project: your-project-id
+      vertex_location: us-east5
+  
+  # Bedrock
+  - model_name: claude-bedrock-opus-4-6
+    litellm_params:
+      model: bedrock/anthropic.claude-opus-4-6-v1:0
+      aws_region_name: us-east-1
+```
+
+### Feature Support Matrix
+
+| Feature | Anthropic | Bedrock Invoke | Bedrock Converse | Vertex AI | Azure AI |
+|---------|-----------|----------------|------------------|-----------|----------|
+| `/v1/messages` Compaction | ✅ | ❌ Not supported | ❌ Not supported | ✅ | ✅ |
+| 1M Token Context | ✅ | ✅ | ✅ | ✅ | ✅ |
+| US-Only Inference - cost tracking | ✅ | Not applicable | Not applicable | Not applicable | Not applicable |
+| Adaptive Thinking | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+### Adaptive Thinking
+
+Use the `thinking` parameter with `type: "adaptive"` to enable adaptive thinking mode:
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'x-api-key: sk-12345' \
+--header 'content-type: application/json' \
+--data '{
+    "model": "claude-opus-4-6",
+    "max_tokens": 16000,
+    "thinking": {
+        "type": "adaptive"
+    },
+    "messages": [
+        {
+            "role": "user",
+            "content": "Explain why the sum of two even numbers is always even."
+        }
+    ]
+}'
+```
+
+### Context Management - Compaction
+
+Enable compaction to reduce context size while preserving key information. LiteLLM automatically adds the `compact-2026-01-12` beta header when compaction is enabled.
+
+:::info
+**Provider Support:** Compaction is supported on Anthropic, Bedrock Invoke Azure AI, and Vertex AI. It is **not supported** on Bedrock Converse API.
+:::
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'x-api-key: sk-12345' \
+--header 'content-type: application/json' \
+--data '{
+    "model": "claude-opus-4-6",
+    "max_tokens": 4096,
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hi"
+        }
+    ],
+    "context_management": {
+        "edits": [
+            {
+                "type": "compact_20260112"
+            }
+        ]
+    }
+}'
+```
+
+LiteLLM automatically adds the `compact-2026-01-12` beta header when compaction is enabled.
+
+### 1M Token Context Window
+
+To use the 1M token context window, you need to forward the `anthropic-beta` header from your client to the LLM provider.
+
+**Step 1: Enable header forwarding in your config**
+
+```yaml
+general_settings:
+  forward_client_headers_to_llm_api: true
+```
+
+**Step 2: Send requests with the beta header**
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'x-api-key: sk-12345' \
+--header 'anthropic-beta: context-1m-2025-08-07' \
+--header 'content-type: application/json' \
+--data '{
+    "model": "claude-opus-4-6",
+    "max_tokens": 16000,
+    "messages": [
+        {
+            "role": "user",
+            "content": "Explain why the sum of two even numbers is always even."
+        }
+    ]
+}'
+```
+
