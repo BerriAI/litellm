@@ -31,6 +31,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) => {
   return React.createElement(QueryClientProvider, { client: queryClient }, children);
 };
 
+const mockAccessToken = "test-token-456";
 const mockAccessGroups = ["group-1", "group-2", "group-3"];
 
 describe("useMCPAccessGroups", () => {
@@ -38,8 +39,20 @@ describe("useMCPAccessGroups", () => {
     vi.clearAllMocks();
     const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
     vi.mocked(useAuthorizedModule.default).mockReturnValue({
-      accessToken: "test-token-456",
+      accessToken: mockAccessToken,
     } as any);
+  });
+
+  it("should return hook result without errors", () => {
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+
+    const { result } = renderHook(() => useMCPAccessGroups(), { wrapper });
+
+    expect(result.current).toBeDefined();
+    expect(result.current).toHaveProperty("data");
+    expect(result.current).toHaveProperty("isSuccess");
+    expect(result.current).toHaveProperty("isError");
+    expect(result.current).toHaveProperty("status");
   });
 
   it("should return MCP access groups when access token is present", async () => {
@@ -51,11 +64,11 @@ describe("useMCPAccessGroups", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(networking.fetchMCPAccessGroups).toHaveBeenCalledWith("test-token-456");
+    expect(networking.fetchMCPAccessGroups).toHaveBeenCalledWith(mockAccessToken);
     expect(result.current.data).toEqual(mockAccessGroups);
   });
 
-  it("should not fetch when access token is not available", async () => {
+  it("should not fetch when access token is null", async () => {
     const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
     vi.mocked(useAuthorizedModule.default).mockReturnValue({
       accessToken: null,
@@ -63,7 +76,23 @@ describe("useMCPAccessGroups", () => {
 
     const { result } = renderHook(() => useMCPAccessGroups(), { wrapper });
 
-    expect(result.current.status).toBe("pending");
+    expect(result.current.isFetching).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
+    expect(networking.fetchMCPAccessGroups).not.toHaveBeenCalled();
+  });
+
+  it("should not fetch when access token is empty string", async () => {
+    const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
+    vi.mocked(useAuthorizedModule.default).mockReturnValue({
+      accessToken: "",
+    } as any);
+
+    const { result } = renderHook(() => useMCPAccessGroups(), { wrapper });
+
+    expect(result.current.isFetching).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
     expect(networking.fetchMCPAccessGroups).not.toHaveBeenCalled();
   });
 
@@ -78,6 +107,7 @@ describe("useMCPAccessGroups", () => {
     });
 
     expect(result.current.error).toEqual(mockError);
+    expect(result.current.data).toBeUndefined();
   });
 
   it("should return empty array when API returns no groups", async () => {
