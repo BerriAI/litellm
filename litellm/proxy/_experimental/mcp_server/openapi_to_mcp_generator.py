@@ -8,7 +8,6 @@ import os
 from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 from urllib.parse import quote
-from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
