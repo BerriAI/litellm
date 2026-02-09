@@ -124,3 +124,22 @@ class TestShouldRedactMessageLogging:
             standard_callback_dynamic_params={"turn_off_message_logging": False},
         )
         assert should_redact_message_logging(details) is False
+
+    # ---- non-dict metadata safety ----
+
+    def test_both_metadata_fields_none(self):
+        """When both litellm_metadata and metadata are None, should not raise."""
+        details = _make_model_call_details(
+            metadata=None,
+            litellm_metadata=None,
+        )
+        assert should_redact_message_logging(details) is False
+
+    def test_both_metadata_fields_none_global_on(self):
+        """When both metadata fields are None but global is on, should still return True."""
+        litellm.turn_off_message_logging = True
+        details = _make_model_call_details(
+            metadata=None,
+            litellm_metadata=None,
+        )
+        assert should_redact_message_logging(details) is True
