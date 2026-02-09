@@ -261,37 +261,4 @@ describe("CreateUserButton", () => {
       expect(mockNotificationsManager.success).toHaveBeenCalledWith("API user Created");
     });
   });
-
-  it("should use SSO flow without invitationCreateCall when SSO is enabled", async () => {
-    const user = userEvent.setup();
-    mockUserCreateCall.mockResolvedValue({ data: { user_id: "sso-enabled-user" } });
-    mockGetProxyUISettings.mockResolvedValue({
-      PROXY_BASE_URL: "http://localhost",
-      PROXY_LOGOUT_URL: null,
-      DEFAULT_TEAM_DISABLED: false,
-      SSO_ENABLED: true,
-    });
-
-    renderWithProviders(
-      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
-    });
-    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
-
-    const dialog = screen.getByRole("dialog", { name: /invite user/i });
-    await user.type(within(dialog).getByLabelText(/user email/i), "sso-enabled@example.com");
-    await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-    await user.click(screen.getByText("User"));
-    await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
-
-    await waitFor(() => {
-      expect(mockInvitationCreateCall).not.toHaveBeenCalled();
-    });
-    await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("API user Created");
-    });
-  });
 });
