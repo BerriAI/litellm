@@ -125,6 +125,7 @@ const sidebars = {
             "tutorials/claude_responses_api",
             "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_prompt_cache_routing",
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
@@ -223,6 +224,7 @@ const sidebars = {
           label: "Configuration",
           items: [
             "set_keys",
+            "proxy_auth",
             "caching/all_caches",
           ],
         },
