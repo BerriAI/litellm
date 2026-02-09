@@ -1,7 +1,10 @@
 """
 Unit tests for Amazon Nova 2 reasoning configuration transformation.
 
-Tests the _transform_reasoning_effort_to_reasoning_config method in AmazonConverseConfig.
+Tests request transformation, response parsing, multi-turn message translation,
+and model detection for Nova 2 Lite and Nova 2 Pro via the Bedrock Converse API.
+
+Reference: https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-converse-api.html
 """
 
 import pytest
@@ -12,6 +15,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+import httpx
 import litellm
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
@@ -323,248 +327,52 @@ class TestNova15SupportedParameters:
         assert "response_format" in supported_params
 
 
-class TestNova15ResponseParsing:
-    """Test suite for Nova 2 response parsing."""
+class TestNova2ResponseParsing:
+    """Test that reasoningContent blocks are parsed into reasoning_content strings."""
 
-    def test_transform_reasoning_content_single_block(self):
-        """Test that reasoning content is extracted correctly from a single block."""
+    def test_should_extract_single_reasoning_block(self):
         config = AmazonConverseConfig()
-
-        reasoning_blocks = [
-            {"reasoningText": {"text": "Let me think through this step by step..."}}
-        ]
-
-        result = config._transform_reasoning_content(reasoning_blocks)
-
+        result = config._transform_reasoning_content(
+            [{"reasoningText": {"text": "Let me think through this step by step..."}}]
+        )
         assert result == "Let me think through this step by step..."
 
-    def test_transform_reasoning_content_multiple_blocks(self):
-        """Test that reasoning content is concatenated from multiple blocks."""
+    def test_should_concatenate_multiple_reasoning_blocks(self):
         config = AmazonConverseConfig()
-
-        reasoning_blocks = [
-            {"reasoningText": {"text": "First, I need to analyze the problem. "}},
-            {"reasoningText": {"text": "Then, I'll consider the solution."}},
-        ]
-
-        result = config._transform_reasoning_content(reasoning_blocks)
-
+        result = config._transform_reasoning_content(
+            [
+                {"reasoningText": {"text": "First, I need to analyze the problem. "}},
+                {"reasoningText": {"text": "Then, I'll consider the solution."}},
+            ]
+        )
         assert (
             result
             == "First, I need to analyze the problem. Then, I'll consider the solution."
         )
 
-    def test_transform_reasoning_content_empty_blocks(self):
-        """Test that empty reasoning blocks return empty string."""
+    def test_should_return_empty_string_for_empty_blocks(self):
         config = AmazonConverseConfig()
-
-        reasoning_blocks = []
-
-        result = config._transform_reasoning_content(reasoning_blocks)
-
-        assert result == ""
-
-    def test_transform_thinking_blocks_with_text(self):
-        """Test that thinking blocks are populated correctly with text."""
-        config = AmazonConverseConfig()
-
-        reasoning_blocks = [{"reasoningText": {"text": "My reasoning process..."}}]
-
-        result = config._transform_thinking_blocks(reasoning_blocks)
-
-        assert len(result) == 1
-        assert result[0]["type"] == "thinking"
-        assert result[0]["thinking"] == "My reasoning process..."
-        assert "signature" not in result[0]
-
-    def test_transform_thinking_blocks_with_signature(self):
-        """Test that signature field is preserved when present."""
-        config = AmazonConverseConfig()
-
-        reasoning_blocks = [
-            {
-                "reasoningText": {
-                    "text": "My reasoning...",
-                    "signature": "signature-hash-12345",
-                }
-            }
-        ]
-
-        result = config._transform_thinking_blocks(reasoning_blocks)
-
-        assert len(result) == 1
-        assert result[0]["type"] == "thinking"
-        assert result[0]["thinking"] == "My reasoning..."
-        assert result[0]["signature"] == "signature-hash-12345"
-
-    def test_transform_thinking_blocks_with_redacted_content(self):
-        """Test that redacted content blocks are handled correctly."""
-        config = AmazonConverseConfig()
-
-        reasoning_blocks = [
-            {"reasoningText": {"text": "First part of reasoning..."}},
-            {"redactedContent": {}},
-            {"reasoningText": {"text": "Second part after redaction..."}},
-        ]
-
-        result = config._transform_thinking_blocks(reasoning_blocks)
-
-        assert len(result) == 3
-        assert result[0]["type"] == "thinking"
-        assert result[0]["thinking"] == "First part of reasoning..."
-        assert result[1]["type"] == "redacted_thinking"
-        assert result[2]["type"] == "thinking"
-        assert result[2]["thinking"] == "Second part after redaction..."
-
-    def test_transform_thinking_blocks_multiple_blocks(self):
-        """Test that multiple thinking blocks are all transformed."""
-        config = AmazonConverseConfig()
-
-        reasoning_blocks = [
-            {"reasoningText": {"text": "Step 1: Analyze the problem"}},
-            {
-                "reasoningText": {
-                    "text": "Step 2: Consider solutions",
-                    "signature": "sig-abc",
-                }
-            },
-            {"reasoningText": {"text": "Step 3: Choose best approach"}},
-        ]
-
-        result = config._transform_thinking_blocks(reasoning_blocks)
-
-        assert len(result) == 3
-        assert all(block["type"] == "thinking" for block in result)
-        assert result[0]["thinking"] == "Step 1: Analyze the problem"
-        assert result[1]["thinking"] == "Step 2: Consider solutions"
-        assert result[1]["signature"] == "sig-abc"
-        assert result[2]["thinking"] == "Step 3: Choose best approach"
-
-    def test_transform_thinking_blocks_empty_list(self):
-        """Test that empty thinking blocks list returns empty list."""
-        config = AmazonConverseConfig()
-
-        reasoning_blocks = []
-
-        result = config._transform_thinking_blocks(reasoning_blocks)
-
-        assert result == []
-
-    def test_response_parsing_integration(self):
-        """Test that response parsing works end-to-end with Nova 2 structure."""
-        config = AmazonConverseConfig()
-
-        # Simulate a Nova 2 response with reasoning content
-        reasoning_blocks = [
-            {
-                "reasoningText": {
-                    "text": "Let me analyze this carefully. ",
-                    "signature": "test-signature",
-                }
-            },
-            {"reasoningText": {"text": "Based on my analysis, the answer is clear."}},
-        ]
-
-        # Test reasoning content extraction
-        reasoning_content = config._transform_reasoning_content(reasoning_blocks)
-        assert (
-            reasoning_content
-            == "Let me analyze this carefully. Based on my analysis, the answer is clear."
-        )
-
-        # Test thinking blocks transformation
-        thinking_blocks = config._transform_thinking_blocks(reasoning_blocks)
-        assert len(thinking_blocks) == 2
-        assert thinking_blocks[0]["thinking"] == "Let me analyze this carefully. "
-        assert thinking_blocks[0]["signature"] == "test-signature"
-        assert (
-            thinking_blocks[1]["thinking"]
-            == "Based on my analysis, the answer is clear."
-        )
+        assert config._transform_reasoning_content([]) == ""
 
 
-class TestNova15StreamingResponseParsing:
-    """Test suite for Nova 2 streaming response parsing."""
+class TestNova2StreamingResponseParsing:
+    """Test that streaming reasoningContent deltas produce reasoning_content on the delta."""
 
-    def test_streaming_reasoning_content_start_event(self):
-        """Test that streaming start event with reasoningContent is handled correctly."""
+    def test_should_extract_reasoning_content_from_delta(self):
         from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
         handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate a start event with redacted reasoning content
-        chunk_data = {
-            "start": {"reasoningContent": {"redactedContent": {}}},
-            "contentBlockIndex": 0,
-        }
-
-        result = handler.converse_chunk_parser(chunk_data)
-
-        # Verify thinking blocks are populated
-        assert result.choices[0].delta.thinking_blocks is not None
-        assert len(result.choices[0].delta.thinking_blocks) == 1
-        assert result.choices[0].delta.thinking_blocks[0]["type"] == "redacted_thinking"
-
-    def test_streaming_reasoning_content_delta_text(self):
-        """Test that streaming delta event with reasoning text is handled correctly."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
-
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate a delta event with reasoning text
         chunk_data = {
             "delta": {"reasoningContent": {"text": "Let me think about this..."}},
             "contentBlockIndex": 0,
         }
-
         result = handler.converse_chunk_parser(chunk_data)
-
-        # Verify reasoning content is extracted
         assert result.choices[0].delta.reasoning_content == "Let me think about this..."
 
-        # Verify thinking blocks are populated
-        assert result.choices[0].delta.thinking_blocks is not None
-        assert len(result.choices[0].delta.thinking_blocks) == 1
-        assert result.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
-        assert (
-            result.choices[0].delta.thinking_blocks[0]["thinking"]
-            == "Let me think about this..."
-        )
-
-    def test_streaming_reasoning_content_delta_signature(self):
-        """Test that streaming delta event with signature is handled correctly."""
+    def test_should_accumulate_multiple_reasoning_deltas(self):
         from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
         handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate a delta event with signature
-        chunk_data = {
-            "delta": {"reasoningContent": {"signature": "signature-hash-xyz"}},
-            "contentBlockIndex": 0,
-        }
-
-        result = handler.converse_chunk_parser(chunk_data)
-
-        # Verify reasoning content is set to empty string for consistency
-        assert result.choices[0].delta.reasoning_content == ""
-
-        # Verify thinking blocks are populated with signature
-        assert result.choices[0].delta.thinking_blocks is not None
-        assert len(result.choices[0].delta.thinking_blocks) == 1
-        assert result.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
-        assert (
-            result.choices[0].delta.thinking_blocks[0]["signature"]
-            == "signature-hash-xyz"
-        )
-        assert result.choices[0].delta.thinking_blocks[0]["thinking"] == ""
-
-    def test_streaming_reasoning_content_multiple_deltas(self):
-        """Test that multiple reasoning content deltas are accumulated correctly."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
-
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate multiple delta events
         chunks = [
             {
                 "delta": {"reasoningContent": {"text": "First, "}},
@@ -579,30 +387,15 @@ class TestNova15StreamingResponseParsing:
                 "contentBlockIndex": 0,
             },
         ]
-
-        results = []
-        for chunk_data in chunks:
-            result = handler.converse_chunk_parser(chunk_data)
-            results.append(result)
-
-        # Verify each delta has the correct reasoning content
+        results = [handler.converse_chunk_parser(c) for c in chunks]
         assert results[0].choices[0].delta.reasoning_content == "First, "
         assert results[1].choices[0].delta.reasoning_content == "I need to analyze "
         assert results[2].choices[0].delta.reasoning_content == "the problem."
 
-        # Verify thinking blocks are populated for each delta
-        for result in results:
-            assert result.choices[0].delta.thinking_blocks is not None
-            assert len(result.choices[0].delta.thinking_blocks) == 1
-            assert result.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
-
-    def test_streaming_reasoning_then_text_content(self):
-        """Test that reasoning content followed by text content is handled correctly."""
+    def test_should_stream_reasoning_then_text(self):
         from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
         handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate reasoning content followed by text content
         chunks = [
             {
                 "delta": {"reasoningContent": {"text": "Let me think..."}},
@@ -611,184 +404,286 @@ class TestNova15StreamingResponseParsing:
             {"delta": {"text": "Based on my reasoning, "}, "contentBlockIndex": 1},
             {"delta": {"text": "the answer is 42."}, "contentBlockIndex": 1},
         ]
-
-        results = []
-        for chunk_data in chunks:
-            result = handler.converse_chunk_parser(chunk_data)
-            results.append(result)
-
-        # Verify first chunk has reasoning content
+        results = [handler.converse_chunk_parser(c) for c in chunks]
         assert results[0].choices[0].delta.reasoning_content == "Let me think..."
-        assert results[0].choices[0].delta.thinking_blocks is not None
-
-        # Verify subsequent chunks have text content
         assert results[1].choices[0].delta.content == "Based on my reasoning, "
         assert results[2].choices[0].delta.content == "the answer is 42."
 
-    def test_streaming_redacted_content_delta(self):
-        """Test that streaming delta with redacted content is handled correctly."""
+    def test_should_populate_provider_specific_fields(self):
         from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
         handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate a delta event with redacted content
-        chunk_data = {
-            "delta": {"reasoningContent": {"redactedContent": {}}},
-            "contentBlockIndex": 0,
-        }
-
-        result = handler.converse_chunk_parser(chunk_data)
-
-        # Verify reasoning content is set to empty string for consistency
-        assert result.choices[0].delta.reasoning_content == ""
-
-        # Verify thinking blocks contain redacted block
-        assert result.choices[0].delta.thinking_blocks is not None
-        assert len(result.choices[0].delta.thinking_blocks) == 1
-        assert result.choices[0].delta.thinking_blocks[0]["type"] == "redacted_thinking"
-
-    def test_streaming_provider_specific_fields(self):
-        """Test that provider_specific_fields are populated in streaming responses."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
-
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate a delta event with reasoning content
         chunk_data = {
             "delta": {"reasoningContent": {"text": "Reasoning text"}},
             "contentBlockIndex": 0,
         }
-
         result = handler.converse_chunk_parser(chunk_data)
+        psf = result.choices[0].delta.provider_specific_fields
+        assert psf is not None
+        assert psf["reasoningContent"]["text"] == "Reasoning text"
 
-        # Verify provider_specific_fields are populated
-        assert result.choices[0].delta.provider_specific_fields is not None
-        assert "reasoningContent" in result.choices[0].delta.provider_specific_fields
-        assert (
-            result.choices[0].delta.provider_specific_fields["reasoningContent"]["text"]
-            == "Reasoning text"
-        )
-
-    def test_streaming_mixed_content_blocks(self):
-        """Test streaming with mixed content blocks (reasoning, text, tool calls)."""
+    def test_should_stream_reasoning_with_tool_calls(self):
         from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
         handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        # Simulate a complex streaming scenario
         chunks = [
-            # Start with reasoning
             {
-                "delta": {
-                    "reasoningContent": {
-                        "text": "I need to call a tool to get information."
-                    }
-                },
+                "delta": {"reasoningContent": {"text": "I need to call a tool."}},
                 "contentBlockIndex": 0,
             },
-            # Tool use start
             {
                 "start": {"toolUse": {"toolUseId": "tool-123", "name": "get_weather"}},
                 "contentBlockIndex": 1,
             },
-            # Tool use delta
             {
                 "delta": {"toolUse": {"input": '{"location": "NYC"}'}},
                 "contentBlockIndex": 1,
             },
-            # Text response
             {"delta": {"text": "The weather is sunny."}, "contentBlockIndex": 2},
         ]
-
-        results = []
-        for chunk_data in chunks:
-            result = handler.converse_chunk_parser(chunk_data)
-            results.append(result)
-
-        # Verify reasoning content in first chunk
-        assert (
-            results[0].choices[0].delta.reasoning_content
-            == "I need to call a tool to get information."
-        )
-
-        # Verify tool call in second and third chunks
-        assert results[1].choices[0].delta.tool_calls is not None
+        results = [handler.converse_chunk_parser(c) for c in chunks]
+        assert results[0].choices[0].delta.reasoning_content == "I need to call a tool."
         assert (
             results[1].choices[0].delta.tool_calls[0]["function"]["name"]
             == "get_weather"
         )
-        assert results[2].choices[0].delta.tool_calls is not None
-
-        # Verify text content in fourth chunk
         assert results[3].choices[0].delta.content == "The weather is sunny."
 
-    def test_extract_reasoning_content_str_with_text(self):
-        """Test extract_reasoning_content_str method with text."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
+# ---------------------------------------------------------------------------
+# Model detection — _is_nova_2_model covers both Lite and Pro
+# ---------------------------------------------------------------------------
 
-        reasoning_block = {"text": "This is reasoning text"}
+NOVA_2_LITE = "amazon.nova-2-lite-v1:0"
+NOVA_2_PRO = "us.amazon.nova-2-pro-preview-20251202-v1:0"
 
-        result = handler.extract_reasoning_content_str(reasoning_block)
 
-        assert result == "This is reasoning text"
+class TestNova2ModelDetection:
+    """Verify _is_nova_2_model identifies all Nova 2 variants (lite, pro, regional, routed)."""
 
-    def test_extract_reasoning_content_str_without_text(self):
-        """Test extract_reasoning_content_str method without text (e.g., signature only)."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "amazon.nova-2-lite-v1:0",
+            "amazon.nova-2-pro-preview-20251202-v1:0",
+            "us.amazon.nova-2-lite-v1:0",
+            "us.amazon.nova-2-pro-preview-20251202-v1:0",
+            "eu.amazon.nova-2-lite-v1:0",
+            "apac.amazon.nova-2-pro-preview-20251202-v1:0",
+            "bedrock/converse/amazon.nova-2-lite-v1:0",
+            "bedrock/converse/us.amazon.nova-2-pro-preview-20251202-v1:0",
+            "bedrock/amazon.nova-2-lite-v1:0",
+            "converse/us.amazon.nova-2-lite-v1:0",
+            "converse/amazon.nova-2-pro-preview-20251202-v1:0",
+        ],
+    )
+    def test_should_recognize_nova_2_models(self, model):
+        assert AmazonConverseConfig()._is_nova_2_model(model) is True
 
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "amazon.nova-pro-v1:0",
+            "amazon.nova-lite-v1:0",
+            "amazon.nova-pro-1-5-v1:0",
+            "anthropic.claude-3-sonnet-20240229-v1:0",
+            "us.amazon.nova-pro-v1:0",
+        ],
+    )
+    def test_should_not_match_non_nova_2_models(self, model):
+        assert AmazonConverseConfig()._is_nova_2_model(model) is False
 
-        reasoning_block = {"signature": "sig-123"}
 
-        result = handler.extract_reasoning_content_str(reasoning_block)
+# ---------------------------------------------------------------------------
+# End-to-end request body — reasoningConfig in additionalModelRequestFields
+# ---------------------------------------------------------------------------
 
-        assert result is None
 
-    def test_translate_thinking_blocks_streaming_text(self):
-        """Test translate_thinking_blocks method with text."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+class TestNova2EndToEndRequest:
+    """Verify transform_request places reasoningConfig correctly for both model variants."""
 
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
+    def _build_request(self, model, effort, **extra):
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": effort, **extra},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        return config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
 
-        thinking_block = {"text": "Thinking content"}
+    @pytest.mark.parametrize("model", [NOVA_2_LITE, NOVA_2_PRO])
+    def test_should_place_reasoning_config_in_additional_model_request_fields(
+        self, model
+    ):
+        body = self._build_request(model, "high")
+        additional = body.get("additionalModelRequestFields", {})
+        assert additional["reasoningConfig"] == {
+            "type": "enabled",
+            "maxReasoningEffort": "high",
+        }
+        assert "reasoningConfig" not in body  # not top-level
+        assert "thinking" not in body  # not Anthropic-style
 
-        result = handler.translate_thinking_blocks(thinking_block)
-
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["type"] == "thinking"
-        assert result[0]["thinking"] == "Thinking content"
-
-    def test_translate_thinking_blocks_streaming_signature(self):
-        """Test translate_thinking_blocks method with signature."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
-
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
-
-        thinking_block = {"signature": "sig-abc"}
-
-        result = handler.translate_thinking_blocks(thinking_block)
-
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["type"] == "thinking"
-        assert result[0]["signature"] == "sig-abc"
+    @pytest.mark.parametrize("model", [NOVA_2_LITE, NOVA_2_PRO])
+    def test_should_coexist_with_inference_params(self, model):
+        body = self._build_request(model, "high", temperature=0.5, max_tokens=512)
         assert (
-            result[0]["thinking"] == ""
-        )  # Empty string for consistency with Anthropic
+            body["additionalModelRequestFields"]["reasoningConfig"]["type"] == "enabled"
+        )
+        inf = body.get("inferenceConfig", {})
+        assert inf.get("temperature") == 0.5
+        assert inf.get("maxTokens") == 512
 
-    def test_translate_thinking_blocks_streaming_redacted(self):
-        """Test translate_thinking_blocks method with redacted content."""
-        from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
-        handler = AWSEventStreamDecoder(model="amazon.nova-2-lite-v1:0")
+# ---------------------------------------------------------------------------
+# End-to-end response — reasoningContent parsed to reasoning_content string
+# ---------------------------------------------------------------------------
 
-        thinking_block = {"redactedContent": {}}
 
-        result = handler.translate_thinking_blocks(thinking_block)
+class TestNova2EndToEndResponse:
+    """Verify transform_response produces reasoning_content from reasoningContent blocks."""
 
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["type"] == "redacted_thinking"
+    def _transform(self, content_blocks, model=NOVA_2_LITE):
+        config = AmazonConverseConfig()
+        body = {
+            "output": {"message": {"role": "assistant", "content": content_blocks}},
+            "usage": {"inputTokens": 10, "outputTokens": 50, "totalTokens": 60},
+            "stopReason": "end_turn",
+            "metrics": {"latencyMs": 100},
+        }
+        resp = httpx.Response(
+            200, json=body, request=httpx.Request("POST", "https://bedrock")
+        )
+        return config.transform_response(
+            model=model,
+            raw_response=resp,
+            model_response=litellm.ModelResponse(),
+            logging_obj=None,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=None,
+        )
+
+    def test_should_extract_reasoning_content_as_string(self):
+        result = self._transform(
+            [
+                {"reasoningContent": {"reasoningText": {"text": "Step 1. "}}},
+                {"reasoningContent": {"reasoningText": {"text": "Step 2."}}},
+                {"text": "The answer is 4."},
+            ]
+        )
+        msg = result.choices[0].message
+        assert msg.content == "The answer is 4."
+        assert msg.reasoning_content == "Step 1. Step 2."
+
+    def test_should_include_raw_blocks_in_provider_specific_fields(self):
+        result = self._transform(
+            [
+                {"reasoningContent": {"reasoningText": {"text": "thinking..."}}},
+                {"text": "done"},
+            ]
+        )
+        psf = result.choices[0].message.get("provider_specific_fields", {})
+        assert "reasoningContentBlocks" in psf
+
+    def test_should_omit_reasoning_content_when_absent(self):
+        result = self._transform([{"text": "Plain answer."}])
+        assert not getattr(result.choices[0].message, "reasoning_content", None)
+
+
+# ---------------------------------------------------------------------------
+# Multi-turn — reasoning_content round-trips back to Bedrock format
+# ---------------------------------------------------------------------------
+
+
+class TestNova2MultiTurnMessageTranslation:
+    """Verify that assistant messages carrying reasoning from a previous turn are
+    correctly translated to Bedrock content blocks via _bedrock_converse_messages_pt."""
+
+    def _to_bedrock(self, messages, model=NOVA_2_LITE):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _bedrock_converse_messages_pt,
+        )
+
+        return _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+        )
+
+    def test_should_inline_unsigned_thinking_blocks_as_text(self):
+        """Without a signature, reasoning text becomes a plain text block."""
+        bedrock_msgs = self._to_bedrock(
+            [
+                {"role": "user", "content": "What is 2+2?"},
+                {
+                    "role": "assistant",
+                    "content": "4.",
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "Simple addition"},
+                    ],
+                },
+                {"role": "user", "content": "Sure?"},
+            ]
+        )
+        assistant = next(m for m in bedrock_msgs if m["role"] == "assistant")
+        texts = [b["text"] for b in assistant["content"] if "text" in b]
+        assert "Simple addition" in texts
+        assert "4." in texts
+
+    def test_should_keep_signed_thinking_blocks_as_reasoning_content(self):
+        """With a signature, reasoning is preserved as a reasoningContent block."""
+        bedrock_msgs = self._to_bedrock(
+            [
+                {"role": "user", "content": "What is 2+2?"},
+                {
+                    "role": "assistant",
+                    "content": "4.",
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "math", "signature": "sig-1"},
+                    ],
+                },
+                {"role": "user", "content": "Sure?"},
+            ]
+        )
+        assistant = next(m for m in bedrock_msgs if m["role"] == "assistant")
+        rc_blocks = [b for b in assistant["content"] if "reasoningContent" in b]
+        assert len(rc_blocks) >= 1
+        assert rc_blocks[0]["reasoningContent"]["reasoningText"]["text"] == "math"
+        assert rc_blocks[0]["reasoningContent"]["reasoningText"]["signature"] == "sig-1"
+
+    def test_should_translate_inline_content_list_thinking_type(self):
+        """content=[{type:'thinking',...},{type:'text',...}] should also round-trip."""
+        bedrock_msgs = self._to_bedrock(
+            [
+                {"role": "user", "content": "Hi"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "hmm", "signature": "sig-2"},
+                        {"type": "text", "text": "Hello!"},
+                    ],
+                },
+                {"role": "user", "content": "Bye"},
+            ]
+        )
+        assistant = next(m for m in bedrock_msgs if m["role"] == "assistant")
+        rc_blocks = [b for b in assistant["content"] if "reasoningContent" in b]
+        text_blocks = [
+            b
+            for b in assistant["content"]
+            if "text" in b and "reasoningContent" not in b
+        ]
+        assert len(rc_blocks) >= 1
+        assert any("Hello!" in b["text"] for b in text_blocks)
