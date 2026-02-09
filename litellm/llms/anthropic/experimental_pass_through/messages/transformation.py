@@ -46,6 +46,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "thinking",
             "context_management",
             "output_format",
+            "inference_geo",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
