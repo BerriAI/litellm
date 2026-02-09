@@ -56,7 +56,7 @@ class ZscalerAIGuard(CustomGuardrail):
             send_user_api_key_team_id:{self.send_user_api_key_team_id}"""
         )
 
-        super().__init__(default_on=True)
+        super().__init__(default_on=True, **kwargs)
 
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
 
