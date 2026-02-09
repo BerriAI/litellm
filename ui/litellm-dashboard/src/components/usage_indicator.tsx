@@ -25,8 +25,9 @@ interface UsageData {
 // Calculate days until expiration
 const getDaysUntilExpiration = (expirationDate: string | null): number | null => {
   if (!expirationDate) return null;
-  const expDate = new Date(expirationDate);
+  const expDate = new Date(expirationDate + 'T00:00:00Z'); // Force UTC midnight
   const now = new Date();
+  now.setHours(0, 0, 0, 0); // Normalize to local midnight
   const diffTime = expDate.getTime() - now.getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return diffDays;
