@@ -68,7 +68,7 @@ async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         # NOTE: do not close shared client if get_async_httpx_client returns a shared singleton.
         # If it returns a new client each time, consider wrapping it in an async context manager.
-        r = await client.get(filepath, timeout=30.0)
+        r = await client.get(filepath)
         r.raise_for_status()
         return r.json()
 
