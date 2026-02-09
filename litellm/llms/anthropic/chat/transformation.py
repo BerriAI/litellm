@@ -1,7 +1,18 @@
 import json
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+    get_args,
+)
 
 import httpx
 
@@ -30,6 +41,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMcpServerTool,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
+    AnthropicOutputConfig,
     AnthropicOutputSchema,
     AnthropicSystemMessageContent,
     AnthropicThinkingParam,
@@ -78,6 +90,10 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+SUPPORTED_ANTHROPIC_OUTPUT_CONFIG_EFFORTS = frozenset(
+    get_args(AnthropicOutputConfig.__annotations__["effort"])
+)
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -172,8 +188,77 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _is_claude_opus_4_6(model: str) -> bool:
+        """Check if the model is Claude Opus 4.6."""
+        model_lower = model.lower()
+        opus_4_6_patterns = [
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
+        ]
+        return any(pattern in model_lower for pattern in opus_4_6_patterns)
+
+    @staticmethod
+    def _is_claude_opus_4_5(model: str) -> bool:
         """Check if the model is Claude Opus 4.5."""
-        return "opus-4-6" in model.lower() or "opus_4_6" in model.lower()
+        model_lower = model.lower()
+        opus_4_5_patterns = [
+            "opus-4.5",
+            "opus_4.5",
+            "opus-4-5",
+            "opus_4_5",
+        ]
+        return any(pattern in model_lower for pattern in opus_4_5_patterns)
+
+    @staticmethod
+    def _get_supported_output_config_efforts(model: str) -> Set[str]:
+        """
+        Return supported output_config effort values for a given model.
+
+        Opus 4.6 supports low/medium/high/max.
+        Opus 4.5 supports low/medium/high (max is invalid).
+        """
+        if AnthropicConfig._is_claude_opus_4_6(model):
+            return set(SUPPORTED_ANTHROPIC_OUTPUT_CONFIG_EFFORTS)
+        return set(SUPPORTED_ANTHROPIC_OUTPUT_CONFIG_EFFORTS - {"max"})
+
+    @staticmethod
+    def _validate_output_config_effort(
+        model: str, output_config: Dict[str, Any]
+    ) -> None:
+        effort = output_config.get("effort")
+        if effort is None:
+            return
+        if not isinstance(effort, str):
+            raise ValueError(
+                f"Invalid effort value type: {type(effort).__name__}. Must be a string."
+            )
+
+        supported_efforts = AnthropicConfig._get_supported_output_config_efforts(model)
+        if effort not in supported_efforts:
+            supported_efforts_str = ", ".join(
+                f"'{value}'" for value in sorted(supported_efforts)
+            )
+            raise ValueError(
+                f"Invalid effort value: {effort}. Model '{model}' supports: {supported_efforts_str}"
+            )
+
+    @staticmethod
+    def _validate_thinking_for_model(model: str, thinking: Dict[str, Any]) -> None:
+        """
+        Validate thinking param compatibility for model-specific behavior.
+
+        Opus 4.5 does not support thinking.type="adaptive".
+        """
+        if not AnthropicConfig._is_claude_opus_4_5(model):
+            return
+
+        thinking_type = thinking.get("type")
+        if thinking_type == "adaptive":
+            raise ValueError(
+                f"Invalid thinking type: '{thinking_type}' for model '{model}'. "
+                "Claude Opus 4.5 requires thinking={'type': 'enabled', 'budget_tokens': N}."
+            )
 
     def get_supported_openai_params(self, model: str):
         params = [
@@ -1215,15 +1300,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **optional_params,
         }
 
+        thinking = optional_params.get("thinking")
+        if isinstance(thinking, dict):
+            self._validate_thinking_for_model(model=model, thinking=thinking)
+
         ## Handle output_config (Anthropic-specific parameter)
         if "output_config" in optional_params:
             output_config = optional_params.get("output_config")
             if output_config and isinstance(output_config, dict):
-                effort = output_config.get("effort")
-                if effort and effort not in ["high", "medium", "low"]:
-                    raise ValueError(
-                        f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low'"
-                    )
+                self._validate_output_config_effort(
+                    model=model, output_config=output_config
+                )
                 data["output_config"] = output_config
 
         return data

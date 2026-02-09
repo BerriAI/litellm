@@ -1529,6 +1529,64 @@ def test_effort_validation():
         )
 
 
+def test_effort_validation_allows_max_for_claude_opus_46():
+    """Test that Opus 4.6 accepts effort='max' in output_config."""
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-opus-4-6-20250514",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_effort_validation_rejects_max_for_claude_opus_45():
+    """Test that Opus 4.5 rejects effort='max' in output_config."""
+    config = AnthropicConfig()
+
+    with pytest.raises(ValueError, match="Invalid effort value: max"):
+        config.transform_request(
+            model="claude-opus-4-5-20251101",
+            messages=[{"role": "user", "content": "Test"}],
+            optional_params={"output_config": {"effort": "max"}},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_thinking_adaptive_rejected_for_claude_opus_45():
+    """Test that Opus 4.5 rejects thinking.type='adaptive'."""
+    config = AnthropicConfig()
+
+    with pytest.raises(ValueError, match="Invalid thinking type"):
+        config.transform_request(
+            model="claude-opus-4-5-20251101",
+            messages=[{"role": "user", "content": "Test"}],
+            optional_params={"thinking": {"type": "adaptive"}},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_thinking_adaptive_allowed_for_claude_opus_46():
+    """Test that Opus 4.6 allows thinking.type='adaptive'."""
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-opus-4-6-20250514",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params={"thinking": {"type": "adaptive"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"]["type"] == "adaptive"
+
+
 def test_effort_with_claude_opus_45():
     """Test effort parameter works with Claude Opus 4.5 model."""
     config = AnthropicConfig()
