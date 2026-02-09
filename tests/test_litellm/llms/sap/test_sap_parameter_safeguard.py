@@ -112,7 +112,10 @@ class TestSAPTransformationIntegration:
                         )
             except AttributeError as e:
                 if "deployment_url" in str(e):
-                    pass
+                    # Expected: deployment_url is not a model param
+                    continue
+                else:
+                    pytest.fail(f"Unexpected AttributeError: {e}")
                 else:
                     pytest.fail(f"Unexpected AttributeError: {e}")
             except Exception as e:
