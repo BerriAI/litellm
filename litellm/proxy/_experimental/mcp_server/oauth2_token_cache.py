@@ -10,14 +10,16 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import (
+    MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
+    MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
+    MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
-
-
-_EXPIRY_BUFFER_SECONDS = 60
 
 
 class MCPOAuth2TokenCache(InMemoryCache):
@@ -30,8 +32,8 @@ class MCPOAuth2TokenCache(InMemoryCache):
 
     def __init__(self) -> None:
         super().__init__(
-            max_size_in_memory=200,
-            default_ttl=3600,
+            max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
+            default_ttl=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
         )
         self._locks: Dict[str, asyncio.Lock] = {}
 
@@ -99,7 +101,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
             )
 
         expires_in = int(body.get("expires_in", 3600))
-        ttl = max(expires_in - _EXPIRY_BUFFER_SECONDS, 0)
+        ttl = max(expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS, 0)
 
         verbose_logger.info(
             "Fetched OAuth2 token for MCP server %s (expires in %ds)",
