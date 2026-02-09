@@ -3,7 +3,7 @@ WebSearch Tool Transformation
 
 Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
-
+import json
 from typing import Any, Dict, List, Tuple
 
 from litellm._logging import verbose_logger
@@ -301,7 +301,7 @@ class WebSearchTransformation:
                     "type": "function",
                     "function": {
                         "name": tc["name"],
-                        "arguments": str(tc["input"]),
+                        "arguments": json.dumps(tc["input"]) if isinstance(tc["input"], dict) else str(tc["input"]),
                     },
                 }
                 for tc in tool_calls
