@@ -11,7 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 
 
-async def route_a2a_agent_request(data: dict, route_type: str) -> Optional[Any]:
+def route_a2a_agent_request(data: dict, route_type: str) -> Optional[Any]:
     """
     Route A2A agent requests directly to litellm with injected API base.
     

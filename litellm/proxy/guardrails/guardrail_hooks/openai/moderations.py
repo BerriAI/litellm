@@ -22,16 +22,18 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .base import OpenAIGuardrailBase
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues, OpenAIModerationResponse
+    from litellm.types.llms.openai import OpenAIModerationResponse
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
     from litellm.types.utils import ModelResponse, ModelResponseStream
 
@@ -178,170 +180,59 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 },
             )
 
-    def _extract_user_content_from_data(self, data: Dict[str, Any]) -> Optional[str]:
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
         """
-        Extract user content from request data, supporting both Chat Completions and Responses API.
+        Apply OpenAI moderation guardrail using the unified guardrail interface.
         
-        For Chat Completions: extracts from 'messages' field
-        For Responses API: extracts from 'input' field
+        This method is called by the UnifiedLLMGuardrails system for all endpoint types
+        (chat completions, embeddings, responses API, etc.).
         
+        Args:
+            inputs: GenericGuardrailAPIInputs containing texts and/or structured_messages
+            request_data: The original request data
+            input_type: Whether this is a "request" (pre-call) or "response" (post-call)
+            logging_obj: Optional logging object
+            
         Returns:
-            The extracted user content string, or None if no content found
+            The inputs unchanged (moderation doesn't modify content, only blocks)
+            
+        Raises:
+            HTTPException: If content violates moderation policy
         """
-        # Try to get messages first (Chat Completions API)
-        messages: Optional[List["AllMessageValues"]] = data.get("messages")
-        if messages is not None:
-            return self.get_user_prompt(messages)
+        # Extract text to moderate from inputs
+        text_to_moderate: Optional[str] = None
         
-        # Try to get input (Responses API)
-        input_data = data.get("input")
-        if input_data is not None:
-            # input can be a string or a list of message-like objects
-            if isinstance(input_data, str):
-                return input_data
-            elif isinstance(input_data, list):
-                # Treat input as messages and extract user content
-                return self.get_user_prompt(input_data)
+        # Prefer structured_messages if available (has role context)
+        if structured_messages := inputs.get("structured_messages"):
+            text_to_moderate = self.get_user_prompt(structured_messages)
         
-        return None
-
-    @log_guardrail_information
-    async def async_pre_call_hook(
-        self,
-        user_api_key_dict: "UserAPIKeyAuth",
-        cache: Any,
-        data: Dict[str, Any],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-        ],
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Pre-call hook to scan user prompts before sending to LLM.
-
-        Raises HTTPException if content should be blocked.
-        """
-        verbose_proxy_logger.debug(
-            "OpenAI Moderation: Running pre-call prompt scan, on call_type: %s",
-            call_type,
-        )
+        # Fall back to texts
+        if not text_to_moderate:
+            if texts := inputs.get("texts"):
+                # Join all texts for moderation
+                text_to_moderate = "\n".join(texts)
         
-        # Skip moderation calls to avoid infinite recursion
-        if call_type == "moderation":
-            return data
-
-        user_prompt = self._extract_user_content_from_data(data)
-        
-        if user_prompt is None:
-            verbose_proxy_logger.warning(
-                "OpenAI Moderation: not running guardrail. No messages or input in data"
-            )
-            return data
-
-        if user_prompt:
+        if not text_to_moderate:
             verbose_proxy_logger.debug(
-                f"OpenAI Moderation: User prompt: {user_prompt[:100]}..."  # Log first 100 chars for debugging
+                "OpenAI Moderation: No text content to moderate in inputs"
             )
-            
-            moderation_response = await self.async_make_request(
-                input_text=user_prompt,
-            )
-            
-            # Check if content is flagged and raise exception if needed
-            self._check_moderation_result(moderation_response)
-        else:
-            verbose_proxy_logger.warning(
-                "OpenAI Moderation: No user prompt found"
-            )
-
-        return data
-
-    @log_guardrail_information
-    async def async_moderation_hook(
-        self,
-        data: Dict[str, Any],
-        user_api_key_dict: "UserAPIKeyAuth",
-        call_type: Literal[
-            "completion",
-            "embeddings", 
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-        ],
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Moderation hook to scan user prompts during call processing.
-
-        Raises HTTPException if content should be blocked.
-        """
-        verbose_proxy_logger.debug(
-            "OpenAI Moderation: Running moderation hook, on call_type: %s",
-            call_type,
-        )
+            return inputs
+                
+        # Make moderation request
+        moderation_response = await self.async_make_request(input_text=text_to_moderate)
         
-        # Skip moderation calls to avoid infinite recursion
-        if call_type == "moderation":
-            return data
-
-        # Extract user content from either messages or input field
-        user_prompt = self._extract_user_content_from_data(data)
+        # Check if content is flagged and raise exception if needed
+        self._check_moderation_result(moderation_response)
         
-        if user_prompt is None:
-            verbose_proxy_logger.warning(
-                "OpenAI Moderation: not running guardrail. No messages or input in data"
-            )
-            return data
+        # Moderation doesn't modify content, just blocks - return inputs unchanged
+        return inputs
 
-        if user_prompt:
-            moderation_response = await self.async_make_request(
-                input_text=user_prompt,
-            )
-            
-            # Check if content is flagged and raise exception if needed
-            self._check_moderation_result(moderation_response)
-
-        return data
-
-    @log_guardrail_information
-    async def async_post_call_hook(
-        self,
-        data: Dict[str, Any],
-        user_api_key_dict: "UserAPIKeyAuth",
-        response: "ModelResponse",
-    ) -> "ModelResponse":
-        """
-        Post-call hook to scan LLM responses before returning to user.
-
-        Raises HTTPException if response should be blocked.
-        """
-        verbose_proxy_logger.debug(
-            "OpenAI Moderation: Running post-call response scan"
-        )
-
-        # Extract response text for moderation
-        response_text = self._extract_response_text(response)
-        if response_text:
-            verbose_proxy_logger.debug(
-                f"OpenAI Moderation: Response text: {response_text[:100]}..."  # Log first 100 chars
-            )
-            
-            moderation_response = await self.async_make_request(
-                input_text=response_text,
-            )
-            
-            # Check if content is flagged and raise exception if needed
-            self._check_moderation_result(moderation_response)
-
-        return response
 
     @log_guardrail_information
     async def async_post_call_streaming_iterator_hook(

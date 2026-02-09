@@ -2,6 +2,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -43,6 +46,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "thinking",
             "context_management",
             "output_format",
+            "inference_geo",
+            "speed",
+            "output_config",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
@@ -88,6 +94,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+        )
+
+        headers = update_headers_with_filtered_beta(
+            headers=headers,
+            provider="anthropic",
         )
 
         return headers, api_base
@@ -175,10 +186,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - context_management: adds 'context-management-2025-06-27'
         - tool_search: adds provider-specific tool search header
         - output_format: adds 'structured-outputs-2025-11-13'
+        - speed: adds 'fast-mode-2026-02-01'
 
         Args:
             headers: Request headers dict
-            optional_params: Optional parameters including tools, context_management, output_format
+            optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
         """
         beta_values: set = set()
@@ -189,12 +201,35 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             beta_values.update(b.strip() for b in existing_beta.split(","))
 
         # Check for context management
-        if optional_params.get("context_management") is not None:
-            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+        context_management_param = optional_params.get("context_management")
+        if context_management_param is not None:
+            # Check edits array for compact_20260112 type
+            edits = context_management_param.get("edits", [])
+            has_compact = False
+            has_other = False
+            
+            for edit in edits:
+                edit_type = edit.get("type", "")
+                if edit_type == "compact_20260112":
+                    has_compact = True
+                else:
+                    has_other = True
+            
+            # Add compact header if any compact edits exist
+            if has_compact:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+            
+            # Add context management header if any other edits exist
+            if has_other:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
 
         # Check for structured outputs
         if optional_params.get("output_format") is not None:
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value)
+
+        # Check for fast mode
+        if optional_params.get("speed") == "fast":
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
         # Check for tool search tools
         tools = optional_params.get("tools")

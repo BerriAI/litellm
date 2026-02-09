@@ -188,4 +188,78 @@ describe("RequestResponsePanel", () => {
     expect(responseData).toEqual({ responseData: "this should appear in response" });
     expect(responseData).not.toEqual({ requestData: "this should not appear in response" });
   });
+
+  it("should show error response data when hasError is true and hasResponse is false", () => {
+    const failedLogEntry: LogEntry = {
+      ...baseLogEntry,
+      messages: [],
+      response: {},
+      metadata: {
+        status: "failure",
+        error_information: {
+          error_message: "Model not found",
+          error_class: "NotFoundError",
+          error_code: 404,
+        },
+        additional_usage_values: {
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    };
+    const errorResponse = { error: { message: "Model not found", type: "NotFoundError", code: 404, param: null } };
+    const mockGetRawRequest = vi.fn().mockReturnValue({ messages: [] });
+    const mockFormattedResponse = vi.fn().mockReturnValue(errorResponse);
+    render(
+      <RequestResponsePanel
+        row={{ original: failedLogEntry }}
+        hasMessages={false}
+        hasResponse={false}
+        hasError={true}
+        errorInfo={failedLogEntry.metadata.error_information}
+        getRawRequest={mockGetRawRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+    expect(screen.queryByText("Response data not available")).not.toBeInTheDocument();
+    expect(mockFormattedResponse).toHaveBeenCalled();
+    const copyButtons = screen.getAllByRole("button");
+    const copyResponseButton = copyButtons.find((button) => button.getAttribute("title") === "Copy response");
+    expect(copyResponseButton).not.toBeDisabled();
+  });
+
+  it("should show Response data not available when hasResponse and hasError are both false", () => {
+    const mockGetRawRequest = vi.fn().mockReturnValue({ messages: [] });
+    const mockFormattedResponse = vi.fn().mockReturnValue({});
+    render(
+      <RequestResponsePanel
+        row={{ original: baseLogEntry }}
+        hasMessages={false}
+        hasResponse={false}
+        hasError={false}
+        errorInfo={null}
+        getRawRequest={mockGetRawRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+    expect(screen.getByText("Response data not available")).toBeInTheDocument();
+  });
+
+  it("should show error code in response header when hasError is true", () => {
+    const errorInfo = { error_message: "Rate limit exceeded", error_class: "RateLimitError", error_code: 429 };
+    const mockGetRawRequest = vi.fn().mockReturnValue({ messages: [] });
+    const mockFormattedResponse = vi.fn().mockReturnValue({ error: { message: "Rate limit exceeded", type: "RateLimitError", code: 429, param: null } });
+    render(
+      <RequestResponsePanel
+        row={{ original: baseLogEntry }}
+        hasMessages={false}
+        hasResponse={false}
+        hasError={true}
+        errorInfo={errorInfo}
+        getRawRequest={mockGetRawRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+    expect(screen.getByText(/HTTP code 429/)).toBeInTheDocument();
+  });
 });

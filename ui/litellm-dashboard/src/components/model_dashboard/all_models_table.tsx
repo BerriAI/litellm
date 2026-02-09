@@ -95,7 +95,14 @@ export function AllModelsDataTable<TData, TValue>({
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
         <div className="relative min-w-full">
-          <Table className="[&_td]:py-2 [&_th]:py-2 w-full">
+          <Table
+            className="[&_td]:py-2 [&_th]:py-2"
+            style={{
+              width: tableInstance.getTotalSize(),
+              minWidth: "100%",
+              tableLayout: "fixed",
+            }}
+          >
             <TableHead>
               {tableInstance.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
@@ -171,7 +178,7 @@ export function AllModelsDataTable<TData, TValue>({
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
-                        className={`py-0.5 ${cell.column.id === "actions"
+                        className={`py-0.5 overflow-hidden ${cell.column.id === "actions"
                           ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
                           : ""
                           } ${cell.column.columnDef.meta?.className || ""}`}

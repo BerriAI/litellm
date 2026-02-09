@@ -4,7 +4,7 @@ import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
-import AdminPanel from "@/components/admins";
+import AdminPanel from "@/components/AdminPanel";
 import AgentsPanel from "@/components/agents";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
@@ -43,7 +43,7 @@ import { isJwtExpired } from "@/utils/jwtUtils";
 import { isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams, ReadonlyURLSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { ConfigProvider, theme } from "antd";
 
@@ -469,12 +469,6 @@ function CreateKeyPageContent() {
                     />
                   ) : page == "admin-panel" ? (
                     <AdminPanel
-                      setTeams={setTeams}
-                      searchParams={searchParams}
-                      accessToken={accessToken}
-                      userID={userID}
-                      showSSOBanner={showSSOBanner}
-                      premiumUser={premiumUser}
                       proxySettings={proxySettings}
                     />
                   ) : page == "api_ref" ? (

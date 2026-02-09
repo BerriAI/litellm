@@ -275,7 +275,7 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
 
 
 def test_log_budget_lookup_failure_dry_run():
-    """Dry run: verify _log_budget_lookup_failure logs without raising."""
+    """Dry run: verify _log_budget_lookup_failure logs for schema/DB errors."""
     with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
         err = Exception("column 'policies' does not exist in prisma schema")
         _log_budget_lookup_failure("user", err)
@@ -285,6 +285,14 @@ def test_log_budget_lookup_failure_dry_run():
         assert "cache will not be populated" in call_msg
         assert "policies" in call_msg or "prisma" in call_msg
         assert "prisma db push" in call_msg
+
+
+def test_log_budget_lookup_failure_skips_user_not_found():
+    """Verify _log_budget_lookup_failure does NOT log for expected user-not-found."""
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        err = Exception()  # bare Exception from get_user_object when user not found
+        _log_budget_lookup_failure("user", err)
+        mock_logger.error.assert_not_called()
 
 
 @pytest.mark.asyncio

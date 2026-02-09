@@ -47,6 +47,7 @@ from litellm.constants import (
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+    LITELLM_UI_ALLOW_HEADERS,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -1214,6 +1215,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
@@ -1862,6 +1864,7 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
+        self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -3246,7 +3249,9 @@ class ProxyConfig:
                 _model_list: list = self.decrypt_model_list_from_db(
                     new_models=models_list
                 )
-                if len(_model_list) > 0:
+                # Only create router if we have models or search_tools to route
+                # Router can function with model_list=[] if search_tools are configured
+                if len(_model_list) > 0 or search_tools:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
                     llm_router = litellm.Router(
                         model_list=_model_list,
@@ -3398,6 +3403,86 @@ class ProxyConfig:
             )
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
+
+    @staticmethod
+    def _parse_router_settings_value(value: Any) -> Optional[dict]:
+        """
+        Parse a router_settings value that may be a dict or a JSON/YAML string.
+
+        Returns a non-empty dict if valid, otherwise None.
+        """
+        if value is None:
+            return None
+
+        parsed: Optional[dict] = None
+        if isinstance(value, dict):
+            parsed = value
+        elif isinstance(value, str):
+            import json
+
+            import yaml
+
+            try:
+                parsed = yaml.safe_load(value)
+            except (yaml.YAMLError, json.JSONDecodeError):
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+        return None
+
+    async def _get_hierarchical_router_settings(
+        self,
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+        prisma_client: Optional[PrismaClient],
+        proxy_logging_obj: Optional["ProxyLogging"] = None,
+    ) -> Optional[dict]:
+        """
+        Get router_settings in priority order: Key > Team
+
+        Uses the already-cached key object and the cached team lookup
+        (get_team_object) to avoid direct DB queries on the hot path.
+
+        Global router_settings are NOT looked up here — they are already
+        applied to the Router object at config-load / DB-sync time.
+
+        Returns:
+            dict: router_settings, or None if no settings found
+        """
+        # 1. Try key-level router_settings
+        # user_api_key_dict is already the cached/authenticated key object —
+        # no DB call needed.
+        if user_api_key_dict is not None:
+            key_settings = self._parse_router_settings_value(
+                getattr(user_api_key_dict, "router_settings", None)
+            )
+            if key_settings is not None:
+                return key_settings
+
+        # 2. Try team-level router_settings using cached team lookup
+        # get_team_object checks in-memory cache / Redis first, only falls
+        # back to DB on a cache miss.
+        if user_api_key_dict is not None and user_api_key_dict.team_id is not None:
+            try:
+                team_obj = await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                team_settings = self._parse_router_settings_value(
+                    getattr(team_obj, "router_settings", None)
+                )
+                if team_settings is not None:
+                    return team_settings
+            except Exception:
+                # If team lookup fails, no team-level settings available
+                pass
+
+        return None
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3918,6 +4003,93 @@ class ProxyConfig:
 
             await CacheSettingsManager.init_cache_settings_in_db(
                 prisma_client=prisma_client, proxy_config=self
+            )
+
+        if self._should_load_db_object(object_type="semantic_filter_settings"):
+            await self._init_semantic_filter_settings_in_db(
+                prisma_client=prisma_client
+            )
+
+    async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize MCP semantic filter settings from database.
+        Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
+        """
+        import json
+
+        import litellm
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        try:
+            # Load litellm_settings from DB
+            config_record = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "litellm_settings"}
+            )
+
+            if config_record is None or config_record.param_value is None:
+                return
+
+            litellm_settings = config_record.param_value
+            if isinstance(litellm_settings, str):
+                litellm_settings = json.loads(litellm_settings)
+
+            mcp_semantic_filter_config = litellm_settings.get(
+                "mcp_semantic_tool_filter", None
+            )
+
+            if mcp_semantic_filter_config is None:
+                return
+
+            # Check if settings have changed (compare with in-memory state)
+            if hasattr(self, "_last_semantic_filter_config"):
+                if self._last_semantic_filter_config == mcp_semantic_filter_config:
+                    # If hook is missing or router isn't built yet, reinitialize anyway
+                    active_hooks = (
+                        litellm.logging_callback_manager.get_custom_loggers_for_type(
+                            SemanticToolFilterHook
+                        )
+                    )
+                    if active_hooks:
+                        for active_hook in active_hooks:
+                            if isinstance(active_hook, SemanticToolFilterHook):
+                                if (
+                                    active_hook.filter is not None
+                                    and active_hook.filter.tool_router is not None
+                                ):
+                                    verbose_proxy_logger.debug(
+                                        "Semantic filter settings unchanged, skipping reinitialization"
+                                    )
+                                    return
+                    verbose_proxy_logger.info(
+                        "Semantic filter settings unchanged, but hook is missing or uninitialized. Reinitializing."
+                    )
+
+            # Remove old hooks using logging callback manager
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                litellm.callbacks, SemanticToolFilterHook
+            )
+
+            # Initialize new hook if enabled
+            if mcp_semantic_filter_config.get("enabled", False):
+                global llm_router
+                hook = await SemanticToolFilterHook.initialize_from_config(
+                    config=mcp_semantic_filter_config,
+                    llm_router=llm_router,
+                )
+                if hook:
+                    litellm.logging_callback_manager.add_litellm_callback(hook)
+                    verbose_proxy_logger.info(
+                        "MCP Semantic Filter reinitialized from DB"
+                    )
+            else:
+                verbose_proxy_logger.info("MCP Semantic Filter disabled")
+
+            # Store current config for comparison next time
+            self._last_semantic_filter_config = mcp_semantic_filter_config.copy()
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error initializing semantic filter settings from DB: {e}"
             )
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
@@ -4770,13 +4942,17 @@ class ProxyStartupEvent:
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
         
-        verbose_proxy_logger.info(
-            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
-            f"litellm_settings keys={list(litellm_settings.keys())}"
-        )
-        
         mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
-        verbose_proxy_logger.debug(f"Semantic filter config: {mcp_semantic_filter_config}")
+        
+        # Only proceed if the feature is configured and enabled
+        if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get("enabled", False):
+            verbose_proxy_logger.debug("Semantic tool filter not configured or not enabled, skipping initialization")
+            return
+        
+        verbose_proxy_logger.debug(
+            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
+            f"config={mcp_semantic_filter_config}"
+        )
         
         hook = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
@@ -4784,10 +4960,11 @@ class ProxyStartupEvent:
         )
         
         if hook:
-            verbose_proxy_logger.debug("✅ Semantic tool filter hook registered")
+            verbose_proxy_logger.debug("Semantic tool filter hook registered")
             litellm.logging_callback_manager.add_litellm_callback(hook)
         else:
-            verbose_proxy_logger.warning("❌ Semantic tool filter hook not initialized")
+            # Only warn if the feature was configured but failed to initialize
+            verbose_proxy_logger.warning("Semantic tool filter hook was configured but failed to initialize")
 
     @classmethod
     def _initialize_jwt_auth(
@@ -10733,6 +10910,8 @@ async def get_config_list(
         "pass_through_endpoints": {"type": "PydanticModel"},
         "store_prompts_in_spend_logs": {"type": "Boolean"},
         "maximum_spend_logs_retention_period": {"type": "String"},
+        "mcp_internal_ip_ranges": {"type": "List"},
+        "mcp_trusted_proxy_ranges": {"type": "List"},
     }
 
     return_val = []
@@ -10802,11 +10981,15 @@ async def get_config_list(
                 elif field_name in general_settings:
                     _stored_in_db = False
 
+                _field_value = general_settings.get(field_name, None)
+                if _field_value is None and field_name in db_general_settings_dict:
+                    _field_value = db_general_settings_dict[field_name]
+
                 _response_obj = ConfigList(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=general_settings.get(field_name, None),
+                    field_value=_field_value,
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
@@ -11600,9 +11783,13 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
         from litellm.types.mcp import MCPAuth
 
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
         if mcp_server is None:
             raise HTTPException(
                 status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
