@@ -926,7 +926,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     logging_obj=logging_obj,
                 )
                 stringified_response = response.model_dump()
-                print(f"🔥stringified_response: {stringified_response}")
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
