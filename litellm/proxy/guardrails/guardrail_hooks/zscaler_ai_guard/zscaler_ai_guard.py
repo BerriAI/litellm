@@ -56,7 +56,7 @@ class ZscalerAIGuard(CustomGuardrail):
             send_user_api_key_team_id:{self.send_user_api_key_team_id}"""
         )
 
-        super().__init__(default_on=True)
+        super().__init__(**kwargs)
 
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
 
@@ -150,6 +150,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     content=concatenated_text,
                     **kwargs,
                 )
+                verbose_proxy_logger.debug(f"response from zscaler ai guards: {zscaler_ai_guard_result}")
             if (
                 zscaler_ai_guard_result
                 and zscaler_ai_guard_result.get("action") == "BLOCK"
@@ -321,7 +322,6 @@ class ZscalerAIGuard(CustomGuardrail):
             "direction": direction,
             "content": content,
         }
-
         try:
             response = await self._send_request(
                 zscaler_ai_guard_url, extra_headers, data
@@ -330,5 +330,4 @@ class ZscalerAIGuard(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"{e}. Blocking request.")
             user_facing_error = self._create_user_facing_error(f"{str(e)})")
-            # This exception will be caught by the proxy and returned to the user
             raise HTTPException(status_code=500, detail=user_facing_error)
