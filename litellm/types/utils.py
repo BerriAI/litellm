@@ -1,5 +1,6 @@
 import json
 import time
+import warnings
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
@@ -1528,6 +1529,34 @@ class Usage(SafeAttributeModel, CompletionUsage):
                 _server_tool_use = ServerToolUse(**server_tool_use)
             elif isinstance(server_tool_use, ServerToolUse):
                 _server_tool_use = server_tool_use
+            else:
+                # Warn about unsupported type and try to handle it gracefully
+                warnings.warn(
+                    f"server_tool_use received unsupported type {type(server_tool_use).__name__}. "
+                    f"Expected dict or ServerToolUse. Attempting to convert to dict.",
+                    UserWarning,
+                    stacklevel=2
+                )
+                # Try to convert to dict if it has model_dump (Pydantic models)
+                if hasattr(server_tool_use, "model_dump"):
+                    try:
+                        _server_tool_use = ServerToolUse(**server_tool_use.model_dump())
+                    except Exception as e:
+                        warnings.warn(
+                            f"Failed to convert server_tool_use to ServerToolUse: {e}",
+                            UserWarning,
+                            stacklevel=2
+                        )
+                # Try dict() conversion for mapping types
+                elif isinstance(server_tool_use, Mapping):
+                    try:
+                        _server_tool_use = ServerToolUse(**dict(server_tool_use))
+                    except Exception as e:
+                        warnings.warn(
+                            f"Failed to convert server_tool_use to ServerToolUse: {e}",
+                            UserWarning,
+                            stacklevel=2
+                        )
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
