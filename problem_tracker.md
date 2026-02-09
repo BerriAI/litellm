@@ -243,7 +243,7 @@ The issue was caused by hitting the database on every request when Prometheus wa
 
 > It was hard to diagnose because Prometheus was catching database errors and only logging them at debug level. Fixed by commit `d37796662` (adds `_log_budget_lookup_failure` to surface errors). This error is very important—it stops the cache from working properly.
 
-### Baseline Latency Spikes (Separate from Prometheus)
+## Baseline Latency Spikes (Separate from Prometheus)
 
 **Issue:** Zurich reports huge latency spikes even when callbacks are off. Unlike the Prometheus callback issue (which adds ~2.6× latency when enabled), this baseline behavior affects both configs roughly equally.
 
@@ -256,3 +256,49 @@ The issue was caused by hitting the database on every request when Prometheus wa
 
 
 **Reference files:** `callbacks_off_baseline.txt`, `callbacks_on_baseline.txt`
+
+### Next Steps
+
+**Context:** Callbacks on vs off no longer affects latency (Prometheus fix). The remaining baseline spikes are likely from end_user lookups, provider latency, or other bottlenecks. Comparing user modes will isolate whether passing `user` (and cache behavior) contributes.
+
+**Measure baseline latency with each user mode** (run `measure_latency.py`):
+
+| Mode        | Command                     | What it isolates                                                         |
+|-------------|-----------------------------|--------------------------------------------------------------------------|
+| `none`      | `--user-mode none`          | No end_user lookup; pure proxy + provider latency                         |
+| `sequential`| `--user-mode sequential`    | End_user lookup with IDs 1,2,3,… (reused per user → cache hits)          |
+| `random`    | `--user-mode random`        | End_user lookup with unique random IDs per user → more cache misses      |
+
+**Callbacks on** (Prometheus enabled in proxy config):
+
+- [x] `--user-mode none` → `callbacks_on_user_none.txt`
+- [x] `--user-mode sequential` → `callbacks_on_user_sequential.txt`
+- [x] `--user-mode random` → `callbacks_on_user_random.txt`
+
+**Callbacks off** (Prometheus disabled in proxy config):
+
+- [x] `--user-mode none` → `callbacks_off_user_none.txt`
+- [x] `--user-mode sequential` → `callbacks_off_user_sequential.txt`
+- [x] `--user-mode random` → `callbacks_off_user_random.txt`
+
+**Compare:** If `none` shows much lower latency than `random`/`sequential`, end_user DB lookups are a contributor. If all three are similar, the bottleneck is elsewhere.
+
+#### Analysis (1000 requests, 100 users)
+
+**Data summary**
+
+| Config        | User mode   | avg    | p95    | Above 1s |
+|---------------|-------------|--------|--------|----------|
+| Callbacks on  | none        | 1.099s | 7.767s | 10.0%    |
+| Callbacks on  | sequential  | 1.702s | 8.524s | 37.7%    |
+| Callbacks on  | random      | 1.773s | 8.598s | 42.5%    |
+| Callbacks off | none        | 0.998s | 7.966s | 10.0%    |
+| Callbacks off | sequential  | 1.532s | 8.626s | 31.8%    |
+| Callbacks off | random      | 1.556s | 8.036s | 34.3%    |
+
+**Findings**
+
+1. **Passing `user` adds significant latency.** `none` has ~10% of requests above 1s vs ~32–43% when `user` is passed. Avg latency with `none` (~1.0–1.1s) is ~35–55% lower than with `sequential`/`random` (~1.5–1.8s).
+2. **End_user lookups are a contributor.** The large gap between `none` and the other modes points to end_user DB/cache lookups adding measurable overhead.
+3. **Random vs sequential:** Random is slightly worse (avg +0.2s, Above 1s +3–8%), consistent with more cache misses for unique IDs.
+4. **Callbacks on vs off:** Small difference (~5–10%). Callbacks-on is marginally slower; callbacks-off is not the main driver of the baseline spikes.
