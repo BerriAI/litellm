@@ -211,7 +211,7 @@ export const columns = (
         const outputCost = model.output_cost;
 
         // If both costs are missing or undefined, show "-"
-        if (!inputCost && !outputCost) {
+        if (inputCost == null && outputCost == null) {
           return (
             <div className="w-full">
               <span className="text-xs text-gray-400">-</span>
@@ -223,9 +223,9 @@ export const columns = (
           <Tooltip title="Cost per 1M tokens">
             <div className="flex flex-col min-w-0 w-full">
               {/* Input Cost - Primary */}
-              {inputCost && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
+              {inputCost != null && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
               {/* Output Cost - Secondary */}
-              {outputCost && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
+              {outputCost != null && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
             </div>
           </Tooltip>
         );
