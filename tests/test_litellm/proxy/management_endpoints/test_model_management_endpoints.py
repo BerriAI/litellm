@@ -6,6 +6,7 @@ from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -20,10 +21,16 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    _validate_model_costs,
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    ModelInfo,
+    updateDeployment,
+)
 
 
 class MockPrismaClient:
@@ -653,3 +660,25 @@ class TestModelInfoEndpoint:
             assert result["id"] == "team-model-1"
             assert result["object"] == "model" 
             assert result["owned_by"] == "custom"
+
+
+class TestModelCostValidation:
+    def test_rejects_unreasonably_high_token_cost(self):
+        model_info = ModelInfo(input_cost_per_token=2)
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_model_costs(model_info=model_info, litellm_params=None)
+
+        assert exc_info.value.status_code == 400
+        assert "divide by 1e6" in str(exc_info.value.detail)
+
+    def test_allows_reasonable_token_costs(self):
+        model_info = ModelInfo(input_cost_per_token=1e-6)
+        litellm_params = LiteLLM_Params(
+            model="gpt-3.5-turbo",
+            output_cost_per_token=2e-6,
+        )
+
+        _validate_model_costs(
+            model_info=model_info,
+            litellm_params=litellm_params,
+        )
