@@ -44,7 +44,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
-  const isInteractiveFlow = isOAuthAuthType && oauthFlowTypeValue !== OAUTH_FLOW.M2M;
 
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
 
@@ -493,6 +492,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   transport: mcpServer.transport,
                   auth_type: mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
+                  oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
                 }}
                 allowedTools={allowedTools}
                 existingAllowedTools={mcpServer.allowed_tools || null}

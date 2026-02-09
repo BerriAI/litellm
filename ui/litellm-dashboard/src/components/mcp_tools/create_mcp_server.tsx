@@ -54,7 +54,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
-  const isInteractiveFlow = isOAuthAuthType && formValues.oauth_flow_type !== OAUTH_FLOW.M2M;
 
   const persistCreateUiState = () => {
     if (typeof window === "undefined") {
