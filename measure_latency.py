@@ -21,6 +21,7 @@ USER_MODES:
 - sequential: each user gets sequential ID (1, 2, 3, ...) - fewer cache misses
 - none: no user field in payload - skips end_user lookup entirely
 - created: create end users via POST /customer/new before the test, then use those IDs (requires --key-mode per_user)
+  Use --warmup to send one request per user before the test to warm end_user cache (avoids cold lookup on measured run).
 
 KEY_MODES (add-on; can be combined with any user mode):
 - shared: all users share the same API key (default)
@@ -34,7 +35,7 @@ KEY_MODES (add-on; can be combined with any user mode):
 BASE_URL = "http://localhost:4000"
 API_KEY = "sk-1234"
 MODEL = "gpt-o1"  # must match a model_name in your proxy config (e.g. test_config_123.yaml)
-NUM_REQUESTS = 1000
+NUM_REQUESTS = 100
 NUM_CONCURRENT = 100  # Concurrent users; each has one connection, reuses it for their requests
 MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
 TIMEOUT = 30000.0
@@ -258,9 +259,23 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="shared: all users use same API key; per_user: create one key per user",
     )
+    parser.add_argument(
+        "--warmup",
+        action="store_true",
+        help="(created mode only) send one request per user before the test to warm end_user cache",
+    )
+    parser.add_argument(
+        "--warmup-verbose",
+        action="store_true",
+        help="with --warmup: print each warmup request (user_id, status) to verify correctness",
+    )
     args = parser.parse_args()
     if args.user_mode == "created" and args.key_mode != "per_user":
         parser.error("--user-mode created requires --key-mode per_user")
+    if args.warmup and args.user_mode != "created":
+        parser.error("--warmup requires --user-mode created")
+    if args.warmup_verbose and not args.warmup:
+        parser.error("--warmup-verbose requires --warmup")
     return args
 
 
@@ -317,6 +332,37 @@ def print_run_banner(user_mode: str, key_mode: str) -> None:
     print("Latency = time from request start until last byte of response received", flush=True)
 
 
+async def warmup_users(
+    users: list[SimulatedUser],
+    base_url: str,
+    path: str,
+    verbose: bool = False,
+) -> None:
+    """Send one request per user to warm end_user cache; results not recorded."""
+    async def warm_one(user: SimulatedUser) -> tuple[int, str, float, bool]:
+        user_id = user.payload.get("user", "(none)")
+        start = time.perf_counter()
+        async with httpx.AsyncClient(base_url=base_url, timeout=TIMEOUT) as client:
+            try:
+                resp = await client.post(path, json=user.payload, headers=user.headers)
+                resp.read()
+                ok = resp.is_success
+            except Exception:
+                ok = False
+        lat = time.perf_counter() - start
+        return (user.idx, user_id, lat, ok)
+
+    print(f"Warming up {len(users)} users (one request each)...", flush=True)
+    results = await asyncio.gather(*[asyncio.create_task(warm_one(u)) for u in users])
+    for idx, user_id, lat, ok in sorted(results, key=lambda r: r[0]):
+        status = "[OK]" if ok else "[FAIL]"
+        print(f"  warmup {status} User {idx} user_id={user_id}: {lat:.3f}s", flush=True)
+    if verbose:
+        distinct_users = len(set(uid for _, uid, _, _ in results))
+        print(f"  -> {len(results)} requests, {distinct_users} distinct user_ids", flush=True)
+    print("Warmup complete.", flush=True)
+
+
 async def run_all_users(
     users: list[SimulatedUser],
     base_url: str,
@@ -337,7 +383,10 @@ async def run_all_users(
 
 
 async def main(
-    user_mode: str = "random", key_mode: str = "shared"
+    user_mode: str = "random",
+    key_mode: str = "shared",
+    warmup: bool = False,
+    warmup_verbose: bool = False,
 ) -> None:
     base_url = BASE_URL.rstrip("/")
     path = "/chat/completions"
@@ -355,6 +404,9 @@ async def main(
         remainder=remainder,
     )
 
+    if warmup:
+        await warmup_users(users, base_url, path, verbose=warmup_verbose)
+
     print_run_banner(user_mode, key_mode)
     results = await run_all_users(users, base_url, path)
     print_summary(results)
@@ -362,4 +414,11 @@ async def main(
 
 if __name__ == "__main__":
     args = parse_args()
-    asyncio.run(main(user_mode=args.user_mode, key_mode=args.key_mode))
+    asyncio.run(
+        main(
+            user_mode=args.user_mode,
+            key_mode=args.key_mode,
+            warmup=args.warmup,
+            warmup_verbose=args.warmup_verbose,
+        )
+    )

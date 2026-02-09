@@ -361,7 +361,8 @@ Same pattern as random: 1 per user → all cache misses, ~7.5× higher avg laten
 ### Next Steps
 
 - [x] Run proxy + `measure_latency.py --user-mode random --key-mode shared`, capture proxy stdout → `end_user_profile_proxy_logs.txt`
+- [x] Run `--user-mode created --key-mode per_user --warmup --warmup-verbose` to validate whether warmup reduces latency => `cache_validation.txt`
 
 #### Findings
 
-Passing IDs of users that **don't exist** in the DB triggers repeated cache misses and DB lookups (no negative caching). Proxy logs show each non-existent user hits the DB on every request. Before optimizing this negative path, we should exercise the **happy path**: use `--user-mode created --key-mode per_user` to pre-create end users and verify latency with cache hits on subsequent requests.
+Passing IDs of users that **don't exist** in the DB triggers repeated cache misses and DB lookups (no negative caching). Proxy logs show each non-existent user hits the DB on every request. With **created** mode (pre-existing users) and warmup, warm and measured runs had nearly identical profiles (~8s avg)—warmup did **not** reduce latency. The bottleneck is likely the upstream LLM call and its queue under 100 concurrent requests, not the end_user lookup.

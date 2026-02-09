@@ -1,0 +1,231 @@
+Creating 100 keys via /key/generate...
+Created 100 keys.
+Creating 100 end users via /customer/new...
+Created 100 end users.
+Warming up 100 users (one request each)...
+  warmup [OK] User 1 user_id=latency-test-1770666406-1: 15.800s
+  warmup [OK] User 2 user_id=latency-test-1770666406-2: 15.915s
+  warmup [OK] User 3 user_id=latency-test-1770666406-3: 15.350s
+  warmup [OK] User 4 user_id=latency-test-1770666406-4: 15.210s
+  warmup [OK] User 5 user_id=latency-test-1770666406-5: 15.271s
+  warmup [OK] User 6 user_id=latency-test-1770666406-6: 14.828s
+  warmup [OK] User 7 user_id=latency-test-1770666406-7: 14.913s
+  warmup [OK] User 8 user_id=latency-test-1770666406-8: 14.814s
+  warmup [OK] User 9 user_id=latency-test-1770666406-9: 14.524s
+  warmup [OK] User 10 user_id=latency-test-1770666406-10: 14.676s
+  warmup [OK] User 11 user_id=latency-test-1770666406-11: 14.082s
+  warmup [OK] User 12 user_id=latency-test-1770666406-12: 14.418s
+  warmup [OK] User 13 user_id=latency-test-1770666406-13: 14.179s
+  warmup [OK] User 14 user_id=latency-test-1770666406-14: 14.039s
+  warmup [OK] User 15 user_id=latency-test-1770666406-15: 13.801s
+  warmup [OK] User 16 user_id=latency-test-1770666406-16: 13.616s
+  warmup [OK] User 17 user_id=latency-test-1770666406-17: 13.588s
+  warmup [OK] User 18 user_id=latency-test-1770666406-18: 13.513s
+  warmup [OK] User 19 user_id=latency-test-1770666406-19: 13.269s
+  warmup [OK] User 20 user_id=latency-test-1770666406-20: 13.167s
+  warmup [OK] User 21 user_id=latency-test-1770666406-21: 12.952s
+  warmup [OK] User 22 user_id=latency-test-1770666406-22: 12.922s
+  warmup [OK] User 23 user_id=latency-test-1770666406-23: 12.607s
+  warmup [OK] User 24 user_id=latency-test-1770666406-24: 12.612s
+  warmup [OK] User 25 user_id=latency-test-1770666406-25: 12.472s
+  warmup [OK] User 26 user_id=latency-test-1770666406-26: 12.402s
+  warmup [OK] User 27 user_id=latency-test-1770666406-27: 12.263s
+  warmup [OK] User 28 user_id=latency-test-1770666406-28: 11.981s
+  warmup [OK] User 29 user_id=latency-test-1770666406-29: 11.842s
+  warmup [OK] User 30 user_id=latency-test-1770666406-30: 11.704s
+  warmup [OK] User 31 user_id=latency-test-1770666406-31: 11.750s
+  warmup [OK] User 32 user_id=latency-test-1770666406-32: 11.480s
+  warmup [OK] User 33 user_id=latency-test-1770666406-33: 11.409s
+  warmup [OK] User 34 user_id=latency-test-1770666406-34: 11.315s
+  warmup [OK] User 35 user_id=latency-test-1770666406-35: 11.116s
+  warmup [OK] User 36 user_id=latency-test-1770666406-36: 10.796s
+  warmup [OK] User 37 user_id=latency-test-1770666406-37: 10.721s
+  warmup [OK] User 38 user_id=latency-test-1770666406-38: 10.783s
+  warmup [OK] User 39 user_id=latency-test-1770666406-39: 10.649s
+  warmup [OK] User 40 user_id=latency-test-1770666406-40: 10.037s
+  warmup [OK] User 41 user_id=latency-test-1770666406-41: 10.366s
+  warmup [OK] User 42 user_id=latency-test-1770666406-42: 10.162s
+  warmup [OK] User 43 user_id=latency-test-1770666406-43: 10.022s
+  warmup [OK] User 44 user_id=latency-test-1770666406-44: 9.880s
+  warmup [OK] User 45 user_id=latency-test-1770666406-45: 9.749s
+  warmup [OK] User 46 user_id=latency-test-1770666406-46: 9.210s
+  warmup [OK] User 47 user_id=latency-test-1770666406-47: 9.524s
+  warmup [OK] User 48 user_id=latency-test-1770666406-48: 9.255s
+  warmup [OK] User 49 user_id=latency-test-1770666406-49: 9.190s
+  warmup [OK] User 50 user_id=latency-test-1770666406-50: 8.688s
+  warmup [OK] User 51 user_id=latency-test-1770666406-51: 8.904s
+  warmup [OK] User 52 user_id=latency-test-1770666406-52: 8.765s
+  warmup [OK] User 53 user_id=latency-test-1770666406-53: 8.686s
+  warmup [OK] User 54 user_id=latency-test-1770666406-54: 8.550s
+  warmup [OK] User 55 user_id=latency-test-1770666406-55: 8.278s
+  warmup [OK] User 56 user_id=latency-test-1770666406-56: 8.273s
+  warmup [OK] User 57 user_id=latency-test-1770666406-57: 8.122s
+  warmup [OK] User 58 user_id=latency-test-1770666406-58: 7.862s
+  warmup [OK] User 59 user_id=latency-test-1770666406-59: 7.846s
+  warmup [OK] User 60 user_id=latency-test-1770666406-60: 7.561s
+  warmup [OK] User 61 user_id=latency-test-1770666406-61: 7.476s
+  warmup [OK] User 62 user_id=latency-test-1770666406-62: 7.413s
+  warmup [OK] User 63 user_id=latency-test-1770666406-63: 7.288s
+  warmup [OK] User 64 user_id=latency-test-1770666406-64: 7.094s
+  warmup [OK] User 65 user_id=latency-test-1770666406-65: 6.983s
+  warmup [OK] User 66 user_id=latency-test-1770666406-66: 6.757s
+  warmup [OK] User 67 user_id=latency-test-1770666406-67: 6.571s
+  warmup [OK] User 68 user_id=latency-test-1770666406-68: 6.500s
+  warmup [OK] User 69 user_id=latency-test-1770666406-69: 6.359s
+  warmup [OK] User 70 user_id=latency-test-1770666406-70: 6.312s
+  warmup [OK] User 71 user_id=latency-test-1770666406-71: 6.132s
+  warmup [OK] User 72 user_id=latency-test-1770666406-72: 5.867s
+  warmup [OK] User 73 user_id=latency-test-1770666406-73: 5.727s
+  warmup [OK] User 74 user_id=latency-test-1770666406-74: 5.699s
+  warmup [OK] User 75 user_id=latency-test-1770666406-75: 5.585s
+  warmup [OK] User 76 user_id=latency-test-1770666406-76: 5.386s
+  warmup [OK] User 77 user_id=latency-test-1770666406-77: 5.202s
+  warmup [OK] User 78 user_id=latency-test-1770666406-78: 5.161s
+  warmup [OK] User 79 user_id=latency-test-1770666406-79: 4.936s
+  warmup [OK] User 80 user_id=latency-test-1770666406-80: 4.879s
+  warmup [OK] User 81 user_id=latency-test-1770666406-81: 4.700s
+  warmup [OK] User 82 user_id=latency-test-1770666406-82: 4.596s
+  warmup [OK] User 83 user_id=latency-test-1770666406-83: 4.789s
+  warmup [OK] User 84 user_id=latency-test-1770666406-84: 4.264s
+  warmup [OK] User 85 user_id=latency-test-1770666406-85: 4.137s
+  warmup [OK] User 86 user_id=latency-test-1770666406-86: 3.996s
+  warmup [OK] User 87 user_id=latency-test-1770666406-87: 3.875s
+  warmup [OK] User 88 user_id=latency-test-1770666406-88: 3.716s
+  warmup [OK] User 89 user_id=latency-test-1770666406-89: 3.584s
+  warmup [OK] User 90 user_id=latency-test-1770666406-90: 3.582s
+  warmup [OK] User 91 user_id=latency-test-1770666406-91: 3.297s
+  warmup [OK] User 92 user_id=latency-test-1770666406-92: 3.200s
+  warmup [OK] User 93 user_id=latency-test-1770666406-93: 3.381s
+  warmup [OK] User 94 user_id=latency-test-1770666406-94: 2.895s
+  warmup [OK] User 95 user_id=latency-test-1770666406-95: 2.736s
+  warmup [OK] User 96 user_id=latency-test-1770666406-96: 2.613s
+  warmup [OK] User 97 user_id=latency-test-1770666406-97: 2.761s
+  warmup [OK] User 98 user_id=latency-test-1770666406-98: 2.327s
+  warmup [OK] User 99 user_id=latency-test-1770666406-99: 2.190s
+  warmup [OK] User 100 user_id=latency-test-1770666406-100: 2.044s
+  -> 100 requests, 100 distinct user_ids
+Warmup complete.
+=== 100 requests, 100 users, fire-as-fast-as-possible ===
+User mode: created, Key mode: per_user
+Latency = time from request start until last byte of response received
+  [OK] User 2 request   1: 15.749s
+  [OK] User 6 request   1: 15.193s
+  [OK] User 5 request   1: 15.333s
+  [OK] User 14 request   1: 14.078s
+  [OK] User 18 request   1: 13.519s
+  [OK] User 21 request   1: 13.098s
+  [OK] User 10 request   1: 14.635s
+  [OK] User 16 request   1: 13.798s
+  [OK] User 17 request   1: 13.659s
+  [OK] User 13 request   1: 14.220s
+  [OK] User 4 request   1: 15.511s
+  [OK] User 9 request   1: 14.825s
+  [OK] User 7 request   1: 15.132s
+  [OK] User 8 request   1: 15.016s
+  [OK] User 33 request   1: 11.458s
+  [OK] User 1 request   1: 15.995s
+  [OK] User 35 request   1: 11.035s
+  [OK] User 12 request   1: 14.477s
+  [OK] User 46 request   1: 9.189s
+  [OK] User 28 request   1: 12.188s
+  [OK] User 20 request   1: 13.374s
+  [OK] User 42 request   1: 9.825s
+  [OK] User 39 request   1: 10.310s
+  [OK] User 23 request   1: 12.956s
+  [OK] User 24 request   1: 12.765s
+  [OK] User 22 request   1: 13.095s
+  [OK] User 34 request   1: 11.284s
+  [OK] User 56 request   1: 7.612s
+  [OK] User 31 request   1: 11.786s
+  [OK] User 27 request   1: 12.347s
+  [OK] User 50 request   1: 8.622s
+  [OK] User 15 request   1: 14.075s
+  [OK] User 36 request   1: 10.847s
+  [OK] User 41 request   1: 9.992s
+  [OK] User 26 request   1: 12.498s
+  [OK] User 29 request   1: 12.078s
+  [OK] User 19 request   1: 13.527s
+  [OK] User 25 request   1: 12.638s
+  [OK] User 32 request   1: 11.655s
+  [OK] User 30 request   1: 11.948s
+  [OK] User 54 request   1: 7.955s
+  [OK] User 47 request   1: 9.077s
+  [OK] User 51 request   1: 8.505s
+  [OK] User 52 request   1: 8.339s
+  [OK] User 53 request   1: 8.100s
+  [OK] User 57 request   1: 7.496s
+  [OK] User 59 request   1: 7.190s
+  [OK] User 55 request   1: 7.800s
+  [OK] User 58 request   1: 7.354s
+  [OK] User 65 request   1: 6.108s
+  [OK] User 38 request   1: 10.565s
+  [OK] User 37 request   1: 10.727s
+  [OK] User 60 request   1: 6.973s
+  [OK] User 3 request   1: 15.789s
+  [OK] User 11 request   1: 14.682s
+  [OK] User 45 request   1: 9.431s
+  [OK] User 48 request   1: 8.963s
+  [OK] User 43 request   1: 9.723s
+  [OK] User 44 request   1: 9.583s
+  [OK] User 40 request   1: 10.207s
+  [OK] User 61 request   1: 6.753s
+  [OK] User 49 request   1: 8.811s
+  [OK] User 64 request   1: 6.281s
+  [OK] User 66 request   1: 5.939s
+  [OK] User 63 request   1: 6.424s
+  [OK] User 69 request   1: 5.484s
+  [OK] User 72 request   1: 5.069s
+  [OK] User 71 request   1: 5.209s
+  [OK] User 70 request   1: 5.349s
+  [OK] User 76 request   1: 4.497s
+  [OK] User 78 request   1: 4.148s
+  [OK] User 80 request   1: 3.867s
+  [OK] User 73 request   1: 4.931s
+  [OK] User 77 request   1: 4.292s
+  [OK] User 75 request   1: 4.648s
+  [OK] User 81 request   1: 3.726s
+  [OK] User 79 request   1: 4.008s
+  [OK] User 68 request   1: 5.644s
+  [OK] User 83 request   1: 3.409s
+  [OK] User 84 request   1: 3.265s
+  [OK] User 86 request   1: 2.986s
+  [OK] User 88 request   1: 2.738s
+  [OK] User 87 request   1: 2.877s
+  [OK] User 82 request   1: 3.614s
+  [OK] User 85 request   1: 3.157s
+  [OK] User 93 request   1: 2.060s
+  [OK] User 99 request   1: 1.227s
+  [OK] User 100 request   1: 1.081s
+  [OK] User 95 request   1: 1.796s
+  [OK] User 97 request   1: 1.516s
+  [OK] User 62 request   1: 6.646s
+  [OK] User 98 request   1: 1.376s
+  [OK] User 90 request   1: 2.523s
+  [OK] User 92 request   1: 2.294s
+  [OK] User 96 request   1: 1.744s
+  [OK] User 67 request   1: 5.995s
+  [OK] User 74 request   1: 4.996s
+  [OK] User 89 request   1: 2.775s
+  [OK] User 94 request   1: 2.077s
+  [OK] User 91 request   1: 2.499s
+
+[OK] 100 succeeded, [FAIL] 0 failed
+
+Latency (successful):
+  min:  1.081s
+  avg:  8.536s
+  max:  15.995s
+  p95:  15.193s
+  p99:  15.789s
+
+Requests above threshold (successful only):
+  Above 1s: 100/100 (100.0%)
+  Above 2s: 94/100 (94.0%)
+  Above 3s: 85/100 (85.0%)
+  Above 4s: 79/100 (79.0%)
+  Above 5s: 72/100 (72.0%)
+  Above 6s: 65/100 (65.0%)
+  Above 7s: 59/100 (59.0%)
+  Above 8s: 53/100 (53.0%)
+  Above 9s: 47/100 (47.0%)
+  Above 10s: 40/100 (40.0%)
