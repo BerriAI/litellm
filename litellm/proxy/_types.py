@@ -451,6 +451,11 @@ class LiteLLMRoutes(enum.Enum):
         "/guardrails/apply_guardrail",
     ]
 
+    model_info_routes = [
+        "/model/info",
+        "/v1/model/info",
+    ]
+
     llm_api_routes = (
         openai_routes
         + anthropic_routes
@@ -458,6 +463,7 @@ class LiteLLMRoutes(enum.Enum):
         + mapped_pass_through_routes
         + passthrough_routes_wildcard
         + apply_guardrail_routes
+        + model_info_routes
         + mcp_routes
         + litellm_native_routes
         + agent_routes

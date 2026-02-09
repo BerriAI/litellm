@@ -159,6 +159,27 @@ def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
 @pytest.mark.parametrize(
     "route",
     [
+        "/model/info",
+        "/v1/model/info",
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_model_info(route):
+    """
+    Virtual key with llm_api_routes should allow model discovery routes.
+    """
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route, valid_token=valid_token
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
         "/v1beta/models/gemini-2.5-flash:countTokens",
         "/v1beta/models/gemini-2.0-flash:generateContent",
         "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
