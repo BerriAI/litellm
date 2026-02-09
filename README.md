@@ -15,20 +15,52 @@ Why drive a Lamborgini to the grocery store when the Prius will do? ClawRouter c
 ## Install (OpenClaw Plugin)
 
 ```bash
-openclaw plugins install clawrouter
+# 1. Clone the repo
+git clone https://github.com/Counterweight-AI/clawrouter.git
+cd clawrouter
+
+# 2. Install the plugin (link mode — points at your local copy)
+openclaw plugins install -l ./openclaw-plugin
+
+# 3. Restart the gateway to start the service
+openclaw gateway restart
 ```
 
-Restart the gateway. The plugin will:
-1. Clone the repo and set up a Python venv
-2. Pull your API keys from your existing OpenClaw auth profiles
-3. Generate routing configs and start the proxy
-4. Register `clawrouter/auto` as a model provider
+That's it. On first start, the service will automatically:
+1. Clone the repo into `~/.openclaw/litellm/`
+2. Create a Python 3.10+ venv and install LiteLLM
+3. Read your existing API keys from OpenClaw auth profiles
+4. Pick the best tier models based on your available keys
+5. Generate `proxy_config.yaml` and `routing_rules.yaml`
+6. Start the proxy on port 4000
+7. Add `clawrouter/auto` as a provider in your OpenClaw config
 
-From here, messages sent to `clawrouter/auto` are automatically classified and routed to the models you have configured.
+Verify it works:
+
+```bash
+curl http://localhost:4000/health/liveliness    # → "I'm alive!"
+```
+
+Test routing:
+
+```bash
+# Simple → LOW tier
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-clawrouter" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}'
+
+# Coding → MID tier
+# ... "write a Python function" ...
+
+# Reasoning → TOP tier
+# ... "prove that sqrt(2) is irrational" ...
+
+# Force a tier with [low], [med], or [high] prefix
+# ... "[high] hello" ...
+```
 
 ## Configuration
-
-### Routing Rules
 
 Edit `routing_rules.yaml` to customize tier models, category-to-tier mappings, or add domain-specific patterns:
 
@@ -68,11 +100,4 @@ The tag is stripped before the model sees it.
 ./setup.sh
 ```
 
-This walks you through API key setup, tier model selection, and starts the proxy on port 4000. To test, run:
-
-```bash
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
-```
+This walks you through API key setup, tier model selection, and starts the proxy on port 4000.
