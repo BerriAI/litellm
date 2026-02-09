@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
@@ -41,7 +41,7 @@ def _sanitize_prometheus_label_name(label: str) -> str:
     return sanitized
 
 
-def _sanitize_prometheus_label_value(value: Optional[str]) -> Optional[str]:
+def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
     """
     Sanitize a label value for Prometheus text format compatibility.
 
