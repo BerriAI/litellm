@@ -1,0 +1,124 @@
+=== 100 requests, 1 users, fire-as-fast-as-possible ===
+User mode: none, Key mode: shared
+Latency = time from request start until last byte of response received
+  [OK] User 1 request   1: 0.716s
+  [OK] User 1 request   2: 0.006s
+  [OK] User 1 request   3: 0.005s
+  [OK] User 1 request   4: 0.005s
+  [OK] User 1 request   5: 0.005s
+  [OK] User 1 request   6: 0.004s
+  [OK] User 1 request   7: 0.005s
+  [OK] User 1 request   8: 0.005s
+  [OK] User 1 request   9: 0.005s
+  [OK] User 1 request  10: 0.005s
+  [OK] User 1 request  11: 0.005s
+  [OK] User 1 request  12: 0.005s
+  [OK] User 1 request  13: 0.008s
+  [OK] User 1 request  14: 0.007s
+  [OK] User 1 request  15: 0.005s
+  [OK] User 1 request  16: 0.005s
+  [OK] User 1 request  17: 0.005s
+  [OK] User 1 request  18: 0.005s
+  [OK] User 1 request  19: 0.005s
+  [OK] User 1 request  20: 0.005s
+  [OK] User 1 request  21: 0.005s
+  [OK] User 1 request  22: 0.005s
+  [OK] User 1 request  23: 0.005s
+  [OK] User 1 request  24: 0.005s
+  [OK] User 1 request  25: 0.005s
+  [OK] User 1 request  26: 0.006s
+  [OK] User 1 request  27: 0.006s
+  [OK] User 1 request  28: 0.005s
+  [OK] User 1 request  29: 0.006s
+  [OK] User 1 request  30: 0.005s
+  [OK] User 1 request  31: 0.005s
+  [OK] User 1 request  32: 0.005s
+  [OK] User 1 request  33: 0.006s
+  [OK] User 1 request  34: 0.005s
+  [OK] User 1 request  35: 0.005s
+  [OK] User 1 request  36: 0.005s
+  [OK] User 1 request  37: 0.005s
+  [OK] User 1 request  38: 0.004s
+  [OK] User 1 request  39: 0.005s
+  [OK] User 1 request  40: 0.006s
+  [OK] User 1 request  41: 0.006s
+  [OK] User 1 request  42: 0.006s
+  [OK] User 1 request  43: 0.006s
+  [OK] User 1 request  44: 0.006s
+  [OK] User 1 request  45: 0.005s
+  [OK] User 1 request  46: 0.005s
+  [OK] User 1 request  47: 0.005s
+  [OK] User 1 request  48: 0.005s
+  [OK] User 1 request  49: 0.005s
+  [OK] User 1 request  50: 0.006s
+  [OK] User 1 request  51: 0.005s
+  [OK] User 1 request  52: 0.005s
+  [OK] User 1 request  53: 0.005s
+  [OK] User 1 request  54: 0.005s
+  [OK] User 1 request  55: 0.005s
+  [OK] User 1 request  56: 0.005s
+  [OK] User 1 request  57: 0.005s
+  [OK] User 1 request  58: 0.004s
+  [OK] User 1 request  59: 0.004s
+  [OK] User 1 request  60: 0.004s
+  [OK] User 1 request  61: 0.004s
+  [OK] User 1 request  62: 0.004s
+  [OK] User 1 request  63: 0.004s
+  [OK] User 1 request  64: 0.006s
+  [OK] User 1 request  65: 0.005s
+  [OK] User 1 request  66: 0.005s
+  [OK] User 1 request  67: 0.005s
+  [OK] User 1 request  68: 0.005s
+  [OK] User 1 request  69: 0.005s
+  [OK] User 1 request  70: 0.006s
+  [OK] User 1 request  71: 0.006s
+  [OK] User 1 request  72: 0.005s
+  [OK] User 1 request  73: 0.005s
+  [OK] User 1 request  74: 0.005s
+  [OK] User 1 request  75: 0.005s
+  [OK] User 1 request  76: 0.007s
+  [OK] User 1 request  77: 0.007s
+  [OK] User 1 request  78: 0.006s
+  [OK] User 1 request  79: 0.007s
+  [OK] User 1 request  80: 0.007s
+  [OK] User 1 request  81: 0.007s
+  [OK] User 1 request  82: 0.006s
+  [OK] User 1 request  83: 0.007s
+  [OK] User 1 request  84: 0.006s
+  [OK] User 1 request  85: 0.005s
+  [OK] User 1 request  86: 0.005s
+  [OK] User 1 request  87: 0.005s
+  [OK] User 1 request  88: 0.005s
+  [OK] User 1 request  89: 0.006s
+  [OK] User 1 request  90: 0.006s
+  [OK] User 1 request  91: 0.005s
+  [OK] User 1 request  92: 0.005s
+  [OK] User 1 request  93: 0.006s
+  [OK] User 1 request  94: 0.005s
+  [OK] User 1 request  95: 0.005s
+  [OK] User 1 request  96: 0.005s
+  [OK] User 1 request  97: 0.006s
+  [OK] User 1 request  98: 0.005s
+  [OK] User 1 request  99: 0.005s
+  [OK] User 1 request 100: 0.006s
+
+[OK] 100 succeeded, [FAIL] 0 failed
+
+Latency (successful):
+  min:  0.004s
+  avg:  0.012s
+  max:  0.716s
+  p95:  0.007s
+  p99:  0.008s
+
+Requests above threshold (successful only):
+  Above 1s: 0/100 (0.0%)
+  Above 2s: 0/100 (0.0%)
+  Above 3s: 0/100 (0.0%)
+  Above 4s: 0/100 (0.0%)
+  Above 5s: 0/100 (0.0%)
+  Above 6s: 0/100 (0.0%)
+  Above 7s: 0/100 (0.0%)
+  Above 8s: 0/100 (0.0%)
+  Above 9s: 0/100 (0.0%)
+  Above 10s: 0/100 (0.0%)

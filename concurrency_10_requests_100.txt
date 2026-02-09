@@ -1,0 +1,124 @@
+=== 100 requests, 10 users, fire-as-fast-as-possible ===
+User mode: none, Key mode: shared
+Latency = time from request start until last byte of response received
+  [OK] User 9 request   1: 0.608s
+  [OK] User 7 request   1: 0.896s
+  [OK] User 5 request   1: 1.195s
+  [OK] User 3 request   1: 1.481s
+  [OK] User 9 request   2: 0.013s
+  [OK] User 7 request   2: 0.013s
+  [OK] User 5 request   2: 0.013s
+  [OK] User 3 request   2: 0.014s
+  [OK] User 3 request   3: 0.014s
+  [OK] User 7 request   3: 0.017s
+  [OK] User 9 request   3: 0.018s
+  [OK] User 5 request   3: 0.016s
+  [OK] User 3 request   4: 0.012s
+  [OK] User 7 request   4: 0.013s
+  [OK] User 9 request   4: 0.014s
+  [OK] User 5 request   4: 0.014s
+  [OK] User 3 request   5: 0.016s
+  [OK] User 7 request   5: 0.016s
+  [OK] User 9 request   5: 0.015s
+  [OK] User 5 request   5: 0.016s
+  [OK] User 3 request   6: 0.016s
+  [OK] User 7 request   6: 0.015s
+  [OK] User 9 request   6: 0.015s
+  [OK] User 5 request   6: 0.015s
+  [OK] User 3 request   7: 0.014s
+  [OK] User 7 request   7: 0.014s
+  [OK] User 9 request   7: 0.014s
+  [OK] User 5 request   7: 0.014s
+  [OK] User 3 request   8: 0.013s
+  [OK] User 7 request   8: 0.013s
+  [OK] User 9 request   8: 0.013s
+  [OK] User 5 request   8: 0.013s
+  [OK] User 7 request   9: 0.012s
+  [OK] User 3 request   9: 0.014s
+  [OK] User 9 request   9: 0.013s
+  [OK] User 5 request   9: 0.014s
+  [OK] User 9 request  10: 0.012s
+  [OK] User 3 request  10: 0.013s
+  [OK] User 7 request  10: 0.015s
+  [OK] User 5 request  10: 0.012s
+  [OK] User 1 request   1: 2.034s
+  [OK] User 8 request   1: 1.014s
+  [OK] User 2 request   1: 1.894s
+  [OK] User 10 request   1: 0.730s
+  [OK] User 6 request   1: 1.317s
+  [OK] User 4 request   1: 1.596s
+  [OK] User 1 request   2: 0.030s
+  [OK] User 2 request   2: 0.025s
+  [OK] User 10 request   2: 0.025s
+  [OK] User 8 request   2: 0.026s
+  [OK] User 4 request   2: 0.025s
+  [OK] User 6 request   2: 0.026s
+  [OK] User 1 request   3: 0.018s
+  [OK] User 2 request   3: 0.020s
+  [OK] User 10 request   3: 0.020s
+  [OK] User 8 request   3: 0.020s
+  [OK] User 6 request   3: 0.021s
+  [OK] User 4 request   3: 0.021s
+  [OK] User 1 request   4: 0.015s
+  [OK] User 2 request   4: 0.021s
+  [OK] User 4 request   4: 0.019s
+  [OK] User 10 request   4: 0.023s
+  [OK] User 8 request   4: 0.023s
+  [OK] User 6 request   4: 0.022s
+  [OK] User 1 request   5: 0.021s
+  [OK] User 8 request   5: 0.019s
+  [OK] User 6 request   5: 0.019s
+  [OK] User 10 request   5: 0.022s
+  [OK] User 4 request   5: 0.024s
+  [OK] User 2 request   5: 0.024s
+  [OK] User 1 request   6: 0.020s
+  [OK] User 8 request   6: 0.021s
+  [OK] User 10 request   6: 0.020s
+  [OK] User 6 request   6: 0.022s
+  [OK] User 4 request   6: 0.021s
+  [OK] User 2 request   6: 0.021s
+  [OK] User 1 request   7: 0.020s
+  [OK] User 8 request   7: 0.018s
+  [OK] User 6 request   7: 0.018s
+  [OK] User 10 request   7: 0.019s
+  [OK] User 4 request   7: 0.019s
+  [OK] User 2 request   7: 0.019s
+  [OK] User 1 request   8: 0.021s
+  [OK] User 6 request   8: 0.020s
+  [OK] User 4 request   8: 0.019s
+  [OK] User 2 request   8: 0.019s
+  [OK] User 10 request   8: 0.022s
+  [OK] User 8 request   8: 0.025s
+  [OK] User 1 request   9: 0.019s
+  [OK] User 2 request   9: 0.020s
+  [OK] User 6 request   9: 0.022s
+  [OK] User 4 request   9: 0.022s
+  [OK] User 10 request   9: 0.021s
+  [OK] User 8 request   9: 0.021s
+  [OK] User 1 request  10: 0.024s
+  [OK] User 2 request  10: 0.019s
+  [OK] User 6 request  10: 0.019s
+  [OK] User 4 request  10: 0.019s
+  [OK] User 10 request  10: 0.018s
+  [OK] User 8 request  10: 0.019s
+
+[OK] 100 succeeded, [FAIL] 0 failed
+
+Latency (successful):
+  min:  0.012s
+  avg:  0.144s
+  max:  2.034s
+  p95:  1.195s
+  p99:  1.894s
+
+Requests above threshold (successful only):
+  Above 1s: 7/100 (7.0%)
+  Above 2s: 1/100 (1.0%)
+  Above 3s: 0/100 (0.0%)
+  Above 4s: 0/100 (0.0%)
+  Above 5s: 0/100 (0.0%)
+  Above 6s: 0/100 (0.0%)
+  Above 7s: 0/100 (0.0%)
+  Above 8s: 0/100 (0.0%)
+  Above 9s: 0/100 (0.0%)
+  Above 10s: 0/100 (0.0%)

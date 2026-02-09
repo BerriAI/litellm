@@ -1,0 +1,124 @@
+=== 100 requests, 50 users, fire-as-fast-as-possible ===
+User mode: none, Key mode: shared
+Latency = time from request start until last byte of response received
+  [OK] User 36 request   1: 2.515s
+  [OK] User 11 request   1: 5.994s
+  [OK] User 34 request   1: 2.794s
+  [OK] User 50 request   1: 0.562s
+  [OK] User 3 request   1: 7.134s
+  [OK] User 37 request   1: 2.378s
+  [OK] User 24 request   1: 4.185s
+  [OK] User 7 request   1: 6.573s
+  [OK] User 44 request   1: 1.402s
+  [OK] User 40 request   1: 1.968s
+  [OK] User 2 request   1: 7.291s
+  [OK] User 47 request   1: 0.991s
+  [OK] User 31 request   1: 3.221s
+  [OK] User 15 request   1: 5.447s
+  [OK] User 18 request   1: 5.029s
+  [OK] User 22 request   1: 4.472s
+  [OK] User 10 request   1: 6.145s
+  [OK] User 20 request   1: 4.751s
+  [OK] User 16 request   1: 5.309s
+  [OK] User 13 request   1: 5.726s
+  [OK] User 32 request   1: 3.083s
+  [OK] User 30 request   1: 3.361s
+  [OK] User 4 request   1: 7.001s
+  [OK] User 19 request   1: 4.891s
+  [OK] User 28 request   1: 3.642s
+  [OK] User 36 request   2: 0.049s
+  [OK] User 34 request   2: 0.049s
+  [OK] User 50 request   2: 0.049s
+  [OK] User 3 request   2: 0.049s
+  [OK] User 11 request   2: 0.049s
+  [OK] User 24 request   2: 0.055s
+  [OK] User 44 request   2: 0.055s
+  [OK] User 37 request   2: 0.056s
+  [OK] User 7 request   2: 0.056s
+  [OK] User 2 request   2: 0.066s
+  [OK] User 31 request   2: 0.066s
+  [OK] User 15 request   2: 0.066s
+  [OK] User 18 request   2: 0.066s
+  [OK] User 22 request   2: 0.066s
+  [OK] User 10 request   2: 0.066s
+  [OK] User 16 request   2: 0.065s
+  [OK] User 13 request   2: 0.066s
+  [OK] User 30 request   2: 0.065s
+  [OK] User 4 request   2: 0.065s
+  [OK] User 19 request   2: 0.065s
+  [OK] User 28 request   2: 0.064s
+  [OK] User 40 request   2: 0.067s
+  [OK] User 47 request   2: 0.067s
+  [OK] User 32 request   2: 0.066s
+  [OK] User 20 request   2: 0.066s
+  [OK] User 39 request   1: 2.344s
+  [OK] User 43 request   1: 1.793s
+  [OK] User 29 request   1: 3.743s
+  [OK] User 45 request   1: 1.514s
+  [OK] User 1 request   1: 7.689s
+  [OK] User 35 request   1: 2.909s
+  [OK] User 41 request   1: 2.074s
+  [OK] User 49 request   1: 0.956s
+  [OK] User 46 request   1: 1.374s
+  [OK] User 27 request   1: 4.029s
+  [OK] User 48 request   1: 1.103s
+  [OK] User 42 request   1: 1.942s
+  [OK] User 17 request   1: 5.421s
+  [OK] User 38 request   1: 2.501s
+  [OK] User 33 request   1: 3.196s
+  [OK] User 14 request   1: 5.839s
+  [OK] User 23 request   1: 4.586s
+  [OK] User 8 request   1: 6.678s
+  [OK] User 26 request   1: 4.170s
+  [OK] User 21 request   1: 4.864s
+  [OK] User 6 request   1: 6.975s
+  [OK] User 5 request   1: 7.115s
+  [OK] User 25 request   1: 4.310s
+  [OK] User 12 request   1: 6.120s
+  [OK] User 9 request   1: 6.539s
+  [OK] User 39 request   2: 0.052s
+  [OK] User 43 request   2: 0.057s
+  [OK] User 45 request   2: 0.056s
+  [OK] User 1 request   2: 0.056s
+  [OK] User 41 request   2: 0.056s
+  [OK] User 49 request   2: 0.056s
+  [OK] User 46 request   2: 0.055s
+  [OK] User 35 request   2: 0.056s
+  [OK] User 29 request   2: 0.057s
+  [OK] User 27 request   2: 0.056s
+  [OK] User 48 request   2: 0.066s
+  [OK] User 17 request   2: 0.066s
+  [OK] User 38 request   2: 0.066s
+  [OK] User 33 request   2: 0.066s
+  [OK] User 23 request   2: 0.066s
+  [OK] User 26 request   2: 0.065s
+  [OK] User 21 request   2: 0.065s
+  [OK] User 5 request   2: 0.065s
+  [OK] User 25 request   2: 0.065s
+  [OK] User 9 request   2: 0.065s
+  [OK] User 8 request   2: 0.066s
+  [OK] User 14 request   2: 0.067s
+  [OK] User 6 request   2: 0.066s
+  [OK] User 42 request   2: 0.069s
+  [OK] User 12 request   2: 0.067s
+
+[OK] 100 succeeded, [FAIL] 0 failed
+
+Latency (successful):
+  min:  0.049s
+  avg:  2.087s
+  max:  7.689s
+  p95:  6.975s
+  p99:  7.291s
+
+Requests above threshold (successful only):
+  Above 1s: 47/100 (47.0%)
+  Above 2s: 40/100 (40.0%)
+  Above 3s: 33/100 (33.0%)
+  Above 4s: 27/100 (27.0%)
+  Above 5s: 18/100 (18.0%)
+  Above 6s: 11/100 (11.0%)
+  Above 7s: 5/100 (5.0%)
+  Above 8s: 0/100 (0.0%)
+  Above 9s: 0/100 (0.0%)
+  Above 10s: 0/100 (0.0%)

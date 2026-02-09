@@ -249,3 +249,106 @@ The latency spike is high regardless of whether a user is passed to the payload 
 1. **User parameter has no impact** - Passing a user to the request payload doesn't affect first request latency
 2. **Cache has no impact** - Response caching ON vs OFF shows identical performance (~15s avg)
 3. **Latency is proxy overhead** - 15s average suggests infrastructure (DB, Redis, auth) is the bottleneck, not LLM calls since the LLM server is running locally.
+
+---
+
+## Minimal Configuration Test Results
+
+### Test with `test_config_minimal.yaml` (no DB, no Redis, no callbacks, no alerting)
+
+- [x] **Test completed:** `validation_123.txt`
+
+| Config | File | avg | p95 | max | Above 1s |
+|--------|------|-----|-----|-----|----------|
+| **Minimal config** | `validation_123.txt` | **8.654s** | 15.065s | 15.807s | 100% |
+| Full config (cache ON) | `user_none_1_request_per_user_local_llm_cache_on.txt` | 15.204s | 26.543s | 27.706s | 100% |
+| Full config (cache OFF) | `user_none_1_requests_per_user_local_llm_cache_off.txt` | 15.449s | 26.317s | 27.430s | 100% |
+
+**Improvement: 43% faster** (15.2s → 8.6s avg)
+
+### Critical Findings
+
+1. **Removing DB/Redis/callbacks cuts latency nearly in half**
+   - Proves the 6.5s overhead comes from database operations, Redis, alerting infrastructure
+
+2. **BUT: 8.6s is still very slow for a local mock LLM**
+   - Local LLM mock likely responds in milliseconds
+   - Proxy adds ~8.6s overhead **even with everything disabled**
+   - Same wave pattern persists (early: 15s, mid: 6-8s, late: 1.5-4s)
+
+3. **Root cause is in core proxy code, not features**
+   - The bulk of latency comes from the proxy itself, not external network calls
+   - Likely issues:
+     - Request queueing/serialization (requests blocking each other)
+     - Poor concurrency handling
+     - Auth/router logic overhead
+     - Python async event loop bottlenecks
+
+---
+
+## Conclusions
+
+1. **User parameter:** No impact
+2. **Cache:** No impact  
+3. **Database/Redis/Alerting:** Adds ~6.5s overhead (15.2s → 8.6s)
+4. **Core proxy code:** Adds ~8.6s overhead even with bare minimum config
+5. **Total overhead:** ~15s for complex config processing 100 concurrent requests
+
+**Next action:** Profile the proxy request path to identify the specific bottleneck in core code (likely concurrency/queueing)
+
+## cProfile: Per-Request Hotspots (minimal config, no DB/Redis)
+
+Profile captured with `test_config_minimal.yaml`. Ordered by cumtime, normalized per request:
+
+| Component                            | Calls     | Cumtime | Per-call (est.) | Notes                              |
+| ------------------------------------ | --------- | ------- | --------------- | ---------------------------------- |
+| user_api_key_auth                    | 200       | 12.58s  | ~63ms           | Auth entry point                   |
+| _user_api_key_auth_builder           | 100       | 12.55s  | **~125ms**      | Main auth logic                    |
+| log_db_metrics wrapper               | 100       | 12.53s  | **~125ms**      | Still in path despite no DB        |
+| FastAPI solve_dependencies           | 1600/200  | 12.61s  | ~63ms           | Dependency injection for chat route|
+| Starlette/FastAPI middleware/routing | 600       | ~12.7s  | ~21ms           | Middleware stack                   |
+| annotationlib call_annotate_function | 23400     | 8.28s   | ~0.4ms × many   | Python 3.14 annotation processing  |
+| router acompletion                   | 586       | 0.67s   | ~1ms            | LLM call path (mostly I/O)         |
+
+**Key finding:** Auth + log_db_metrics ≈ **125ms per request** even with no database. Expected for a simple master_key compare: microseconds.
+
+**Optimization targets (in order):**
+1. Auth path + log_db_metrics – ensure early return when master-key-only (no DB)
+2. FastAPI dependency resolution – reduce number of injected dependencies on chat route
+3. Lazy/conditional Prisma import – avoid loading Prisma when DB not configured
+
+---
+
+## Concurrency Test 1-10-30-50-100
+
+**Setup:** Minimal config (`test_config_minimal.yaml`), no user in payload, master key auth, local LLM mock at localhost:8090. 100 total requests per run; concurrency = number of simulated users.
+
+### Results
+
+| Concurrency | File | avg | p95 | max | >1s | >5s | >10s |
+|-------------|------|-----|-----|-----|-----|-----|------|
+| 1           | `concurrency_1_requests_100.txt`   | 0.012s | 0.007s | 0.716s | 0%   | 0% | 0%  |
+| 10          | `concurrency_10_requests_100.txt`  | 0.144s | 1.195s | 2.034s | 7%   | 0% | 0%  |
+| 30          | `concurrency_30_requests_100.txt`  | 0.833s | 3.861s | 4.836s | 27%  | 0% | 0%  |
+| 50          | `concurrency_50_requests_100.txt`  | 2.087s | 6.975s | 7.689s | 47%  | 18% | 0% |
+| 100         | `concurrency_100_requests_100.txt` | 7.721s | 14.019s | 14.657s | 97% | 69% | 33% |
+
+### Analysis
+
+1. **Steep degradation with concurrency** — Average latency grows ~640× from 12 ms (c=1) to 7.7 s (c=100). p95 grows from 7 ms to 14 s.
+
+2. **First request vs later requests** — At c=1, the first request is ~716 ms (cold/auth path), then ~5 ms per request. At c=10/30/50, the first request per user is 0.5–4 s, while subsequent requests are ~15–70 ms. At c=100, every request is effectively a “first” request (1 per user), so all pay the full contention cost.
+
+3. **Evidence of queueing/serialization** — Higher concurrency yields much worse latency despite the same total load. This points to limited parallelism: requests appear to be processed in waves rather than truly in parallel.
+
+4. **Tail latency** — At c=100, 33% of requests exceed 10 s. Worst-case (14.6 s) is far above the ~5 ms steady-state per-request cost, indicating substantial proxy overhead under load.
+
+5. **Config context** — These runs use minimal config (no DB, Redis, callbacks) and the Prisma fast-path fix, so the bottleneck is in core proxy handling: auth, routing, and/or async event-loop behavior under concurrency.
+
+### Checklist
+
+- [x] Concurrency 1 → `concurrency_1_requests_100.txt`
+- [x] Concurrency 10 → `concurrency_10_requests_100.txt`
+- [x] Concurrency 30 → `concurrency_30_requests_100.txt`
+- [x] Concurrency 50 → `concurrency_50_requests_100.txt`
+- [x] Concurrency 100 → `concurrency_100_requests_100.txt`
