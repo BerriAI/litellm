@@ -1076,6 +1076,7 @@ const sidebars = {
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
         "troubleshoot/spend_queue_warnings",
+        "troubleshoot/max_callbacks",
       ],
     },
   ],
