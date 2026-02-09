@@ -21,7 +21,7 @@ import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings"
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import TeamDropdown from "../common_components/team_dropdown";
-import Createuser from "../create_user_button";
+import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -1347,7 +1347,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
           footer={null}
           width={800}
         >
-          <Createuser
+          <CreateUserButton
             userID={userID}
             accessToken={accessToken}
             teams={teams}
