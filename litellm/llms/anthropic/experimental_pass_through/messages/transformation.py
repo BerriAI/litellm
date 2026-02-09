@@ -47,6 +47,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "context_management",
             "output_format",
             "inference_geo",
+            "speed",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
@@ -184,10 +185,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - context_management: adds 'context-management-2025-06-27'
         - tool_search: adds provider-specific tool search header
         - output_format: adds 'structured-outputs-2025-11-13'
+        - speed: adds 'fast-mode-2026-02-01'
 
         Args:
             headers: Request headers dict
-            optional_params: Optional parameters including tools, context_management, output_format
+            optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
         """
         beta_values: set = set()
@@ -223,6 +225,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for structured outputs
         if optional_params.get("output_format") is not None:
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value)
+
+        # Check for fast mode
+        if optional_params.get("speed") == "fast":
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
         # Check for tool search tools
         tools = optional_params.get("tools")

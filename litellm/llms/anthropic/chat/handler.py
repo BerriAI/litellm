@@ -75,6 +75,7 @@ async def make_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
+    speed: Optional[str] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
@@ -103,6 +104,7 @@ async def make_call(
         streaming_response=response.aiter_lines(),
         sync_stream=False,
         json_mode=json_mode,
+        speed=speed,
     )
 
     # LOGGING
@@ -126,6 +128,7 @@ def make_sync_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
+    speed: Optional[str] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
@@ -159,7 +162,7 @@ def make_sync_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True, json_mode=json_mode
+        streaming_response=response.iter_lines(), sync_stream=True, json_mode=json_mode, speed=speed
     )
 
     # LOGGING
@@ -213,6 +216,7 @@ class AnthropicChatCompletion(BaseLLM):
             logging_obj=logging_obj,
             timeout=timeout,
             json_mode=json_mode,
+            speed=optional_params.get("speed") if optional_params else None,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -427,6 +431,7 @@ class AnthropicChatCompletion(BaseLLM):
                     logging_obj=logging_obj,
                     timeout=timeout,
                     json_mode=json_mode,
+                    speed=optional_params.get("speed") if optional_params else None,
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
@@ -485,13 +490,14 @@ class AnthropicChatCompletion(BaseLLM):
 
 class ModelResponseIterator:
     def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False, speed: Optional[str] = None
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
+        self.speed = speed
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
@@ -541,7 +547,7 @@ class ModelResponseIterator:
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
         return AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
+            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None, speed=self.speed
         )
 
     def _content_block_delta_helper(self, chunk: dict) -> Tuple[
