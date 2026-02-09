@@ -13,6 +13,11 @@ export const AUTH_TYPE = {
   OAUTH2: "oauth2",
 };
 
+export const OAUTH_FLOW = {
+  INTERACTIVE: "interactive",
+  M2M: "m2m",
+};
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
