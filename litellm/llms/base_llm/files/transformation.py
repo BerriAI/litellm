@@ -227,6 +227,7 @@ class BaseFileEndpoints(ABC):
         self,
         file_id: str,
         litellm_parent_otel_span: Optional[Span],
+        llm_router: Optional[Router] = None,
     ) -> OpenAIFileObject:
         pass
 

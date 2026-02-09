@@ -296,9 +296,9 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
     citations: Optional[CitationsObject]
 
 
-class AnthropicMessagesToolResultContent(TypedDict):
-    type: Literal["text"]
-    text: str
+class AnthropicMessagesToolResultContent(TypedDict, total=False):
+    type: Required[Literal["text"]]
+    text: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -359,6 +359,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
     container: Optional[Dict[str, Any]]  # Container config with skills for code execution
+    output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -475,6 +476,8 @@ class MessageDelta(TypedDict, total=False):
 class UsageDelta(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
 
 
 class MessageBlockDelta(TypedDict):
@@ -610,7 +613,7 @@ ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedr
 
 
 class AnthropicThinkingParam(TypedDict, total=False):
-    type: Literal["enabled"]
+    type: Literal["enabled", "adaptive"]
     budget_tokens: int
 
 
@@ -630,12 +633,19 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
     WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
+    COMPACT_2026_01_12 = "compact-2026-01-12"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
 
 
-# Tool search beta header constant
+# Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
 ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+
+# OAuth constants
+ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
+ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
+
+ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER = "prompt-caching-scope-2026-01-05"

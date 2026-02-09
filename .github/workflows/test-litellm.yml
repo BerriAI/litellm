@@ -34,7 +34,8 @@ jobs:
         poetry run pip install "google-genai==1.22.0"
         poetry run pip install "google-cloud-aiplatform>=1.38"
         poetry run pip install "fastapi-offline==1.7.3"
-        poetry run pip install "python-multipart==0.0.18"
+        poetry run pip install "python-multipart==0.0.22"
+        poetry run pip install "openapi-core"
     - name: Setup litellm-enterprise as local package
       run: |
         cd enterprise

@@ -1,11 +1,19 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_HOSTED_TOOLS,
+)
+from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_HOSTED_TOOLS
 
 from ....vertex_llm_base import VertexBase
 
@@ -51,13 +59,34 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         headers["content-type"] = "application/json"
         
-        # Add web search beta header for Vertex AI only if not already set
-        if "anthropic-beta" not in headers:
-            tools = optional_params.get("tools", [])
-            for tool in tools:
-                if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
-                    headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
-                    break
+        # Add beta headers for Vertex AI
+        tools = optional_params.get("tools", [])
+        beta_values: set[str] = set()
+        
+        # Get existing beta headers if any
+        existing_beta = headers.get("anthropic-beta")
+        if existing_beta:
+            beta_values.update(b.strip() for b in existing_beta.split(","))
+
+        # Check for web search tool
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
+                break
+        
+        # Check for tool search tools - Vertex AI uses different beta header
+        anthropic_model_info = AnthropicModelInfo()
+        if anthropic_model_info.is_tool_search_used(tools):
+            beta_values.add(get_tool_search_beta_header("vertex_ai"))
+        
+        if beta_values:
+            headers["anthropic-beta"] = ",".join(beta_values)
+        
+        # Filter out unsupported beta headers for Vertex AI
+        headers = update_headers_with_filtered_beta(
+            headers=headers,
+            provider="vertex_ai",
+        )
         
         return headers, api_base
 
@@ -97,4 +126,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         anthropic_messages_request.pop(
             "model", None
         )  # do not pass model in request body to vertex ai
+
+        anthropic_messages_request.pop(
+            "output_format", None
+        )  # do not pass output_format in request body to vertex ai - vertex ai does not support output_format as yet
+
         return anthropic_messages_request

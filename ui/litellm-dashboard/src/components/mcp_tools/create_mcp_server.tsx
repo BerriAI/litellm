@@ -189,6 +189,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
+        available_on_public_internet: availableOnPublicInternetRaw,
         ...restValues
       } = values;
 
@@ -280,6 +281,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
         allow_all_keys: Boolean(allowAllKeysRaw),
+        available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         static_headers: staticHeaders,
       };
 
@@ -425,7 +427,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   MCP Server Name
-                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead.">
+                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
@@ -663,7 +665,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </Form.Item>
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
                   <p className="text-sm text-gray-600">
-                    Complete the OAuth authorization flow to fetch an access token and store it as the authentication value.
+                    Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.
                   </p>
                   <Button
                     variant="secondary"

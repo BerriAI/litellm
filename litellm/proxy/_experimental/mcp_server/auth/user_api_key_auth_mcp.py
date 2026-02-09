@@ -1,11 +1,12 @@
 from typing import Dict, List, Optional, Set, Tuple
 
+from fastapi import HTTPException
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_TeamTable, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, ProxyException, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -63,6 +64,13 @@ class MCPRequestHandler:
             HTTPException: If headers are invalid or missing required headers
         """
         headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+
+        # Check if there is an explicit LiteLLM API key (primary header)
+        has_explicit_litellm_key = (
+            headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
+            is not None
+        )
+
         litellm_api_key = (
             MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
         )
@@ -106,16 +114,38 @@ class MCPRequestHandler:
         request.body = mock_body  # type: ignore
         if ".well-known" in str(request.url):  # public routes
             validated_user_api_key_auth = UserAPIKeyAuth()
-        # elif litellm_api_key == "":
-        #     from fastapi import HTTPException
-
-        #     raise HTTPException(
-        #         status_code=401,
-        #         detail="LiteLLM API key is missing. Please add it or use OAuth authentication.",
-        #         headers={
-        #             "WWW-Authenticate": f'Bearer resource_metadata=f"{request.base_url}/.well-known/oauth-protected-resource"',
-        #         },
-        #     )
+        elif has_explicit_litellm_key:
+            # Explicit x-litellm-api-key provided - always validate normally
+            validated_user_api_key_auth = await user_api_key_auth(
+                api_key=litellm_api_key, request=request
+            )
+        elif oauth2_headers:
+            # No x-litellm-api-key, but Authorization header present.
+            # Could be a LiteLLM key (backward compat) OR an OAuth2 token
+            # from an upstream MCP provider (e.g. Atlassian).
+            # Try LiteLLM auth first; on auth failure, treat as OAuth2 passthrough.
+            try:
+                validated_user_api_key_auth = await user_api_key_auth(
+                    api_key=litellm_api_key, request=request
+                )
+            except HTTPException as e:
+                if e.status_code in (401, 403):
+                    verbose_logger.debug(
+                        "MCP OAuth2: Authorization header is not a valid LiteLLM key, "
+                        "treating as OAuth2 token passthrough"
+                    )
+                    validated_user_api_key_auth = UserAPIKeyAuth()
+                else:
+                    raise
+            except ProxyException as e:
+                if str(e.code) in ("401", "403"):
+                    verbose_logger.debug(
+                        "MCP OAuth2: Authorization header is not a valid LiteLLM key, "
+                        "treating as OAuth2 token passthrough"
+                    )
+                    validated_user_api_key_auth = UserAPIKeyAuth()
+                else:
+                    raise
         else:
             validated_user_api_key_auth = await user_api_key_auth(
                 api_key=litellm_api_key, request=request
@@ -387,6 +417,9 @@ class MCPRequestHandler:
             user_api_key_cache,
         )
 
+        verbose_logger.debug(
+            f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
+        )
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
 
@@ -516,7 +549,7 @@ class MCPRequestHandler:
         Check if the tool is allowed for the given user/key based on permissions
         """
         if len(allowed_mcp_servers) == 0:
-            return True
+            return False
         elif server_name in allowed_mcp_servers:
             return True
         return False

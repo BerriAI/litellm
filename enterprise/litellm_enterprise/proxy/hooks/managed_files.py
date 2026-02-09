@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cas
 
 from fastapi import HTTPException
 
+import litellm
 from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
@@ -165,7 +166,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                 },
-                "update": {},  # don't do anything if it already exists
+                "update": {
+                    "file_object": file_object.model_dump_json(),
+                    "status": file_object.status,
+                    "updated_by": user_api_key_dict.user_id,
+                },  # FIX: Update status and file_object on every operation to keep state in sync
             },
         )
 
@@ -243,6 +248,78 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return managed_object.created_by == user_id
         return True  # don't raise error if managed object is not found
 
+    async def list_user_batches(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
+        provider: Optional[str] = None,
+        target_model_names: Optional[str] = None,
+        llm_router: Optional[Router] = None,
+    ) -> Dict[str, Any]:
+        # Provider filtering is not supported for managed batches
+        # This is because the encoded object ids stored in the managed objects table do not contain the provider information
+        # To support provider filtering, we would need to store the provider information in the encoded object ids
+        if provider:
+            raise Exception(
+                "Filtering by 'provider' is not supported when using managed batches."
+            )
+
+        # Model name filtering is not supported for managed batches
+        # This is because the encoded object ids stored in the managed objects table do not contain the model name
+        # A hash of the model name + litellm_params for the model name is encoded as the model id. This is not sufficient to reliably map the target model names to the model ids.
+        if target_model_names:
+            raise Exception(
+                "Filtering by 'target_model_names' is not supported when using managed batches."
+            )
+        
+        where_clause: Dict[str, Any] = {"file_purpose": "batch"}
+        
+        # Filter by user who created the batch
+        if user_api_key_dict.user_id:
+            where_clause["created_by"] = user_api_key_dict.user_id
+        
+        if after:
+            where_clause["id"] = {"gt": after}
+        
+        # Fetch more than needed to allow for post-fetch filtering
+        fetch_limit = limit or 20
+        if target_model_names:
+            # Fetch extra to account for filtering
+            fetch_limit = max(fetch_limit * 3, 100)
+        
+        batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+            where=where_clause,
+            take=fetch_limit,
+            order={"created_at": "desc"},
+        )
+                
+        batch_objects: List[LiteLLMBatch] = []
+        for batch in batches:
+            try:
+                # Stop once we have enough after filtering
+                if len(batch_objects) >= (limit or 20):
+                    break
+
+                batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
+                batch_obj = LiteLLMBatch(**batch_data)
+                batch_obj.id = batch.unified_object_id
+                batch_objects.append(batch_obj)
+
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Failed to parse batch object {batch.unified_object_id}: {e}"
+                )
+                continue
+        
+        return {
+            "object": "list",
+            "data": batch_objects,
+            "first_id": batch_objects[0].id if batch_objects else None,
+            "last_id": batch_objects[-1].id if batch_objects else None,
+            "has_more": len(batch_objects) == (limit or 20),
+        }
+
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
     ) -> List[OpenAIFileObject]:
@@ -281,6 +358,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
         return False
 
+    async def check_file_ids_access(
+        self, file_ids: List[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Check if the user has access to a list of file IDs.
+        Only checks managed (unified) file IDs.
+        
+        Args:
+            file_ids: List of file IDs to check access for
+            user_api_key_dict: User API key authentication details
+            
+        Raises:
+            HTTPException: If user doesn't have access to any of the files
+        """
+        for file_id in file_ids:
+            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+            if is_unified_file_id:
+                if not await self.can_user_call_unified_file_id(
+                    file_id, user_api_key_dict
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+                    )
+
     async def async_pre_call_hook(  # noqa: PLR0915
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -296,6 +398,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if (
             call_type == CallTypes.afile_content.value
             or call_type == CallTypes.afile_delete.value
+            or call_type == CallTypes.afile_retrieve.value
+            or call_type == CallTypes.afile_content.value
         ):
             await self.check_managed_file_id_access(data, user_api_key_dict)
 
@@ -312,6 +416,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if messages:
                 file_ids = self.get_file_ids_from_messages(messages)
                 if file_ids:
+                    # Check user has access to all managed files
+                    await self.check_file_ids_access(file_ids, user_api_key_dict)
+                    
                     # Check if any files are stored in storage backends and need base64 conversion
                     # This is needed for Vertex AI/Gemini which requires base64 content
                     is_vertex_ai = model and ("vertex_ai" in model or "gemini" in model.lower())
@@ -327,15 +434,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
-            # Handle managed files in responses API input
+            # Handle managed files in responses API input and tools
+            file_ids = []
+            
+            # Extract file IDs from input parameter
             input_data = data.get("input")
             if input_data:
-                file_ids = self.get_file_ids_from_responses_input(input_data)
-                if file_ids:
-                    model_file_id_mapping = await self.get_model_file_id_mapping(
-                        file_ids, user_api_key_dict.parent_otel_span
-                    )
-                    data["model_file_id_mapping"] = model_file_id_mapping
+                file_ids.extend(self.get_file_ids_from_responses_input(input_data))
+            
+            # Extract file IDs from tools parameter (e.g., code_interpreter container)
+            tools = data.get("tools")
+            if tools:
+                file_ids.extend(self.get_file_ids_from_responses_tools(tools))
+            
+            if file_ids:
+                # Check user has access to all managed files
+                await self.check_file_ids_access(file_ids, user_api_key_dict)
+                
+                model_file_id_mapping = await self.get_model_file_id_mapping(
+                    file_ids, user_api_key_dict.parent_otel_span
+                )
+                data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
             potential_file_id = (
@@ -360,12 +479,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data["model_file_id_mapping"] = model_file_id_mapping
         elif (
             call_type == CallTypes.aretrieve_batch.value
+            or call_type == CallTypes.acancel_batch.value
             or call_type == CallTypes.acancel_fine_tuning_job.value
             or call_type == CallTypes.aretrieve_fine_tuning_job.value
         ):
             accessor_key: Optional[str] = None
             retrieve_object_id: Optional[str] = None
-            if call_type == CallTypes.aretrieve_batch.value:
+            if (
+                call_type == CallTypes.aretrieve_batch.value
+                or call_type == CallTypes.acancel_batch.value
+            ):
                 accessor_key = "batch_id"
             elif (
                 call_type == CallTypes.acancel_fine_tuning_job.value
@@ -533,6 +656,41 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         
         return file_ids
 
+    def get_file_ids_from_responses_tools(
+        self, tools: List[Dict[str, Any]]
+    ) -> List[str]:
+        """
+        Gets file ids from responses API tools parameter.
+        
+        The tools can contain code_interpreter with container.file_ids:
+        [
+            {
+                "type": "code_interpreter",
+                "container": {"type": "auto", "file_ids": ["file-123", "file-456"]}
+            }
+        ]
+        """
+        file_ids: List[str] = []
+        
+        if not isinstance(tools, list):
+            return file_ids
+        
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            
+            # Check for code_interpreter with container file_ids
+            if tool.get("type") == "code_interpreter":
+                container = tool.get("container")
+                if isinstance(container, dict):
+                    container_file_ids = container.get("file_ids")
+                    if isinstance(container_file_ids, list):
+                        for file_id in container_file_ids:
+                            if isinstance(file_id, str):
+                                file_ids.append(file_id)
+        
+        return file_ids
+
     async def get_model_file_id_mapping(
         self, file_ids: List[str], litellm_parent_otel_span: Span
     ) -> dict:
@@ -672,6 +830,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             bytes=file_objects[0].bytes,
             filename=file_objects[0].filename,
             status="uploaded",
+            expires_at=file_objects[0].expires_at,
         )
 
         return response
@@ -836,15 +995,36 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return response
 
     async def afile_retrieve(
-        self, file_id: str, litellm_parent_otel_span: Optional[Span]
+        self, file_id: str, litellm_parent_otel_span: Optional[Span], llm_router=None
     ) -> OpenAIFileObject:
         stored_file_object = await self.get_unified_file_id(
             file_id, litellm_parent_otel_span
         )
-        if stored_file_object:
-            return stored_file_object.file_object
-        else:
+
+        # Case 1 : This is not a managed file
+        if not stored_file_object:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+        
+        # Case 2: Managed file and the file object exists in the database
+        if stored_file_object and stored_file_object.file_object:
+            return stored_file_object.file_object
+
+        # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
+        # So we fetch the file object from the provider. We deliberately do not store the result to avoid interfering with batch cost tracking code.
+        if not llm_router:
+            raise Exception(
+                f"LiteLLM Managed File object with id={file_id} has no file_object "
+                f"and llm_router is required to fetch from provider"
+            )
+
+        try:
+            model_id, model_file_id = next(iter(stored_file_object.model_mappings.items()))
+            credentials = llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            response = await litellm.afile_retrieve(file_id=model_file_id, **credentials)
+            response.id = file_id  # Replace with unified ID
+            return response
+        except Exception as e:
+            raise Exception(f"Failed to retrieve file {file_id} from provider: {str(e)}") from e
 
     async def afile_list(
         self,
@@ -868,10 +1048,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             [file_id], litellm_parent_otel_span
         )
 
+        delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
+            # Remove conflicting keys from data to avoid duplicate keyword arguments
+            filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
@@ -879,6 +1062,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if stored_file_object:
             return stored_file_object
+        elif delete_response:
+            delete_response.id = file_id
+            return delete_response
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 

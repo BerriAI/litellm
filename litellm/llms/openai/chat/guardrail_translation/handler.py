@@ -21,7 +21,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import ChatCompletionToolParam
-from litellm.types.utils import Choices, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    Choices,
+    GenericGuardrailAPIInputs,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -80,13 +86,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
-                inputs["structured_messages"] = (
-                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
-                )
+                inputs[
+                    "structured_messages"
+                ] = messages  # pass the openai /chat/completions messages to the guardrail, as-is
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")
             if tools:
                 inputs["tools"] = tools
+            # Include model information if available
+            model = data.get("model")
+            if model:
+                inputs["model"] = model
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -297,6 +307,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+            # Include model information from the response if available
+            if hasattr(response, "model") and response.model:
+                inputs["model"] = response.model
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -355,14 +368,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # check if the stream has ended
         has_stream_ended = False
         for chunk in responses_so_far:
-            if chunk.choices[0].finish_reason is not None:
+            if chunk.choices and chunk.choices[0].finish_reason is not None:
                 has_stream_ended = True
                 break
 
         if has_stream_ended:
             # convert to model response
             model_response = cast(
-                ModelResponse, stream_chunk_builder(chunks=responses_so_far)
+                ModelResponse,
+                stream_chunk_builder(
+                    chunks=responses_so_far, logging_obj=litellm_logging_obj
+                ),
             )
             # run process_output_response
             await self.process_output_response(
@@ -417,6 +433,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            # Include model information from the first response if available
+            if (
+                responses_so_far
+                and hasattr(responses_so_far[0], "model")
+                and responses_so_far[0].model
+            ):
+                inputs["model"] = responses_so_far[0].model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,

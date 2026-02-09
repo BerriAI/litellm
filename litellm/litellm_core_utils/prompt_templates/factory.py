@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union, cast, overload
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -903,11 +903,11 @@ def convert_to_anthropic_image_obj(
             media_type=media_type,
             data=base64_data,
         )
+    except litellm.ImageFetchError:
+        raise
     except Exception as e:
-        if "Error: Unable to fetch image from URL" in str(e):
-            raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {str(e)}"""
         )
 
 
@@ -1462,7 +1462,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def convert_to_gemini_tool_call_result(
+def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
 ) -> Union[VertexPartType, List[VertexPartType]]:
@@ -1529,6 +1529,33 @@ def convert_to_gemini_tool_call_result(
                             verbose_logger.warning(
                                 f"Failed to process image in tool response: {e}"
                             )
+                elif content_type in ("file", "input_file"):
+                    # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
+                    file_data = content.get("file_data", "")
+                    if not file_data:
+                        file_content = content.get("file", {})
+                        file_data = (
+                            file_content.get("file_data", "")
+                            if isinstance(file_content, dict)
+                            else file_content
+                            if isinstance(file_content, str)
+                            else ""
+                        )
+
+                    if file_data:
+                        # Convert file to base64 blob format for Gemini
+                        try:
+                            file_obj = convert_to_anthropic_image_obj(
+                                file_data, format=None
+                            )
+                            inline_data = BlobType(
+                                data=file_obj["data"],
+                                mime_type=file_obj["media_type"],
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process file in tool response: {e}"
+                            )
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
@@ -1555,8 +1582,6 @@ def convert_to_gemini_tool_call_result(
     # For Computer Use, the response should contain structured data like {"url": "..."}
     response_data: dict
     try:
-        import json
-
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed = json.loads(content_str)
@@ -1607,6 +1632,7 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
 
 def convert_to_anthropic_tool_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
+    force_base64: bool = False,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1652,13 +1678,16 @@ def convert_to_anthropic_tool_result(
         ] = []
         for content in content_list:
             if content["type"] == "text":
-                anthropic_content_list.append(
-                    AnthropicMessagesToolResultContent(
-                        type="text",
-                        text=content["text"],
-                        cache_control=content.get("cache_control", None),
-                    )
-                )
+                # Only include cache_control if explicitly set and not None
+                # to avoid sending "cache_control": null which breaks some API channels
+                text_content: AnthropicMessagesToolResultContent = {
+                    "type": "text",
+                    "text": content["text"],
+                }
+                cache_control_value = content.get("cache_control")
+                if cache_control_value is not None:
+                    text_content["cache_control"] = cache_control_value
+                anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
                 format = (
                     content["image_url"].get("format")
@@ -1666,13 +1695,13 @@ def convert_to_anthropic_tool_result(
                     else None
                 )
                 _anthropic_image_param = create_anthropic_image_param(
-                    content["image_url"], format=format
+                    content["image_url"], format=format, is_bedrock_invoke=force_base64
                 )
                 _anthropic_image_param = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_image_param,
                     original_content_element=content,
                 )
-                anthropic_content_list.append(_anthropic_image_param)
+                anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -2028,6 +2057,12 @@ def anthropic_messages_pt(  # noqa: PLR0915
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
 
+    # Bedrock invoke models have format: invoke/...
+    # Vertex AI Anthropic also doesn't support URL sources for images
+    is_bedrock_invoke = model.lower().startswith("invoke/")
+    is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
+    force_base64 = is_bedrock_invoke or is_vertex_ai
+
     msg_i = 0
     while msg_i < len(messages):
         user_content: List[AnthropicMessagesUserMessageValues] = []
@@ -2137,7 +2172,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ):
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block)
+                    convert_to_anthropic_tool_result(
+                        user_message_types_block, force_base64=force_base64
+                    )
                 )
 
             msg_i += 1
@@ -2145,10 +2182,23 @@ def anthropic_messages_pt(  # noqa: PLR0915
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
 
+        # Track unique tool IDs in this merge block to avoid duplication
+        unique_tool_ids: Set[str] = set()
+
         assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
+
+            # Extract compaction_blocks from provider_specific_fields and add them first
+            _provider_specific_fields_raw = assistant_content_block.get(
+                "provider_specific_fields"
+            )
+            if isinstance(_provider_specific_fields_raw, dict):
+                _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
+                if _compaction_blocks and isinstance(_compaction_blocks, list):
+                    # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
+                    assistant_content.extend(_compaction_blocks)  # type: ignore
 
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             if (
@@ -2238,13 +2288,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                 )
-                # AnthropicMessagesAssistantMessageValues includes AnthropicMessagesToolUseParam
-                assistant_content.extend(
-                    cast(
-                        List[AnthropicMessagesAssistantMessageValues],
-                        tool_invoke_results,
+
+                # Prevent "tool_use ids must be unique" errors by filtering duplicates
+                # This can happen when merging history that already contains the tool calls
+                for item in tool_invoke_results:
+                    # tool_use items are typically dicts, but handle objects just in case
+                    item_id = (
+                        item.get("id")
+                        if isinstance(item, dict)
+                        else getattr(item, "id", None)
                     )
-                )
+
+                    if item_id:
+                        if item_id in unique_tool_ids:
+                            continue
+                        unique_tool_ids.add(item_id)
+
+                    assistant_content.append(
+                        cast(AnthropicMessagesAssistantMessageValues, item)
+                    )
 
             assistant_function_call = assistant_content_block.get("function_call")
 
@@ -3347,6 +3409,59 @@ def _convert_to_bedrock_tool_call_result(
     return content_block
 
 
+def _deduplicate_bedrock_content_blocks(
+    blocks: List[BedrockContentBlock],
+    block_key: str,
+    id_key: str = "toolUseId",
+) -> List[BedrockContentBlock]:
+    """
+    Remove duplicate content blocks that share the same ID under ``block_key``.
+
+    Bedrock requires all toolResult and toolUse IDs within a single message to
+    be unique.  When merging consecutive messages, duplicates can occur if the
+    same tool_call_id appears multiple times in conversation history.
+
+    When duplicates exist, the first occurrence is retained and subsequent ones
+    are discarded.  A warning is logged for every dropped block so that
+    upstream duplication bugs remain visible.
+
+    Blocks that do not contain ``block_key`` (e.g., cachePoint, text) are
+    always preserved.
+
+    Args:
+        blocks: The list of Bedrock content blocks to deduplicate.
+        block_key: The dict key to inspect (e.g. ``"toolResult"`` or ``"toolUse"``).
+        id_key: The nested key that holds the unique ID (default ``"toolUseId"``).
+    """
+    seen_ids: Set[str] = set()
+    deduplicated: List[BedrockContentBlock] = []
+    for block in blocks:
+        keyed = block.get(block_key)
+        if keyed is not None and isinstance(keyed, dict):
+            block_id = keyed.get(id_key)
+            if block_id:
+                if block_id in seen_ids:
+                    verbose_logger.warning(
+                        "Bedrock Converse: dropping duplicate %s block with "
+                        "%s=%s. This may indicate duplicate tool messages in "
+                        "conversation history.",
+                        block_key,
+                        id_key,
+                        block_id,
+                    )
+                    continue
+                seen_ids.add(block_id)
+        deduplicated.append(block)
+    return deduplicated
+
+
+def _deduplicate_bedrock_tool_content(
+    tool_content: List[BedrockContentBlock],
+) -> List[BedrockContentBlock]:
+    """Convenience wrapper: deduplicate ``toolResult`` blocks by ``toolUseId``."""
+    return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
+
+
 def _insert_assistant_continue_message(
     messages: List[BedrockMessageBlock],
     assistant_continue_message: Optional[
@@ -3815,6 +3930,8 @@ class BedrockConverseMessagesProcessor:
                     tool_content.append(cache_point_block)
 
                 msg_i += 1
+            # Deduplicate toolResult blocks with the same toolUseId
+            tool_content = _deduplicate_bedrock_tool_content(tool_content)
             if tool_content:
                 # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
                 if len(contents) > 0 and contents[-1]["role"] == "user":
@@ -3880,10 +3997,12 @@ class BedrockConverseMessagesProcessor:
                                     assistant_parts=assistants_parts,
                                 )
                             elif element["type"] == "text":
-                                assistants_part = BedrockContentBlock(
-                                    text=element["text"]
-                                )
-                                assistants_parts.append(assistants_part)
+                                # Skip completely empty strings to avoid blank content blocks
+                                if element.get("text", "").strip():
+                                    assistants_part = BedrockContentBlock(
+                                        text=element["text"]
+                                    )
+                                    assistants_parts.append(assistants_part)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
@@ -3908,9 +4027,12 @@ class BedrockConverseMessagesProcessor:
                 elif _assistant_content is not None and isinstance(
                     _assistant_content, str
                 ):
-                    assistant_content.append(
-                        BedrockContentBlock(text=_assistant_content)
-                    )
+                    # Skip completely empty strings to avoid blank content blocks
+                    if _assistant_content.strip():
+                        assistant_content.append(
+                            BedrockContentBlock(text=_assistant_content)
+                        )
+                    # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
                     _cache_point_block = (
                         litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -3927,6 +4049,8 @@ class BedrockConverseMessagesProcessor:
                     )
 
                 msg_i += 1
+
+            assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
 
             if assistant_content:
                 contents.append(
@@ -4178,6 +4302,8 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 tool_content.append(cache_point_block)
 
             msg_i += 1
+        # Deduplicate toolResult blocks with the same toolUseId
+        tool_content = _deduplicate_bedrock_tool_content(tool_content)
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
             if len(contents) > 0 and contents[-1]["role"] == "user":
@@ -4237,12 +4363,11 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 assistant_parts=assistants_parts,
                             )
                         elif element["type"] == "text":
-                            # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                            text_content = (
-                                element["text"] if element["text"].strip() else "."
-                            )
-                            assistants_part = BedrockContentBlock(text=text_content)
-                            assistants_parts.append(assistants_part)
+                            # AWS Bedrock doesn't allow empty or whitespace-only text content
+                            # Skip completely empty strings to avoid blank content blocks
+                            if element.get("text", "").strip():
+                                assistants_part = BedrockContentBlock(text=element["text"])
+                                assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -4265,9 +4390,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
-                # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                text_content = _assistant_content if _assistant_content.strip() else "."
-                assistant_content.append(BedrockContentBlock(text=text_content))
+                # Skip completely empty strings to avoid blank content blocks
+                if _assistant_content.strip():
+                    assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -4283,6 +4408,8 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 )
 
             msg_i += 1
+
+        assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
 
         if assistant_content:
             contents.append(
@@ -4343,6 +4470,32 @@ def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
     return None
 
 
+def _is_bedrock_tool_block(tool: dict) -> bool:
+    """
+    Check if a tool is already a BedrockToolBlock.
+    
+    BedrockToolBlock has one of: systemTool, toolSpec, or cachePoint.
+    This is used to detect tools that are already in Bedrock format
+    (e.g., systemTool for Nova grounding) vs OpenAI-style function tools
+    that need transformation.
+    
+    Args:
+        tool: The tool dict to check
+        
+    Returns:
+        True if the tool is already a BedrockToolBlock, False otherwise
+        
+    Examples:
+        >>> _is_bedrock_tool_block({"systemTool": {"name": "nova_grounding"}})
+        True
+        >>> _is_bedrock_tool_block({"type": "function", "function": {...}})
+        False
+    """
+    return isinstance(tool, dict) and (
+        "systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool
+    )
+
+
 def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -4368,7 +4521,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     ]
     """
     """
-    Bedrock toolConfig looks like: 
+    Bedrock toolConfig looks like:
     "tools": [
         {
             "toolSpec": {
@@ -4396,6 +4549,13 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
+        # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
+        if _is_bedrock_tool_block(tool):
+            # Already a BedrockToolBlock, pass it through
+            tool_block_list.append(tool)  # type: ignore
+            continue
+
+        # Handle regular OpenAI-style function tools
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )
@@ -4412,9 +4572,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
-        # flatten the defs
-        for _, value in defs_copy.items():
-            unpack_defs(value, defs_copy)
+        # Expand $ref references in parameters using the definitions
+        # Note: We don't pre-flatten defs as that causes exponential memory growth
+        # with circular references (see issue #19098). unpack_defs handles nested
+        # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(

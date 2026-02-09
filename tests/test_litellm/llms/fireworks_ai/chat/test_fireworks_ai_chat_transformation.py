@@ -108,3 +108,32 @@ def test_get_supported_openai_params_reasoning_effort():
         "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct"
     )
     assert "reasoning_effort" not in unsupported_params
+
+
+def test_transform_messages_helper_removes_provider_specific_fields():
+    """
+    Test that _transform_messages_helper removes provider_specific_fields from messages.
+    """
+    config = FireworksAIConfig()
+    # Simulated messages, as dicts, including provider_specific_fields
+    messages = [
+        {
+            "role": "user",
+            "content": "Hello!",
+            "provider_specific_fields": {"extra": "should be removed"},
+        },
+        {
+            "role": "assistant",
+            "content": "Hi there!",
+            "provider_specific_fields": {"more": "remove this"},
+        },
+        {
+            "role": "user",
+            "content": "How are you?",
+            # no provider_specific_fields
+        }
+    ]
+    # Call helper
+    out = config._transform_messages_helper(messages, model="fireworks/test", litellm_params={})
+    for msg in out:
+        assert "provider_specific_fields" not in msg

@@ -308,12 +308,18 @@ class RouteChecks:
             return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
-        # Check for routes with placeholders
+        # Check for routes with placeholders or wildcard patterns
         for openai_route in LiteLLMRoutes.openai_routes.value:
             # Replace placeholders with regex pattern
             # placeholders are written as "/threads/{thread_id}"
             if "{" in openai_route:
                 if RouteChecks._route_matches_pattern(
+                    route=route, pattern=openai_route
+                ):
+                    return True
+            # Check for wildcard patterns like "/containers/*"
+            if RouteChecks._is_wildcard_pattern(pattern=openai_route):
+                if RouteChecks._route_matches_wildcard_pattern(
                     route=route, pattern=openai_route
                 ):
                     return True
@@ -386,7 +392,15 @@ class RouteChecks:
         # Ensure route is a string before attempting regex matching
         if not isinstance(route, str):
             return False
-        pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
+
+        def _placeholder_to_regex(match: re.Match) -> str:
+            placeholder = match.group(0).strip("{}")
+            if placeholder.endswith(":path"):
+                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
+                return r"[^:]+"
+            return r"[^/]+"
+
+        pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
         if re.match(pattern, route):

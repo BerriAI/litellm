@@ -1929,6 +1929,7 @@ class BaseLLMHTTPHandler:
         # used for logging + cost tracking
         logging_obj.model_call_details["httpx_response"] = response
 
+        initial_response: Union[AsyncIterator, AnthropicMessagesResponse]
         if stream:
             completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
                 model=model,
@@ -1936,13 +1937,28 @@ class BaseLLMHTTPHandler:
                 request_body=request_body,
                 litellm_logging_obj=logging_obj,
             )
-            return completion_stream
+            initial_response = completion_stream
         else:
-            return anthropic_messages_provider_config.transform_anthropic_messages_response(
+            initial_response = anthropic_messages_provider_config.transform_anthropic_messages_response(
                 model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
+
+        # Call agentic completion hooks
+        final_response = await self._call_agentic_completion_hooks(
+            response=initial_response,
+            model=model,
+            messages=messages,
+            anthropic_messages_provider_config=anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            logging_obj=logging_obj,
+            stream=stream or False,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+        )
+
+        return final_response if final_response is not None else initial_response
 
     def anthropic_messages_handler(
         self,
@@ -3064,10 +3080,8 @@ class BaseLLMHTTPHandler:
             transformed_request, bytes
         ):
             # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
+            # Note: transformed_request can be bytes (for binary files like PDFs)
+            # or str (for text files like JSONL). httpx handles both correctly.
             # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
             if http_method == "PUT":
@@ -4334,6 +4348,111 @@ class BaseLLMHTTPHandler:
             return stream, data
         return stream, data
 
+    async def _call_agentic_completion_hooks(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
+        anthropic_messages_optional_request_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict,
+    ) -> Optional[Any]:
+        """
+        Call agentic completion hooks for all custom loggers.
+
+        1. Call async_should_run_agentic_completion to check if agentic loop is needed
+        2. If yes, call async_run_agentic_completion to execute the loop
+
+        Returns the response from agentic loop, or None if no hook runs.
+        """
+        from litellm._logging import verbose_logger
+        from litellm.integrations.custom_logger import CustomLogger
+
+        callbacks = litellm.callbacks + (
+            logging_obj.dynamic_success_callbacks or []
+        )
+        tools = anthropic_messages_optional_request_params.get("tools", [])
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    # First: Check if agentic loop should run
+                    should_run, tool_calls = (
+                        await callback.async_should_run_agentic_loop(
+                            response=response,
+                            model=model,
+                            messages=messages,
+                            tools=tools,
+                            stream=stream,
+                            custom_llm_provider=custom_llm_provider,
+                            kwargs=kwargs,
+                        )
+                    )
+
+                    if should_run:
+                        # Second: Execute agentic loop
+                        # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
+                        kwargs_with_provider = kwargs.copy() if kwargs else {}
+                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                        agentic_response = await callback.async_run_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            anthropic_messages_provider_config=anthropic_messages_provider_config,
+                            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        )
+                        # First hook that runs agentic loop wins
+                        return agentic_response
+
+            except Exception as e:
+                verbose_logger.exception(
+                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks: {str(e)}"
+                )
+
+        # Check if we need to convert response to fake stream
+        # This happens when:
+        # 1. Stream was originally True but converted to False for WebSearch interception
+        # 2. No agentic loop ran (LLM didn't use the tool)
+        # 3. We have a non-streaming response that needs to be converted to streaming
+        websearch_converted_stream = (
+            logging_obj.model_call_details.get("websearch_interception_converted_stream", False)
+            if logging_obj is not None
+            else False
+        )
+        
+        if websearch_converted_stream:
+            from typing import cast
+
+            from litellm._logging import verbose_logger
+            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                FakeAnthropicMessagesStreamIterator,
+            )
+            from litellm.types.llms.anthropic_messages.anthropic_response import (
+                AnthropicMessagesResponse,
+            )
+            
+            verbose_logger.debug(
+                "WebSearchInterception: No tool call made, converting non-streaming response to fake stream"
+            )
+            
+            # Convert the non-streaming response to a fake stream
+            # The response should be an AnthropicMessagesResponse (dict)
+            if isinstance(response, dict):
+                # Create a fake streaming iterator
+                fake_stream = FakeAnthropicMessagesStreamIterator(
+                    response=cast(AnthropicMessagesResponse, response)
+                )
+                return fake_stream
+        
+        return None
+
     def _handle_error(
         self,
         e: Exception,
@@ -4453,7 +4572,7 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         image: Any,
-        prompt: str,
+        prompt: Optional[str],
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_request_params: Dict,
         custom_llm_provider: str,
@@ -4572,7 +4691,7 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         image: FileTypes,
-        prompt: str,
+        prompt: Optional[str],
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_request_params: Dict,
         custom_llm_provider: str,
@@ -6914,17 +7033,31 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        (
-            url,
-            request_body,
-        ) = vector_store_provider_config.transform_search_vector_store_request(
-            vector_store_id=vector_store_id,
-            query=query,
-            vector_store_search_optional_params=vector_store_search_optional_params,
-            api_base=api_base,
-            litellm_logging_obj=logging_obj,
-            litellm_params=dict(litellm_params),
-        )
+        # Check if provider has async transform method
+        if hasattr(vector_store_provider_config, "atransform_search_vector_store_request"):
+            (
+                url,
+                request_body,
+            ) = await vector_store_provider_config.atransform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+            )
+        else:
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+            )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
         headers, signed_json_body = vector_store_provider_config.sign_request(

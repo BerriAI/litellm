@@ -5,6 +5,7 @@ datasource client {
 
 generator client {
   provider = "prisma-client-py"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
 // Budget / Rate Limits for an org
@@ -112,6 +113,7 @@ model LiteLLM_TeamTable {
     members_with_roles Json @default("{}")
     metadata  Json  @default("{}")
     max_budget Float?
+    soft_budget Float?
     spend      Float    @default(0.0)
     models     String[]
     max_parallel_requests Int?
@@ -126,10 +128,58 @@ model LiteLLM_TeamTable {
     model_max_budget Json @default("{}")
     router_settings  Json? @default("{}")
     team_member_permissions String[] @default([])
+    policies         String[] @default([])
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
+    allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+}
+
+// Audit table for deleted teams - preserves spend and team information for historical tracking
+model LiteLLM_DeletedTeamTable {
+    id                      String   @id @default(uuid())
+    team_id                 String   // Original team_id
+    team_alias              String?
+    organization_id         String?
+    object_permission_id    String?
+    admins                  String[]
+    members                 String[]
+    members_with_roles      Json     @default("{}")
+    metadata                Json     @default("{}")
+    max_budget              Float?
+    soft_budget             Float?
+    spend                   Float    @default(0.0)
+    models                  String[]
+    max_parallel_requests   Int?
+    tpm_limit               BigInt?
+    rpm_limit               BigInt?
+    budget_duration         String?
+    budget_reset_at         DateTime?
+    blocked                 Boolean  @default(false)
+    model_spend             Json     @default("{}")
+    model_max_budget        Json     @default("{}")
+    router_settings  Json? @default("{}")
+    team_member_permissions String[] @default([])
+    policies                String[] @default([])
+    model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
+    allow_team_guardrail_config Boolean @default(false)
+    
+    // Original timestamps from team creation/updates
+    created_at              DateTime? @map("created_at")
+    updated_at              DateTime? @map("updated_at")
+    
+    // Deletion metadata
+    deleted_at              DateTime  @default(now()) @map("deleted_at")
+    deleted_by              String?   @map("deleted_by") // User who deleted the team
+    deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
+    litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
+    
+    @@index([team_id])
+    @@index([deleted_at])
+    @@index([organization_id])
+    @@index([team_alias])
+    @@index([created_at])
 }
 
 // Track spend, rate limit, budget Users
@@ -154,6 +204,7 @@ model LiteLLM_UserTable {
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
+    policies         String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     created_at      DateTime?               @default(now()) @map("created_at")
@@ -213,6 +264,7 @@ model LiteLLM_MCPServerTable {
   token_url          String?
   registration_url   String?
   allow_all_keys Boolean @default(false)
+  available_on_public_internet Boolean @default(false)
 }
 
 // Generate Tokens for Proxy
@@ -240,6 +292,7 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
+    policies         String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
@@ -257,6 +310,73 @@ model LiteLLM_VerificationToken {
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+
+    // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
+    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
+    @@index([user_id, team_id])
+
+    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."team_id" = $1 OFFSET $2
+    @@index([team_id])
+
+    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (("public"."LiteLLM_VerificationToken"."expires" IS NULL OR "public"."LiteLLM_VerificationToken"."expires" > $1) AND "public"."LiteLLM_VerificationToken"."budget_reset_at" < $2) OFFSET $3
+    @@index([budget_reset_at, expires])
+}
+
+// Audit table for deleted keys - preserves spend and key information for historical tracking
+model LiteLLM_DeletedVerificationToken {
+    id                      String   @id @default(uuid())
+    token                   String   // Original token (hashed)
+    key_name                String?
+    key_alias               String?
+    soft_budget_cooldown    Boolean  @default(false)
+    spend                   Float    @default(0.0)
+    expires                 DateTime?
+    models                  String[]
+    aliases                 Json     @default("{}")
+    config                  Json     @default("{}")
+    user_id                 String?
+    team_id                 String?
+    permissions             Json     @default("{}")
+    max_parallel_requests   Int?
+    metadata                Json     @default("{}")
+    blocked                 Boolean?
+    tpm_limit               BigInt?
+    rpm_limit               BigInt?
+    max_budget              Float?
+    budget_duration         String?
+    budget_reset_at         DateTime?
+    allowed_cache_controls  String[] @default([])
+    allowed_routes          String[] @default([])
+    policies                String[] @default([])
+    model_spend             Json     @default("{}")
+    model_max_budget        Json     @default("{}")
+    router_settings  Json? @default("{}")
+    budget_id               String?
+    organization_id         String?
+    object_permission_id    String?
+    created_at              DateTime? // Original creation timestamp
+    created_by              String?   // Original creator
+    updated_at              DateTime? // Last update timestamp before deletion
+    updated_by              String?   // Last user who updated before deletion
+    rotation_count          Int?      @default(0)
+    auto_rotate             Boolean?  @default(false)
+    rotation_interval       String?
+    last_rotation_at        DateTime?
+    key_rotation_at         DateTime?
+    
+    // Deletion metadata
+    deleted_at              DateTime  @default(now()) @map("deleted_at")
+    deleted_by              String?   @map("deleted_by") // User who deleted the key
+    deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
+    litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
+    
+    @@index([token])
+    @@index([deleted_at])
+    @@index([user_id])
+    @@index([team_id])
+    @@index([organization_id])
+    @@index([key_alias])
+    @@index([created_at])
 }
 
 model LiteLLM_EndUserTable {
@@ -656,6 +776,11 @@ model LiteLLM_ManagedVectorStoresTable {
   updated_at DateTime @updatedAt
   litellm_credential_name String?
   litellm_params Json?
+  team_id String?
+  user_id String?
+  
+  @@index([team_id])
+  @@index([user_id])
 }
 
 // Guardrails table for storing guardrail configurations
@@ -763,4 +888,33 @@ model LiteLLM_SkillsTable {
   created_by     String?
   updated_at     DateTime @default(now()) @updatedAt
   updated_by     String?
+}
+
+// Policy table for storing guardrail policies
+model LiteLLM_PolicyTable {
+  policy_id        String    @id @default(uuid())
+  policy_name      String    @unique
+  inherit          String?   // Name of parent policy to inherit from
+  description      String?
+  guardrails_add   String[]  @default([])
+  guardrails_remove String[] @default([])
+  condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  created_at       DateTime  @default(now())
+  created_by       String?
+  updated_at       DateTime  @default(now()) @updatedAt
+  updated_by       String?
+}
+
+// Policy attachment table for defining where policies apply
+model LiteLLM_PolicyAttachmentTable {
+  attachment_id    String    @id @default(uuid())
+  policy_name      String    // Name of the policy to attach
+  scope            String?   // Use '*' for global scope
+  teams            String[]  @default([])  // Team aliases or patterns
+  keys             String[]  @default([])  // Key aliases or patterns
+  models           String[]  @default([])  // Model names or patterns
+  created_at       DateTime  @default(now())
+  created_by       String?
+  updated_at       DateTime  @default(now()) @updatedAt
+  updated_by       String?
 }

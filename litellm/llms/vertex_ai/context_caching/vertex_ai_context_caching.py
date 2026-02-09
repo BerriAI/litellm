@@ -27,6 +27,8 @@ local_cache_obj = Cache(
     type=LiteLLMCacheType.LOCAL
 )  # only used for calling 'get_cache_key' function
 
+MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
+
 
 class ContextCachingEndpoints(VertexBase):
     """
@@ -115,7 +117,7 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        _, url = self._get_token_and_url_context_caching(
+        _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
@@ -123,43 +125,63 @@ class ContextCachingEndpoints(VertexBase):
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header
         )
-        try:
-            ## LOGGING
-            logging_obj.pre_call(
-                input="",
-                api_key="",
-                additional_args={
-                    "complete_input_dict": {},
-                    "api_base": url,
-                    "headers": headers,
-                },
-            )
 
-            resp = client.get(url=url, headers=headers)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
+        page_token: Optional[str] = None
+
+        # Iterate through all pages
+        for _ in range(MAX_PAGINATION_PAGES):
+            # Build URL with pagination token if present
+            if page_token:
+                separator = "&" if "?" in base_url else "?"
+                url = f"{base_url}{separator}pageToken={page_token}"
+            else:
+                url = base_url
+
+            try:
+                ## LOGGING
+                logging_obj.pre_call(
+                    input="",
+                    api_key="",
+                    additional_args={
+                        "complete_input_dict": {},
+                        "api_base": url,
+                        "headers": headers,
+                    },
+                )
+
+                resp = client.get(url=url, headers=headers)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403:
+                    return None
+                raise VertexAIError(
+                    status_code=e.response.status_code, message=e.response.text
+                )
+            except Exception as e:
+                raise VertexAIError(status_code=500, message=str(e))
+
+            raw_response = resp.json()
+            logging_obj.post_call(original_response=raw_response)
+
+            if "cachedContents" not in raw_response:
                 return None
-            raise VertexAIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
-        except Exception as e:
-            raise VertexAIError(status_code=500, message=str(e))
-        raw_response = resp.json()
-        logging_obj.post_call(original_response=raw_response)
 
-        if "cachedContents" not in raw_response:
-            return None
+            all_cached_items = CachedContentListAllResponseBody(**raw_response)
 
-        all_cached_items = CachedContentListAllResponseBody(**raw_response)
+            if "cachedContents" not in all_cached_items:
+                return None
 
-        if "cachedContents" not in all_cached_items:
-            return None
+            # Check current page for matching cache_key
+            for cached_item in all_cached_items["cachedContents"]:
+                display_name = cached_item.get("displayName")
+                if display_name is not None and display_name == cache_key:
+                    return cached_item.get("name")
 
-        for cached_item in all_cached_items["cachedContents"]:
-            display_name = cached_item.get("displayName")
-            if display_name is not None and display_name == cache_key:
-                return cached_item.get("name")
+            # Check if there are more pages
+            page_token = all_cached_items.get("nextPageToken")
+            if not page_token:
+                # No more pages, cache not found
+                break
 
         return None
 
@@ -187,7 +209,7 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        _, url = self._get_token_and_url_context_caching(
+        _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
@@ -195,43 +217,63 @@ class ContextCachingEndpoints(VertexBase):
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header
         )
-        try:
-            ## LOGGING
-            logging_obj.pre_call(
-                input="",
-                api_key="",
-                additional_args={
-                    "complete_input_dict": {},
-                    "api_base": url,
-                    "headers": headers,
-                },
-            )
 
-            resp = await client.get(url=url, headers=headers)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
+        page_token: Optional[str] = None
+
+        # Iterate through all pages
+        for _ in range(MAX_PAGINATION_PAGES):
+            # Build URL with pagination token if present
+            if page_token:
+                separator = "&" if "?" in base_url else "?"
+                url = f"{base_url}{separator}pageToken={page_token}"
+            else:
+                url = base_url
+
+            try:
+                ## LOGGING
+                logging_obj.pre_call(
+                    input="",
+                    api_key="",
+                    additional_args={
+                        "complete_input_dict": {},
+                        "api_base": url,
+                        "headers": headers,
+                    },
+                )
+
+                resp = await client.get(url=url, headers=headers)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403:
+                    return None
+                raise VertexAIError(
+                    status_code=e.response.status_code, message=e.response.text
+                )
+            except Exception as e:
+                raise VertexAIError(status_code=500, message=str(e))
+
+            raw_response = resp.json()
+            logging_obj.post_call(original_response=raw_response)
+
+            if "cachedContents" not in raw_response:
                 return None
-            raise VertexAIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
-        except Exception as e:
-            raise VertexAIError(status_code=500, message=str(e))
-        raw_response = resp.json()
-        logging_obj.post_call(original_response=raw_response)
 
-        if "cachedContents" not in raw_response:
-            return None
+            all_cached_items = CachedContentListAllResponseBody(**raw_response)
 
-        all_cached_items = CachedContentListAllResponseBody(**raw_response)
+            if "cachedContents" not in all_cached_items:
+                return None
 
-        if "cachedContents" not in all_cached_items:
-            return None
+            # Check current page for matching cache_key
+            for cached_item in all_cached_items["cachedContents"]:
+                display_name = cached_item.get("displayName")
+                if display_name is not None and display_name == cache_key:
+                    return cached_item.get("name")
 
-        for cached_item in all_cached_items["cachedContents"]:
-            display_name = cached_item.get("displayName")
-            if display_name is not None and display_name == cache_key:
-                return cached_item.get("name")
+            # Check if there are more pages
+            page_token = all_cached_items.get("nextPageToken")
+            if not page_token:
+                # No more pages, cache not found
+                break
 
         return None
 
@@ -304,7 +346,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools
+            messages=cached_messages, tools=tools, model=model
         )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
@@ -433,7 +475,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools
+            messages=cached_messages, tools=tools, model=model
         )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,

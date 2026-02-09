@@ -6,6 +6,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 3. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_post_call_streaming_iterator_hook
 """
 
+import copy
 from typing import Any, AsyncGenerator, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -50,6 +51,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         Runs on only Input
         Use this if you want to MODIFY the input
         """
+
         global endpoint_guardrail_translation_mappings
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -65,6 +67,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type == CallTypes.call_mcp_tool.value:
             event_type = GuardrailEventHooks.pre_mcp_call
 
+
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
             is not True
@@ -79,8 +82,12 @@ class UnifiedLLMGuardrails(CustomLogger):
             endpoint_guardrail_translation_mappings = (
                 load_guardrail_translation_mappings()
             )
-        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
-            return data
+
+        try:
+            if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+                return data
+        except ValueError:
+            return data  # handle unmapped call types
 
         endpoint_translation = endpoint_guardrail_translation_mappings[
             CallTypes(call_type)
@@ -345,22 +352,26 @@ class UnifiedLLMGuardrails(CustomLogger):
                     guardrail_to_apply.guardrail_name,
                 )
 
+                # Deep-copy the current chunk before guardrail processing.
+                # process_output_streaming_response modifies responses_so_far
+                # in-place: it puts the combined guardrailed text in the first
+                # chunk and clears all subsequent chunks to "". Without this
+                # copy, yielding processed_items[-1] would yield an empty
+                # string, permanently losing this chunk's content.
+                original_item = copy.deepcopy(item)
+
                 endpoint_translation = endpoint_guardrail_translation_mappings[
                     CallTypes(call_type)
                 ]()
 
-                processed_items = (
-                    await endpoint_translation.process_output_streaming_response(
-                        responses_so_far=responses_so_far,
-                        guardrail_to_apply=guardrail_to_apply,
-                        litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                        user_api_key_dict=user_api_key_dict,
-                    )
+                await endpoint_translation.process_output_streaming_response(
+                    responses_so_far=responses_so_far,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
                 )
 
-                last_item = processed_items[-1]
-
-                yield last_item
+                yield original_item
             else:
                 yield item
 

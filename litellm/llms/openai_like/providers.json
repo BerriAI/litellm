@@ -71,5 +71,20 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "gmi": {
+    "base_url": "https://api.gmi-serving.com/v1",
+    "api_key_env": "GMI_API_KEY"
+  },
+  "sarvam": {
+    "base_url": "https://api.sarvam.ai/v1",
+    "api_key_env": "SARVAM_API_KEY",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "headers": {
+      "api-subscription-key": "{api_key}"
+    }
   }
 }

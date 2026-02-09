@@ -3,6 +3,7 @@ ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
+
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -46,8 +47,9 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip
+# Install runtime dependencies (libsndfile needed for audio processing on ARM64)
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+    npm install -g npm@latest tar@latest
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -61,6 +63,10 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+# Replace the nodejs-wheel-binaries bundled node with the system node (fixes CVE-2025-55130)
+RUN NODEJS_WHEEL_NODE=$(find /usr/lib -path "*/nodejs_wheel/bin/node" 2>/dev/null) && \
+    if [ -n "$NODEJS_WHEEL_NODE" ]; then cp /usr/bin/node "$NODEJS_WHEEL_NODE"; fi
+
 # Remove test files and keys from dependencies
 RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
     find /usr/lib -type d -path "*/tornado/test" -delete
@@ -69,8 +75,8 @@ RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
 # Convert Windows line endings to Unix and make executable
 RUN sed -i 's/\r$//' docker/install_auto_router.sh && chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
-# Generate prisma client
-RUN prisma generate
+# Generate prisma client using the correct schema
+RUN prisma generate --schema=./litellm/proxy/schema.prisma
 # Convert Windows line endings to Unix for entrypoint scripts
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
 RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh

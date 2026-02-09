@@ -9,7 +9,7 @@ import json
 import os
 import re
 from enum import Enum
-from typing import Dict, List, Pattern
+from typing import Any, Dict, List, Pattern
 
 
 def _load_patterns_from_json() -> Dict:
@@ -39,6 +39,26 @@ PREBUILT_PATTERNS: Dict[str, str] = {
     pattern_data["name"]: pattern_data["pattern"]
     for pattern_data in _PATTERNS_DATA["patterns"]
 }
+
+
+# Capture any extra configuration declared per pattern (e.g., contextual keywords)
+KNOWN_PATTERN_KEYS = {
+    "name",
+    "display_name",
+    "pattern",
+    "category",
+    "action",
+    "description",
+}
+
+PATTERN_EXTRA_CONFIG: Dict[str, Dict[str, Any]] = {}
+for pattern_data in _PATTERNS_DATA["patterns"]:
+    extra_config = {
+        key: value
+        for key, value in pattern_data.items()
+        if key not in KNOWN_PATTERN_KEYS
+    }
+    PATTERN_EXTRA_CONFIG[pattern_data["name"]] = extra_config
 
 
 def get_compiled_pattern(pattern_name: str) -> Pattern:

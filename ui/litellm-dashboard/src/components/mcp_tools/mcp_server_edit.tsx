@@ -290,6 +290,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         static_headers: staticHeadersList,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
+        available_on_public_internet: availableOnPublicInternetRaw,
         ...restValues
       } = values;
 
@@ -345,6 +346,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
+        available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
       };
 
       const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
@@ -553,7 +555,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   />
                 </Form.Item>
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and save it as the authentication value.</p>
+                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
                   <Button
                     variant="secondary"
                     onClick={startOAuthFlow}

@@ -165,7 +165,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the complete url for the request
         """
-        bucket_name = litellm_params.get("bucket_name") or os.getenv("GCS_BUCKET_NAME")
+        bucket_name = litellm_params.get("bucket_name") or litellm_params.get("litellm_metadata", {}).pop("gcs_bucket_name", None) or os.getenv("GCS_BUCKET_NAME")
         if not bucket_name:
             raise ValueError("GCS bucket_name is required")
         file_data = data.get("file")

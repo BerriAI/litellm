@@ -268,6 +268,7 @@ class CustomGuardrail(CustomLogger):
         """
         Returns the guardrail(s) to be run from the metadata or root
         """
+
         if "guardrails" in data:
             return data["guardrails"]
         metadata = data.get("litellm_metadata") or data.get("metadata", {})
@@ -475,11 +476,18 @@ class CustomGuardrail(CustomLogger):
                 guardrail_config: DynamicGuardrailParams = DynamicGuardrailParams(
                     **guardrail[self.guardrail_name]
                 )
+                extra_body = guardrail_config.get("extra_body", {})
                 if self._validate_premium_user() is not True:
+                    if isinstance(extra_body, dict) and extra_body:
+                        verbose_logger.warning(
+                            "Guardrail %s: ignoring dynamic extra_body keys %s because premium_user is False",
+                            self.guardrail_name,
+                            list(extra_body.keys()),
+                        )
                     return {}
 
                 # Return the extra_body if it exists, otherwise empty dict
-                return guardrail_config.get("extra_body", {})
+                return extra_body
 
         return {}
 
@@ -516,7 +524,9 @@ class CustomGuardrail(CustomLogger):
         from litellm.types.utils import GuardrailMode
 
         # Use event_type if provided, otherwise fall back to self.event_hook
-        guardrail_mode: Union[GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]]
+        guardrail_mode: Union[
+            GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]
+        ]
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
@@ -524,11 +534,21 @@ class CustomGuardrail(CustomLogger):
         else:
             guardrail_mode = self.event_hook  # type: ignore[assignment]
 
+        from litellm.litellm_core_utils.core_helpers import (
+            filter_exceptions_from_params,
+        )
+
+        # Sanitize the response to ensure it's JSON serializable and free of circular refs
+        # This prevents RecursionErrors in downstream loggers (Langfuse, Datadog, etc.)
+        clean_guardrail_response = filter_exceptions_from_params(
+            guardrail_json_response
+        )
+
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
             guardrail_provider=guardrail_provider,
             guardrail_mode=guardrail_mode,
-            guardrail_response=guardrail_json_response,
+            guardrail_response=clean_guardrail_response,
             guardrail_status=guardrail_status,
             start_time=start_time,
             end_time=end_time,

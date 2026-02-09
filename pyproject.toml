@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.80.15"
+version = "1.81.9"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -45,7 +45,7 @@ orjson = {version = "^3.9.7", optional = true}
 apscheduler = {version = "^3.10.4", optional = true}
 fastapi-sso = { version = "^0.16.0", optional = true }
 PyJWT = { version = "^2.10.1", optional = true, python = ">=3.9" }
-python-multipart = { version = "^0.0.18", optional = true}
+python-multipart = { version = "^0.0.22", optional = true, python = ">=3.10"}
 cryptography = {version = "*", optional = true}
 prisma = {version = "0.11.0", optional = true}
 azure-identity = {version = "^1.15.0", optional = true, python = ">=3.9"}
@@ -53,15 +53,17 @@ azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 azure-storage-blob = {version="^12.25.1", optional=true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 google-cloud-iam = {version = "^2.19.1", optional = true}
+google-cloud-aiplatform = {version = ">=1.38.0", optional = true}
 resend = {version = ">=0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
 websockets = {version = "^15.0.1", optional = true}
-boto3 = {version = "1.36.0", optional = true}
+boto3 = { version = "1.40.76", optional = true }
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
-mcp = {version = "^1.21.2", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.21", optional = true}
+mcp = {version = ">=1.25.0,<2.0.0", optional = true, python = ">=3.10"}
+a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
+litellm-proxy-extras = {version = "0.4.33", optional = true}
 rich = {version = "13.7.1", optional = true}
-litellm-enterprise = {version = "0.1.27", optional = true}
+litellm-enterprise = {version = "0.1.31", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = ">=0.1.12", optional = true, python = ">=3.9,<3.14"}
@@ -72,8 +74,8 @@ soundfile = {version = "^0.12.1", optional = true}
 # - 1.68.0-1.68.1 has reconnect bug (https://github.com/grpc/grpc/issues/38290)
 # - 1.75.0+ has Python 3.14 wheels and bug fix
 grpcio = [
-    {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14"},
-    {version = ">=1.75.0", python = ">=3.14"},
+    {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14", optional = true},
+    {version = ">=1.75.0", python = ">=3.14", optional = true},
 ]
 
 [tool.poetry.extras]
@@ -111,7 +113,8 @@ extra_proxy = [
     "google-cloud-kms",
     "google-cloud-iam",
     "resend",
-    "redisvl"
+    "redisvl",
+    "a2a-sdk"
 ]
 
 utils = [
@@ -124,6 +127,9 @@ semantic-router = ["semantic-router"]
 
 mlflow = ["mlflow"]
 
+grpc = ["grpcio"]
+
+google = ["google-cloud-aiplatform"]
 
 [tool.isort]
 profile = "black"
@@ -133,23 +139,25 @@ litellm = 'litellm:run_server'
 litellm-proxy = 'litellm.proxy.client.cli:cli'
 
 [tool.poetry.group.dev.dependencies]
+diff-cover = "^9.0"
 flake8 = "^6.1.0"
 black = "^23.12.0"
 mypy = "^1.0"
 pytest = "^7.4.3"
 pytest-mock = "^3.12.0"
 pytest-asyncio = "^0.21.1"
+pytest-retry = "^1.6.3"
 requests-mock = "^1.12.1"
 responses = "^0.25.7"
 respx = "^0.22.0"
-ruff = "^0.1.0"
+ruff = "^0.2.1"
 types-requests = "*"
 types-setuptools = "*"
 types-redis = "*"
 types-PyYAML = "*"
-opentelemetry-api = "1.25.0"
-opentelemetry-sdk = "1.25.0"
-opentelemetry-exporter-otlp = "1.25.0"
+opentelemetry-api = "^1.28.0"
+opentelemetry-sdk = "^1.28.0"
+opentelemetry-exporter-otlp = "^1.28.0"
 langfuse = "^2.45.0"
 fastapi-offline = "^1.7.3"
 
@@ -157,9 +165,9 @@ fastapi-offline = "^1.7.3"
 prisma = "0.11.0"
 hypercorn = "^0.15.0"
 prometheus-client = "0.20.0"
-opentelemetry-api = "1.25.0"
-opentelemetry-sdk = "1.25.0"
-opentelemetry-exporter-otlp = "1.25.0"
+opentelemetry-api = "^1.28.0"
+opentelemetry-sdk = "^1.28.0"
+opentelemetry-exporter-otlp = "^1.28.0"
 azure-identity = {version = "^1.15.0", python = ">=3.9"}
 
 [build-system]
@@ -167,7 +175,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.80.15"
+version = "1.81.9"
 version_files = [
     "pyproject.toml:^version"
 ]
@@ -177,6 +185,8 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+retries = 20
+retry_delay = 5
 markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",

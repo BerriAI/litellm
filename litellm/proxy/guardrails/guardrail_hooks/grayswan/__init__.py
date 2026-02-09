@@ -46,6 +46,10 @@ def initialize_guardrail(
         streaming_sampling_rate=_get_config_value(
             litellm_params, optional_params, "streaming_sampling_rate"
         ) or 5,
+        fail_open=_get_config_value(litellm_params, optional_params, "fail_open"),
+        guardrail_timeout=_get_config_value(
+            litellm_params, optional_params, "guardrail_timeout"
+        ),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

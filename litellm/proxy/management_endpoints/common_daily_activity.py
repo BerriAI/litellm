@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from fastapi import HTTPException, status
 
@@ -336,6 +336,46 @@ async def get_api_key_metadata(
     }
 
 
+def _adjust_dates_for_timezone(
+    start_date: str,
+    end_date: str,
+    timezone_offset_minutes: Optional[int],
+) -> Tuple[str, str]:
+    """
+    Adjust date range to account for timezone differences.
+
+    The database stores dates in UTC. When a user in a different timezone
+    selects a local date range, we need to expand the UTC query range to
+    capture all records that fall within their local date range.
+
+    Args:
+        start_date: Start date in YYYY-MM-DD format (user's local date)
+        end_date: End date in YYYY-MM-DD format (user's local date)
+        timezone_offset_minutes: Minutes behind UTC (positive = west of UTC)
+            This matches JavaScript's Date.getTimezoneOffset() convention.
+            For example: PST = +480 (8 hours * 60 = 480 minutes behind UTC)
+
+    Returns:
+        Tuple of (adjusted_start_date, adjusted_end_date) in YYYY-MM-DD format
+    """
+    if timezone_offset_minutes is None or timezone_offset_minutes == 0:
+        return start_date, end_date
+
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    if timezone_offset_minutes > 0:
+        # West of UTC (Americas): local evening extends into next UTC day
+        # e.g., Feb 4 23:59 PST = Feb 5 07:59 UTC
+        end = end + timedelta(days=1)
+    else:
+        # East of UTC (Asia/Europe): local morning starts in previous UTC day
+        # e.g., Feb 4 00:00 IST = Feb 3 18:30 UTC
+        start = start - timedelta(days=1)
+
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
 def _build_where_conditions(
     *,
     entity_id_field: str,
@@ -343,21 +383,30 @@ def _build_where_conditions(
     start_date: str,
     end_date: str,
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     exclude_entity_ids: Optional[List[str]] = None,
+    timezone_offset_minutes: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Build prisma where clause for daily activity queries."""
+    # Adjust dates for timezone if provided
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes
+    )
+
     where_conditions: Dict[str, Any] = {
         "date": {
-            "gte": start_date,
-            "lte": end_date,
+            "gte": adjusted_start,
+            "lte": adjusted_end,
         }
     }
 
     if model:
         where_conditions["model"] = model
     if api_key:
-        where_conditions["api_key"] = api_key
+        if isinstance(api_key, list):
+            where_conditions["api_key"] = {"in": api_key}
+        else:
+            where_conditions["api_key"] = api_key
 
     if entity_id is not None:
         if isinstance(entity_id, list):
@@ -445,11 +494,12 @@ async def get_daily_activity(
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     page: int,
     page_size: int,
     exclude_entity_ids: Optional[List[str]] = None,
     metadata_metrics_func: Optional[Callable[[List[Any]], SpendMetrics]] = None,
+    timezone_offset_minutes: Optional[int] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
 
@@ -474,6 +524,7 @@ async def get_daily_activity(
             model=model,
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
+            timezone_offset_minutes=timezone_offset_minutes,
         )
 
         # Get total count for pagination
@@ -539,6 +590,7 @@ async def get_daily_activity_aggregated(
     model: Optional[str],
     api_key: Optional[str],
     exclude_entity_ids: Optional[List[str]] = None,
+    timezone_offset_minutes: Optional[int] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
@@ -565,6 +617,7 @@ async def get_daily_activity_aggregated(
             model=model,
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
+            timezone_offset_minutes=timezone_offset_minutes,
         )
 
         # Fetch all matching results (no pagination)

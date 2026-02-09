@@ -12,10 +12,30 @@ vi.mock("@/utils/proxyUtils", () => ({
   fetchProxySettings: vi.fn(),
 }));
 
+// Mock CommunityEngagementButtons component
+vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => ({
+  CommunityEngagementButtons: () => (
+    <div data-testid="community-engagement-buttons">
+      <a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer">
+        Join Slack
+      </a>
+      <a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer">
+        Star us on GitHub
+      </a>
+    </div>
+  ),
+}));
+
 // Create mock functions that can be controlled in tests
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessImpl = () => ({ data: null as any });
-let mockGetLocalStorageItemImpl = () => null as string | null;
+let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
+let mockUseAuthorizedImpl = () => ({
+  userId: "test-user",
+  userEmail: "test@example.com",
+  userRole: "Admin",
+  premiumUser: false,
+});
 
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
@@ -25,8 +45,13 @@ vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness", () => ({
   useHealthReadiness: () => mockUseHealthReadinessImpl(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => mockUseAuthorizedImpl(),
+}));
+
 vi.mock("@/utils/localStorageUtils", () => ({
-  getLocalStorageItem: () => mockGetLocalStorageItemImpl(),
+  LOCAL_STORAGE_EVENT: "local-storage-change",
+  getLocalStorageItem: (key: string) => mockGetLocalStorageItemImpl(key),
   setLocalStorageItem: vi.fn(),
   removeLocalStorageItem: vi.fn(),
   emitLocalStorageChange: vi.fn(),
@@ -52,6 +77,8 @@ describe("Navbar", () => {
     setProxySettings: vi.fn(),
     accessToken: "test-token",
     isPublicPage: false,
+    isDarkMode: false,
+    toggleDarkMode: vi.fn(),
   };
 
   it("should render without crashing", () => {
@@ -95,13 +122,26 @@ describe("Navbar", () => {
 
   it("should show premium user badge when premiumUser is true", async () => {
     const user = userEvent.setup();
-    const premiumProps = { ...defaultProps, premiumUser: true };
-    renderWithProviders(<Navbar {...premiumProps} />);
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user",
+      userEmail: "test@example.com",
+      userRole: "Admin",
+      premiumUser: true,
+    });
+    renderWithProviders(<Navbar {...defaultProps} />);
 
     await user.click(screen.getByText("User"));
 
     await waitFor(() => {
       expect(screen.getByText("Premium")).toBeInTheDocument();
+    });
+
+    // Reset mock
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user",
+      userEmail: "test@example.com",
+      userRole: "Admin",
+      premiumUser: false,
     });
   });
 
@@ -139,7 +179,10 @@ describe("Navbar", () => {
     const user = userEvent.setup();
 
     // Initially disabled
-    mockGetLocalStorageItemImpl = () => "false";
+    mockGetLocalStorageItemImpl = (key: string) => {
+      if (key === "disableShowNewBadge") return "false";
+      return null;
+    };
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
@@ -158,6 +201,9 @@ describe("Navbar", () => {
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
     expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowNewBadge", "true");
     expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowNewBadge");
+
+    // Reset mock
+    mockGetLocalStorageItemImpl = (key: string) => null;
   });
 
   it("should handle logout functionality", async () => {
@@ -177,5 +223,12 @@ describe("Navbar", () => {
     const cookieUtils = vi.mocked(await import("@/utils/cookieUtils"));
     expect(cookieUtils.clearTokenCookies).toHaveBeenCalled();
     expect(window.location.href).toBe("");
+  });
+
+  it("should not render dark mode toggle slider", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    // DO NOT RENDER THIS UNTIL ALL COMPONENTS ARE CONFIRMED TO SUPPORT DARK MODE STYLES. IT IS AN ISSUE IF THIS TEST FAILS.
+    expect(screen.queryByTestId("dark-mode-toggle")).not.toBeInTheDocument();
   });
 });
