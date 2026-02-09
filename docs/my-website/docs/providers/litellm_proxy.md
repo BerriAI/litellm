@@ -227,6 +227,28 @@ response = litellm.completion(
 )
 ```
 
+## OAuth2/JWT Authentication
+
+If your LiteLLM Proxy requires OAuth2/JWT authentication (e.g., Azure AD, Keycloak, Okta), the SDK can automatically obtain and refresh tokens for you.
+
+```python
+import litellm
+from litellm.proxy_auth import AzureADCredential, ProxyAuthHandler
+
+litellm.proxy_auth = ProxyAuthHandler(
+    credential=AzureADCredential(),
+    scope="api://my-litellm-proxy/.default"
+)
+litellm.api_base = "https://my-proxy.example.com"
+
+response = litellm.completion(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+[Learn more about SDK Proxy Authentication (OAuth2/JWT Auto-Refresh) →](../proxy_auth)
+
 ## Sending `tags` to LiteLLM Proxy
 
 Tags allow you to categorize and track your API requests for monitoring, debugging, and analytics purposes. You can send tags as a list of strings to the LiteLLM Proxy using the `extra_body` parameter.
