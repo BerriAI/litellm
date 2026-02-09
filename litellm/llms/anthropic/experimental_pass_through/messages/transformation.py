@@ -46,6 +46,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "thinking",
             "context_management",
             "output_format",
+            "output_config",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
