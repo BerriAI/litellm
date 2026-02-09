@@ -5,12 +5,24 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
-from datetime import datetime
 import traceback
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast, Callable
+from datetime import datetime
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
+
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
+from starlette.requests import Request as StarletteRequest
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
@@ -25,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
@@ -213,6 +226,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
@@ -276,6 +290,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
+            _client_ip,
         ) = get_auth_context()
 
         verbose_logger.debug(
@@ -288,7 +303,7 @@ if MCP_AVAILABLE:
                 host_token = getattr(host_ctx.meta, 'progressToken', None)
                 if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
                     host_session = host_ctx.session
-                    
+
                     async def forward_progress(progress: float, total: float | None):
                         """Forward progress notifications from external MCP to Host"""
                         try:
@@ -300,7 +315,7 @@ if MCP_AVAILABLE:
                             verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
                         except Exception as e:
                             verbose_logger.error(f"Failed to forward progress to Host: {e}")
-                    
+
                     host_progress_callback = forward_progress
                     verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
         except Exception as e:
@@ -387,6 +402,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_prompts - User API Key Auth from context: {user_api_key_auth}"
@@ -440,6 +456,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
+            _client_ip,
         ) = get_auth_context()
 
         verbose_logger.debug(
@@ -467,6 +484,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_resources - User API Key Auth from context: {user_api_key_auth}"
@@ -505,6 +523,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                _client_ip,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_resource_templates - User API Key Auth from context: {user_api_key_auth}"
@@ -544,6 +563,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
+            _client_ip,
         ) = get_auth_context()
 
         read_resource_result = await mcp_read_resource(
@@ -702,13 +722,57 @@ if MCP_AVAILABLE:
 
         return tools_to_return
 
+    def _get_client_ip_from_context() -> Optional[str]:
+        """
+        Extract client_ip from auth context.
+        Returns None if context not set (caller should handle this as "no IP filtering").
+        """
+        try:
+            auth_user = auth_context_var.get()
+            if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
+                return auth_user.client_ip
+        except Exception:
+            pass
+        return None
+
     async def _get_allowed_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
+        client_ip: Optional[str] = None,
     ) -> List[MCPServer]:
-        """Return allowed MCP servers for a request after applying filters."""
+        """Return allowed MCP servers for a request after applying filters.
+
+        Args:
+            user_api_key_auth: The authenticated user's API key info.
+            mcp_servers: Optional list of server names to filter to.
+            client_ip: Client IP for IP-based access control. If None, falls back to
+                      auth context. Pass explicitly from request handlers for safety.
+        Note: If client_ip is None and auth context is not set, IP filtering is skipped.
+              This is intentional for internal callers but may indicate a bug if called
+              from a request handler without proper context setup.
+        """
+        # Use explicit client_ip if provided, otherwise try auth context
+        if client_ip is None:
+            client_ip = _get_client_ip_from_context()
+            if client_ip is None:
+                verbose_logger.debug(
+                    "MCP _get_allowed_mcp_servers called without client_ip and no auth context. "
+                    "IP filtering will be skipped. This is expected for internal calls."
+                )
+
         allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+            await global_mcp_server_manager.get_allowed_mcp_servers(
+                user_api_key_auth
+            )
+        )
+        allowed_mcp_server_ids = (
+            global_mcp_server_manager.filter_server_ids_by_ip(
+                allowed_mcp_server_ids, client_ip
+            )
+        )
+        verbose_logger.debug(
+            "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
+            client_ip, allowed_mcp_server_ids,
         )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
@@ -1715,7 +1779,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
-        host_progress_callback: Optional[Callable] = None, 
+        host_progress_callback: Optional[Callable] = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -1891,6 +1955,10 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+
+            # Extract client IP for MCP access control
+            _client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
+
             verbose_logger.debug(
                 f"MCP request mcp_servers (header/path): {mcp_servers}"
             )
@@ -1899,11 +1967,11 @@ if MCP_AVAILABLE:
             )
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             for server_name in mcp_servers or []:
-                server = global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name, client_ip=_client_ip
+                )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    from starlette.requests import Request
-
-                    request = Request(scope)
+                    request = StarletteRequest(scope)
                     base_url = str(request.base_url).rstrip("/")
 
                     authorization_uri = (
@@ -1925,6 +1993,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
             )
 
             # Ensure session managers are initialized
@@ -1936,12 +2005,13 @@ if MCP_AVAILABLE:
             _strip_stale_mcp_session_header(scope, session_manager)
 
             await session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            # Re-raise HTTP exceptions to preserve status codes and details
+            raise
         except Exception as e:
-            raise e
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Instead of re-raising, try to send a graceful error response
+            # Try to send a graceful error response for non-HTTP exceptions
             try:
-                # Send a proper HTTP error response instead of letting the exception bubble up
                 from starlette.responses import JSONResponse
                 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
@@ -1969,6 +2039,10 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+
+            # Extract client IP for MCP access control
+            _sse_client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
+
             verbose_logger.debug(
                 f"MCP request mcp_servers (header/path): {mcp_servers}"
             )
@@ -1982,6 +2056,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_sse_client_ip,
             )
 
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -2045,6 +2120,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> None:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -2054,6 +2130,7 @@ if MCP_AVAILABLE:
             mcp_auth_header: MCP auth header to be passed to the MCP server (deprecated)
             mcp_servers: Optional list of server names and access groups to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            client_ip: Client IP address for MCP access control
         """
         auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
@@ -2062,6 +2139,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         auth_context_var.set(auth_user)
 
@@ -2073,14 +2151,15 @@ if MCP_AVAILABLE:
             Optional[Dict[str, Dict[str, str]]],
             Optional[Dict[str, str]],
             Optional[Dict[str, str]],
+            Optional[str],
         ]
     ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 
         Returns:
-            Tuple[Optional[UserAPIKeyAuth], Optional[str], Optional[List[str]], Optional[Dict[str, str]]]:
-            UserAPIKeyAuth object, MCP auth header (deprecated), MCP servers (can include access groups), and server-specific auth headers
+            Tuple containing: UserAPIKeyAuth, MCP auth header (deprecated),
+            MCP servers, server-specific auth headers, OAuth2 headers, raw headers, client IP
         """
         auth_user = auth_context_var.get()
         if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
@@ -2091,8 +2170,9 @@ if MCP_AVAILABLE:
                 auth_user.mcp_server_auth_headers,
                 auth_user.oauth2_headers,
                 auth_user.raw_headers,
+                auth_user.client_ip,
             )
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None
 
     ########################################################
     ############ End of Auth Context Functions #############

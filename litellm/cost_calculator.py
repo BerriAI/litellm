@@ -1,5 +1,6 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
+import logging
 import time
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
@@ -774,10 +775,11 @@ def _apply_cost_discount(
         discount_amount = original_cost * discount_percent
         final_cost = original_cost - discount_amount
 
-        verbose_logger.debug(
-            f"Applied {discount_percent*100}% discount to {custom_llm_provider}: "
-            f"${original_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"Applied {discount_percent*100}% discount to {custom_llm_provider}: "
+                f"${original_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
+            )
 
         return final_cost, discount_percent, discount_amount
 
@@ -807,17 +809,20 @@ def _apply_cost_margin(
     margin_config = None
     if custom_llm_provider and custom_llm_provider in litellm.cost_margin_config:
         margin_config = litellm.cost_margin_config[custom_llm_provider]
-        verbose_logger.debug(
-            f"Found provider-specific margin config for {custom_llm_provider}: {margin_config}"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"Found provider-specific margin config for {custom_llm_provider}: {margin_config}"
+            )
     elif "global" in litellm.cost_margin_config:
         margin_config = litellm.cost_margin_config["global"]
-        verbose_logger.debug(f"Using global margin config: {margin_config}")
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(f"Using global margin config: {margin_config}")
     else:
-        verbose_logger.debug(
-            f"No margin config found. Provider: {custom_llm_provider}, "
-            f"Available configs: {list(litellm.cost_margin_config.keys())}"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"No margin config found. Provider: {custom_llm_provider}, "
+                f"Available configs: {list(litellm.cost_margin_config.keys())}"
+            )
 
     if margin_config is not None:
         # Handle different margin config formats
@@ -836,11 +841,12 @@ def _apply_cost_margin(
 
         final_cost = original_cost + margin_total_amount
 
-        verbose_logger.debug(
-            f"Applied margin to {custom_llm_provider or 'global'}: "
-            f"${original_cost:.6f} -> ${final_cost:.6f} "
-            f"(margin: {margin_percent*100 if margin_percent > 0 else 0}% + ${margin_fixed_amount:.6f} = ${margin_total_amount:.6f})"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"Applied margin to {custom_llm_provider or 'global'}: "
+                f"${original_cost:.6f} -> ${final_cost:.6f} "
+                f"(margin: {margin_percent*100 if margin_percent > 0 else 0}% + ${margin_fixed_amount:.6f} = ${margin_total_amount:.6f})"
+            )
 
         return final_cost, margin_percent, margin_fixed_amount, margin_total_amount
 
@@ -1021,9 +1027,10 @@ def completion_cost(  # noqa: PLR0915
 
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.debug(
-                    f"selected model name for cost calculation: {model}"
-                )
+                if verbose_logger.isEnabledFor(logging.DEBUG):
+                    verbose_logger.debug(
+                        f"selected model name for cost calculation: {model}"
+                    )
 
                 if completion_response is not None and (
                     isinstance(completion_response, BaseModel)
@@ -1411,37 +1418,47 @@ def completion_cost(  # noqa: PLR0915
 
                 # Apply discount from module-level config if configured
                 original_cost = _final_cost
-                _final_cost, discount_percent, discount_amount = _apply_cost_discount(
-                    base_cost=_final_cost,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if litellm.cost_discount_config:
+                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                else:
+                    discount_percent = 0.0
+                    discount_amount = 0.0
 
                 # Apply margin from module-level config if configured
-                (
-                    _final_cost,
-                    margin_percent,
-                    margin_fixed_amount,
-                    margin_total_amount,
-                ) = _apply_cost_margin(
-                    base_cost=_final_cost,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if litellm.cost_margin_config:
+                    (
+                        _final_cost,
+                        margin_percent,
+                        margin_fixed_amount,
+                        margin_total_amount,
+                    ) = _apply_cost_margin(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                else:
+                    margin_percent = 0.0
+                    margin_fixed_amount = 0.0
+                    margin_total_amount = 0.0
 
                 # Store cost breakdown in logging object if available
-                _store_cost_breakdown_in_logging_obj(
-                    litellm_logging_obj=litellm_logging_obj,
-                    prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
-                    completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
-                    cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
-                    total_cost_usd_dollar=_final_cost,
-                    additional_costs=additional_costs,
-                    original_cost=original_cost,
-                    discount_percent=discount_percent,
-                    discount_amount=discount_amount,
-                    margin_percent=margin_percent,
-                    margin_fixed_amount=margin_fixed_amount,
-                    margin_total_amount=margin_total_amount,
-                )
+                if litellm_logging_obj is not None:
+                    _store_cost_breakdown_in_logging_obj(
+                        litellm_logging_obj=litellm_logging_obj,
+                        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+                        completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+                        cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
+                        total_cost_usd_dollar=_final_cost,
+                        original_cost=original_cost,
+                        additional_costs=additional_costs,
+                        discount_percent=discount_percent,
+                        discount_amount=discount_amount,
+                        margin_percent=margin_percent,
+                        margin_fixed_amount=margin_fixed_amount,
+                        margin_total_amount=margin_total_amount,
+                    )
 
                 return _final_cost
             except Exception as e:
@@ -2116,3 +2133,5 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
+
+

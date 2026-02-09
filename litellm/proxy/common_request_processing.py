@@ -267,7 +267,9 @@ def _override_openai_response_model(
     hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
     if isinstance(hidden_params, dict):
         fallback_headers = hidden_params.get("additional_headers", {}) or {}
-        attempted_fallbacks = fallback_headers.get("x-litellm-attempted-fallbacks", None)
+        attempted_fallbacks = fallback_headers.get(
+            "x-litellm-attempted-fallbacks", None
+        )
         if attempted_fallbacks is not None and attempted_fallbacks > 0:
             # A fallback occurred - preserve the actual model that was used
             verbose_proxy_logger.debug(
@@ -517,6 +519,8 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
+            "asend_message",
+            "call_mcp_tool",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -615,6 +619,23 @@ class ProxyBaseLLMRequestProcessing:
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
+
+        # Apply hierarchical router_settings (Key > Team)
+        # Global router_settings are already on the Router object itself.
+        if llm_router is not None and proxy_config is not None:
+            from litellm.proxy.proxy_server import prisma_client
+
+            router_settings = await proxy_config._get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+            # If router_settings found (from key or team), apply them
+            # Pass settings as per-request overrides instead of creating a new Router
+            # This avoids expensive Router instantiation on each request
+            if router_settings is not None:
+                self.data["router_settings_override"] = router_settings
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
@@ -820,7 +841,9 @@ class ProxyBaseLLMRequestProcessing:
             # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
             # what the client sent.
             if requested_model_from_client:
-                self.data["_litellm_client_requested_model"] = requested_model_from_client
+                self.data["_litellm_client_requested_model"] = (
+                    requested_model_from_client
+                )
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -1392,9 +1415,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

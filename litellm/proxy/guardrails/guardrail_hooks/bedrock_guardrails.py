@@ -1361,7 +1361,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
 
                 # Apply any masking that was applied by the guardrail
-
                 output_list = bedrock_response.get("output")
                 if output_list:
                     # If the guardrail returned modified content, use that
@@ -1392,6 +1391,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             inputs["texts"] = masked_texts
             return inputs
 
+        except (HTTPException, GuardrailInterventionNormalStringError):
+            # Let guardrail blocking exceptions propagate as-is so the proxy
+            # can return the correct HTTP status (400) or handle the
+            # GuardrailInterventionNormalStringError for disable_exception_on_block mode.
+            # Without this, the generic except below wraps them into a plain
+            # Exception, losing the HTTP semantics and preventing the proxy
+            # from properly blocking the call.
+            raise
         except Exception as e:
             verbose_proxy_logger.error(
                 "Bedrock Guardrail: Failed to apply guardrail: %s", str(e)

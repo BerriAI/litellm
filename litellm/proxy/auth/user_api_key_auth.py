@@ -1149,6 +1149,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
                     team_id=valid_token.team_id,
                     max_budget=valid_token.team_max_budget,
+                    soft_budget=valid_token.team_soft_budget,
                     spend=valid_token.team_spend,
                     tpm_limit=valid_token.team_tpm_limit,
                     rpm_limit=valid_token.team_rpm_limit,

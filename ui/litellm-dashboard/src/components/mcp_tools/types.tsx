@@ -153,6 +153,7 @@ export interface MCPServer {
   mcp_access_groups?: string[];
   allowed_tools?: string[];
   allow_all_keys?: boolean;
+  available_on_public_internet?: boolean;
 }
 
 export interface MCPServerProps {

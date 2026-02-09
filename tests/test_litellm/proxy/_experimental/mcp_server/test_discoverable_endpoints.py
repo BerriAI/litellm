@@ -3,6 +3,23 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
+# Fixture to mock IP address check for all MCP tests
+# This prevents tests from failing due to IP-based access control
+@pytest.fixture(autouse=True)
+def mock_mcp_client_ip():
+    """Mock IPAddressUtils.get_mcp_client_ip to return None for all tests.
+    
+    This bypasses IP-based access control in tests, since the MCP server's
+    available_on_public_internet defaults to False and mock requests don't
+    have proper client IP context.
+    """
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
+        return_value=None,
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_authorize_endpoint_includes_response_type():
     """Test that authorize endpoint includes response_type=code parameter (fixes #15684)"""
