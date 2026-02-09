@@ -86,16 +86,18 @@ class TestSAPTransformationIntegration:
         ]
 
         for i, test_case in enumerate(test_cases):
-            filtered_params = {
-                k: v for k, v in test_case["params"].items()
-                if k not in {"tools", "model_version", "deployment_url"}
-            }
+            result = mock_config.transform_request(
+                model, messages, test_case["params"], {}, {}
+            )
+            
+            if result and "config" in result:
+                model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
+                
+                for expected_param in test_case["expected_in_model"]:
+                    assert expected_param in model_params, f"Case {i + 1}: {expected_param} should be in model params"
 
-            for expected_param in test_case["expected_in_model"]:
-                assert expected_param in filtered_params, f"Case {i + 1}: {expected_param} should be in model params"
-
-            for excluded_param in test_case["expected_excluded"]:
-                assert excluded_param not in filtered_params, f"Case {i + 1}: {excluded_param} should be excluded from model params"
+                for excluded_param in test_case["expected_excluded"]:
+                    assert excluded_param not in model_params, f"Case {i + 1}: {excluded_param} should be excluded from model params"
 
             try:
                 result = mock_config.transform_request(
