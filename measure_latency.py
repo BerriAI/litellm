@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Measure /chat/completions latency against the LiteLLM proxy."""
 
-""
-
+import argparse
 import asyncio
 import random
 import time
@@ -15,6 +14,11 @@ What makes this file be capable of reproducing the latency issue when using prom
 2. Don't send too many requests at once but don't be too slow either.
 3. Passing a user_id to call makes the issue more reproducible.
 4. Sending the requests in waves makes the issue more reproducible.
+
+USER_MODES:
+- random: each user gets a random 10-digit ID (default, most reproducible for Prometheus)
+- sequential: each user gets sequential ID (1, 2, 3, ...) - fewer cache misses
+- none: no user field in payload - skips end_user lookup entirely
 """
 
 # -----------------------------------------------------------------------------
@@ -23,8 +27,8 @@ What makes this file be capable of reproducing the latency issue when using prom
 BASE_URL = "http://localhost:4000"
 API_KEY = "sk-1234"
 MODEL = "gpt-o1"  # must match a model_name in your proxy config (e.g. test_config_123.yaml)
-NUM_REQUESTS = 5000
-NUM_CONCURRENT = 50  # Concurrent users; each has one connection, reuses it for their requests
+NUM_REQUESTS = 1000
+NUM_CONCURRENT = 100  # Concurrent users; each has one connection, reuses it for their requests
 MESSAGES = [{"role": "user", "content": "Say hello in one word."}]
 TIMEOUT = 30000.0
 # -----------------------------------------------------------------------------
@@ -56,7 +60,21 @@ async def run_user(
             print(f"  {status} User {user_id} request {req_num:3d}: {lat:.3f}s", flush=True)
 
 
-async def main() -> None:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Measure /chat/completions latency against the LiteLLM proxy."
+    )
+    parser.add_argument(
+        "--user-mode",
+        choices=["random", "sequential", "none"],
+        default="random",
+        help="random: random user IDs (default, most reproducible for Prometheus); "
+        "sequential: 1,2,3,... (fewer cache misses); none: no user in payload",
+    )
+    return parser.parse_args()
+
+
+async def main(user_mode: str = "random") -> None:
     base_url = BASE_URL.rstrip("/")
     path = "/chat/completions"
 
@@ -69,6 +87,7 @@ async def main() -> None:
     remainder = NUM_REQUESTS - base_per_user * NUM_CONCURRENT
 
     print(f"=== {NUM_REQUESTS} requests, {NUM_CONCURRENT} users, fire-as-fast-as-possible ===", flush=True)
+    print(f"User mode: {user_mode}", flush=True)
     print("Latency = time from request start until last byte of response received", flush=True)
 
     _results.clear()
@@ -76,8 +95,12 @@ async def main() -> None:
     for user_idx in range(1, NUM_CONCURRENT + 1):
         count = base_per_user + (1 if user_idx <= remainder else 0)
         if count > 0:
-            user_id = str(random.randint(1000000000, 9999999999))
-            payload = {"model": MODEL, "messages": MESSAGES, "user": user_id}
+            if user_mode == "none":
+                payload = {"model": MODEL, "messages": MESSAGES}
+            elif user_mode == "sequential":
+                payload = {"model": MODEL, "messages": MESSAGES, "user": str(user_idx)}
+            else:  # random (default)
+                payload = {"model": MODEL, "messages": MESSAGES, "user": str(random.randint(1000000000, 9999999999))}
             tasks.append(asyncio.create_task(run_user(user_idx, count, base_url, path, payload, headers)))
     await asyncio.gather(*tasks)
 
@@ -109,4 +132,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    args = parse_args()
+    asyncio.run(main(user_mode=args.user_mode))
