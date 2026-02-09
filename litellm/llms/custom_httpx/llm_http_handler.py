@@ -438,7 +438,7 @@ class BaseLLMHTTPHandler:
                     provider_config=provider_config,
                     fake_stream=fake_stream,
                 )
-                response = self.acompletion_stream_function(
+                return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
                     api_base=api_base,
