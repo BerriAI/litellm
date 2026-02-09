@@ -97,6 +97,11 @@ const sidebars = {
       ]
     },
     {
+      type: "doc",
+      id: "integrations/websearch_interception",
+      label: "Web Search Integration"
+    },
+    {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
