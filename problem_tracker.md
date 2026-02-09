@@ -235,9 +235,17 @@ The latency spike is high regardless of whether a user is passed to the payload 
 ### Use a local LLM mock provider
 
 - [x] User none + caching true → `user_none_1_request_per_user_local_llm_cache_on.txt`
+- [x] User none + caching false → `user_none_1_request_per_user_local_llm_cache_off.txt`
 
 | Config | File | avg | p95 | max | Above 1s |
 |--------|------|-----|-----|-----|----------|
 | User none, local LLM (localhost:8090), cache ON | `user_none_1_request_per_user_local_llm_cache_on.txt` | 15.204s | 26.543s | 27.706s | 100% |
+| User none, local LLM (localhost:8090), cache OFF | `user_none_1_request_per_user_local_llm_cache_off.txt` | 15.449s | 26.317s | 27.430s | 100% |
 
-**Note:** With cache ON and user none, all 100 requests share the same cache key (same model + messages). Most requests are served from cache; only 1–2 requests reach the local LLM mock. Latency remains high (~15s avg) due to cache lookup and the few requests that hit the LLM.
+---
+
+## What we know so far
+
+1. **User parameter has no impact** - Passing a user to the request payload doesn't affect first request latency
+2. **Cache has no impact** - Response caching ON vs OFF shows identical performance (~15s avg)
+3. **Latency is proxy overhead** - 15s average suggests infrastructure (DB, Redis, auth) is the bottleneck, not LLM calls since the LLM server is running locally.

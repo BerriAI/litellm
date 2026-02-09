@@ -55,12 +55,12 @@ general_settings:
 #################################
 litellm_settings:
   # Cache
-  cache: true
+  cache: false
   # NOTE: MANAGED BY CCoE
   cache_params:
     type: redis
     host: "os.environ/REDIS_HOST"
-    port: 17950
+    port: "os.environ/REDIS_PORT"
     username: default
     password: "os.environ/REDIS_PASSWORD"
   
