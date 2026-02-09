@@ -360,6 +360,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     context_management: Optional[Dict[str, Any]]
     container: Optional[Dict[str, Any]]  # Container config with skills for code execution
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
+    output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
