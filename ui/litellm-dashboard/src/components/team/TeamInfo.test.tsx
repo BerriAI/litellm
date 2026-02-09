@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
-import TeamInfoView from "./team_info";
+import TeamInfoView from "./TeamInfo";
 
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
@@ -40,7 +40,7 @@ vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
 }));
 
-vi.mock("@/components/team/team_member_view", () => ({
+vi.mock("@/components/team/TeamMemberTab", () => ({
   default: vi.fn(({ setIsAddMemberModalVisible }) => (
     <div>
       <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
@@ -83,10 +83,6 @@ vi.mock("@/components/common_components/DeleteResourceModal", () => ({
       </div>
     ) : null
   ),
-}));
-
-vi.mock("@/components/team/member_permissions", () => ({
-  default: vi.fn(() => <div>Member Permissions</div>),
 }));
 
 vi.mock("@/components/team/member_permissions", () => ({
@@ -335,10 +331,10 @@ describe("TeamInfoView", () => {
     await user.click(settingsTab);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    const editButton = screen.getByRole("button", { name: "Edit Settings" });
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
     await user.click(editButton);
 
     await waitFor(() => {
@@ -361,17 +357,17 @@ describe("TeamInfoView", () => {
     await user.click(settingsTab);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    const editButton = screen.getByRole("button", { name: "Edit Settings" });
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
     await user.click(editButton);
 
     await waitFor(() => {
       expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
     });
 
-    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    const cancelButton = screen.getByRole("button", { name: /cancel/i });
     await user.click(cancelButton);
 
     await waitFor(() => {
@@ -438,10 +434,10 @@ describe("TeamInfoView", () => {
     await user.click(settingsTab);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    const editButton = screen.getByRole("button", { name: "Edit Settings" });
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
     await user.click(editButton);
 
     const secretField = await screen.findByPlaceholderText(
@@ -472,10 +468,10 @@ describe("TeamInfoView", () => {
     await user.click(settingsTab);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    const editButton = screen.getByRole("button", { name: "Edit Settings" });
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
     await user.click(editButton);
 
     const secretField = await screen.findByPlaceholderText(
@@ -502,10 +498,10 @@ describe("TeamInfoView", () => {
     await user.click(membersTab);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Add Member" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /add member/i })).toBeInTheDocument();
     });
 
-    const addButton = screen.getByRole("button", { name: "Add Member" });
+    const addButton = screen.getByRole("button", { name: /add member/i });
     await user.click(addButton);
 
     await waitFor(() => {
@@ -601,6 +597,47 @@ describe("TeamInfoView", () => {
       expect(screen.getByText(/Soft Budget:/)).toBeInTheDocument();
       expect(screen.getByText(/\$500\.75/)).toBeInTheDocument();
     });
+  });
+
+  it("should open Settings tab by default when editTeam is true and user can edit", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} editTeam={true} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getByText("Team Settings")).toBeInTheDocument();
+  });
+
+  it("should open Overview tab by default when editTeam is false", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} editTeam={false} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getByText("Budget Status")).toBeInTheDocument();
+  });
+
+  it("should open Overview tab by default when editTeam is true but user cannot edit", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(
+      <TeamInfoView {...defaultProps} editTeam={true} is_team_admin={false} is_proxy_admin={false} />
+    );
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getByText("Budget Status")).toBeInTheDocument();
   });
 
   it("should display soft budget alerting emails in settings view when present", async () => {
