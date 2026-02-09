@@ -3,9 +3,11 @@ This module is used to generate MCP tools from OpenAPI specs.
 """
 
 import json
+import httpx
 from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 from urllib.parse import quote
+from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -45,8 +47,15 @@ def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
 
 
 def load_openapi_spec(filepath: str) -> Dict[str, Any]:
-    """Load OpenAPI specification from JSON file."""
-    with open(filepath, "r") as f:
+    """Load OpenAPI specification from JSON file or URL."""
+    parsed = urlparse(filepath)
+    if parsed.scheme in ("http", "https"):
+        # fetch spec from URL
+        r = httpx.get(filepath, timeout=30.0)
+        r.raise_for_status()
+        return r.json()
+    # fallback: local file
+    with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
