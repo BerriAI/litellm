@@ -136,7 +136,10 @@ class BaseConfig(ABC):
         """
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
         if is_thinking_enabled and ("max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params):
-            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
+            thinking_params = optional_params.get("thinking")
+            if not isinstance(thinking_params, dict):
+                return
+            thinking_token_budget = thinking_params.get(
                 "budget_tokens", None
             )
             if thinking_token_budget is not None:
