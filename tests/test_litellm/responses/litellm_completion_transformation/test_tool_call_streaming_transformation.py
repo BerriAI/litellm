@@ -229,3 +229,164 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     assert sequence_numbers == sorted(sequence_numbers)
     assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
 
+
+def test_tool_call_delta_without_id_uses_index_mapping():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    chunks = [
+        [
+            {
+                "index": 0,
+                "id": "call_abc123",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"lo'},
+            }
+        ],
+        [{"index": 0, "type": "function", "function": {"arguments": 'cation":'}}],
+        [{"index": 0, "type": "function", "function": {"arguments": ' "New'}}],
+        [{"index": 0, "type": "function", "function": {"arguments": ' York"}'}}],
+    ]
+
+    for tool_calls in chunks:
+        iterator._queue_tool_call_delta_events(tool_calls)
+
+    all_events = []
+    while iterator._pending_tool_events:
+        all_events.append(iterator._pending_tool_events.pop(0))
+
+    delta_events = [
+        evt
+        for evt in all_events
+        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ]
+    streamed_arguments = "".join(evt.delta for evt in delta_events)
+
+    assert streamed_arguments == '{"location": "New York"}'
+
+    output_item_added_events = [
+        evt
+        for evt in all_events
+        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert len(output_item_added_events) == 1
+    assert output_item_added_events[0].item.id == "call_abc123"
+
+
+def test_parallel_tool_calls_without_ids_use_index_mapping():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": '{"x":'},
+            },
+            {
+                "index": 1,
+                "id": "call_b",
+                "type": "function",
+                "function": {"name": "tool_b", "arguments": '{"y":'},
+            },
+        ]
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {"index": 0, "type": "function", "function": {"arguments": "1}"}},
+            {"index": 1, "type": "function", "function": {"arguments": "2}"}},
+        ]
+    )
+
+    all_events = []
+    while iterator._pending_tool_events:
+        all_events.append(iterator._pending_tool_events.pop(0))
+
+    output_item_added_events = [
+        evt
+        for evt in all_events
+        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert len(output_item_added_events) == 2
+
+    delta_events = [
+        evt
+        for evt in all_events
+        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ]
+    arguments_by_call_id = {}
+    for evt in delta_events:
+        arguments_by_call_id.setdefault(evt.item_id, "")
+        arguments_by_call_id[evt.item_id] += evt.delta
+
+    assert arguments_by_call_id["call_a"] == '{"x":1}'
+    assert arguments_by_call_id["call_b"] == '{"y":2}'
+
+
+def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": '{"a":'},
+            }
+        ]
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_b",
+                "type": "function",
+                "function": {"name": "tool_b", "arguments": '{"b":'},
+            }
+        ]
+    )
+    # Ambiguous chunk: index reused and id missing. We should skip fallback rather than misroute.
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "type": "function",
+                "function": {"arguments": "1}"},
+            }
+        ]
+    )
+
+    all_events = []
+    while iterator._pending_tool_events:
+        all_events.append(iterator._pending_tool_events.pop(0))
+
+    delta_events = [
+        evt
+        for evt in all_events
+        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ]
+    arguments_by_call_id = {}
+    for evt in delta_events:
+        arguments_by_call_id.setdefault(evt.item_id, "")
+        arguments_by_call_id[evt.item_id] += evt.delta
+
+    assert arguments_by_call_id["call_a"] == '{"a":'
+    assert arguments_by_call_id["call_b"] == '{"b":'
+    assert arguments_by_call_id["call_a"] != '{"a":1}'
+    assert arguments_by_call_id["call_b"] != '{"b":1}'

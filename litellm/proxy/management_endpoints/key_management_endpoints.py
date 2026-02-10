@@ -3789,7 +3789,7 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        if user_id is None and user_api_key_dict.user_role not in [
+        if not user_id and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]:
@@ -4659,10 +4659,16 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
             for _model, _budget_info in model_max_budget.items():
                 assert isinstance(_model, str)
 
+                # Normalize to dict (Pydantic may already parse nested values as BudgetConfig)
+                _info = (
+                    _budget_info.model_dump()
+                    if hasattr(_budget_info, "model_dump")
+                    else dict(_budget_info)
+                )
                 # /CRUD endpoints can pass budget_limit as a string, so we need to convert it to a float
-                if "budget_limit" in _budget_info:
-                    _budget_info["budget_limit"] = float(_budget_info["budget_limit"])
-                BudgetConfig(**_budget_info)
+                if "budget_limit" in _info:
+                    _info["budget_limit"] = float(_info["budget_limit"])
+                BudgetConfig(**_info)
     except Exception as e:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"

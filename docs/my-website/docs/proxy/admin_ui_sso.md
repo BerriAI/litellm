@@ -23,26 +23,75 @@ From v1.76.0, SSO is now Free for up to 5 users.
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
 
-1. Add Okta credentials to your .env
+#### Step 1: Create an OIDC Application in Okta
+
+In your Okta Admin Console, create a new **OIDC Web Application**. See [Okta's guide on creating OIDC app integrations](https://help.okta.com/en-us/content/topics/apps/apps_app_integration_wizard_oidc.htm) for detailed instructions.
+
+When configuring the application:
+- **Sign-in redirect URI**: `https://<your-proxy-base-url>/sso/callback`
+- **Sign-out redirect URI** (optional): `https://<your-proxy-base-url>`
+
+<Image img={require('../../img/okta_redirect_uri.png')} />
+
+After creating the app, copy your **Client ID** and **Client Secret** from the application's General tab:
+
+<Image img={require('../../img/okta_client_credentials.png')} />
+
+#### Step 2: Assign Users to the Application
+
+Ensure users are assigned to the app in the **Assignments** tab. If Federation Broker Mode is enabled, you may need to disable it to assign users manually.
+
+#### Step 3: Configure Authorization Server Access Policy
+
+:::warning Important
+This step is required. Without an Access Policy for your app, users will get a `no_matching_policy` error when attempting to log in.
+:::
+
+1. Go to **Security** → **API**
+
+<Image img={require('../../img/okta_security_api.png')} />
+
+2. Select the **default** authorization server (or your custom one)
+
+<Image img={require('../../img/okta_authorization_server.png')} />
+
+3. Click on **Access Policies** tab, create a new policy assigned to your LiteLLM app
+4. Add a rule that allows the **Authorization Code** grant type
+
+<Image img={require('../../img/okta_access_policies.png')} />
+
+See [Okta's Access Policy documentation](https://help.okta.com/en-us/content/topics/security/api-access-management/access-policies.htm) for more details.
+
+#### Step 4: Configure LiteLLM Environment Variables
 
 ```bash
-GENERIC_CLIENT_ID = "<your-okta-client-id>"
-GENERIC_CLIENT_SECRET = "<your-okta-client-secret>" 
-GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/authorize
-GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
-GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
-GENERIC_CLIENT_STATE = "random-string" # [OPTIONAL] REQUIRED BY OKTA, if not set random state value is generated
-GENERIC_SSO_HEADERS = "Content-Type=application/json, X-Custom-Header=custom-value" # [OPTIONAL] Comma-separated list of additional headers to add to the request - e.g. Content-Type=application/json, etc.
+GENERIC_CLIENT_ID="<your-client-id>"
+GENERIC_CLIENT_SECRET="<your-client-secret>"
+GENERIC_AUTHORIZATION_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/authorize"
+GENERIC_TOKEN_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/token"
+GENERIC_USERINFO_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/userinfo"
+GENERIC_CLIENT_STATE="random-string"
+PROXY_BASE_URL="https://<your-proxy-base-url>"
 ```
 
-You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
+:::tip
+You can find all OAuth endpoints at `https://<your-okta-domain>/.well-known/openid-configuration`
+:::
 
-2. Add proxy url as callback_url on Okta
+#### Step 5: Test the SSO Flow
 
-On Okta, add the 'callback_url' as `<proxy_base_url>/sso/callback`
+1. Start your LiteLLM proxy
+2. Navigate to `https://<your-proxy-base-url>/ui`
+3. Click the SSO login button
+4. Authenticate with Okta and verify you're redirected back to LiteLLM
 
+#### Troubleshooting
 
-<Image img={require('../../img/okta_callback_url.png')} />
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `redirect_uri` error | Redirect URI not configured | Add `<proxy_base_url>/sso/callback` to Sign-in redirect URIs in Okta |
+| `access_denied` | User not assigned to app | Assign the user in the Assignments tab |
+| `no_matching_policy` | Missing Access Policy | Create an Access Policy in the Authorization Server (see Step 3) |
 
 </TabItem>
 <TabItem value="google" label="Google SSO">

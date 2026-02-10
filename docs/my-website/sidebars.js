@@ -97,6 +97,11 @@ const sidebars = {
       ]
     },
     {
+      type: "doc",
+      id: "integrations/websearch_interception",
+      label: "Web Search Integration"
+    },
+    {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
@@ -125,10 +130,12 @@ const sidebars = {
             "tutorials/claude_responses_api",
             "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_prompt_cache_routing",
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
             "tutorials/claude_code_plugin_marketplace",
+            "tutorials/claude_code_beta_headers",
           ]
         },
         "tutorials/opencode_integration",
@@ -222,6 +229,7 @@ const sidebars = {
           label: "Configuration",
           items: [
             "set_keys",
+            "proxy_auth",
             "caching/all_caches",
           ],
         },
@@ -286,40 +294,52 @@ const sidebars = {
           label: "Admin UI",
           items: [
             "proxy/ui",
-            "proxy/admin_ui_sso",
-            "proxy/custom_root_ui",
-            "proxy/custom_sso",
-            "proxy/ai_hub",
-            "proxy/model_compare_ui",
-            "proxy/ui_credentials",
-            "tutorials/scim_litellm",
             {
               type: "category",
-              label: "UI User/Team Management",
+              label: "Setup & SSO",
               items: [
-            "proxy/access_control",
-                "proxy/public_teams",
+                "proxy/admin_ui_sso",
+                "proxy/custom_sso",
+                "proxy/custom_root_ui",
+                "tutorials/scim_litellm",
+              ]
+            },
+            {
+              type: "category",
+              label: "Models",
+              items: [
+                "proxy/ui_credentials",
+                "proxy/ai_hub",
+                "proxy/model_compare_ui",
+              ]
+            },
+            {
+              type: "category",
+              label: "Teams & Organizations",
+              items: [
+                "proxy/access_control",
                 "proxy/self_serve",
+                "proxy/public_teams",
                 "proxy/ui/bulk_edit_users",
                 "proxy/ui/page_visibility",
               ]
             },
             {
               type: "category",
-              label: "UI Usage Tracking",
+              label: "Observability: Usage",
               items: [
                 "proxy/customer_usage",
-                "proxy/endpoint_activity"
+                "proxy/endpoint_activity",
               ]
             },
             {
               type: "category",
-              label: "UI Logs",
+              label: "Logs",
               items: [
                 "proxy/ui_logs",
                 "proxy/ui_spend_log_settings",
                 "proxy/ui_logs_sessions",
-                "proxy/deleted_keys_teams"
+                "proxy/deleted_keys_teams",
               ]
             }
           ],
@@ -367,6 +387,7 @@ const sidebars = {
           items: [
             "proxy/users",
             "proxy/team_budgets",
+            "proxy/ui_team_soft_budget_alerts",
             "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
@@ -542,6 +563,8 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_oauth",
+            "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
             "mcp_cost",
@@ -1059,6 +1082,7 @@ const sidebars = {
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
         "troubleshoot/spend_queue_warnings",
+        "troubleshoot/max_callbacks",
       ],
     },
   ],

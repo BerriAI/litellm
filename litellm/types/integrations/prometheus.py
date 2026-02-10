@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
@@ -39,6 +39,38 @@ def _sanitize_prometheus_label_name(label: str) -> str:
         sanitized = "_"
 
     return sanitized
+
+
+def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
+    """
+    Sanitize a label value for Prometheus text format compatibility.
+
+    Removes or replaces characters that break the Prometheus exposition format:
+    - U+2028 (Line Separator) and U+2029 (Paragraph Separator) are removed
+    - Carriage returns are removed
+    - Newlines are replaced with spaces
+    - Backslashes and double quotes are escaped per Prometheus spec
+    """
+    if value is None:
+        return None
+
+    # Coerce non-string values (int, bool, etc.) to str before sanitizing
+    if not isinstance(value, str):
+        value = str(value)
+
+    # Remove Unicode line/paragraph separators that break text format
+    value = value.replace("\u2028", "").replace("\u2029", "")
+
+    # Remove carriage returns
+    value = value.replace("\r", "")
+
+    # Replace newlines with spaces
+    value = value.replace("\n", " ")
+
+    # Escape backslashes and double quotes per Prometheus exposition format
+    value = value.replace("\\", "\\\\").replace('"', '\\"')
+
+    return value
 
 
 @dataclass

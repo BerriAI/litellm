@@ -75,6 +75,7 @@ async def make_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
+    speed: Optional[str] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
@@ -103,6 +104,7 @@ async def make_call(
         streaming_response=response.aiter_lines(),
         sync_stream=False,
         json_mode=json_mode,
+        speed=speed,
     )
 
     # LOGGING
@@ -126,6 +128,7 @@ def make_sync_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
+    speed: Optional[str] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
@@ -159,7 +162,7 @@ def make_sync_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True, json_mode=json_mode
+        streaming_response=response.iter_lines(), sync_stream=True, json_mode=json_mode, speed=speed
     )
 
     # LOGGING
@@ -213,6 +216,7 @@ class AnthropicChatCompletion(BaseLLM):
             logging_obj=logging_obj,
             timeout=timeout,
             json_mode=json_mode,
+            speed=optional_params.get("speed") if optional_params else None,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -427,6 +431,7 @@ class AnthropicChatCompletion(BaseLLM):
                     logging_obj=logging_obj,
                     timeout=timeout,
                     json_mode=json_mode,
+                    speed=optional_params.get("speed") if optional_params else None,
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
@@ -485,13 +490,14 @@ class AnthropicChatCompletion(BaseLLM):
 
 class ModelResponseIterator:
     def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False, speed: Optional[str] = None
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
+        self.speed = speed
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
@@ -512,6 +518,9 @@ class ModelResponseIterator:
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: List[Dict[str, Any]] = []
+        
+        # Accumulate compaction blocks for multi-turn reconstruction
+        self.compaction_blocks: List[Dict[str, Any]] = []
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -538,7 +547,7 @@ class ModelResponseIterator:
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
         return AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
+            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None, speed=self.speed
         )
 
     def _content_block_delta_helper(self, chunk: dict) -> Tuple[
@@ -592,6 +601,12 @@ class ModelResponseIterator:
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
+        elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
+            # Handle compaction delta
+            provider_specific_fields["compaction_delta"] = {
+                "type": "compaction_delta",
+                "content": content_block["delta"]["content"]
+            }
 
         return text, tool_use, thinking_blocks, provider_specific_fields
 
@@ -720,6 +735,20 @@ class ModelResponseIterator:
                         content_block_start=content_block_start,
                         provider_specific_fields=provider_specific_fields,
                     )
+
+                elif content_block_start["content_block"]["type"] == "compaction":
+                    # Handle compaction blocks
+                    # The full content comes in content_block_start
+                    self.compaction_blocks.append(
+                        content_block_start["content_block"]
+                    )
+                    provider_specific_fields["compaction_blocks"] = (
+                        self.compaction_blocks
+                    )
+                    provider_specific_fields["compaction_start"] = {
+                        "type": "compaction",
+                        "content": content_block_start["content_block"].get("content", "")
+                    }
 
                 elif content_block_start["content_block"]["type"].endswith("_tool_result"):
                     # Handle all tool result types (web_search, bash_code_execution, text_editor, etc.)

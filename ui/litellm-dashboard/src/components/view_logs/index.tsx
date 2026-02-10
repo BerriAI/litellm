@@ -25,6 +25,7 @@ import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { prefetchLogDetails } from "./prefetch";
+import { ERROR_CODE_OPTIONS, QUICK_SELECT_OPTIONS } from "./constants";
 import { RequestResponsePanel } from "./RequestResponsePanel";
 import { SessionView } from "./SessionView";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
@@ -372,24 +373,6 @@ export default function SpendLogsTable({
     setSelectedLog(log);
   };
 
-  // Function to extract unique error codes from logs
-  const extractErrorCodes = (logs: LogEntry[], searchText: string = "") => {
-    const errorCodes = new Set<string>();
-    logs.forEach((log) => {
-      const metadata = log.metadata || {};
-      if (metadata.status === "failure" && metadata.error_information) {
-        const errorCode = metadata.error_information.error_code;
-        if (errorCode && (!searchText || errorCode.toLowerCase().includes(searchText.toLowerCase()))) {
-          errorCodes.add(errorCode);
-        }
-      }
-    });
-    return Array.from(errorCodes).map((code) => ({
-      label: code,
-      value: code,
-    }));
-  };
-
   const logFilterOptions: FilterOption[] = [
     {
       name: "Team ID",
@@ -455,7 +438,14 @@ export default function SpendLogsTable({
       label: "Error Code",
       isSearchable: true,
       searchFn: async (searchText: string) => {
-        return extractErrorCodes(logsData.data, searchText);
+        if (!searchText) return ERROR_CODE_OPTIONS;
+        const lower = searchText.toLowerCase();
+        const filtered = ERROR_CODE_OPTIONS.filter((opt) => opt.label.toLowerCase().includes(lower));
+        const isExactValue = ERROR_CODE_OPTIONS.some((opt) => opt.value === searchText.trim());
+        if (!isExactValue && searchText.trim()) {
+          filtered.push({ label: `Use custom code: ${searchText.trim()}`, value: searchText.trim() });
+        }
+        return filtered;
       },
     },
     {
@@ -492,15 +482,7 @@ export default function SpendLogsTable({
     return unit;
   };
 
-  const quickSelectOptions = [
-    { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-    { label: "Last Hour", value: 1, unit: "hours" },
-    { label: "Last 4 Hours", value: 4, unit: "hours" },
-    { label: "Last 24 Hours", value: 24, unit: "hours" },
-    { label: "Last 7 Days", value: 7, unit: "days" },
-  ];
-
-  const selectedOption = quickSelectOptions.find(
+  const selectedOption = QUICK_SELECT_OPTIONS.find(
     (option) => option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit,
   );
 
@@ -617,7 +599,7 @@ export default function SpendLogsTable({
                             {quickSelectOpen && (
                               <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                                 <div className="space-y-1">
-                                  {quickSelectOptions.map((option) => (
+                                  {QUICK_SELECT_OPTIONS.map((option) => (
                                     <button
                                       key={option.label}
                                       className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
@@ -822,7 +804,7 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
       ? row.original.messages.length > 0
       : Object.keys(row.original.messages).length > 0);
   const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
-  const missingData = !hasMessages && !hasResponse;
+  const missingData = !hasMessages && !hasResponse && !hasError;
 
   // Format the response with error details if present
   const formattedResponse = () => {
