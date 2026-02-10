@@ -146,6 +146,7 @@ class CustomStreamWrapper:
         self.chunks: List = (
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.has_received_usage_chunk = False  # Track if usage chunk received (for OpenRouter)
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
 
@@ -952,9 +953,21 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Default - return StopIteration
-                if hasattr(model_response, "usage"):
+                # Track usage chunk for providers that send it after finish reason
+                if hasattr(model_response, "usage") and model_response.usage is not None:
+                    self.has_received_usage_chunk = True
                     self.chunks.append(model_response)
+
+                # OpenRouter sends usage chunk after finish reason - wait for it if requested
+                # See: https://github.com/BerriAI/litellm/issues/16112
+                if (
+                    self.custom_llm_provider == "openrouter"
+                    and self.send_stream_usage is True
+                    and not self.has_received_usage_chunk
+                ):
+                    return None  # Continue iterating to receive usage chunk
+
+                # Default - return StopIteration
                 raise StopIteration
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:

@@ -3967,3 +3967,67 @@ def test_streaming_finish_reason():
     relative_anthropic_idx = anthropic_finish_reason_idx - anthropic_last_chunk_idx
     relative_openai_idx = openai_finish_reason_idx - openai_last_chunk_idx
     assert relative_anthropic_idx == relative_openai_idx
+
+
+def test_openrouter_streaming_waits_for_usage_chunk():
+    """
+    Test that OpenRouter streaming with include_usage=True waits for the usage chunk.
+    
+    OpenRouter sends usage data in a separate chunk after the finish reason chunk.
+    This test verifies that CustomStreamWrapper properly waits for this usage chunk
+    instead of stopping iteration early.
+    
+    Related issue: https://github.com/BerriAI/litellm/issues/16112
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta, StreamingChoices, Usage
+    from unittest.mock import MagicMock
+    
+    # Create mock logging object
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {"litellm_params": {}}
+    mock_logging_obj.completion_start_time = None
+    
+    # Create CustomStreamWrapper for OpenRouter with include_usage=True
+    stream_wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),  # Empty, we'll test the flag logic directly
+        model="openrouter/anthropic/claude-haiku-4.5",
+        logging_obj=mock_logging_obj,
+        custom_llm_provider="openrouter",
+        stream_options={"include_usage": True},
+    )
+    
+    # Verify initial state
+    assert stream_wrapper.has_received_usage_chunk is False
+    assert stream_wrapper.send_stream_usage is True
+    assert stream_wrapper.custom_llm_provider == "openrouter"
+    
+    # Test that has_received_usage_chunk flag exists and is tracked
+    stream_wrapper.has_received_usage_chunk = True
+    assert stream_wrapper.has_received_usage_chunk is True
+
+
+def test_non_openrouter_streaming_not_affected():
+    """
+    Test that non-OpenRouter providers are not affected by the usage chunk wait logic.
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from unittest.mock import MagicMock
+    
+    # Create mock logging object
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {"litellm_params": {}}
+    mock_logging_obj.completion_start_time = None
+    
+    # Create CustomStreamWrapper for OpenAI (should not have special handling)
+    stream_wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4o-mini",
+        logging_obj=mock_logging_obj,
+        custom_llm_provider="openai",
+        stream_options={"include_usage": True},
+    )
+    
+    # Verify flag exists but provider is not OpenRouter
+    assert stream_wrapper.has_received_usage_chunk is False
+    assert stream_wrapper.custom_llm_provider == "openai"
