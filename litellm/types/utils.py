@@ -1561,7 +1561,6 @@ class Usage(SafeAttributeModel, CompletionUsage):
             self._cache_read_input_tokens == 0
             and _prompt_tokens_details is not None
             and _prompt_tokens_details.cached_tokens is not None
-            and _prompt_tokens_details.cached_tokens > 0
         ):
             self._cache_read_input_tokens = _prompt_tokens_details.cached_tokens
 

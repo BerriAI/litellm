@@ -193,15 +193,16 @@ def test_usage_anthropic_cache_read_not_overwritten_by_prompt_details():
     from litellm.types.utils import Usage
 
     # Anthropic passes cache_read_input_tokens explicitly in **params
+    # Use different values to verify the explicit param wins over prompt_tokens_details
     usage = Usage(
         prompt_tokens=1000,
         completion_tokens=50,
         total_tokens=1050,
-        prompt_tokens_details={"cached_tokens": 500},
+        prompt_tokens_details={"cached_tokens": 300},
         cache_read_input_tokens=500,
     )
 
-    # Should use the explicit Anthropic value, not overwrite it
+    # Should use the explicit Anthropic value (500), not the prompt_tokens_details value (300)
     assert usage._cache_read_input_tokens == 500
     assert usage.prompt_tokens_details.cached_tokens == 500
 
