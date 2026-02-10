@@ -1,1 +1,0 @@
-# Sarvam Audio Transcription (STT)
