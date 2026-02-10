@@ -192,7 +192,7 @@ async def test_async_post_call_success_hook_for_unified_finetuning_job():
         "model_id": "gpt-3.5-turbo-0613",
     }
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=AsyncMock()
     )
     data = {
         "user_api_key_dict": {"parent_otel_span": MagicMock()},
