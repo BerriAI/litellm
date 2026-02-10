@@ -16,11 +16,14 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 @patch("litellm._redis.init_redis_cluster")
 def test_redis_cluster_batch_get(mock_init_redis_cluster):
     """
-    Test that RedisClusterCache uses mget_nonatomic instead of mget for batch operations
+    Test that RedisClusterCache uses pipeline instead of mget for batch operations
     """
     # Create a mock Redis client
     mock_redis = MagicMock()
-    mock_redis.mget_nonatomic.return_value = [None, None]  # Simulate no cache hits
+    mock_pipe = MagicMock()
+    mock_redis.pipeline.return_value.__enter__.return_value = mock_pipe
+    mock_pipe.execute.return_value = [None, None]
+    
     mock_init_redis_cluster.return_value = mock_redis
 
     # Create RedisClusterCache instance with mock client
@@ -33,20 +36,25 @@ def test_redis_cluster_batch_get(mock_init_redis_cluster):
     keys = ["key1", "key2"]
     cache.batch_get_cache(keys)
 
-    # Verify mget_nonatomic was called instead of mget
-    mock_redis.mget_nonatomic.assert_called_once()
-    assert not mock_redis.mget.called
+    # Verify pipeline was called
+    mock_redis.pipeline.assert_called_once()
+    assert mock_pipe.get.call_count == 2
+    mock_pipe.execute.assert_called_once()
 
 
 @pytest.mark.asyncio
 @patch("litellm._redis.init_redis_cluster")
 async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
     """
-    Test that RedisClusterCache uses mget_nonatomic instead of mget for async batch operations
+    Test that RedisClusterCache uses pipeline instead of mget for async batch operations
     """
     # Create a mock Redis client
     mock_redis = MagicMock()
-    mock_redis.mget_nonatomic.return_value = [None, None]  # Simulate no cache hits
+    mock_pipe = MagicMock()
+    
+    # Mock the async context manager
+    mock_redis.pipeline.return_value.__aenter__.return_value = mock_pipe
+    mock_pipe.execute.return_value = [None, None]
 
     # Create RedisClusterCache instance with mock client
     cache = RedisClusterCache(
@@ -61,6 +69,7 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
     keys = ["key1", "key2"]
     await cache.async_batch_get_cache(keys)
 
-    # Verify mget_nonatomic was called instead of mget
-    mock_redis.mget_nonatomic.assert_called_once()
-    assert not mock_redis.mget.called
+    # Verify pipeline was called
+    mock_redis.pipeline.assert_called_once()
+    assert mock_pipe.get.call_count == 2
+    mock_pipe.execute.assert_called_once()

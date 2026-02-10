@@ -264,19 +264,19 @@ class RedisCache(BaseCache):
     def _parse_redis_major_version(self) -> int:
         """
         Parse Redis version to extract the major version number.
-        
+
         Handles multiple version formats:
         - Strings: "7.0.0", "6", "7.0.0-rc1", " 7.0.0 "
         - Floats: 7.0 (e.g., from AWS ElastiCache Valkey)
         - Integers: 7
         - Malformed: "latest", "", "Unknown" (defaults to DEFAULT_REDIS_MAJOR_VERSION)
-        
+
         Returns:
             int: The major version number (defaults to DEFAULT_REDIS_MAJOR_VERSION if unparseable)
         """
         if self.redis_version == "Unknown":
             return DEFAULT_REDIS_MAJOR_VERSION
-        
+
         try:
             version_str = str(self.redis_version).strip()
             # Handle cases where there's no dot (e.g., "7" or 7)
@@ -827,7 +827,12 @@ class RedisCache(BaseCache):
 
         We use a wrapper so RedisCluster can override this method
         """
-        return self.redis_client.mget(keys=keys)  # type: ignore
+        if len(keys) == 0:
+            return []
+        with self.redis_client.pipeline(transaction=False) as pipe:
+            for key in keys:
+                pipe.get(key)
+            return pipe.execute()
 
     async def _async_run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
         """
@@ -836,7 +841,13 @@ class RedisCache(BaseCache):
         We use a wrapper so RedisCluster can override this method
         """
         async_redis_client = self.init_async_client()
-        return await async_redis_client.mget(keys=keys)  # type: ignore
+        if len(keys) == 0:
+            return []
+
+        async with async_redis_client.pipeline(transaction=False) as pipe:
+            for key in keys:
+                pipe.get(key)
+            return await pipe.execute()
 
     def batch_get_cache(
         self,
@@ -1086,8 +1097,14 @@ class RedisCache(BaseCache):
     async def delete_cache_keys(self, keys):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
         _redis_client: Any = self.init_async_client()
-        # keys is a list, unpack it so it gets passed as individual elements to delete
-        await _redis_client.delete(*keys)
+        # keys is a list. Multi-key delete can raise CROSSLOT in Redis Cluster.
+        # Use pipeline for atomic-like (but non-transactional) batch deletion.
+        if len(keys) == 0:
+            return
+        async with _redis_client.pipeline(transaction=False) as pipe:
+            for key in keys:
+                pipe.delete(key)
+            await pipe.execute()
 
     def client_list(self) -> List:
         client_list: List = self.redis_client.client_list()  # type: ignore
@@ -1105,14 +1122,14 @@ class RedisCache(BaseCache):
 
     async def disconnect(self):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
-    
+
     async def test_connection(self) -> dict:
         """
         Test the Redis connection by creating a new client and pinging it.
-        
+
         This creates a fresh connection without using cached clients or connection pools
         to ensure the credentials are actually valid.
-        
+
         Returns:
             dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
         """
@@ -1121,29 +1138,26 @@ class RedisCache(BaseCache):
 
             # Create a fresh Redis client with current settings
             redis_client = redis_async.Redis(**self.redis_kwargs)
-            
+
             # Test the connection
             ping_result = await redis_client.ping()  # type: ignore[misc]
 
             # Close the connection
             await redis_client.aclose()  # type: ignore[attr-defined]
-            
+
             if ping_result:
                 return {
                     "status": "success",
-                    "message": "Redis connection test successful"
+                    "message": "Redis connection test successful",
                 }
             else:
-                return {
-                    "status": "failed",
-                    "message": "Redis ping returned False"
-                }
+                return {"status": "failed", "message": "Redis ping returned False"}
         except Exception as e:
             verbose_logger.error(f"Redis connection test failed: {str(e)}")
             return {
                 "status": "failed",
                 "message": f"Redis connection failed: {str(e)}",
-                "error": str(e)
+                "error": str(e),
             }
 
     async def async_delete_cache(self, key: str):
