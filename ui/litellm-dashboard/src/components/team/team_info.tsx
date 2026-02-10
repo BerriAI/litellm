@@ -53,7 +53,7 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import EditLoggingSettings from "./EditLoggingSettings";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
-import TeamMembersComponent from "./team_member_view";
+import TeamMembersComponent from "./TeamMemberTab";
 
 export interface TeamMembership {
   user_id: string;
