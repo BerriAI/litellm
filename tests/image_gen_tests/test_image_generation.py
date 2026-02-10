@@ -183,6 +183,7 @@ class TestAimlImageGeneration(BaseImageGenTest):
         return {"model": "aiml/flux-pro/v1.1"}
 
     @pytest.mark.asyncio(scope="module")
+    @pytest.mark.flaky(retries=0)
     async def test_basic_image_generation(self):
         """Test basic image generation"""
         from unittest.mock import AsyncMock, patch
@@ -213,8 +214,11 @@ class TestAimlImageGeneration(BaseImageGenTest):
                 litellm.callbacks = [custom_logger]
                 base_image_generation_call_args = self.get_base_image_generation_call_args()
                 litellm.set_verbose = True
+                # Pass dummy api_key so validate_environment passes; HTTP is mocked
                 response = await litellm.aimage_generation(
-                    **base_image_generation_call_args, prompt="A image of a otter"
+                    **base_image_generation_call_args,
+                    prompt="A image of a otter",
+                    api_key="test-key-mocked-no-credits-needed",
                 )
                 print("FAL AI RESPONSE: ", response)
 
