@@ -25614,6 +25614,66 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "perplexity/preset/pro-search": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_preset": true
+    },
+    "perplexity/openai/gpt-4o": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false
+    },
+    "perplexity/openai/gpt-4o-mini": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false
+    },
+    "perplexity/openai/gpt-5.2": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": true
+    },
+    "perplexity/anthropic/claude-3-5-sonnet-20241022": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false
+    },
+    "perplexity/anthropic/claude-3-5-haiku-20241022": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false
+    },
+    "perplexity/google/gemini-2.0-flash-exp": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false
+    },
+    "perplexity/google/gemini-2.0-flash-thinking-exp": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": true
+    },
+    "perplexity/xai/grok-2-1212": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false
+    },
+    "perplexity/xai/grok-2-vision-1212": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false
+    },
     "publicai/aisingapore/Qwen-SEA-LION-v4-32B-IT": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "publicai",
