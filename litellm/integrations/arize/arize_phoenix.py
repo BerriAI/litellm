@@ -26,6 +26,55 @@ ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://otlp.arize.com/v1/traces"
 
 
 class ArizePhoenixLogger(OpenTelemetry):
+    """
+    Arize Phoenix logger that sends traces to a Phoenix endpoint.
+
+    Creates its own dedicated TracerProvider so it can coexist with the
+    generic ``otel`` callback (or any other OTEL-based integration) without
+    fighting over the global ``opentelemetry.trace`` TracerProvider singleton.
+    """
+
+    def _init_tracing(self, tracer_provider):
+        """
+        Override to always create a *private* TracerProvider for Arize Phoenix.
+
+        The base ``OpenTelemetry._init_tracing`` falls back to the global
+        TracerProvider when one already exists.  That causes whichever
+        integration initialises second to silently reuse the first one's
+        exporter, so spans only reach one destination.
+
+        By creating our own provider we guarantee Arize Phoenix always gets
+        its own exporter pipeline, regardless of initialisation order.
+        """
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.trace import SpanKind
+
+        if tracer_provider is not None:
+            # Explicitly supplied (e.g. in tests) — honour it.
+            self.tracer = tracer_provider.get_tracer("litellm")
+            self.span_kind = SpanKind
+            return
+
+        # Always create a dedicated provider — never touch the global one.
+        provider = TracerProvider(resource=self._get_litellm_resource(self.config))
+        provider.add_span_processor(self._get_span_processor())
+        self.tracer = provider.get_tracer("litellm")
+        self.span_kind = SpanKind
+        verbose_logger.debug(
+            "ArizePhoenixLogger: Created dedicated TracerProvider "
+            "(endpoint=%s, exporter=%s)",
+            self.config.endpoint,
+            self.config.exporter,
+        )
+
+    def _init_otel_logger_on_litellm_proxy(self):
+        """
+        Override: Arize Phoenix should NOT overwrite the proxy's
+        ``open_telemetry_logger``.  That attribute is reserved for the
+        primary ``otel`` callback which handles proxy-level parent spans.
+        """
+        pass
+
     def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
         return
