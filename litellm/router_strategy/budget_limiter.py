@@ -486,24 +486,31 @@ class RouterBudgetLimiting(CustomLogger):
 
         Only runs if Redis is initialized
         """
+        increment_operations_to_flush: List[RedisPipelineIncrementOperation] = []
         try:
             if not self.dual_cache.redis_cache:
                 return  # Redis is not initialized
 
-            verbose_router_logger.debug(
-                "Pushing Redis Increment Pipeline for queue: %s",
-                self.redis_increment_operation_queue,
-            )
-            if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
-                )
-
+            # Snapshot pending increments and clear queue before await, so new writes are queued
+            # for the next sync cycle while this batch is flushed to Redis.
+            increment_operations_to_flush = self.redis_increment_operation_queue
             self.redis_increment_operation_queue = []
 
+            verbose_router_logger.debug(
+                "Pushing Redis Increment Pipeline for queue: %s",
+                increment_operations_to_flush,
+            )
+            if len(increment_operations_to_flush) > 0:
+                await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=increment_operations_to_flush,
+                )
+
         except Exception as e:
+            if len(increment_operations_to_flush) > 0:
+                # Retry these increments on a future sync cycle.
+                self.redis_increment_operation_queue = (
+                    increment_operations_to_flush + self.redis_increment_operation_queue
+                )
             verbose_router_logger.error(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
