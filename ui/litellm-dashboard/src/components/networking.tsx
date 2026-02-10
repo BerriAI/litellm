@@ -2593,6 +2593,7 @@ export const uiSpendLogsCall = async (
   end_user?: string,
   status_filter?: string,
   model?: string,
+  modelId?: string,
   keyAlias?: string,
   error_code?: string,
   error_message?: string,
@@ -2614,6 +2615,7 @@ export const uiSpendLogsCall = async (
     if (end_user) queryParams.append("end_user", end_user);
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
+    if (modelId) queryParams.append("model_id", modelId);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
     if (error_code) queryParams.append("error_code", error_code);
     if (error_message) queryParams.append("error_message", error_message);
