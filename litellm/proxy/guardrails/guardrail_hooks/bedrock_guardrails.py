@@ -34,10 +34,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.exceptions import GuardrailInterventionNormalStringError
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -1368,7 +1365,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                             "Applied masking to choice text content"
                         )
 
-    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",

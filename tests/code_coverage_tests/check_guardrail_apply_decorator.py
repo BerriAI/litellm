@@ -77,6 +77,12 @@ def test_guardrail_apply_decorator():
         if python_file.name in ["base.py", "primitives.py", "patterns.py"]:
             continue
 
+        # Skip bedrock_guardrails.py - it implements logging differently via
+        # add_standard_logging_guardrail_information_to_request_data calls
+        # in make_bedrock_api_request method instead of using the decorator
+        if python_file.name == "bedrock_guardrails.py":
+            continue
+
         results = find_apply_guardrail_methods(python_file)
 
         for class_name, line_num, has_decorator in results:
