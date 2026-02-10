@@ -49,3 +49,17 @@ class TestMapReasoningEffort:
         )
         assert result["type"] == "enabled"
         assert "budget_tokens" in result
+
+    def test_none_string_returns_none_for_opus_4_6(self):
+        """reasoning_effort='none' should return None for Opus 4.6."""
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="none", model="claude-opus-4-6"
+        )
+        assert result is None
+
+    def test_none_string_returns_none_for_other_models(self):
+        """reasoning_effort='none' should return None for non-Opus models."""
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="none", model="claude-3-7-sonnet-20250219"
+        )
+        assert result is None

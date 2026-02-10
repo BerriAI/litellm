@@ -664,7 +664,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]], 
         model: str,
     ) -> Optional[AnthropicThinkingParam]:
-        if reasoning_effort is None:
+        if reasoning_effort is None or reasoning_effort == "none":
             return None
         if AnthropicConfig._is_claude_opus_4_6(model):
             return AnthropicThinkingParam(
