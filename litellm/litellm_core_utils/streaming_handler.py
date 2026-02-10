@@ -2035,11 +2035,17 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    try:
+                        _cached_chunk = complete_streaming_response.model_copy(
+                            deep=True
+                        )
+                    except RuntimeError:
+                        # Fallback to shallow copy if dict mutated during deep copy
+                        # (concurrent async tasks modifying model internals)
+                        _cached_chunk = complete_streaming_response.model_copy()
                     asyncio.create_task(
                         self.async_cache_streaming_response(
-                            processed_chunk=complete_streaming_response.model_copy(
-                                deep=True
-                            ),
+                            processed_chunk=_cached_chunk,
                             cache_hit=cache_hit,
                         )
                     )
