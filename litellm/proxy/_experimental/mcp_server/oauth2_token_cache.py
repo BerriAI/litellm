@@ -39,9 +39,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_lock(self, server_id: str) -> asyncio.Lock:
-        if server_id not in self._locks:
-            self._locks[server_id] = asyncio.Lock()
-        return self._locks[server_id]
+        return self._locks.setdefault(server_id, asyncio.Lock())
 
     async def async_get_token(self, server: "MCPServer") -> Optional[str]:
         """Return a valid access token, fetching or refreshing as needed.
@@ -96,6 +94,12 @@ class MCPOAuth2TokenCache(InMemoryCache):
         response = await client.post(server.token_url, data=data)
         response.raise_for_status()
         body = response.json()
+
+        if not isinstance(body, dict):
+            raise ValueError(
+                f"OAuth2 token response for MCP server '{server.server_id}' "
+                f"returned non-object JSON (got {type(body).__name__})"
+            )
 
         access_token = body.get("access_token")
         if not access_token:
