@@ -213,7 +213,7 @@ class BaseAWSLLM:
         elif aws_role_name is not None:
             # Check if we're already running as the target role and can skip assumption
             # This handles IRSA (EKS), ECS task roles, and EC2 instance profiles
-            if self._is_already_running_as_role(aws_role_name):
+            if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
                 verbose_logger.debug(
                     "Already running as target role %s, using ambient credentials",
                     aws_role_name,
@@ -541,7 +541,49 @@ class BaseAWSLLM:
                 aws_region_name = "us-west-2"
         return aws_region_name
 
-    def _is_already_running_as_role(self, aws_role_name: str) -> bool:
+    @staticmethod
+    def _parse_arn_account_and_role_name(
+        arn: str,
+    ) -> Optional[Tuple[str, str, str]]:
+        """
+        Parse an ARN and return (partition, account_id, role_name).
+
+        Handles:
+        - arn:aws:iam::123456789012:role/MyRole
+        - arn:aws:iam::123456789012:role/path/to/MyRole
+        - arn:aws:sts::123456789012:assumed-role/MyRole/session-name
+
+        Returns None if the ARN cannot be parsed.
+        """
+        # ARN format: arn:PARTITION:SERVICE:REGION:ACCOUNT:RESOURCE
+        parts = arn.split(":")
+        if len(parts) < 6 or parts[0] != "arn":
+            return None
+
+        partition = parts[1]  # e.g. "aws", "aws-cn", "aws-us-gov"
+        account_id = parts[4]
+        resource = ":".join(parts[5:])  # rejoin in case resource contains colons
+
+        if resource.startswith("role/"):
+            # arn:aws:iam::ACCOUNT:role/[path/]ROLE_NAME
+            role_name = resource.split("/")[-1]
+        elif resource.startswith("assumed-role/"):
+            # arn:aws:sts::ACCOUNT:assumed-role/ROLE_NAME/SESSION
+            role_parts = resource.split("/")
+            if len(role_parts) >= 2:
+                role_name = role_parts[1]
+            else:
+                return None
+        else:
+            return None
+
+        return partition, account_id, role_name
+
+    def _is_already_running_as_role(
+        self,
+        aws_role_name: str,
+        ssl_verify: Optional[Union[bool, str]] = None,
+    ) -> bool:
         """
         Check if the current environment is already running as the target IAM role.
 
@@ -550,9 +592,18 @@ class BaseAWSLLM:
         - ECS task roles: Uses sts:GetCallerIdentity to check current role ARN
         - EC2 instance profiles: Uses sts:GetCallerIdentity to check current role ARN
 
+        Compares partition, account ID, and role name to avoid cross-account
+        false matches.
+
         Returns True if the current identity matches the target role, meaning
         we can skip sts:AssumeRole and use ambient credentials directly.
         """
+        target_parsed = self._parse_arn_account_and_role_name(aws_role_name)
+        if target_parsed is None:
+            return False
+
+        target_partition, target_account, target_role = target_parsed
+
         # Fast path: IRSA environment check (no API call needed)
         current_role_arn = os.getenv("AWS_ROLE_ARN")
         web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
@@ -564,29 +615,20 @@ class BaseAWSLLM:
             import boto3
 
             with tracer.trace("boto3.client(sts).get_caller_identity"):
-                sts_client = boto3.client("sts")
+                sts_client = boto3.client(
+                    "sts", verify=self._get_ssl_verify(ssl_verify)
+                )
                 identity = sts_client.get_caller_identity()
                 caller_arn = identity.get("Arn", "")
 
-            # The caller ARN for an ECS task role looks like:
-            # arn:aws:sts::123456789012:assumed-role/MyRole/session-name
-            # The target role ARN looks like:
-            # arn:aws:iam::123456789012:role/MyRole
-            # We need to compare the role name portion
-            if ":assumed-role/" in caller_arn:
-                # Extract role name from assumed-role ARN
-                # Format: arn:aws:sts::ACCOUNT:assumed-role/ROLE_NAME/SESSION
-                caller_role_name = caller_arn.split(":assumed-role/")[1].split("/")[0]
-
-                # Extract role name from target role ARN
-                # Format: arn:aws:iam::ACCOUNT:role/ROLE_NAME or
-                # arn:aws:iam::ACCOUNT:role/path/ROLE_NAME
-                if ":role/" in aws_role_name:
-                    target_role_name = aws_role_name.split(":role/")[-1].split("/")[-1]
-                else:
-                    target_role_name = aws_role_name
-
-                if caller_role_name == target_role_name:
+            caller_parsed = self._parse_arn_account_and_role_name(caller_arn)
+            if caller_parsed is not None:
+                caller_partition, caller_account, caller_role = caller_parsed
+                if (
+                    caller_partition == target_partition
+                    and caller_account == target_account
+                    and caller_role == target_role
+                ):
                     verbose_logger.debug(
                         "Current identity already matches target role: %s",
                         aws_role_name,
@@ -918,17 +960,30 @@ class BaseAWSLLM:
             sts_response = sts_client.assume_role(**assume_role_params)
         except Exception as e:
             error_str = str(e)
-            # If AssumeRole fails because the caller already IS the role
-            # (e.g., ECS task role, root account, or same-role scenario),
-            # fall back to using ambient credentials directly
             if "AccessDenied" in error_str:
-                verbose_logger.warning(
-                    "AssumeRole failed for %s (%s). "
-                    "Falling back to ambient credentials (boto3 default chain).",
+                # Only fall back to ambient credentials if we can positively
+                # confirm the caller is already the target role (same account,
+                # partition, and role name).  This avoids silently using the
+                # wrong identity when there is a genuine trust-policy or
+                # permission misconfiguration.
+                if self._is_already_running_as_role(
+                    aws_role_name, ssl_verify=ssl_verify
+                ):
+                    verbose_logger.warning(
+                        "AssumeRole failed for %s (%s). "
+                        "Caller is already running as this role; "
+                        "falling back to ambient credentials.",
+                        aws_role_name,
+                        error_str,
+                    )
+                    return self._auth_with_env_vars()
+                # Genuine permission error — re-raise
+                verbose_logger.error(
+                    "AssumeRole AccessDenied for %s and caller is NOT "
+                    "the same role. Re-raising. Error: %s",
                     aws_role_name,
                     error_str,
                 )
-                return self._auth_with_env_vars()
             raise
 
         # Extract the credentials from the response and convert to Session Credentials
