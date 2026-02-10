@@ -17,7 +17,7 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -241,6 +241,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         file_id: str,
         custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
@@ -248,6 +249,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         Args:
             file_id: The file ID to read
             custom_llm_provider: The custom LLM provider to use for token encoding
+            user_api_key_dict: User authentication information for file access (required for managed files)
             
         Returns:
             BatchFileUsage with total_tokens and request_count
@@ -257,6 +259,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             file_content = await litellm.afile_content(
                 file_id=file_id,
                 custom_llm_provider=custom_llm_provider,
+                user_api_key_dict=user_api_key_dict,
             )
 
             file_content_as_dict = _get_file_content_as_dictionary(
@@ -336,6 +339,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             batch_usage = await self.count_input_file_usage(
                 file_id=input_file_id,
                 custom_llm_provider=custom_llm_provider,
+                user_api_key_dict=user_api_key_dict,
             )
 
             verbose_proxy_logger.debug(
