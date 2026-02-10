@@ -76,7 +76,7 @@ A contributor PR introduced an extra `{` bracket, producing invalid JSON. The re
 
 ---
 
-## What happens if the hosted model cost map is bad (new behavior)
+## What happens if the hosted model cost map is bad
 
 After addressing this incident, `get_model_cost_map()` now validates the fetched JSON before using it. If the hosted map is corrupted, empty, or has shrunk significantly, LiteLLM falls back to the local backup and logs a warning.
 
