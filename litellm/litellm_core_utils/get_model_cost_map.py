@@ -16,7 +16,7 @@ import httpx
 
 from litellm import verbose_logger
 from litellm.constants import (
-    MODEL_COST_MAP_MAX_SHRINK_PERCENT,
+    MODEL_COST_MAP_MAX_SHRINK_RATIO,
     MODEL_COST_MAP_MIN_MODEL_COUNT,
 )
 
@@ -25,10 +25,9 @@ class GetModelCostMap:
     """
     Handles fetching, validating, and loading the model cost map.
 
-    The backup model count is cached on first access so that validation
-    never needs to parse the full backup JSON — only the count is needed
-    for the shrinkage check.  The full backup is only loaded when it must
-    be *returned* as a fallback.
+    Only the backup model *count* is cached (a single int). The full
+    backup dict is never held in memory — it is only parsed when it
+    needs to be *returned* as a fallback.
     """
 
     _backup_model_count: int = -1  # -1 = not yet loaded
@@ -45,7 +44,7 @@ class GetModelCostMap:
 
     @classmethod
     def _get_backup_model_count(cls) -> int:
-        """Return the number of models in the local backup (cached)."""
+        """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
             backup = cls.load_local_model_cost_map()
             cls._backup_model_count = len(backup)
@@ -77,7 +76,7 @@ class GetModelCostMap:
         fetched_map: dict,
         backup_model_count: int,
         min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
-        max_shrink_pct: float = MODEL_COST_MAP_MAX_SHRINK_PERCENT,
+        max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
         """Check 2: model count has not reduced significantly vs backup."""
         fetched_count = len(fetched_map)
@@ -92,7 +91,7 @@ class GetModelCostMap:
             )
             return False
 
-        if backup_model_count > 0 and fetched_count < backup_model_count * max_shrink_pct:
+        if backup_model_count > 0 and fetched_count < backup_model_count * max_shrink_ratio:
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map shrank significantly "
                 "(fetched=%d, backup=%d, threshold=%.0f%%). "
@@ -100,7 +99,7 @@ class GetModelCostMap:
                 "Falling back to local backup.",
                 fetched_count,
                 backup_model_count,
-                max_shrink_pct * 100,
+                max_shrink_ratio * 100,
             )
             return False
 
@@ -112,7 +111,7 @@ class GetModelCostMap:
         fetched_map: dict,
         backup_model_count: int,
         min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
-        max_shrink_pct: float = MODEL_COST_MAP_MAX_SHRINK_PERCENT,
+        max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
         """
         Validate the integrity of a fetched model cost map.
@@ -122,7 +121,7 @@ class GetModelCostMap:
         Checks:
         1. ``_check_is_valid_dict`` -- fetched map is a non-empty dict.
         2. ``_check_model_count_not_reduced`` -- model count meets minimum
-           and has not shrunk >``max_shrink_pct`` vs backup.
+           and has not shrunk >``max_shrink_ratio`` vs backup.
 
         Returns True if all checks pass, False otherwise.
         """
@@ -133,7 +132,7 @@ class GetModelCostMap:
             fetched_map=fetched_map,
             backup_model_count=backup_model_count,
             min_model_count=min_model_count,
-            max_shrink_pct=max_shrink_pct,
+            max_shrink_ratio=max_shrink_ratio,
         ):
             return False
 
@@ -160,9 +159,9 @@ def get_model_cost_map(url: str) -> dict:
     2. Otherwise fetches from ``url``, validates integrity, and falls back
        to the local backup on any failure.
 
-    The backup model count is cached in ``GetModelCostMap`` so validation
-    only costs a cheap integer comparison — the full backup JSON is only
-    parsed when it needs to be *returned* as a fallback.
+    Only the backup model count is cached (a single int) for validation.
+    The full backup dict is only parsed when it must be *returned* as a
+    fallback — it is never held in memory long-term.
     """
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
@@ -180,7 +179,7 @@ def get_model_cost_map(url: str) -> dict:
         )
         return GetModelCostMap.load_local_model_cost_map()
 
-    # Validate fetched JSON integrity — uses cached backup count, no file I/O
+    # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=content,
         backup_model_count=GetModelCostMap._get_backup_model_count(),

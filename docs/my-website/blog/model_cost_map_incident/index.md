@@ -77,9 +77,8 @@ A contributor PR introduced an extra `{` bracket, producing invalid JSON. The re
 | 1 | CI validation on `model_prices_and_context_window.json` | ✅ Done | [PR #20605](https://github.com/BerriAI/litellm/pull/20605) |
 | 2 | Warning log on fallback to local backup | ✅ Done | [`get_model_cost_map.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm_core_utils/get_model_cost_map.py) |
 | 3 | `GetModelCostMap` class with integrity validation helpers | ✅ Done | [`get_model_cost_map.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm_core_utils/get_model_cost_map.py) |
-| 4 | Validation constants (`MODEL_COST_MAP_MIN_MODEL_COUNT`, `MODEL_COST_MAP_MAX_SHRINK_PERCENT`) | ✅ Done | [`constants.py`](https://github.com/BerriAI/litellm/blob/main/litellm/constants.py) |
-| 5 | Resilience test suite (bad hosted map, bad backup, fallback, completion) | ✅ Done | [`test_model_cost_map_resilience.py`](https://github.com/BerriAI/litellm/blob/main/tests/llm_translation/test_model_cost_map_resilience.py) |
-| 6 | Test that backup model cost map always exists and contains common models | ✅ Done | [`test_model_cost_map_resilience.py`](https://github.com/BerriAI/litellm/blob/main/tests/llm_translation/test_model_cost_map_resilience.py) |
+| 4 | Resilience test suite (bad hosted map, bad backup, fallback, completion) | ✅ Done | [`test_model_cost_map_resilience.py`](https://github.com/BerriAI/litellm/blob/main/tests/llm_translation/test_model_cost_map_resilience.py) |
+| 5 | Test that backup model cost map always exists and contains common models | ✅ Done | [`test_model_cost_map_resilience.py`](https://github.com/BerriAI/litellm/blob/main/tests/llm_translation/test_model_cost_map_resilience.py) |
 
 Enterprises that require zero external dependencies at import time can set `LITELLM_LOCAL_MODEL_COST_MAP=True` to skip the GitHub fetch entirely.
 
