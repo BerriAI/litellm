@@ -2277,6 +2277,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
+      - run: python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
       - run: python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py

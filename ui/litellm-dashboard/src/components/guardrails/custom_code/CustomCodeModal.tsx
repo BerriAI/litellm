@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Modal, Select, Switch, Collapse, Input } from "antd";
+import { Modal, Select, Switch, Collapse, Input, Divider } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import {
   CodeOutlined,
@@ -8,6 +8,8 @@ import {
   CloseCircleOutlined,
   CaretRightOutlined,
   SaveOutlined,
+  UsergroupAddOutlined,
+  ExportOutlined,
 } from "@ant-design/icons";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
@@ -90,6 +92,7 @@ const CODE_TEMPLATES = {
     return allow()`,
   },
 };
+
 
 // Available primitives organized by category
 const PRIMITIVES = {
@@ -241,6 +244,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
   // Handle template change
   const handleTemplateChange = (templateKey: string) => {
     setSelectedTemplate(templateKey);
+    
+    // Check if it's a standard template
     setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
@@ -486,12 +491,45 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
               onChange={handleTemplateChange}
               className="w-full"
               size="middle"
+              dropdownRender={(menu) => (
+                <>
+                  {menu}
+                  <Divider style={{ margin: '8px 0' }} />
+                  <div
+                    style={{
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      color: '#1890ff',
+                      fontSize: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      window.open('https://models.litellm.ai/guardrails', '_blank');
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f0f0f0';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <UsergroupAddOutlined />
+                    <span>Browse Community templates</span>
+                    <ExportOutlined style={{ fontSize: '10px' }} />
+                  </div>
+                </>
+              )}
             >
-              {Object.entries(CODE_TEMPLATES).map(([key, template]) => (
-                <Select.Option key={key} value={key}>
-                  {template.name}
-                </Select.Option>
-              ))}
+              <Select.OptGroup label="STANDARD">
+                {Object.entries(CODE_TEMPLATES).map(([key, template]) => (
+                  <Select.Option key={key} value={key}>
+                    {template.name}
+                  </Select.Option>
+                ))}
+              </Select.OptGroup>
             </Select>
           </div>
           <div className="flex items-center gap-2 pt-5">
@@ -632,6 +670,27 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                 </div>
               </Panel>
             </Collapse>
+            {/* Contribution CTA Banner */}
+            <div className="mt-3 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-100 rounded-full p-2">
+                  <UsergroupAddOutlined className="text-blue-600 text-lg" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-gray-900">Built a useful guardrail?</div>
+                  <div className="text-xs text-gray-600">Share it with the community and help others build faster</div>
+                </div>
+              </div>
+              <Button
+                size="xs"
+                onClick={() => window.open('https://github.com/BerriAI/litellm-guardrails', '_blank')}
+                icon={ExportOutlined}
+                className="bg-blue-600 hover:bg-blue-700 text-white border-0"
+              >
+                Contribute Template
+              </Button>
+            </div>
+
           </div>
 
           {/* Primitives Panel */}
