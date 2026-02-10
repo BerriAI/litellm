@@ -62,6 +62,11 @@ class S3Logger:
                 s3_use_team_prefix = bool(
                     litellm.s3_callback_params.get("s3_use_team_prefix", False)
                 )
+                self.s3_log_prompts_only = bool(
+                    litellm.s3_callback_params.get("s3_log_prompts_only", False)
+                )
+            else:
+                self.s3_log_prompts_only = False
             self.s3_use_team_prefix = s3_use_team_prefix
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
@@ -156,7 +161,13 @@ class S3Logger:
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            payload_str = safe_dumps(payload)
+            payload_dict = dict(payload)
+            if self.s3_log_prompts_only:
+                # Store only prompt content when prompts-only logging is enabled.
+                payload_dict = {
+                    "messages": payload_dict.get("messages") or [],
+                }
+            payload_str = safe_dumps(payload_dict)
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
