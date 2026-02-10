@@ -541,7 +541,7 @@ if MCP_AVAILABLE:
                 static_headers=request.static_headers,
             )
 
-            client = global_mcp_server_manager._create_mcp_client(
+            client = await global_mcp_server_manager._create_mcp_client(
                 server=server_model,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=merged_headers,
