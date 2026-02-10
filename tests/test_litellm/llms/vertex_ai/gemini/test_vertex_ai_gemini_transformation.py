@@ -5,6 +5,8 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
     _transform_request_body,
     check_if_part_exists_in_parts,
+    _get_highest_media_resolution,
+    _extract_max_media_resolution_from_messages,
 )
 from litellm.types.llms.vertex_ai import BlobType
 
@@ -546,12 +548,224 @@ def test_dummy_signature_with_function_call_mode():
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
+# Tests for media_resolution (detail parameter) handling - Issue #17084
+class TestMediaResolution:
+    """Tests for media_resolution handling in Gemini 2.x models"""
+
+    def test_get_highest_media_resolution_high_wins(self):
+        """Test that 'high' resolution takes precedence over 'low'"""
+        assert _get_highest_media_resolution("low", "high") == "high"
+        assert _get_highest_media_resolution("high", "low") == "high"
+        assert _get_highest_media_resolution(None, "high") == "high"
+        assert _get_highest_media_resolution("high", None) == "high"
+
+    def test_get_highest_media_resolution_low_over_none(self):
+        """Test that 'low' resolution takes precedence over None"""
+        assert _get_highest_media_resolution(None, "low") == "low"
+        assert _get_highest_media_resolution("low", None) == "low"
+
+    def test_get_highest_media_resolution_same_values(self):
+        """Test handling of same resolution values"""
+        assert _get_highest_media_resolution("high", "high") == "high"
+        assert _get_highest_media_resolution("low", "low") == "low"
+        assert _get_highest_media_resolution(None, None) is None
+
+    def test_extract_max_media_resolution_single_image_high(self):
+        """Test extraction of media resolution from single image with detail=high"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) == "high"
+
+    def test_extract_max_media_resolution_single_image_low(self):
+        """Test extraction of media resolution from single image with detail=low"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "low"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) == "low"
+
+    def test_extract_max_media_resolution_no_detail(self):
+        """Test extraction when no detail parameter is provided"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) is None
+
+    def test_extract_max_media_resolution_multiple_images_mixed(self):
+        """Test that highest resolution is returned when multiple images have different details"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Compare these images"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "low"},
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,def456", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) == "high"
+
+    def test_extract_max_media_resolution_text_only(self):
+        """Test extraction from messages with no images"""
+        messages = [
+            {"role": "user", "content": "Hello, how are you?"},
+            {"role": "assistant", "content": "I'm doing well!"},
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) is None
+
+    def test_transform_request_body_gemini_2x_adds_media_resolution(self):
+        """Test that media_resolution is added to generationConfig for Gemini 2.x models"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-2.5-flash",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        assert "generationConfig" in result
+        assert "mediaResolution" in result["generationConfig"]
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_HIGH"
+
+    def test_transform_request_body_gemini_2x_low_resolution(self):
+        """Test that low media_resolution is correctly added for Gemini 2.x"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "low"},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-2.5-flash",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        assert "generationConfig" in result
+        assert "mediaResolution" in result["generationConfig"]
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    def test_transform_request_body_gemini_3_no_global_media_resolution(self):
+        """Test that Gemini 3 models don't add media_resolution to generationConfig (they use per-part)"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-3-pro-preview",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        # Gemini 3 should NOT have mediaResolution in generationConfig
+        # (it's handled per-part in the content transformation)
+        if "generationConfig" in result:
+            assert "mediaResolution" not in result["generationConfig"]
+
+    def test_transform_request_body_no_detail_no_media_resolution(self):
+        """Test that no mediaResolution is added when detail is not specified"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-2.5-flash",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        # When no detail is specified, mediaResolution should not be in generationConfig
+        if "generationConfig" in result:
+            assert "mediaResolution" not in result["generationConfig"]
+
+
 def test_convert_tool_response_with_base64_image():
     """Test tool response with base64 data URI image."""
     # Create a small test image (1x1 red pixel PNG)
     test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
-    
+
     # Create tool message with image
     tool_message = {
         "role": "tool",
@@ -567,7 +781,7 @@ def test_convert_tool_response_with_base64_image():
             }
         ]
     }
-    
+
     # Mock last message with tool calls
     last_message_with_tool_calls = {
         "tool_calls": [
@@ -580,16 +794,16 @@ def test_convert_tool_response_with_base64_image():
             }
         ]
     }
-    
+
     # Convert tool response (returns list when image is present)
     result = convert_to_gemini_tool_call_result(
         tool_message, last_message_with_tool_calls
     )
-    
+
     # Verify results - should be a list with 2 parts (function_response + inline_data)
     assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
     assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-    
+
     # Find function_response part and inline_data part
     function_response_part = None
     inline_data_part = None
@@ -598,7 +812,7 @@ def test_convert_tool_response_with_base64_image():
             function_response_part = part
         elif "inline_data" in part:
             inline_data_part = part
-    
+
     # Check function_response exists
     assert function_response_part is not None, "Missing function_response part"
     function_response = function_response_part["function_response"]
@@ -607,7 +821,7 @@ def test_convert_tool_response_with_base64_image():
     # Verify JSON response is parsed correctly
     assert "url" in function_response["response"]
     assert function_response["response"]["url"] == "https://example.com"
-    
+
     # Check inline_data exists
     assert inline_data_part is not None, "Missing inline_data part"
     inline_data: BlobType = inline_data_part["inline_data"]
@@ -623,7 +837,7 @@ def test_convert_tool_response_with_url_image():
 
     # Use a publicly accessible test image URL
     test_image_url = "https://via.placeholder.com/1x1.png"
-    
+
     tool_message = {
         "role": "tool",
         "tool_call_id": "call_test456",
@@ -638,7 +852,7 @@ def test_convert_tool_response_with_url_image():
             }
         ]
     }
-    
+
     last_message_with_tool_calls = {
         "tool_calls": [
             {
@@ -650,25 +864,25 @@ def test_convert_tool_response_with_url_image():
             }
         ]
     }
-    
+
     try:
         result = convert_to_gemini_tool_call_result(
             tool_message, last_message_with_tool_calls
         )
-        
+
         # Should be a list with 2 parts when image is present
         assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
         assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-        
+
         # Find parts
         function_response_part = next(p for p in result if "function_response" in p)
         inline_data_part = next(p for p in result if "inline_data" in p)
-        
+
         # Check function_response exists
         assert function_response_part is not None, "Missing function_response part"
         function_response = function_response_part["function_response"]
         assert function_response["name"] == "type_text_at"
-        
+
         # Check inline_data exists (URL should be downloaded and converted)
         assert inline_data_part is not None, "Missing inline_data part"
         inline_data: BlobType = inline_data_part["inline_data"]
@@ -691,7 +905,7 @@ def test_convert_tool_response_text_only():
             }
         ]
     }
-    
+
     last_message_with_tool_calls = {
         "tool_calls": [
             {
@@ -703,14 +917,14 @@ def test_convert_tool_response_text_only():
             }
         ]
     }
-    
+
     result = convert_to_gemini_tool_call_result(
         tool_message, last_message_with_tool_calls
     )
-    
+
     # Should be a single part (no list) when no image
     assert not isinstance(result, list), "Should return single part when no image"
-    
+
     # Check function_response exists
     assert "function_response" in result
     function_response = result["function_response"]
@@ -718,7 +932,7 @@ def test_convert_tool_response_text_only():
     # Verify JSON response is parsed correctly
     assert "status" in function_response["response"]
     assert function_response["response"]["status"] == "completed"
-    
+
     # Check inline_data does NOT exist (no image provided)
     assert "inline_data" not in result
 
@@ -726,39 +940,39 @@ def test_convert_tool_response_text_only():
 def test_file_data_field_order():
     """
     Test that file_data fields are in the correct order (mime_type before file_uri).
-    
+
     The Gemini API is sensitive to field order in the file_data object.
     This test verifies that mime_type comes before file_uri in both:
     1. Dictionary key order
     2. JSON serialization
-    
+
     Related issue: Gemini API returns 400 INVALID_ARGUMENT when fields are in wrong order.
     """
     import json
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
-    
+
     # Test with HTTPS URL and explicit format (audio file)
     file_url = "https://generativelanguage.googleapis.com/v1beta/files/test123"
     format = "audio/mpeg"
-    
+
     result = _process_gemini_media(image_url=file_url, format=format)
-    
+
     # Verify the result has file_data
     assert "file_data" in result
     file_data = result["file_data"]
-    
+
     # Verify both fields are present
     assert "mime_type" in file_data
     assert "file_uri" in file_data
     assert file_data["mime_type"] == "audio/mpeg"
     assert file_data["file_uri"] == file_url
-    
+
     # Verify field order by checking dictionary keys
     # In Python 3.7+, dict maintains insertion order
     file_data_keys = list(file_data.keys())
     assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
         "mime_type must come before file_uri in the file_data dict"
-    
+
     # Also verify by serializing to JSON string
     json_str = json.dumps(file_data)
     mime_type_pos = json_str.find('"mime_type"')
@@ -771,20 +985,20 @@ def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
     import json
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
-    
+
     # Test with GCS URL
     gcs_url = "gs://bucket/audio.mp3"
-    
+
     result = _process_gemini_media(image_url=gcs_url)
-    
+
     # Verify the result has file_data
     assert "file_data" in result
     file_data = result["file_data"]
-    
+
     # Verify both fields are present
     assert "mime_type" in file_data
     assert "file_uri" in file_data
-    
+
     # Verify field order
     file_data_keys = list(file_data.keys())
     assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
@@ -794,11 +1008,11 @@ def test_file_data_field_order_gcs_urls():
 def test_extract_file_data_with_path_object():
     """
     Test that filename is correctly extracted from Path objects for MIME type detection.
-    
+
     When uploading files using Path objects (e.g., Path("speech.mp3")), the filename
     must be extracted to enable proper MIME type detection. Without this, files get
     uploaded with 'application/octet-stream' instead of the correct MIME type.
-    
+
     Related issue: Files uploaded with wrong MIME type cause Gemini API to reject
     requests where the specified format doesn't match the uploaded file's MIME type.
     """
@@ -806,28 +1020,28 @@ def test_extract_file_data_with_path_object():
     from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
     import tempfile
     import os
-    
+
     # Create a temporary MP3 file
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp.write(b"fake mp3 content")
         tmp_path = tmp.name
-    
+
     try:
         # Test with Path object
         path_obj = Path(tmp_path)
         extracted = extract_file_data(path_obj)
-        
+
         # Verify filename was extracted
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".mp3")
-        
+
         # Verify MIME type was correctly detected
         assert extracted["content_type"] == "audio/mpeg", \
             f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
-        
+
         # Verify content was read
         assert extracted["content"] == b"fake mp3 content"
-        
+
     finally:
         # Clean up temporary file
         os.unlink(tmp_path)
@@ -838,27 +1052,27 @@ def test_extract_file_data_with_string_path():
     from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
     import tempfile
     import os
-    
+
     # Create a temporary WAV file
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(b"fake wav content")
         tmp_path = tmp.name
-    
+
     try:
         # Test with string path
         extracted = extract_file_data(tmp_path)
-        
+
         # Verify filename was extracted
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".wav")
-        
+
         # Verify MIME type was correctly detected (can be audio/wav or audio/x-wav depending on system)
         assert extracted["content_type"] in ["audio/wav", "audio/x-wav"], \
             f"Expected 'audio/wav' or 'audio/x-wav' but got '{extracted['content_type']}'"
-        
+
         # Verify content was read
         assert extracted["content"] == b"fake wav content"
-        
+
     finally:
         # Clean up temporary file
         os.unlink(tmp_path)
@@ -867,14 +1081,14 @@ def test_extract_file_data_with_string_path():
 def test_extract_file_data_with_tuple_format():
     """Test that tuple format (with explicit content_type) still works correctly."""
     from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-    
+
     # Test with tuple format: (filename, content, content_type)
     filename = "test_audio.mp3"
     content = b"test audio content"
     content_type = "audio/mpeg"
-    
+
     extracted = extract_file_data((filename, content, content_type))
-    
+
     # Verify all fields are correct
     assert extracted["filename"] == filename
     assert extracted["content"] == content
@@ -886,20 +1100,20 @@ def test_extract_file_data_fallback_to_octet_stream():
     from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
     import tempfile
     import os
-    
+
     # Create a temporary file with unknown extension
     with tempfile.NamedTemporaryFile(suffix=".xyz123", delete=False) as tmp:
         tmp.write(b"unknown content")
         tmp_path = tmp.name
-    
+
     try:
         # Test with unknown file type
         extracted = extract_file_data(tmp_path)
-        
+
         # Verify filename was extracted
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".xyz123")
-        
+
         # Verify MIME type falls back to octet-stream
         assert extracted["content_type"] == "application/octet-stream", \
             f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
