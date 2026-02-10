@@ -853,29 +853,66 @@ def test_role_assumption_ttl_calculation():
         assert 3500 <= ttl <= 3600  # Allow some variance for test execution time
 
 
-def test_role_assumption_error_handling():
+def test_role_assumption_access_denied_falls_back_to_env_vars():
     """
-    Test that role assumption errors are properly propagated.
+    Test that when AssumeRole fails with AccessDenied, we fall back to ambient credentials.
+    This handles ECS task roles, root accounts, and same-role scenarios where
+    AssumeRole is unnecessary because the caller already has the role's permissions.
     """
     base_aws_llm = BaseAWSLLM()
-    
-    # Mock the boto3 STS client to raise an exception
+
+    # Mock the boto3 STS client to raise AccessDenied
     mock_sts_client = MagicMock()
-    mock_sts_client.assume_role.side_effect = Exception("AccessDenied: User is not authorized to perform sts:AssumeRole")
-    
+    mock_sts_client.assume_role.side_effect = Exception(
+        "An error occurred (AccessDenied) when calling the AssumeRole operation: "
+        "Roles may not be assumed by root accounts."
+    )
+
+    # Mock _auth_with_env_vars to return fallback credentials
+    mock_creds = MagicMock()
+    mock_creds.access_key = "fallback-access-key"
+    mock_creds.secret_key = "fallback-secret-key"
+
     with patch("boto3.client", return_value=mock_sts_client):
-        
-        # Should raise the exception
+        with patch.object(
+            base_aws_llm, "_auth_with_env_vars", return_value=(mock_creds, None)
+        ) as mock_env_auth:
+            credentials, ttl = base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::1111111111111:role/UnauthorizedRole",
+                aws_session_name="error-test-session",
+            )
+
+            # Should have fallen back to env vars
+            mock_env_auth.assert_called_once()
+            assert credentials.access_key == "fallback-access-key"
+
+
+def test_role_assumption_non_access_denied_error_propagated():
+    """
+    Test that non-AccessDenied errors from AssumeRole are still propagated.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    # Mock the boto3 STS client to raise a non-AccessDenied exception
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.side_effect = Exception(
+        "An error occurred (MalformedPolicyDocument) when calling the AssumeRole operation"
+    )
+
+    with patch("boto3.client", return_value=mock_sts_client):
         with pytest.raises(Exception) as exc_info:
             base_aws_llm._auth_with_aws_role(
                 aws_access_key_id=None,
                 aws_secret_access_key=None,
                 aws_session_token=None,
-                aws_role_name="arn:aws:iam::1111111111111:role/UnauthorizedRole",
-                aws_session_name="error-test-session"
+                aws_role_name="arn:aws:iam::1111111111111:role/BadPolicyRole",
+                aws_session_name="error-test-session",
             )
-        
-        assert "AccessDenied" in str(exc_info.value)
+
+        assert "MalformedPolicyDocument" in str(exc_info.value)
 
 
 def test_multiple_role_assumptions_in_sequence():
@@ -1195,3 +1232,138 @@ def test_converse_handler_external_id_extraction():
                             assert hasattr(mock_get_credentials, 'called_kwargs')
                             assert "aws_external_id" in mock_get_credentials.called_kwargs
                             assert mock_get_credentials.called_kwargs["aws_external_id"] == "TestExternalID123"
+
+
+def test_is_already_running_as_role_irsa_same_role():
+    """Test IRSA fast path: when AWS_ROLE_ARN matches target role."""
+    base_aws_llm = BaseAWSLLM()
+
+    with patch.dict(os.environ, {
+        "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/MyRole",
+        "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/token",
+    }):
+        assert base_aws_llm._is_already_running_as_role(
+            "arn:aws:iam::123456789012:role/MyRole"
+        ) is True
+
+
+def test_is_already_running_as_role_irsa_different_role():
+    """Test IRSA fast path: when AWS_ROLE_ARN does NOT match target role."""
+    base_aws_llm = BaseAWSLLM()
+
+    with patch.dict(os.environ, {
+        "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/MyRole",
+        "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/token",
+    }):
+        assert base_aws_llm._is_already_running_as_role(
+            "arn:aws:iam::999999999999:role/OtherRole"
+        ) is False
+
+
+def test_is_already_running_as_role_ecs_task_role():
+    """Test ECS/EC2 path: GetCallerIdentity shows assumed-role matching target."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyEcsTaskRole/ecs-task-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        # Ensure no IRSA env vars
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::123456789012:role/MyEcsTaskRole"
+                ) is True
+
+
+def test_is_already_running_as_role_ecs_different_role():
+    """Test ECS/EC2 path: GetCallerIdentity shows a different role."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyEcsTaskRole/ecs-task-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::999999999999:role/DifferentRole"
+                ) is False
+
+
+def test_is_already_running_as_role_ecs_role_with_path():
+    """Test ECS path with role that has a path prefix (e.g., /service-role/MyRole)."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyEcsTaskRole/ecs-task-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                # Role ARN with path
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::123456789012:role/service-role/MyEcsTaskRole"
+                ) is True
+
+
+def test_is_already_running_as_role_get_caller_identity_fails():
+    """Test that when GetCallerIdentity fails, we return False (don't crash)."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.side_effect = Exception("No credentials found")
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::123456789012:role/SomeRole"
+                ) is False
+
+
+def test_get_credentials_ecs_same_role_skips_assume_role():
+    """
+    End-to-end test: when running on ECS with the same role as aws_role_name,
+    get_credentials should use ambient credentials and NOT call AssumeRole.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    mock_creds = MagicMock()
+    mock_creds.access_key = "ecs-access-key"
+    mock_creds.secret_key = "ecs-secret-key"
+    mock_creds.token = "ecs-session-token"
+
+    with patch.object(
+        base_aws_llm,
+        "_is_already_running_as_role",
+        return_value=True,
+    ):
+        with patch.object(
+            base_aws_llm,
+            "_auth_with_env_vars",
+            return_value=(mock_creds, None),
+        ) as mock_env_auth:
+            with patch.object(
+                base_aws_llm,
+                "_auth_with_aws_role",
+            ) as mock_role_auth:
+                credentials = base_aws_llm.get_credentials(
+                    aws_role_name="arn:aws:iam::123456789012:role/MyEcsTaskRole",
+                    aws_region_name="us-east-1",
+                )
+
+                # Should use env vars, NOT role assumption
+                mock_env_auth.assert_called_once()
+                mock_role_auth.assert_not_called()
+                assert credentials.access_key == "ecs-access-key"

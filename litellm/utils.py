@@ -6140,6 +6140,12 @@ def validate_environment(  # noqa: PLR0915
             if (
                 "AWS_ACCESS_KEY_ID" in os.environ
                 and "AWS_SECRET_ACCESS_KEY" in os.environ
+            ) or (
+                # IAM role, profile, or web identity auth don't require access keys
+                "AWS_ROLE_ARN" in os.environ
+                or "AWS_PROFILE" in os.environ
+                or "AWS_WEB_IDENTITY_TOKEN_FILE" in os.environ
+                or "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" in os.environ  # ECS task role
             ):
                 keys_in_environment = True
             else:
