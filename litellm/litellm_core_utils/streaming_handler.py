@@ -1021,8 +1021,12 @@ class CustomStreamWrapper:
             elif (
                 self.sent_first_thinking_block is True
                 and not self.sent_last_thinking_block
-                and model_response.choices[0].delta.content
             ):
+                # Emit closing </think> tag when reasoning content stops,
+                # even if the current chunk has no content.  The previous
+                # condition required `delta.content` to be truthy, which
+                # caused the tag to be silently dropped when the model
+                # transitioned from thinking to an empty delta.
                 model_response.choices[0].delta.content = "</think>" + (
                     model_response.choices[0].delta.content or ""
                 )
