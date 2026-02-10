@@ -226,6 +226,7 @@ LLM_CONFIG_NAMES = (
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
+    "PerplexityResponsesConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -274,6 +275,7 @@ LLM_CONFIG_NAMES = (
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
+    "PerplexityResponsesConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
     "IBMWatsonXChatConfig",
@@ -901,6 +903,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.manus.responses.transformation",
         "ManusResponsesAPIConfig",
     ),
+    "PerplexityResponsesConfig": (
+        ".llms.perplexity.responses.transformation",
+        "PerplexityResponsesConfig",
+    ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
         "GoogleAIStudioInteractionsConfig",
@@ -1032,6 +1038,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "PerplexityChatConfig": (
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",
+    ),
+    "PerplexityResponsesConfig": (
+        ".llms.perplexity.responses.transformation",
+        "PerplexityResponsesConfig",
     ),
     "AzureOpenAIO1Config": (
         ".llms.azure.chat.o_series_transformation",

@@ -8243,6 +8243,8 @@ class ProviderConfigManager:
             return litellm.VolcEngineResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
+        elif litellm.LlmProviders.PERPLEXITY == provider:
+            return litellm.PerplexityResponsesConfig()
         return None
 
     @staticmethod
