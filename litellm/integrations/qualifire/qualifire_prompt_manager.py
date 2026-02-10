@@ -130,7 +130,7 @@ class QualifirePromptManager(CustomPromptManagement):
         """
         import asyncio
 
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             self.async_compile_prompt_helper(
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
