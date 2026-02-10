@@ -1,0 +1,18 @@
+####################################################################
+### Minimal LiteLLM Proxy Configuration for Performance Testing
+####################################################################
+
+general_settings:
+  master_key: "sk-1234"
+
+
+
+
+model_list:
+  - model_name: "gpt-o1"
+    litellm_params:
+      model: openai/gpt-o1
+      api_base: http://localhost:8090
+      api_key: "sk-1234"
+    model_info:
+      context_length: 200000
