@@ -334,7 +334,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages = new_messages
 
         self.model = model
-        self.messages = copy.deepcopy(messages) if messages is not None else None
+        self.messages = (
+            [msg.copy() if isinstance(msg, dict) else msg for msg in messages]
+            if isinstance(messages, list)
+            else messages
+        ) if messages is not None else None
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
