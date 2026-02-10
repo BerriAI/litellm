@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import time
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,8 +10,6 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
-
-import time
 
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -160,6 +160,95 @@ def test_logging_prevent_double_logging(logging_obj):
     assert logging_obj.should_run_logging(event_type="sync_failure") == True
     assert logging_obj.should_run_logging(event_type="async_success") == True
     assert logging_obj.should_run_logging(event_type="async_failure") == True
+
+
+def _set_base_model_call_details(logging_obj, litellm_params=None):
+    logging_obj.model_call_details = {
+        "litellm_params": litellm_params or {},
+        "messages": [],
+        "input": [],
+        "optional_params": {},
+        "model": logging_obj.model,
+    }
+    logging_obj.sync_streaming_chunks = []
+    logging_obj.dynamic_success_callbacks = []
+
+
+def test_success_handler_finalizes_parent_span_for_async_requests(logging_obj):
+    logging_obj.stream = False
+    _set_base_model_call_details(logging_obj, litellm_params={})
+    start = datetime.utcnow()
+    result_payload = {"id": "resp"}
+
+    with patch.object(
+        LitellmLogging,
+        "_success_handler_helper_fn",
+        return_value=(start, start, result_payload),
+    ), patch.object(
+        LitellmLogging, "_get_assembled_streaming_response", return_value=None
+    ), patch.object(
+        LitellmLogging, "get_combined_callback_list", return_value=[]
+    ), patch.object(
+        LitellmLogging, "_finalize_proxy_parent_span"
+    ) as finalize_mock:
+        logging_obj.success_handler(result=result_payload)
+        finalize_mock.assert_called_once_with(end_time=start)
+
+
+def test_success_handler_skips_parent_span_for_override_requests(logging_obj):
+    logging_obj.stream = False
+    _set_base_model_call_details(logging_obj, litellm_params={"acompletion": True})
+    start = datetime.utcnow()
+
+    with patch.object(
+        LitellmLogging,
+        "_success_handler_helper_fn",
+        return_value=(start, start, {}),
+    ), patch.object(
+        LitellmLogging, "_get_assembled_streaming_response", return_value=None
+    ), patch.object(
+        LitellmLogging, "get_combined_callback_list", return_value=[]
+    ), patch.object(
+        LitellmLogging, "_finalize_proxy_parent_span"
+    ) as finalize_mock:
+        logging_obj.success_handler(result={})
+        finalize_mock.assert_not_called()
+
+
+def test_failure_handler_finalizes_parent_span_for_async_requests(logging_obj):
+    _set_base_model_call_details(logging_obj, litellm_params={})
+    start = datetime.utcnow()
+    exception = Exception("boom")
+
+    with patch.object(
+        LitellmLogging,
+        "_failure_handler_helper_fn",
+        return_value=(start, start),
+    ), patch.object(
+        LitellmLogging, "get_combined_callback_list", return_value=[]
+    ), patch.object(
+        LitellmLogging, "_finalize_proxy_parent_span"
+    ) as finalize_mock:
+        logging_obj.failure_handler(exception=exception, traceback_exception="trace")
+        finalize_mock.assert_called_once_with(end_time=start)
+
+
+def test_failure_handler_skips_parent_span_for_override_requests(logging_obj):
+    _set_base_model_call_details(logging_obj, litellm_params={"aembedding": True})
+    start = datetime.utcnow()
+    exception = Exception("boom")
+
+    with patch.object(
+        LitellmLogging,
+        "_failure_handler_helper_fn",
+        return_value=(start, start),
+    ), patch.object(
+        LitellmLogging, "get_combined_callback_list", return_value=[]
+    ), patch.object(
+        LitellmLogging, "_finalize_proxy_parent_span"
+    ) as finalize_mock:
+        logging_obj.failure_handler(exception=exception, traceback_exception="trace")
+        finalize_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -1872,6 +1872,8 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
+
+        callbacks: List[Any] = []
         litellm_params = self.model_call_details.get("litellm_params", {})
         is_sync_request = (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
@@ -2312,6 +2314,32 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
             )
 
+        if (is_sync_request
+            and self.call_type
+            != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
+        ):
+            self._finalize_proxy_parent_span(end_time=end_time)
+
+    def _finalize_proxy_parent_span(self, end_time: Optional[dt_object]) -> None:
+        """Close the proxy-created parent span via the proxy OpenTelemetry logger."""
+
+        if end_time is None:
+            return
+
+        from litellm.proxy.proxy_server import open_telemetry_logger
+
+        if open_telemetry_logger is not None:
+            try:
+                open_telemetry_logger.close_litellm_proxy_request_span(
+                        kwargs=self.model_call_details,
+                        end_time=end_time,
+                )
+            except Exception:
+                verbose_logger.debug(
+                    "LiteLLM.Logging: Unable to close proxy parent span via OpenTelemetry",
+                    exc_info=True,
+                )
+
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
@@ -2382,6 +2410,7 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
+        callbacks: List[Any] = []
 
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
@@ -2661,6 +2690,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._handle_callback_failure(callback=callback)
                 pass
 
+        self._finalize_proxy_parent_span(end_time=end_time)
+
     def _handle_callback_failure(self, callback: Any):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
@@ -2771,6 +2802,7 @@ class Logging(LiteLLMLoggingBaseClass):
             event_type="sync_failure"
         ):  # prevent double logging
             return
+
         litellm_params = self.model_call_details.get("litellm_params", {})
         is_sync_request = (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
@@ -2860,7 +2892,9 @@ class Logging(LiteLLMLoggingBaseClass):
                             print_verbose=print_verbose,
                         )
                     if (
-                        callable(callback) and customLogger is not None
+                        callable(callback)
+                        and customLogger is not None
+                        and is_sync_request
                     ):  # custom logger functions
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -2956,6 +2990,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 )
             )
+        if is_sync_request:
+            self._finalize_proxy_parent_span(end_time=end_time)
 
     async def async_failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -3020,6 +3056,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
+
+        self._finalize_proxy_parent_span(end_time=end_time)
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
