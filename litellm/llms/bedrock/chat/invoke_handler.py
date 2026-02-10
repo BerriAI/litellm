@@ -1655,32 +1655,72 @@ class AWSEventStreamDecoder:
         self, iterator: Iterator[bytes]
     ) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
+        from botocore.eventstream import ChecksumMismatch, EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
+        accumulated_bytes = b""  # Track raw bytes for error handling
         for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                message = self._parse_message_from_event(event)
-                if message:
-                    # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+            accumulated_bytes += chunk
+            try:
+                event_stream_buffer.add_data(chunk)
+                for event in event_stream_buffer:
+                    message = self._parse_message_from_event(event)
+                    if message:
+                        # sse_event = ServerSentEvent(data=message, event="completion")
+                        _data = json.loads(message)
+                        yield self._chunk_parser(chunk_data=_data)
+            except ChecksumMismatch:
+                # Bedrock may return JSON error instead of event stream
+                # ChecksumMismatch indicates we received non-event-stream data
+                # See: https://github.com/BerriAI/litellm/issues/20589
+                try:
+                    error_response = json.loads(accumulated_bytes.decode("utf-8"))
+                    error_message = error_response.get("message", str(error_response))
+                    raise BedrockError(
+                        status_code=400,
+                        message=f"Bedrock returned error: {error_message}",
+                    )
+                except json.JSONDecodeError:
+                    # Not valid JSON, re-raise original checksum error
+                    raise BedrockError(
+                        status_code=500,
+                        message=f"Bedrock streaming error: received malformed response data",
+                    )
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
     ) -> AsyncIterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
+        from botocore.eventstream import ChecksumMismatch, EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
+        accumulated_bytes = b""  # Track raw bytes for error handling
         async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                message = self._parse_message_from_event(event)
-                if message:
-                    _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+            accumulated_bytes += chunk
+            try:
+                event_stream_buffer.add_data(chunk)
+                for event in event_stream_buffer:
+                    message = self._parse_message_from_event(event)
+                    if message:
+                        _data = json.loads(message)
+                        yield self._chunk_parser(chunk_data=_data)
+            except ChecksumMismatch:
+                # Bedrock may return JSON error instead of event stream
+                # ChecksumMismatch indicates we received non-event-stream data
+                # See: https://github.com/BerriAI/litellm/issues/20589
+                try:
+                    error_response = json.loads(accumulated_bytes.decode("utf-8"))
+                    error_message = error_response.get("message", str(error_response))
+                    raise BedrockError(
+                        status_code=400,
+                        message=f"Bedrock returned error: {error_message}",
+                    )
+                except json.JSONDecodeError:
+                    # Not valid JSON, re-raise original checksum error
+                    raise BedrockError(
+                        status_code=500,
+                        message=f"Bedrock streaming error: received malformed response data",
+                    )
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
