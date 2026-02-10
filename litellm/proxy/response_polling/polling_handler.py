@@ -148,7 +148,9 @@ class ResponsePollingHandler:
             return
         
         # Parse existing ResponsesAPIResponse from cache
-        state = json.loads(cached_state)
+        # InMemoryCache auto-deserializes JSON strings to dicts,
+        # while Redis returns raw strings - handle both cases
+        state = cached_state if isinstance(cached_state, dict) else json.loads(cached_state)
         
         # Update status (using OpenAI native status values)
         if status:
@@ -224,7 +226,7 @@ class ResponsePollingHandler:
         cached_state = await self.redis_cache.async_get_cache(cache_key)
         
         if cached_state:
-            return json.loads(cached_state)
+            return cached_state if isinstance(cached_state, dict) else json.loads(cached_state)
         
         return None
     
