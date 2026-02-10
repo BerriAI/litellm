@@ -5848,6 +5848,19 @@
         "output_cost_per_token": 7e-07,
         "supports_tool_choice": true
     },
+    "azure_ai/kimi-k2.5": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/kimi-k2-5-now-in-microsoft-foundry/4492321",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure_ai/ministral-3b": {
         "input_cost_per_token": 4e-08,
         "litellm_provider": "azure_ai",
