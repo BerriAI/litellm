@@ -21,6 +21,7 @@ export const OAUTH_FLOW = {
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
+  STDIO: "stdio",
 };
 
 export const handleTransport = (transport?: string | null): string => {
@@ -137,7 +138,11 @@ export interface MCPServer {
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;
-  url: string;
+  /**
+   * Only required for HTTP/SSE transports.
+   * For `stdio`, the backend can return null/undefined.
+   */
+  url?: string | null;
   transport?: string | null;
   auth_type?: string | null;
   authorization_url?: string | null;
@@ -158,6 +163,11 @@ export interface MCPServer {
   allowed_tools?: string[];
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
+
+  /** Stdio-only fields (present when transport === 'stdio') */
+  command?: string | null;
+  args?: string[] | null;
+  env?: Record<string, string> | null;
 }
 
 export interface MCPServerProps {
