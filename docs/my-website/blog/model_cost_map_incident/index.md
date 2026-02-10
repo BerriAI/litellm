@@ -6,7 +6,7 @@ authors:
   - name: Ishaan Jaffer
     title: "CTO, LiteLLM"
     url: https://www.linkedin.com/in/ishaanjaffer/
-    image_url: image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
 tags: [incident-report, stability]
 hide_table_of_contents: false
 ---

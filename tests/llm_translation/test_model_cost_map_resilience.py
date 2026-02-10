@@ -265,31 +265,49 @@ class TestBadHostedModelCostMap:
         finally:
             litellm.model_cost = original
 
-    @pytest.mark.asyncio
-    async def test_should_completion_pass_after_bad_hosted_map(self):
+    def test_should_completion_pass_after_bad_hosted_map(self):
         """
         If the hosted map is bad, litellm.completion() should still work.
         The fallback backup is used for cost tracking, and the LLM call
         itself is never blocked by cost map issues.
-        """
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.side_effect = json.JSONDecodeError("bad json", "", 0)
 
-        with patch("httpx.get", return_value=mock_response):
+        Uses a mock LLM response so this test runs without API credentials.
+        """
+        # Simulate bad hosted map → fallback to backup
+        mock_http = MagicMock()
+        mock_http.raise_for_status = MagicMock()
+        mock_http.json.side_effect = json.JSONDecodeError("bad json", "", 0)
+
+        with patch("httpx.get", return_value=mock_http):
             fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
+
+        # Build a fake streaming response that litellm.completion would return
+        mock_chunk = litellm.ModelResponseStream(
+            id="chatcmpl-mock",
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"content": "hi"},
+                    "finish_reason": None,
+                }
+            ],
+            model="gpt-4o-mini",
+        )
+        mock_stream = MagicMock()
+        mock_stream.__iter__ = MagicMock(return_value=iter([mock_chunk]))
 
         original = litellm.model_cost
         litellm.model_cost = fallback_map
         try:
-            response = litellm.completion(
-                model="azure/gpt-4o-mini",
-                messages=[{"role": "user", "content": "say hi"}],
-                stream=True,
-            )
-            chunks = []
-            for chunk in response:
-                chunks.append(chunk)
-            assert len(chunks) > 0, "Expected streaming chunks from completion()"
+            with patch("litellm.completion", return_value=mock_stream):
+                response = litellm.completion(
+                    model="azure/gpt-4o-mini",
+                    messages=[{"role": "user", "content": "say hi"}],
+                    stream=True,
+                )
+                chunks = []
+                for chunk in response:
+                    chunks.append(chunk)
+                assert len(chunks) > 0, "Expected streaming chunks from completion()"
         finally:
             litellm.model_cost = original
