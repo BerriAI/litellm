@@ -60,7 +60,7 @@ from ...anthropic.chat.transformation import AnthropicConfig
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
-def _sanitize_empty_content(message_dict: dict) -> None:
+def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
     """
     Remove or filter content so empty text blocks are not sent.
     Databricks Model Serving uses Anthropic Messages API spec and rejects empty text blocks.
@@ -382,7 +382,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
-            _sanitize_empty_content(_message)
+            _sanitize_empty_content(cast(dict[str, Any], _message))
             new_messages.append(_message)
 
         if is_async:
