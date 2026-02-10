@@ -640,6 +640,7 @@ router_settings:
 | GENERIC_TOKEN_ENDPOINT | Token endpoint for generic OAuth providers
 | GENERIC_USER_DISPLAY_NAME_ATTRIBUTE | Attribute for user's display name in generic auth
 | GENERIC_USER_EMAIL_ATTRIBUTE | Attribute for user's email in generic auth
+| GENERIC_USER_EXTRA_ATTRIBUTES | Comma-separated list of additional fields to extract from generic SSO provider response (e.g., "department,employee_id,groups"). Accessible via `CustomOpenID.extra_fields` in custom SSO handlers. Supports dot notation for nested fields
 | GENERIC_USER_FIRST_NAME_ATTRIBUTE | Attribute for user's first name in generic auth
 | GENERIC_USER_ID_ATTRIBUTE | Attribute for user ID in generic auth
 | GENERIC_USER_LAST_NAME_ATTRIBUTE | Attribute for user's last name in generic auth
