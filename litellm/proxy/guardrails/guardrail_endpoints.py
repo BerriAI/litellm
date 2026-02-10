@@ -150,6 +150,7 @@ async def list_guardrails_v2():
     }
     ```
     """
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
@@ -164,11 +165,24 @@ async def list_guardrails_v2():
         guardrail_configs: List[GuardrailInfoResponse] = []
         seen_guardrail_ids = set()
         for guardrail in guardrails:
+            litellm_params: Optional[Union[LitellmParams, dict]] = guardrail.get(
+                "litellm_params"
+            )
+            litellm_params_dict = (
+                litellm_params.model_dump(exclude_none=True)
+                if isinstance(litellm_params, LitellmParams)
+                else litellm_params
+            ) or {}
+            masked_litellm_params_dict = _get_masked_values(
+                litellm_params_dict,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
             guardrail_configs.append(
                 GuardrailInfoResponse(
                     guardrail_id=guardrail.get("guardrail_id"),
                     guardrail_name=guardrail.get("guardrail_name"),
-                    litellm_params=guardrail.get("litellm_params"),
+                    litellm_params=masked_litellm_params_dict,
                     guardrail_info=guardrail.get("guardrail_info"),
                     created_at=guardrail.get("created_at"),
                     updated_at=guardrail.get("updated_at"),
@@ -182,11 +196,19 @@ async def list_guardrails_v2():
         for guardrail in in_memory_guardrails:
             # only add guardrails that are not in DB guardrail list already
             if guardrail.get("guardrail_id") not in seen_guardrail_ids:
+                in_memory_litellm_params = dict(
+                    guardrail.get("litellm_params") or {}
+                )
+                masked_in_memory_litellm_params = _get_masked_values(
+                    in_memory_litellm_params,
+                    unmasked_length=4,
+                    number_of_asterisks=4,
+                )
                 guardrail_configs.append(
                     GuardrailInfoResponse(
                         guardrail_id=guardrail.get("guardrail_id"),
                         guardrail_name=guardrail.get("guardrail_name"),
-                        litellm_params=dict(guardrail.get("litellm_params") or {}),
+                        litellm_params=masked_in_memory_litellm_params,
                         guardrail_info=dict(guardrail.get("guardrail_info") or {}),
                         guardrail_definition_location="config",
                     )
