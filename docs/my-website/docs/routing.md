@@ -1019,7 +1019,7 @@ print(f"response: {response}")
 
 ```yaml
 router_settings:
-	allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+	allowed_fails: 3 # cooldown model if it fails > 3 calls in a minute. 
   	cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
 ```
 
