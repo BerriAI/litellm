@@ -78,6 +78,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
 
         assert server.client_id is not None, "client_id must be set"
         assert server.client_secret is not None, "client_secret must be set"
+        assert server.token_url is not None, "token_url must be set"
 
         data: Dict[str, str] = {
             "grant_type": "client_credentials",
@@ -88,12 +89,11 @@ class MCPOAuth2TokenCache(InMemoryCache):
             data["scope"] = " ".join(server.scopes)
 
         verbose_logger.debug(
-            "Fetching OAuth2 client_credentials token for MCP server %s from %s",
+            "Fetching OAuth2 client_credentials token for MCP server %s",
             server.server_id,
-            server.token_url,
         )
 
-        response = await client.post(server.token_url, data=data)  # type: ignore[arg-type]
+        response = await client.post(server.token_url, data=data)
         response.raise_for_status()
         body = response.json()
 
@@ -101,10 +101,16 @@ class MCPOAuth2TokenCache(InMemoryCache):
         if not access_token:
             raise ValueError(
                 f"OAuth2 token response for MCP server '{server.server_id}' "
-                f"missing 'access_token': {body}"
+                f"missing 'access_token'"
             )
 
-        expires_in = int(body.get("expires_in", 3600))
+        # Safely parse expires_in — providers may return null or non-numeric values
+        raw_expires_in = body.get("expires_in")
+        try:
+            expires_in = int(raw_expires_in) if raw_expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+        except (TypeError, ValueError):
+            expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+
         ttl = max(expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS, MCP_OAUTH2_TOKEN_CACHE_MIN_TTL)
 
         verbose_logger.info(
