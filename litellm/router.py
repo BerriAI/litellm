@@ -5925,9 +5925,20 @@ class Router:
                     deployment.litellm_params.custom_llm_provider + "/" + _model_name
                 )
 
+            # For the shared backend key, strip custom pricing fields so that
+            # one deployment's pricing overrides don't pollute another
+            # deployment sharing the same backend model name.
+            # Each deployment's full pricing is already stored under its
+            # unique model_id above.
+            _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
+            _shared_model_info = {
+                k: v
+                for k, v in _model_info.items()
+                if k not in _custom_pricing_fields
+            }
             litellm.register_model(
                 model_cost={
-                    _model_name: _model_info,
+                    _model_name: _shared_model_info,
                 }
             )
 
