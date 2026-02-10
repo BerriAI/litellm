@@ -202,16 +202,26 @@ class TestOnyxGuardrail:
         assert guardrail.api_key == "custom-api-key"
         assert guardrail.event_hook == "post_call"
 
-    def test_initialization_fails_when_api_key_missing(self):
-        """Test that initialization fails when API key is not set."""
-        # Ensure API key is not set
-        if "ONYX_API_KEY" in os.environ:
-            del os.environ["ONYX_API_KEY"]
+    def test_initialization_fails_when_no_keys_set(self):
+        """Test that initialization fails when neither api_key nor mcp_api_key is set."""
+        for key in ["ONYX_API_KEY", "ONYX_MCP_API_KEY"]:
+            if key in os.environ:
+                del os.environ[key]
 
         with pytest.raises(
-            ValueError, match="ONYX_API_KEY environment variable is not set"
+            ValueError, match="At least one of api_key/ONYX_API_KEY or mcp_api_key/ONYX_MCP_API_KEY must be set"
         ):
             OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call")
+
+    def test_initialization_with_only_mcp_api_key(self):
+        """Test that initialization succeeds with only mcp_api_key set."""
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True,
+            mcp_api_key="mcp-only-key",
+        )
+
+        assert guardrail.api_key is None
+        assert guardrail.mcp_api_key == "mcp-only-key"
 
     def test_initialization_with_default_timeout(self):
         """Test that default timeout is 10.0 seconds."""
@@ -687,6 +697,251 @@ class TestOnyxGuardrail:
             assert result == inputs
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_tool_call_fallback(self):
+        """Test apply_guardrail uses mcp_tool_name/mcp_arguments when proxy_server_request is missing.
+
+        When MCP tool calls come through the Responses API, the synthetic data from
+        _convert_mcp_to_llm_format does not include proxy_server_request. The guardrail
+        should fall back to constructing the payload from mcp_tool_name and mcp_arguments.
+        """
+        os.environ["ONYX_API_KEY"] = "test-api-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True,
+            mcp_api_key="mcp-key",
+        )
+
+        inputs = GenericGuardrailAPIInputs()
+
+        # Simulate synthetic data from _convert_mcp_to_llm_format (no proxy_server_request)
+        request_data = {
+            "messages": [{"role": "user", "content": "Tool: ask_question\nArguments: {'repo': 'test'}"}],
+            "model": "mcp-tool-call",
+            "mcp_tool_name": "ask_question",
+            "mcp_arguments": {"repo": "BerriAI/litellm", "question": "What is this repo about?"},
+        }
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        assert result == inputs
+
+        # Verify the payload was constructed from MCP fields
+        call_args = mock_post.call_args
+        payload = call_args.kwargs["json"]["payload"]
+        assert payload["body"]["name"] == "ask_question"
+        assert payload["body"]["arguments"] == {"repo": "BerriAI/litellm", "question": "What is this repo about?"}
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_tool_call_uses_mcp_api_key(self):
+        """Test that MCP tool calls use the mcp_api_key instead of the default api_key."""
+        os.environ["ONYX_API_KEY"] = "agent-policy-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard",
+            event_hook="pre_call",
+            default_on=True,
+            mcp_api_key="mcp-policy-key",
+        )
+
+        assert guardrail.api_key == "agent-policy-key"
+        assert guardrail.mcp_api_key == "mcp-policy-key"
+
+        inputs = GenericGuardrailAPIInputs()
+
+        # MCP tool call data (no proxy_server_request)
+        request_data = {
+            "messages": [{"role": "user", "content": "Tool: ask_question"}],
+            "model": "mcp-tool-call",
+            "mcp_tool_name": "ask_question",
+            "mcp_arguments": {"repo": "test"},
+        }
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        # Verify the MCP API key was used in the URL
+        call_args = mock_post.call_args
+        assert "/guard/evaluate/v1/mcp-policy-key/litellm" in call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_non_mcp_uses_default_api_key(self):
+        """Test that non-MCP requests use the default api_key, not mcp_api_key."""
+        os.environ["ONYX_API_KEY"] = "agent-policy-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard",
+            event_hook="pre_call",
+            default_on=True,
+            mcp_api_key="mcp-policy-key",
+        )
+
+        inputs = GenericGuardrailAPIInputs()
+
+        # Standard request (not MCP)
+        request_data = {
+            "proxy_server_request": {
+                "messages": [{"role": "user", "content": "Hello"}],
+                "model": "gpt-4",
+            }
+        }
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        # Verify the default API key was used (not MCP key)
+        call_args = mock_post.call_args
+        assert "/guard/evaluate/v1/agent-policy-key/litellm" in call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_mcp_call_skipped_when_no_mcp_api_key(self):
+        """Test that MCP calls are skipped when mcp_api_key is not configured."""
+        os.environ["ONYX_API_KEY"] = "guard-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True
+        )
+
+        # When no mcp_api_key is provided, it should be None (no fallback)
+        assert guardrail.mcp_api_key is None
+
+        inputs = GenericGuardrailAPIInputs()
+
+        # MCP tool call
+        request_data = {
+            "mcp_tool_name": "some_tool",
+            "mcp_arguments": {},
+        }
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        # Should skip guardrail (not call the server)
+        mock_post.assert_not_called()
+        assert result == inputs
+
+    def test_mcp_api_key_from_env_var(self):
+        """Test that mcp_api_key can be set via ONYX_MCP_API_KEY env var."""
+        os.environ["ONYX_API_KEY"] = "agent-key"
+        os.environ["ONYX_MCP_API_KEY"] = "mcp-key-from-env"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True
+        )
+
+        assert guardrail.api_key == "agent-key"
+        assert guardrail.mcp_api_key == "mcp-key-from-env"
+
+        # Clean up
+        del os.environ["ONYX_MCP_API_KEY"]
+
+    def test_mcp_api_key_param_overrides_env_var(self):
+        """Test that explicit mcp_api_key parameter overrides env var."""
+        os.environ["ONYX_API_KEY"] = "agent-key"
+        os.environ["ONYX_MCP_API_KEY"] = "mcp-key-from-env"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard",
+            event_hook="pre_call",
+            default_on=True,
+            mcp_api_key="mcp-key-from-param",
+        )
+
+        assert guardrail.mcp_api_key == "mcp-key-from-param"
+
+        # Clean up
+        del os.environ["ONYX_MCP_API_KEY"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_tool_call_does_not_override_proxy_server_request(self):
+        """Test that proxy_server_request is preferred over mcp_tool_name when both are present."""
+        os.environ["ONYX_API_KEY"] = "test-api-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True,
+            mcp_api_key="mcp-key",
+        )
+
+        inputs = GenericGuardrailAPIInputs()
+
+        # Data with both proxy_server_request and mcp fields (REST endpoint path)
+        request_data = {
+            "proxy_server_request": {
+                "url": "/mcp-rest/tools/call",
+                "method": "POST",
+                "headers": {},
+                "body": {"name": "ask_question", "arguments": {"repo": "test"}},
+            },
+            "mcp_tool_name": "ask_question",
+            "mcp_arguments": {"repo": "test"},
+        }
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        assert result == inputs
+
+        # Verify proxy_server_request was used (not the fallback)
+        call_args = mock_post.call_args
+        payload = call_args.kwargs["json"]["payload"]
+        assert payload == request_data["proxy_server_request"]
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_no_logging_obj(self):
         """Test apply_guardrail without logging object (uses UUID)."""
         # Set required API key
@@ -747,7 +1002,7 @@ class TestOnyxGuardrail:
         ) as mock_post:
             conversation_id = "test-conversation-id"
             result = await guardrail._validate_with_guard_server(
-                payload, "request", conversation_id
+                payload, "request", conversation_id, api_key=guardrail.api_key
             )
 
             assert result["allowed"] is True
@@ -760,6 +1015,43 @@ class TestOnyxGuardrail:
                     "payload": payload,
                     "input_type": "request",
                     "conversation_id": conversation_id,
+                },
+                headers={
+                    "Content-Type": "application/json",
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_validate_with_guard_server_custom_api_key(self):
+        """Test _validate_with_guard_server with a custom api_key parameter."""
+        os.environ["ONYX_API_KEY"] = "default-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True
+        )
+
+        payload = {"messages": [{"role": "user", "content": "test"}]}
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail._validate_with_guard_server(
+                payload, "request", "test-conv-id", api_key="custom-key"
+            )
+
+            assert result["allowed"] is True
+
+            # Verify the custom key was used in the URL
+            mock_post.assert_called_once_with(
+                f"{guardrail.api_base}/guard/evaluate/v1/custom-key/litellm",
+                json={
+                    "payload": payload,
+                    "input_type": "request",
+                    "conversation_id": "test-conv-id",
                 },
                 headers={
                     "Content-Type": "application/json",
@@ -790,7 +1082,7 @@ class TestOnyxGuardrail:
         with patch.object(guardrail.async_handler, "post", return_value=mock_response):
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail._validate_with_guard_server(
-                    payload, "request", "test-conversation-id"
+                    payload, "request", "test-conversation-id", api_key=guardrail.api_key
                 )
 
             assert exc_info.value.status_code == 400

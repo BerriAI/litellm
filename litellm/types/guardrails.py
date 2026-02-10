@@ -451,6 +451,15 @@ class NomaGuardrailConfigModel(BaseModel):
     )
 
 
+class OnyxGuardrailLitellmParamsModel(BaseModel):
+    """Configuration parameters for the Onyx Security guardrail"""
+
+    mcp_api_key: Optional[str] = Field(
+        default=None,
+        description="API key for MCP Guard policies. MCP calls are skipped when not set.",
+    )
+
+
 class ZscalerAIGuardConfigModel(BaseModel):
     """Configuration parameters for the Zscaler AI Guard guardrail"""
 
@@ -675,6 +684,7 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
+    OnyxGuardrailLitellmParamsModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     JavelinGuardrailConfigModel,
