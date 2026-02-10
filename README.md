@@ -16,7 +16,7 @@ Why drive a Lamborgini to the grocery store when the Prius will do? ClawRouter c
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/Counterweight-AI/clawrouter.git
+git clone https://github.com/Counterweight-AI/clawrouter.git --depth 1
 cd clawrouter
 
 # 2. Install the plugin (link mode — points at your local copy)
