@@ -6,7 +6,7 @@ authors:
   - name: Ishaan Jaffer
     title: "CTO, LiteLLM"
     url: https://www.linkedin.com/in/ishaanjaffer/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+    image_url: image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
 tags: [incident-report, stability]
 hide_table_of_contents: false
 ---
@@ -36,15 +36,28 @@ A malformed JSON entry in `model_prices_and_context_window.json` was merged to `
 The model cost map is **not** in the request path. It is only used **after** the LLM response comes back, inside a try/catch. A missing entry never blocks a call.
 
 ```mermaid
-flowchart LR
-    A["SDK / Proxy receives request"] --> B["Route to provider (Azure, OpenAI, ...)"]
-    B --> C["LLM returns response"]
-    C --> D{"Post-call: look up model in cost map"}
-    D -->|found| E["Calculate cost, log spend"]
-    D -->|not found| F["Log warning, return response with cost=0"]
+flowchart TD
+    A["1. litellm.completion() receives request
+    litellm/main.py"] --> B["2. Route to provider
+    litellm/litellm_core_utils/get_llm_provider_logic.py"]
+    B --> C["3. LLM returns response
+    litellm/main.py"]
+    C --> D["4. Post-call: success_handler calculates cost
+    litellm/litellm_core_utils/litellm_logging.py"]
+    D --> E{"5. Look up model in cost map
+    litellm/cost_calculator.py"}
+    E -->|"found"| F["6a. Attach cost to response"]
+    E -->|"not found (try/catch)"| G["6b. Log warning, set cost=0"]
+    F --> H["7. ✅ Return response to caller"]
+    G --> H
+
+    style E fill:#fff3cd,stroke:#ffc107
+    style G fill:#fff3cd,stroke:#ffc107
+    style F fill:#d4edda,stroke:#28a745
+    style H fill:#d4edda,stroke:#28a745
 ```
 
-When the cost map lookup fails, the response is still returned to the caller. The only impact is that spend tracking reports `cost=0` for that request.
+Both paths converge -- the caller always gets a response. The cost map lookup at step 5 is wrapped in a try/catch. When it fails, the only difference is `cost=0` on that request.
 
 ---
 
@@ -60,6 +73,63 @@ A contributor PR introduced an extra `{` bracket, producing invalid JSON. The re
 2. LiteLLM installations fall back to local backup on next import
 3. Users report `"This model isn't mapped yet"` for newer models
 4. Bad commit identified and reverted (~20 minutes)
+
+---
+
+## What happens if the hosted model cost map is bad (new behavior)
+
+After addressing this incident, `get_model_cost_map()` now validates the fetched JSON before using it. If the hosted map is corrupted, empty, or has shrunk significantly, LiteLLM falls back to the local backup and logs a warning.
+
+```mermaid
+flowchart TD
+    A["Fetch model cost map from GitHub main
+    litellm/litellm_core_utils/get_model_cost_map.py"] --> B{"Valid JSON?"}
+    B -->|"yes"| C{"Integrity check
+    (is dict, min model count, <50% shrinkage)"}
+    B -->|"no (JSONDecodeError)"| F
+
+    C -->|"pass"| D["Use fetched map"]
+    C -->|"fail"| F["⚠️ Log WARNING, fall back to local backup
+    litellm/model_prices_and_context_window_backup.json"]
+
+    F --> G["LLM calls continue normally.
+    Cost tracking uses backup data."]
+    D --> H["LLM calls continue normally.
+    Cost tracking uses latest data."]
+
+    style F fill:#fff3cd,stroke:#ffc107
+    style D fill:#d4edda,stroke:#28a745
+    style H fill:#d4edda,stroke:#28a745
+    style G fill:#fff3cd,stroke:#ffc107
+```
+
+Previously, this fallback was completely silent. Now operators see:
+
+```
+WARNING - LiteLLM: Failed to fetch remote model cost map from <url>: <error>. Falling back to local backup.
+```
+
+---
+
+## Opting out of the hosted map entirely
+
+For enterprise deployments that require full control over dependencies, set:
+
+```bash
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+```
+
+This skips the GitHub fetch entirely. LiteLLM uses only the local backup bundled with the installed package. No external network call is made at import time.
+
+This is recommended for production environments where deterministic behavior matters more than day-0 model pricing updates.
+
+---
+
+## Enterprise deployment stability
+
+We are investing in making LiteLLM more predictable for enterprise deployments:
+
+- **Day-0 model launches on dedicated branches.** New model pricing will be added to a staging branch first, validated by CI, then merged -- so `main` is never broken by a model cost map update.
 
 ---
 
