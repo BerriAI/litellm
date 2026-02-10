@@ -80,8 +80,6 @@ A contributor PR introduced an extra `{` bracket, producing invalid JSON. The re
 | 4 | Validation constants (`MODEL_COST_MAP_MIN_MODEL_COUNT`, `MODEL_COST_MAP_MAX_SHRINK_PERCENT`) | ✅ Done | [`constants.py`](https://github.com/BerriAI/litellm/blob/main/litellm/constants.py) |
 | 5 | Resilience test suite (bad hosted map, bad backup, fallback, completion) | ✅ Done | [`test_model_cost_map_resilience.py`](https://github.com/BerriAI/litellm/blob/main/tests/llm_translation/test_model_cost_map_resilience.py) |
 | 6 | Test that backup model cost map always exists and contains common models | ✅ Done | [`test_model_cost_map_resilience.py`](https://github.com/BerriAI/litellm/blob/main/tests/llm_translation/test_model_cost_map_resilience.py) |
-| 7 | Sync backup file on every release | Planned | |
-| 8 | Default to local-only cost map in production | Planned | |
 
 Enterprises that require zero external dependencies at import time can set `LITELLM_LOCAL_MODEL_COST_MAP=True` to skip the GitHub fetch entirely.
 
