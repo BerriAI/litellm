@@ -2487,6 +2487,14 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     created_at: datetime
     updated_at: datetime
 
+    @field_validator("members", "teams", mode="before")
+    @classmethod
+    def _coerce_none_to_empty_list(cls, v: Any) -> Any:
+        """Prisma returns None for empty relations; coerce to [] so List validation passes."""
+        if v is None:
+            return []
+        return v
+
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
     organization_id: str  # type: ignore
