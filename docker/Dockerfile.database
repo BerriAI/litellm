@@ -48,8 +48,8 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies (apk update so index has nodejs-24-24.13.0-r0 for Node CVEs)
-RUN apk update && apk add --no-cache bash openssl tzdata nodejs-24-24.13.0-r0 npm python3 py3-pip libsndfile && \
+# Install runtime dependencies
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
     npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
