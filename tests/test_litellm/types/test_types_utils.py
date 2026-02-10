@@ -189,11 +189,16 @@ def test_usage_anthropic_cache_read_not_overwritten_by_prompt_details():
     """
     When Anthropic explicitly passes cache_read_input_tokens, the OpenAI
     fallback mapping should NOT overwrite it.
+
+    Flow: prompt_tokens_details={"cached_tokens": 300} creates the wrapper,
+    then the Anthropic mapping (line ~1502) overwrites cached_tokens to 500
+    and sets _cache_read_input_tokens=500. The OpenAI fallback sees
+    _cache_read_input_tokens != 0 and skips.
     """
     from litellm.types.utils import Usage
 
-    # Anthropic passes cache_read_input_tokens explicitly in **params
-    # Use different values to verify the explicit param wins over prompt_tokens_details
+    # Anthropic passes cache_read_input_tokens explicitly in **params.
+    # Use different values to verify the explicit param (500) wins.
     usage = Usage(
         prompt_tokens=1000,
         completion_tokens=50,
@@ -202,9 +207,46 @@ def test_usage_anthropic_cache_read_not_overwritten_by_prompt_details():
         cache_read_input_tokens=500,
     )
 
-    # Should use the explicit Anthropic value (500), not the prompt_tokens_details value (300)
+    # _cache_read_input_tokens must be the explicit Anthropic value (500)
     assert usage._cache_read_input_tokens == 500
+    # The Anthropic mapping also syncs prompt_tokens_details.cached_tokens to 500
     assert usage.prompt_tokens_details.cached_tokens == 500
+
+
+def test_usage_deepseek_cache_read_not_overwritten_by_prompt_details():
+    """
+    When DeepSeek passes prompt_cache_hit_tokens, the OpenAI fallback
+    mapping should NOT overwrite _cache_read_input_tokens.
+    """
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=50,
+        total_tokens=1050,
+        prompt_tokens_details={"cached_tokens": 300},
+        prompt_cache_hit_tokens=700,
+    )
+
+    # _cache_read_input_tokens must be the DeepSeek value (700), not 300
+    assert usage._cache_read_input_tokens == 700
+
+
+def test_usage_openai_cached_tokens_none_does_not_set_cache_read():
+    """
+    When prompt_tokens_details exists but cached_tokens is explicitly None,
+    _cache_read_input_tokens should stay 0.
+    """
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details={"audio_tokens": 0, "cached_tokens": None},
+    )
+
+    assert usage._cache_read_input_tokens == 0
 
 
 def test_usage_no_prompt_tokens_details_no_error():
@@ -220,3 +262,28 @@ def test_usage_no_prompt_tokens_details_no_error():
     )
 
     assert usage._cache_read_input_tokens == 0
+
+
+def test_usage_openai_cached_tokens_round_trip():
+    """
+    Verify that _cache_read_input_tokens survives a model_dump() -> Usage()
+    round-trip, as happens when usage objects are serialized/deserialized.
+    """
+    from litellm.types.utils import Usage
+
+    original = Usage(
+        **{
+            "prompt_tokens": 2829,
+            "completion_tokens": 29,
+            "total_tokens": 2858,
+            "prompt_tokens_details": {"cached_tokens": 2816, "audio_tokens": 0},
+        }
+    )
+
+    assert original._cache_read_input_tokens == 2816
+
+    # Round-trip through model_dump
+    restored = Usage(**original.model_dump())
+
+    assert restored._cache_read_input_tokens == 2816
+    assert restored.prompt_tokens_details.cached_tokens == 2816
