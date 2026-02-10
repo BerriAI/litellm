@@ -59,40 +59,37 @@ class TestCheckModelCountNotReduced:
         small_map = {f"model-{i}": {} for i in range(5)}
         assert (
             GetModelCostMap._check_model_count_not_reduced(
-                fetched_map=small_map, backup_map={}, min_model_count=10
+                fetched_map=small_map, backup_model_count=0, min_model_count=10
             )
             is False
         )
 
     def test_should_reject_significant_shrinkage(self):
         """Fetched map that shrunk >50% vs backup should fail."""
-        backup = {f"model-{i}": {} for i in range(100)}
-        fetched = {f"model-{i}": {} for i in range(40)}  # 40% of backup
+        fetched = {f"model-{i}": {} for i in range(40)}  # 40% of 100
         assert (
             GetModelCostMap._check_model_count_not_reduced(
-                fetched_map=fetched, backup_map=backup, min_model_count=10
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
             )
             is False
         )
 
     def test_should_accept_when_above_threshold(self):
         """Fetched map at 60% of backup (above 50% threshold) should pass."""
-        backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(60)}
         assert (
             GetModelCostMap._check_model_count_not_reduced(
-                fetched_map=fetched, backup_map=backup, min_model_count=10
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
             )
             is True
         )
 
     def test_should_accept_growth(self):
         """Fetched map larger than backup should pass."""
-        backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(120)}
         assert (
             GetModelCostMap._check_model_count_not_reduced(
-                fetched_map=fetched, backup_map=backup, min_model_count=10
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
             )
             is True
         )
@@ -102,7 +99,7 @@ class TestCheckModelCountNotReduced:
         fetched = {f"model-{i}": {} for i in range(15)}
         assert (
             GetModelCostMap._check_model_count_not_reduced(
-                fetched_map=fetched, backup_map={}, min_model_count=10
+                fetched_map=fetched, backup_model_count=0, min_model_count=10
             )
             is True
         )
@@ -113,41 +110,38 @@ class TestValidateModelCostMap:
 
     def test_should_reject_non_dict(self):
         """Non-dict should fail at check 1."""
-        assert GetModelCostMap.validate_model_cost_map(fetched_map="not a dict", backup_map={}) is False
+        assert GetModelCostMap.validate_model_cost_map(fetched_map="not a dict", backup_model_count=0) is False
 
     def test_should_reject_empty_map(self):
         """Empty dict should fail at check 1."""
-        assert GetModelCostMap.validate_model_cost_map(fetched_map={}, backup_map={}) is False
+        assert GetModelCostMap.validate_model_cost_map(fetched_map={}, backup_model_count=0) is False
 
     def test_should_reject_significant_shrinkage(self):
         """Should fail at check 2 (shrinkage)."""
-        backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(40)}
         assert (
             GetModelCostMap.validate_model_cost_map(
-                fetched_map=fetched, backup_map=backup, min_model_count=10
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
             )
             is False
         )
 
     def test_should_accept_valid_map(self):
         """Should pass both checks."""
-        backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(120)}
         assert (
             GetModelCostMap.validate_model_cost_map(
-                fetched_map=fetched, backup_map=backup, min_model_count=10
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
             )
             is True
         )
 
     def test_should_accept_equal_size_map(self):
         """Equal size should pass both checks."""
-        backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(100)}
         assert (
             GetModelCostMap.validate_model_cost_map(
-                fetched_map=fetched, backup_map=backup, min_model_count=10
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
             )
             is True
         )
