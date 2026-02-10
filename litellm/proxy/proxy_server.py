@@ -404,6 +404,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -1209,16 +1210,54 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=LITELLM_UI_ALLOW_HEADERS,
-)
+# Perf isolation: only _ChatCompletionsEarlyReturnMiddleware - CORS and Prometheus disabled
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+#     expose_headers=LITELLM_UI_ALLOW_HEADERS,
+# )
+# app.add_middleware(PrometheusAuthMiddleware)
 
-app.add_middleware(PrometheusAuthMiddleware)
+
+class _UvicornHandoffTimingMiddleware:
+    """Raw ASGI middleware to timestamp when Uvicorn hands request to our app."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(
+        self, scope: dict, receive: Any, send: Any
+    ) -> None:
+        if scope.get("type") == "http":
+            scope["_uvicorn_handoff_at"] = time.perf_counter()
+        await self.app(scope, receive, send)
+
+
+class _ChatCompletionsEarlyReturnMiddleware(BaseHTTPMiddleware):
+    """Perf isolation: return immediately for chat/completions, skip route + auth."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.scope.get("path", "")
+        if "chat/completions" in path and request.method == "POST":
+            t_handoff = request.scope.get("_uvicorn_handoff_at")
+            if t_handoff is not None:
+                delta_ms = (time.perf_counter() - t_handoff) * 1000
+                print(
+                    f"[proxy] Uvicorn handoff → middleware: {delta_ms:.2f}ms",
+                    flush=True,
+                )
+            print("[proxy] _ChatCompletionsEarlyReturnMiddleware: early return", flush=True)
+            return JSONResponse(
+                content={"message": "Hello, world!", "status": "success"},
+                status_code=200,
+            )
+        return await call_next(request)
+
+
+app.add_middleware(_ChatCompletionsEarlyReturnMiddleware)
 
 
 def mount_swagger_ui():
@@ -5783,6 +5822,7 @@ async def chat_completion(  # noqa: PLR0915
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    return {"message": "Hello, world!", "status": "success"}
     """
 
     Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`
@@ -11848,3 +11888,6 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
+
+# Wrap app so Uvicorn's handoff to our ASGI stack is timestamped for perf tracing
+app = _UvicornHandoffTimingMiddleware(app)
