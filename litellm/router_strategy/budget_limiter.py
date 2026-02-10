@@ -52,6 +52,7 @@ class RouterBudgetLimiting(CustomLogger):
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
+        self._redis_increment_queue_lock = asyncio.Lock()
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
         self.provider_budget_config: Optional[
             GenericBudgetConfigType
@@ -348,7 +349,17 @@ class RouterBudgetLimiting(CustomLogger):
             increment_value=response_cost,
             ttl=ttl,
         )
-        self.redis_increment_operation_queue.append(increment_op)
+        async with self._get_redis_increment_queue_lock():
+            self.redis_increment_operation_queue.append(increment_op)
+
+    def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
+        queue_lock: Optional[asyncio.Lock] = getattr(
+            self, "_redis_increment_queue_lock", None
+        )
+        if queue_lock is None:
+            queue_lock = asyncio.Lock()
+            self._redis_increment_queue_lock = queue_lock
+        return queue_lock
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
@@ -493,8 +504,9 @@ class RouterBudgetLimiting(CustomLogger):
 
             # Snapshot pending increments and clear queue before await, so new writes are queued
             # for the next sync cycle while this batch is flushed to Redis.
-            increment_operations_to_flush = self.redis_increment_operation_queue
-            self.redis_increment_operation_queue = []
+            async with self._get_redis_increment_queue_lock():
+                increment_operations_to_flush = self.redis_increment_operation_queue
+                self.redis_increment_operation_queue = []
 
             verbose_router_logger.debug(
                 "Pushing Redis Increment Pipeline for queue: %s",
@@ -505,14 +517,17 @@ class RouterBudgetLimiting(CustomLogger):
                     increment_list=increment_operations_to_flush,
                 )
 
-        except Exception as e:
+        except Exception:
             if len(increment_operations_to_flush) > 0:
                 # Retry these increments on a future sync cycle.
-                self.redis_increment_operation_queue = (
-                    increment_operations_to_flush + self.redis_increment_operation_queue
-                )
-            verbose_router_logger.error(
-                f"Error syncing in-memory cache with Redis: {str(e)}"
+                async with self._get_redis_increment_queue_lock():
+                    self.redis_increment_operation_queue = (
+                        increment_operations_to_flush
+                        + self.redis_increment_operation_queue
+                    )
+            verbose_router_logger.exception(
+                "Error pushing queued Redis increment operations to Redis",
+                exc_info=True,
             )
 
     async def _sync_in_memory_spend_with_redis(self):
