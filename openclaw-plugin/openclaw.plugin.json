@@ -3,14 +3,10 @@
   "configSchema": {
     "type": "object",
     "properties": {
-      "port": { "type": "number", "default": 4000 },
-      "masterKey": { "type": "string", "default": "sk-clawrouter" },
       "gitRepo": { "type": "string", "default": "https://github.com/Counterweight-AI/litellm.git" }
     }
   },
   "uiHints": {
-    "port": { "label": "Proxy port", "placeholder": "4000" },
-    "masterKey": { "label": "Proxy master key", "sensitive": true },
     "gitRepo": { "label": "ClawRouter repo URL" }
   }
 }
