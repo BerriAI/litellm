@@ -10,15 +10,14 @@ and Perplexity's Responses API format, which supports:
 - Instructions parameter for system-level guidance
 """
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -26,14 +25,14 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
-from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 
-class PerplexityResponsesConfig(BaseResponsesAPIConfig):
+class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     """
     Configuration for Perplexity Agentic Research API (Responses API)
+
     
     Reference: https://docs.perplexity.ai/agentic-research/quickstart
     """
@@ -57,6 +56,7 @@ class PerplexityResponsesConfig(BaseResponsesAPIConfig):
             "reasoning",
             "preset",
             "instructions",
+            "models",  # Model fallback support
         ]
 
     def validate_environment(
@@ -296,7 +296,8 @@ class PerplexityResponsesConfig(BaseResponsesAPIConfig):
         {
             "input_tokens": 100,
             "output_tokens": 200,
-            "total_tokens": 300
+            "total_tokens": 300,
+            "cost": 0.0003
         }
         """
         transformed = {
@@ -304,6 +305,19 @@ class PerplexityResponsesConfig(BaseResponsesAPIConfig):
             "output_tokens": usage_data.get("output_tokens", 0),
             "total_tokens": usage_data.get("total_tokens", 0),
         }
+        
+        # Transform cost from Perplexity format (dict) to OpenAI format (float)
+        cost_obj = usage_data.get("cost")
+        if isinstance(cost_obj, dict) and "total_cost" in cost_obj:
+            transformed["cost"] = cost_obj["total_cost"]
+            verbose_logger.debug(
+                "Transformed Perplexity cost object to float: %s -> %s",
+                cost_obj,
+                cost_obj["total_cost"]
+            )
+        elif cost_obj is not None:
+            # If cost is already a float/number, use it as-is
+            transformed["cost"] = cost_obj
         
         # Add input_tokens_details if present
         if "input_tokens_details" in usage_data:
@@ -324,186 +338,63 @@ class PerplexityResponsesConfig(BaseResponsesAPIConfig):
         """
         Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
         """
-        # Map Perplexity streaming chunk to OpenAI format
-        return ResponsesAPIStreamingResponse(**parsed_chunk)
-
-    def transform_delete_response_api_request(
-        self,
-        response_id: str,
-        api_base: str,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> Tuple[str, Dict]:
-        """Transform delete response API request"""
-        # Perplexity may not support deleting responses
-        # Return appropriate URL and params
-        url = f"{api_base}/v1/responses/{response_id}"
-        return url, {}
-
-    def transform_delete_response_api_response(
-        self,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> DeleteResponseResult:
-        """Transform delete response API response"""
-        try:
-            response_json = raw_response.json()
-            return DeleteResponseResult(
-                id=response_json.get("id", ""),
-                object="response.deleted",
-                deleted=response_json.get("deleted", True),
-            )
-        except Exception as e:
-            raise BaseLLMException(
-                status_code=raw_response.status_code,
-                message=f"Failed to parse delete response: {str(e)}",
-            )
-
-    def transform_get_response_api_request(
-        self,
-        response_id: str,
-        api_base: str,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> Tuple[str, Dict]:
-        """Transform get response API request"""
-        url = f"{api_base}/v1/responses/{response_id}"
-        return url, {}
-
-    def transform_get_response_api_response(
-        self,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> ResponsesAPIResponse:
-        """Transform get response API response"""
-        return self.transform_response_api_response(
-            model="",  # Model will be in the response
-            raw_response=raw_response,
-            logging_obj=logging_obj,
+        # Get the event type from the chunk
+        verbose_logger.debug("Raw Perplexity Chunk=%s", parsed_chunk)
+        event_type = str(parsed_chunk.get("type"))
+        event_pydantic_model = PerplexityResponsesConfig.get_event_model_class(
+            event_type=event_type
         )
-
-    def transform_list_input_items_request(
-        self,
-        response_id: str,
-        api_base: str,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-        after: Optional[str] = None,
-        before: Optional[str] = None,
-        include: Optional[List[str]] = None,
-        limit: int = 20,
-        order: Literal["asc", "desc"] = "desc",
-    ) -> Tuple[str, Dict]:
-        """Transform list input items request"""
-        url = f"{api_base}/v1/responses/{response_id}/input_items"
-        params = {
-            "limit": limit,
-            "order": order,
-        }
         
-        if after:
-            params["after"] = after
-        if before:
-            params["before"] = before
-        if include:
-            params["include"] = include
+        # Transform Perplexity-specific fields to OpenAI format
+        parsed_chunk = self._transform_perplexity_chunk(parsed_chunk)
         
-        return url, params
-
-    def transform_list_input_items_response(
-        self,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
-        """Transform list input items response"""
+        # Defensive: Handle error.code being null (similar to OpenAI implementation)
         try:
-            return raw_response.json()
+            error_obj = parsed_chunk.get("error")
+            if isinstance(error_obj, dict) and error_obj.get("code") is None:
+                # Preserve other fields, but ensure `code` is a non-null string
+                parsed_chunk = dict(parsed_chunk)
+                parsed_chunk["error"] = dict(error_obj)
+                parsed_chunk["error"]["code"] = "unknown_error"
+        except Exception:
+            # If anything unexpected happens here, fall back to attempting
+            # instantiation and let higher-level handlers manage errors.
+            verbose_logger.debug("Failed to coalesce error.code in parsed_chunk")
+
+        return event_pydantic_model(**parsed_chunk)
+
+    def _transform_perplexity_chunk(self, chunk: dict) -> dict:
+        """
+        Transform Perplexity-specific fields in a streaming chunk to OpenAI format.
+        
+        This handles:
+        - Converting Perplexity's cost object to a simple float
+        """
+        # Make a copy to avoid modifying the original
+        chunk = dict(chunk)
+        
+        # Transform usage.cost from Perplexity format to OpenAI format
+        # Perplexity: {"currency": "USD", "input_cost": 0.0001, "output_cost": 0.0002, "total_cost": 0.0003}
+        # OpenAI: 0.0003 (just the total_cost as a float)
+        try:
+            response_obj = chunk.get("response")
+            if isinstance(response_obj, dict):
+                usage_obj = response_obj.get("usage")
+                if isinstance(usage_obj, dict):
+                    cost_obj = usage_obj.get("cost")
+                    if isinstance(cost_obj, dict) and "total_cost" in cost_obj:
+                        # Replace the cost object with just the total_cost value
+                        chunk = dict(chunk)
+                        chunk["response"] = dict(response_obj)
+                        chunk["response"]["usage"] = dict(usage_obj)
+                        chunk["response"]["usage"]["cost"] = cost_obj["total_cost"]
+                        verbose_logger.debug(
+                            "Transformed Perplexity cost object to float: %s -> %s",
+                            cost_obj,
+                            cost_obj["total_cost"]
+                        )
         except Exception as e:
-            raise BaseLLMException(
-                status_code=raw_response.status_code,
-                message=f"Failed to parse list input items response: {str(e)}",
-            )
-
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
-    ) -> BaseLLMException:
-        """Return appropriate error class based on status code"""
-        return BaseLLMException(
-            status_code=status_code,
-            message=error_message,
-            headers=headers,
-        )
-
-    def should_fake_stream(
-        self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
-    ) -> bool:
-        """Returns True if litellm should fake a stream for the given model and stream value"""
-        return False
-
-    #########################################################
-    ########## CANCEL RESPONSE API TRANSFORMATION ##########
-    #########################################################
-    def transform_cancel_response_api_request(
-        self,
-        response_id: str,
-        api_base: str,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> Tuple[str, Dict]:
-        """Transform cancel response API request"""
-        # Perplexity may not support canceling responses
-        # Return appropriate URL and params
-        url = f"{api_base}/v1/responses/{response_id}/cancel"
-        return url, {}
-
-    def transform_cancel_response_api_response(
-        self,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> ResponsesAPIResponse:
-        """Transform cancel response API response"""
-        return self.transform_response_api_response(
-            model="",  # Model will be in the response
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-        )
-
-    #########################################################
-    ########## COMPACT RESPONSE API TRANSFORMATION ##########
-    #########################################################
-    def transform_compact_response_api_request(
-        self,
-        model: str,
-        input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
-        api_base: str,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> Tuple[str, Dict]:
-        """Transform compact response API request"""
-        # Perplexity may not support compact responses
-        # Return standard URL and transformed request
-        url = f"{api_base}/v1/responses"
-        request_data = self.transform_responses_api_request(
-            model=model,
-            input=input,
-            response_api_optional_request_params=response_api_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-        return url, request_data
-
-    def transform_compact_response_api_response(
-        self,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> ResponsesAPIResponse:
-        """Transform compact response API response"""
-        return self.transform_response_api_response(
-            model="",  # Model will be in the response
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-        )
+            # If transformation fails, log and continue with original chunk
+            verbose_logger.debug("Failed to transform Perplexity cost object: %s", e)
+        
+        return chunk
