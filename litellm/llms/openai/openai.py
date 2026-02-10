@@ -330,6 +330,18 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
         {'choices': [{'delta': {'content': '', 'role': 'assistant'}, 'finish_reason': None, 'index': 0, 'logprobs': None}], 'created': 1735763082, 'id': 'a83a2b0fbfaf4aab9c2c93cb8ba346d7', 'model': 'mistral-large', 'object': 'chat.completion.chunk'}
         """
         try:
+            # Map provider-specific reasoning field names to the standard
+            # 'reasoning_content' field.  VLLM (and some other providers)
+            # return 'reasoning' instead of 'reasoning_content'.
+            if "choices" in chunk:
+                for choice in chunk.get("choices", []):
+                    delta = choice.get("delta")
+                    if (
+                        delta
+                        and "reasoning" in delta
+                        and "reasoning_content" not in delta
+                    ):
+                        delta["reasoning_content"] = delta.pop("reasoning")
             return ModelResponseStream(**chunk)
         except Exception as e:
             raise e
