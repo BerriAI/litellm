@@ -339,3 +339,18 @@ serviceMonitor:
   namespaceSelector:
     matchNames: []
     # - test-namespace
+  # Bearer token authentication for metrics endpoint
+
+  # Creates a K8s secret with the API key you want to use. With that you do not need to specify
+  # bearerTokenSecret manually.
+  secret:
+    create: false        # Set to true to have the chart create the secret
+    value: ""            # Token value (required if create: true)
+
+  # Use this if you want to configure the bearerTokenSecret manually.
+  bearerTokenSecret: {}
+  #   name: ""           # Secret name. Defaults to: {{ include "litellm.fullname" . }}-servicemonitor-token
+  #   key: "token"       # Secret key. Defaults to: "token"
+  #   optional: false    # Mark secret as optional. Defaults to: false
+
+
