@@ -2,6 +2,8 @@ import os
 import sys
 from typing import List, Literal
 
+from litellm.litellm_core_utils.env_utils import get_env_int
+
 DEFAULT_HEALTH_CHECK_PROMPT = str(
     os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm")
 )
@@ -81,6 +83,20 @@ MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
     os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
 )
 
+# MCP OAuth2 Client Credentials Defaults
+MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200")
+)
+MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600")
+)
+MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -98,6 +114,11 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
         "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512
     )
 )
+
+# Maximum number of callbacks that can be registered
+# This prevents callbacks from exponentially growing and consuming CPU resources
+# Override with LITELLM_MAX_CALLBACKS env var for large deployments (e.g., many teams with guardrails)
+MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 30)
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
@@ -306,6 +327,22 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+# Patterns that indicate a localhost/internal URL in A2A agent cards that should be
+# replaced with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###

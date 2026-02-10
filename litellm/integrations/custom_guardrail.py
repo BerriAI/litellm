@@ -268,6 +268,7 @@ class CustomGuardrail(CustomLogger):
         """
         Returns the guardrail(s) to be run from the metadata or root
         """
+
         if "guardrails" in data:
             return data["guardrails"]
         metadata = data.get("litellm_metadata") or data.get("metadata", {})

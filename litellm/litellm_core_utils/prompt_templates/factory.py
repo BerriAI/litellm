@@ -2190,6 +2190,16 @@ def anthropic_messages_pt(  # noqa: PLR0915
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
 
+            # Extract compaction_blocks from provider_specific_fields and add them first
+            _provider_specific_fields_raw = assistant_content_block.get(
+                "provider_specific_fields"
+            )
+            if isinstance(_provider_specific_fields_raw, dict):
+                _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
+                if _compaction_blocks and isinstance(_compaction_blocks, list):
+                    # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
+                    assistant_content.extend(_compaction_blocks)  # type: ignore
+
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             if (
                 thinking_blocks is not None
@@ -3277,25 +3287,68 @@ def _convert_to_bedrock_tool_call_invoke(
     - extract name 
     - extract id
     """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        split_concatenated_json_objects,
+    )
 
     try:
         _parts_list: List[BedrockContentBlock] = []
         for tool in tool_calls:
             if "function" in tool:
-                id = tool["id"]
+                tool_id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
-                arguments_dict = json.loads(arguments) if arguments else {}
-                # Ensure arguments_dict is always a dict (Bedrock requires toolUse.input to be an object)
-                # When some providers return arguments: '""' (JSON-encoded empty string), json.loads returns ""
-                if not isinstance(arguments_dict, dict):
-                    arguments_dict = {}
+
                 if not arguments or not arguments.strip():
                     arguments_dict = {}
                 else:
-                    arguments_dict = json.loads(arguments)
+                    try:
+                        arguments_dict = json.loads(arguments)
+                        # Ensure arguments_dict is always a dict
+                        # (Bedrock requires toolUse.input to be an object).
+                        # Some providers return arguments: '""' which
+                        # json.loads decodes to a bare string.
+                        if not isinstance(arguments_dict, dict):
+                            arguments_dict = {}
+                    except json.JSONDecodeError:
+                        # The model may return multiple JSON objects
+                        # concatenated in a single arguments string, e.g.
+                        #   '{"cmd":"a"}{"cmd":"b"}{"cmd":"c"}'
+                        # Split them and emit one toolUse block per object.
+                        # Fixes: https://github.com/BerriAI/litellm/issues/20543
+                        parsed_objects = split_concatenated_json_objects(
+                            arguments
+                        )
+                        if parsed_objects:
+                            # First object keeps the original tool id.
+                            for obj_idx, obj in enumerate(parsed_objects):
+                                block_id = (
+                                    tool_id
+                                    if obj_idx == 0
+                                    else f"{tool_id}_{obj_idx}"
+                                )
+                                bedrock_tool = BedrockToolUseBlock(
+                                    input=obj, name=name, toolUseId=block_id
+                                )
+                                _parts_list.append(
+                                    BedrockContentBlock(toolUse=bedrock_tool)
+                                )
+                            # cache_control applies to the whole original
+                            # tool call; attach after the last split block.
+                            if tool.get("cache_control", None) is not None:
+                                _parts_list.append(
+                                    BedrockContentBlock(
+                                        cachePoint=CachePointBlock(
+                                            type="default"
+                                        )
+                                    )
+                                )
+                            continue
+                        # Fallback: no objects extracted — use empty dict.
+                        arguments_dict = {}
+
                 bedrock_tool = BedrockToolUseBlock(
-                    input=arguments_dict, name=name, toolUseId=id
+                    input=arguments_dict, name=name, toolUseId=tool_id
                 )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)

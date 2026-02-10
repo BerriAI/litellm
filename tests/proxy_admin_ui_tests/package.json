@@ -12,6 +12,8 @@
     "@types/node": "^22.5.5"
   },
   "overrides": {
-    "glob": ">=11.1.0"
+    "glob": ">=11.1.0",
+    "tar": ">=7.5.7",
+    "@isaacs/brace-expansion": ">=5.0.1"
   }
 }

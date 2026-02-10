@@ -43,9 +43,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     onBack();
   };
 
-  const { maskedUrl, hasToken } = getMaskedAndFullUrl(mcpServer.url);
+  const urlValue = mcpServer.url ?? "";
+  const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
 
-  const renderUrlWithToggle = (url: string, showFull: boolean) => {
+  const renderUrlWithToggle = (url: string | null | undefined, showFull: boolean) => {
+    if (!url) return "—";
     if (!hasToken) return url;
     return showFull ? url : maskedUrl;
   };
@@ -243,6 +245,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       {mcpServer.allow_all_keys && (
                         <Text className="text-xs text-gray-500">
                           All keys can access this MCP server
+                        </Text>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Available on Public Internet</Text>
+                    <div className="flex items-center gap-2">
+                      {mcpServer.available_on_public_internet ? (
+                        <span className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-sm">
+                          Public
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md text-sm">
+                          Internal
+                        </span>
+                      )}
+                      {mcpServer.available_on_public_internet && (
+                        <Text className="text-xs text-gray-500">
+                          Accessible from external/public IPs
                         </Text>
                       )}
                     </div>
