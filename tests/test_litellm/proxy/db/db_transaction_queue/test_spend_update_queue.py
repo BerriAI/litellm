@@ -242,10 +242,20 @@ def test_get_aggregated_spend_update_queue_item_does_not_mutate_original_updates
     aggregated_updates = spend_queue._get_aggregated_spend_update_queue_item(
         [original_update, duplicate_key_update]
     )
+    user1_aggregated_update = next(
+        (
+            update
+            for update in aggregated_updates
+            if update.get("entity_type") == Litellm_EntityType.USER
+            and update.get("entity_id") == "user1"
+        ),
+        None,
+    )
 
     assert original_update["response_cost"] == 10.0
-    assert aggregated_updates[0]["response_cost"] == 30.0
-    assert aggregated_updates[0] is not original_update
+    assert user1_aggregated_update is not None
+    assert user1_aggregated_update["response_cost"] == 30.0
+    assert user1_aggregated_update is not original_update
 
 
 @pytest.mark.asyncio
