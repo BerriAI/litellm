@@ -425,6 +425,16 @@ config["models"]["providers"]["litellm"] = {
     ]
 }
 
+# Set litellm/auto as the primary model
+config.setdefault("agents", {})
+config["agents"].setdefault("defaults", {})
+old_primary = config["agents"]["defaults"].get("model", {}).get("primary")
+config["agents"]["defaults"]["model"] = {
+    "primary": "litellm/auto",
+}
+if old_primary and old_primary != "litellm/auto":
+    config["agents"]["defaults"]["model"]["fallbacks"] = [old_primary]
+
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
     f.write("\n")
