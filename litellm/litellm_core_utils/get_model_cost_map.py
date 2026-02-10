@@ -9,13 +9,12 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 """
 
 import json
-import logging
 import os
 from importlib.resources import files
 
 import httpx
 
-logger = logging.getLogger("LiteLLM")
+from litellm import verbose_logger
 
 
 class GetModelCostMap:
@@ -54,7 +53,7 @@ class GetModelCostMap:
         Returns True if the fetched map looks valid, False otherwise.
         """
         if not isinstance(fetched_map, dict):
-            logger.warning(
+            verbose_logger.warning(
                 "LiteLLM: Fetched model cost map is not a dict (type=%s). "
                 "Falling back to local backup.",
                 type(fetched_map).__name__,
@@ -64,7 +63,7 @@ class GetModelCostMap:
         fetched_count = len(fetched_map)
 
         if fetched_count < min_model_count:
-            logger.warning(
+            verbose_logger.warning(
                 "LiteLLM: Fetched model cost map has only %d models (minimum=%d). "
                 "This may indicate a corrupted upstream file. "
                 "Falling back to local backup.",
@@ -75,7 +74,7 @@ class GetModelCostMap:
 
         backup_count = len(backup_map) if isinstance(backup_map, dict) else 0
         if backup_count > 0 and fetched_count < backup_count * max_shrink_pct:
-            logger.warning(
+            verbose_logger.warning(
                 "LiteLLM: Fetched model cost map shrank significantly "
                 "(fetched=%d, backup=%d, threshold=%.0f%%). "
                 "This may indicate a corrupted upstream file. "
@@ -124,7 +123,7 @@ def get_model_cost_map(url: str) -> dict:
         if not GetModelCostMap.validate_model_cost_map(
             fetched_map=content, backup_map=backup_map
         ):
-            logger.warning(
+            verbose_logger.warning(
                 "LiteLLM: Fetched model cost map failed integrity check. "
                 "Using local backup instead. url=%s",
                 url,
@@ -133,7 +132,7 @@ def get_model_cost_map(url: str) -> dict:
 
         return content
     except Exception as e:
-        logger.warning(
+        verbose_logger.warning(
             "LiteLLM: Failed to fetch remote model cost map from %s: %s. "
             "Falling back to local backup.",
             url,
