@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import AllMessageValues, FileTypes, TranscriptionResponse
+from litellm.types.openai import OpenAIAudioTranscriptionOptionalParams
 
 from ...base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -48,7 +49,7 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def custom_llm_provider(self) -> str:
         return "sarvam"
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         return ["language"]
 
     def map_openai_params(
