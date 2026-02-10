@@ -8,11 +8,9 @@ Covers the three root-cause fixes:
 3. Arize loggers do NOT overwrite ``proxy_server.open_telemetry_logger``.
 """
 
-import os
 import unittest
 from unittest.mock import patch
 
-import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
