@@ -374,6 +374,91 @@ async def test_output_file_id_for_batch_retrieve():
 
 
 @pytest.mark.asyncio
+async def test_error_file_id_for_failed_batch():
+    """
+    Test that the error_file_id is properly managed when a batch fails
+    """
+    from typing import cast
+
+    from openai.types.batch import BatchRequestCounts
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfYWJjMTIz",
+        completion_window="24h",
+        created_at=1714508499,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-abc123",
+        object="batch",
+        status="failed",
+        cancelled_at=None,
+        cancelling_at=None,
+        completed_at=None,
+        error_file_id="error-abc123",
+        errors=None,
+        expired_at=None,
+        expires_at=1714536634,
+        failed_at=None,
+        finalizing_at=None,
+        in_progress_at=None,
+        metadata=None,
+        output_file_id=None,
+        request_counts=BatchRequestCounts(completed=0, failed=0, total=0),
+        usage=None,
+    )
+
+    batch._hidden_params = {
+        "litellm_call_id": "test-call-id",
+        "api_base": "https://api.openai.com",
+        "model_id": "test-model-id",
+        "model_name": "gpt-4o",
+        "response_cost": 0.0,
+        "additional_headers": {},
+        "litellm_model_name": "gpt-4o",
+        "unified_batch_id": "litellm_proxy;model_id:test-model-id;llm_batch_id:batch_abc123",
+    }
+    
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=AsyncMock()
+    )
+
+    # Create a proper OpenAIFileObject for the error file
+    error_file_object = OpenAIFileObject(
+        id="error-abc123",
+        object="file",
+        bytes=1234,
+        created_at=1714508500,
+        filename="error.jsonl",
+        purpose="batch_output",
+        status="processed",
+    )
+
+    # Mock the afile_retrieve to simulate retrieving error file metadata
+    with patch("litellm.afile_retrieve", new_callable=AsyncMock) as mock_retrieve:
+        mock_retrieve.return_value = error_file_object
+        
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test-user-123",
+            parent_otel_span=MagicMock()
+        )
+        
+        response = await proxy_managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=user_api_key_dict,
+            response=batch,
+        )
+
+    # Verify that error_file_id was transformed to a managed file ID
+    assert cast(LiteLLMBatch, response).error_file_id is not None
+    assert not cast(LiteLLMBatch, response).error_file_id.startswith("error-")
+    # Verify it's a base64 encoded managed file ID
+    assert _is_base64_encoded_unified_file_id(cast(LiteLLMBatch, response).error_file_id)
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     import asyncio
 
