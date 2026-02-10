@@ -193,7 +193,7 @@ def create(
             litellm_params.mock_response, dict
         ):
             return mock_vector_store_create_response(
-                mock_response=VectorStoreCreateResponse(**litellm_params.mock_response)
+                mock_response=VectorStoreCreateResponse(**litellm_params.mock_response)  # type: ignore[typeddict-item]
             )
 
         # Default to OpenAI for vector stores

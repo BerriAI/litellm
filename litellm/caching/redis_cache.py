@@ -553,7 +553,7 @@ class RedisCache(BaseCache):
                 ex=_td,
             )
         # Execute the pipeline and return the results.
-        results = await pipe.execute()
+        results = await pipe.execute()  # type: ignore[union-attr]
         return results
 
     async def async_set_cache_pipeline(
@@ -574,7 +574,7 @@ class RedisCache(BaseCache):
         )
         cache_value: Any = None
         try:
-            async with _redis_client.pipeline(transaction=False) as pipe:
+            async with _redis_client.pipeline(transaction=False) as pipe:  # type: ignore[attr-defined]
                 results = await self._pipeline_helper(pipe, cache_list, ttl)
 
             print_verbose(f"pipeline results: {results}")
@@ -628,7 +628,7 @@ class RedisCache(BaseCache):
             await redis_client.sadd(key, *value)  # type: ignore
             if ttl is not None:
                 _td = timedelta(seconds=ttl)
-                await redis_client.expire(key, _td)
+                await redis_client.expire(key, _td)  # type: ignore[attr-defined]
         except Exception:
             raise
 
@@ -1167,12 +1167,12 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"Increment ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {increment_op['increment_value']}\nttl={increment_op['ttl']}"
             )
-            pipe.incrbyfloat(cache_key, increment_op["increment_value"])
+            pipe.incrbyfloat(cache_key, increment_op["increment_value"])  # type: ignore[attr-defined]
             if increment_op["ttl"] is not None:
                 _td = timedelta(seconds=increment_op["ttl"])
-                pipe.expire(cache_key, _td)
+                pipe.expire(cache_key, _td)  # type: ignore[attr-defined]
         # Execute the pipeline and return results
-        results = await pipe.execute()
+        results = await pipe.execute()  # type: ignore[attr-defined]
         # only return float values
         verbose_logger.debug(
             f"Increment ASYNC Redis Cache PIPELINE: results: {results}"
@@ -1321,8 +1321,8 @@ class RedisCache(BaseCache):
     ) -> List[bytes]:
         result: List[bytes] = []
         for _ in range(count):
-            pipe.lpop(key)
-            results = await pipe.execute()
+            pipe.lpop(key)  # type: ignore[attr-defined]
+            results = await pipe.execute()  # type: ignore[attr-defined]
 
             # Filter out None values and decode bytes
             for r in results:
