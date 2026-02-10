@@ -106,7 +106,7 @@ class ArizePhoenixLogger(OpenTelemetry):
         traces to different Phoenix projects dynamically.
         """
         standard_logging_payload = kwargs.get("standard_logging_object")
-        if standard_logging_payload is not None:
+        if isinstance(standard_logging_payload, dict):
             metadata = standard_logging_payload.get("metadata")
             if isinstance(metadata, dict):
                 project_name = metadata.get("phoenix_project_name")
@@ -114,8 +114,11 @@ class ArizePhoenixLogger(OpenTelemetry):
                     return str(project_name)
 
         # Also check litellm_params.metadata for SDK usage
-        litellm_params = kwargs.get("litellm_params") or {}
-        metadata = litellm_params.get("metadata") or {}
+        litellm_params = kwargs.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            metadata = litellm_params.get("metadata") or {}
+        else:
+            metadata = {}
         if isinstance(metadata, dict):
             project_name = metadata.get("phoenix_project_name")
             if project_name:
