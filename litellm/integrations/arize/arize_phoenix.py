@@ -32,15 +32,47 @@ class ArizePhoenixLogger(OpenTelemetry):
 
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
-        
-        # Set project name on the span for all traces to go to custom Phoenix projects
-        config = ArizePhoenixLogger.get_arize_phoenix_config()
-        if config.project_name:
-            from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
-            safe_set_attribute(span, "openinference.project.name", config.project_name)
-        
+
+        # Dynamic project name: check metadata first, then fall back to env var config
+        dynamic_project_name = ArizePhoenixLogger._get_dynamic_project_name(kwargs)
+        if dynamic_project_name:
+            safe_set_attribute(span, "openinference.project.name", dynamic_project_name)
+        else:
+            # Fall back to static config from env var
+            config = ArizePhoenixLogger.get_arize_phoenix_config()
+            if config.project_name:
+                safe_set_attribute(span, "openinference.project.name", config.project_name)
+
         return
+
+    @staticmethod
+    def _get_dynamic_project_name(kwargs) -> Optional[str]:
+        """
+        Retrieve dynamic Phoenix project name from request metadata.
+
+        Users can set `metadata.phoenix_project_name` in their request to route
+        traces to different Phoenix projects dynamically.
+        """
+        standard_logging_payload = kwargs.get("standard_logging_object")
+        if standard_logging_payload is not None:
+            metadata = standard_logging_payload.get("metadata")
+            if isinstance(metadata, dict):
+                project_name = metadata.get("phoenix_project_name")
+                if project_name:
+                    return str(project_name)
+
+        # Also check litellm_params.metadata for SDK usage
+        litellm_params = kwargs.get("litellm_params") or {}
+        metadata = litellm_params.get("metadata") or {}
+        if isinstance(metadata, dict):
+            project_name = metadata.get("phoenix_project_name")
+            if project_name:
+                return str(project_name)
+
+        return None
 
     @staticmethod
     def get_arize_phoenix_config() -> ArizePhoenixConfig:
