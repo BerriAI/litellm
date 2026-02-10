@@ -411,7 +411,7 @@ litellm_settings:
   request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   fallbacks: [{"zephyr-beta": ["gpt-4o"]}] # fallback to gpt-4o if call fails num_retries 
   context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-4o": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
-  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  allowed_fails: 3 # cooldown model if it fails > 3 calls in a minute. 
 
 router_settings: # router_settings are optional
   routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
