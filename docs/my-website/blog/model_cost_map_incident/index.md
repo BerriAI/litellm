@@ -148,6 +148,8 @@ We are investing in making LiteLLM more predictable for enterprise deployments:
 
 ## Other upstream dependencies
 
+During this investigation, we also found the following dependcies depend on online / external resources. JWT/OIDC depend on your IDP / SSO provider being live. HuggingFace model API and Ollama tags (localhost) depend on the service being available during the pre/post LLM Call phases.
+
 | Dependency | Impact if unavailable | Fallback |
 |---|---|---|
 | Model cost map (GitHub) | Cost tracking for newer models | Local backup (now with warning) |
