@@ -1274,6 +1274,13 @@ async def user_api_key_auth(
     """
     Parent function to authenticate user api key / jwt token.
     """
+    # Perf isolation: early return mock – skip _read_request_body, _user_api_key_auth_builder
+    route = get_request_route(request=request)
+    return UserAPIKeyAuth(
+        api_key=api_key or "",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        request_route=normalize_request_route(route),
+    )
 
     request_data = await _read_request_body(request=request)
     request_data = populate_request_with_path_params(
