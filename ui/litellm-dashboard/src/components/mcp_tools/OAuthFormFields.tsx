@@ -40,13 +40,28 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
   return (
     <>
       <Form.Item
-        label={<span className="text-sm font-medium text-gray-700">OAuth Flow Type</span>}
+        label={
+          <FieldLabel
+            label="OAuth Flow Type"
+            tooltip="Choose how the proxy authenticates with this MCP server. M2M is for server-to-server communication using client credentials. Interactive (PKCE) is for user-facing flows that require browser-based authorization."
+          />
+        }
         name="oauth_flow_type"
         {...(initialFlowType ? { initialValue: initialFlowType } : {})}
       >
         <Select className="rounded-lg" size="large">
-          <Select.Option value={OAUTH_FLOW.INTERACTIVE}>Interactive (PKCE)</Select.Option>
-          <Select.Option value={OAUTH_FLOW.M2M}>Machine-to-Machine (M2M)</Select.Option>
+          <Select.Option value={OAUTH_FLOW.M2M}>
+            <div>
+              <span className="font-medium">Machine-to-Machine (M2M)</span>
+              <span className="text-gray-400 text-xs ml-2">server-to-server, no user interaction</span>
+            </div>
+          </Select.Option>
+          <Select.Option value={OAUTH_FLOW.INTERACTIVE}>
+            <div>
+              <span className="font-medium">Interactive (PKCE)</span>
+              <span className="text-gray-400 text-xs ml-2">browser-based user authorization</span>
+            </div>
+          </Select.Option>
         </Select>
       </Form.Item>
 
