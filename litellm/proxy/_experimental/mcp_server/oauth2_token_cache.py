@@ -8,6 +8,8 @@ with ``client_id``, ``client_secret``, and ``token_url``.
 import asyncio
 from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
@@ -74,9 +76,13 @@ class MCPOAuth2TokenCache(InMemoryCache):
         """
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
-        assert server.client_id is not None, "client_id must be set"
-        assert server.client_secret is not None, "client_secret must be set"
-        assert server.token_url is not None, "token_url must be set"
+        if not server.client_id or not server.client_secret or not server.token_url:
+            raise ValueError(
+                f"MCP server '{server.server_id}' missing required OAuth2 fields: "
+                f"client_id={bool(server.client_id)}, "
+                f"client_secret={bool(server.client_secret)}, "
+                f"token_url={bool(server.token_url)}"
+            )
 
         data: Dict[str, str] = {
             "grant_type": "client_credentials",
@@ -91,8 +97,15 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
         )
 
-        response = await client.post(server.token_url, data=data)
-        response.raise_for_status()
+        try:
+            response = await client.post(server.token_url, data=data)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"OAuth2 token request for MCP server '{server.server_id}' "
+                f"failed with status {exc.response.status_code}"
+            ) from exc
+
         body = response.json()
 
         if not isinstance(body, dict):
