@@ -268,7 +268,8 @@ if [ -n "$LOW_MODEL" ] || [ -n "$MID_MODEL" ] || [ -n "$TOP_MODEL" ]; then
     [ -n "$MID_MODEL" ]  && echo -e "  mid : ${YELLOW}$MID_DISPLAY${NC}  ->  $MID_MODEL"
     [ -n "$TOP_MODEL" ]  && echo -e "  top : ${CYAN}$TOP_DISPLAY${NC}  ->  $TOP_MODEL"
     echo ""
-    read -rp "  Apply these to routing_rules.yaml? [Y/n] " APPLY_TIERS
+    #read -rp "  Apply these to routing_rules.yaml? [Y/n] " APPLY_TIERS
+    APPLY_TIERS='y'
     if [ -z "$APPLY_TIERS" ] || [[ "$APPLY_TIERS" =~ ^[Yy] ]]; then
         [ -n "$LOW_MODEL" ] && sedi "/^  low:/,/^  [a-z]/{s|model:.*|model: \"$LOW_MODEL\"|;}" "$ROUTING_RULES"
         [ -n "$MID_MODEL" ] && sedi "/^  mid:/,/^  [a-z]/{s|model:.*|model: \"$MID_MODEL\"|;}" "$ROUTING_RULES"
