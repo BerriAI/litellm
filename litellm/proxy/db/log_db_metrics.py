@@ -103,8 +103,14 @@ def log_db_metrics(func):
 
 def _is_exception_related_to_db(e: Exception) -> bool:
     """
-    Returns True if the exception is related to the DB
+    Returns True if the exception is related to the DB (PrismaError, httpx connection/timeout).
+    Uses a fast path: if the exception is not from prisma or httpx modules, return False
+    without importing Prisma (which is expensive ~12s on first load).
     """
+
+    mod = type(e).__module__
+    if not (mod.startswith("prisma") or mod.startswith("httpx")):
+        return False
 
     import httpx
     from prisma.errors import PrismaError
