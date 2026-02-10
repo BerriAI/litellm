@@ -111,13 +111,30 @@ fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
+# Bootstrap pip if missing (Debian/Ubuntu without python3.XX-venv package)
+if ! python -c "import pip" 2>/dev/null; then
+    warn "pip not found in venv — bootstrapping via get-pip.py"
+    GET_PIP_URL="https://bootstrap.pypa.io/get-pip.py"
+    GET_PIP_PATH="$VENV_DIR/get-pip.py"
+    if command -v curl &>/dev/null; then
+        curl -sSL "$GET_PIP_URL" -o "$GET_PIP_PATH" || fail "Failed to download get-pip.py"
+    elif command -v wget &>/dev/null; then
+        wget -q "$GET_PIP_URL" -O "$GET_PIP_PATH" || fail "Failed to download get-pip.py"
+    else
+        fail "Neither curl nor wget found — cannot bootstrap pip"
+    fi
+    python "$GET_PIP_PATH" --quiet || fail "get-pip.py failed"
+    rm -f "$GET_PIP_PATH"
+    ok "Bootstrapped pip via get-pip.py"
+fi
+
 # ---------- 3. Install -------------------------------------------------------
 
 info "Upgrading pip..."
-pip install --upgrade pip --quiet
+python -m pip install --upgrade pip --quiet
 
 info "Installing LiteLLM with proxy extras (this may take a minute)..."
-pip install -e "$REPO_ROOT[proxy]" 2>&1 | tail -5
+python -m pip install -e "$REPO_ROOT[proxy]" 2>&1 | tail -5
 
 # Verify the install
 if ! command -v litellm &>/dev/null; then
