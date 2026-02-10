@@ -15,6 +15,10 @@ from importlib.resources import files
 import httpx
 
 from litellm import verbose_logger
+from litellm.constants import (
+    MODEL_COST_MAP_MAX_SHRINK_PERCENT,
+    MODEL_COST_MAP_MIN_MODEL_COUNT,
+)
 
 
 class GetModelCostMap:
@@ -36,22 +40,8 @@ class GetModelCostMap:
         return content
 
     @staticmethod
-    def validate_model_cost_map(
-        fetched_map: dict,
-        backup_map: dict,
-        min_model_count: int = 10,
-        max_shrink_pct: float = 0.5,
-    ) -> bool:
-        """
-        Validate the integrity of a fetched model cost map.
-
-        Checks:
-        1. The fetched map is a non-empty dict.
-        2. It has at least ``min_model_count`` models.
-        3. It did not shrink by more than ``max_shrink_pct`` (50%) compared to the backup.
-
-        Returns True if the fetched map looks valid, False otherwise.
-        """
+    def _check_is_valid_dict(fetched_map: dict) -> bool:
+        """Check 1: fetched map is a non-empty dict."""
         if not isinstance(fetched_map, dict):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map is not a dict (type=%s). "
@@ -60,6 +50,23 @@ class GetModelCostMap:
             )
             return False
 
+        if len(fetched_map) == 0:
+            verbose_logger.warning(
+                "LiteLLM: Fetched model cost map is empty. "
+                "Falling back to local backup.",
+            )
+            return False
+
+        return True
+
+    @staticmethod
+    def _check_model_count_not_reduced(
+        fetched_map: dict,
+        backup_map: dict,
+        min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
+        max_shrink_pct: float = MODEL_COST_MAP_MAX_SHRINK_PERCENT,
+    ) -> bool:
+        """Check 2: model count has not reduced significantly vs backup."""
         fetched_count = len(fetched_map)
 
         if fetched_count < min_model_count:
@@ -83,6 +90,38 @@ class GetModelCostMap:
                 backup_count,
                 max_shrink_pct * 100,
             )
+            return False
+
+        return True
+
+    @staticmethod
+    def validate_model_cost_map(
+        fetched_map: dict,
+        backup_map: dict,
+        min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
+        max_shrink_pct: float = MODEL_COST_MAP_MAX_SHRINK_PERCENT,
+    ) -> bool:
+        """
+        Validate the integrity of a fetched model cost map.
+
+        Runs each check in order and returns False on the first failure.
+
+        Checks:
+        1. ``_check_is_valid_dict`` -- fetched map is a non-empty dict.
+        2. ``_check_model_count_not_reduced`` -- model count meets minimum
+           and has not shrunk >``max_shrink_pct`` vs backup.
+
+        Returns True if all checks pass, False otherwise.
+        """
+        if not GetModelCostMap._check_is_valid_dict(fetched_map):
+            return False
+
+        if not GetModelCostMap._check_model_count_not_reduced(
+            fetched_map=fetched_map,
+            backup_map=backup_map,
+            min_model_count=min_model_count,
+            max_shrink_pct=max_shrink_pct,
+        ):
             return False
 
         return True
