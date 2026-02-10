@@ -159,6 +159,7 @@ if MCP_AVAILABLE:
         server,
         server_auth_header,
         raw_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
         """Helper function to get tools for a single server."""
         tools = await global_mcp_server_manager._get_tools_from_server(
@@ -197,9 +198,7 @@ if MCP_AVAILABLE:
             )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_server_id in allowed_server_ids_set:
-            server = global_mcp_server_manager.get_mcp_server_by_id(
-                allowed_server_id
-            )
+            server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
             if server is not None:
                 allowed_mcp_servers.append(server)
         return allowed_mcp_servers
@@ -276,9 +275,7 @@ if MCP_AVAILABLE:
                             "message": f"The key is not allowed to access server {server_id}",
                         },
                     )
-                server = global_mcp_server_manager.get_mcp_server_by_id(
-                    server_id
-                )
+                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
                 if server is None:
                     return {
                         "tools": [],
@@ -292,7 +289,10 @@ if MCP_AVAILABLE:
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
-                        server, server_auth_header, raw_headers_from_request
+                        server,
+                        server_auth_header,
+                        raw_headers_from_request,
+                        user_api_key_dict,
                     )
                 except Exception as e:
                     verbose_logger.exception(
@@ -328,7 +328,10 @@ if MCP_AVAILABLE:
 
                     try:
                         tools_result = await _get_tools_for_single_server(
-                            server, server_auth_header, raw_headers_from_request
+                            server,
+                            server_auth_header,
+                            raw_headers_from_request,
+                            user_api_key_dict,
                         )
                         list_tools_result.extend(tools_result)
                     except Exception as e:
