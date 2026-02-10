@@ -37,6 +37,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
         MCPServer,
+        _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
     )
@@ -173,6 +174,29 @@ if MCP_AVAILABLE:
         # Only filter if allowed_tools is explicitly configured (not None and not empty)
         if server.allowed_tools is not None and len(server.allowed_tools) > 0:
             tools = filter_tools_by_allowed_tools(tools, server)
+
+        # Filter tools based on user_api_key_auth.object_permission.mcp_tool_permissions
+        # This provides per-key/team/org control over which tools can be accessed
+        if (
+            user_api_key_auth
+            and user_api_key_auth.object_permission
+            and user_api_key_auth.object_permission.mcp_tool_permissions
+        ):
+            allowed_tools_for_server = (
+                user_api_key_auth.object_permission.mcp_tool_permissions.get(
+                    server.server_id
+                )
+            )
+            if (
+                allowed_tools_for_server is not None
+                and len(allowed_tools_for_server) > 0
+            ):
+                # Filter tools to only include those in the allowed list
+                tools = [
+                    tool
+                    for tool in tools
+                    if _tool_name_matches(tool.name, allowed_tools_for_server)
+                ]
 
         return _create_tool_response_objects(tools, server.mcp_info)
 
