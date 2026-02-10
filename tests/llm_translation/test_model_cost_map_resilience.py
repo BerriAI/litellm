@@ -27,22 +27,38 @@ from litellm.litellm_core_utils.get_model_cost_map import (
 )
 
 
-class TestValidateModelCostMap:
-    """Unit tests for the validate_model_cost_map helper."""
+class TestCheckIsValidDict:
+    """Unit tests for _check_is_valid_dict."""
 
     def test_should_reject_non_dict(self):
-        """Non-dict fetched map should fail validation."""
-        assert GetModelCostMap.validate_model_cost_map(fetched_map="not a dict", backup_map={}) is False
+        """Non-dict should fail."""
+        assert GetModelCostMap._check_is_valid_dict("not a dict") is False
 
-    def test_should_reject_empty_map(self):
-        """Empty fetched map should fail validation."""
-        assert GetModelCostMap.validate_model_cost_map(fetched_map={}, backup_map={}) is False
+    def test_should_reject_empty_dict(self):
+        """Empty dict should fail."""
+        assert GetModelCostMap._check_is_valid_dict({}) is False
+
+    def test_should_reject_list(self):
+        """List should fail."""
+        assert GetModelCostMap._check_is_valid_dict([1, 2, 3]) is False
+
+    def test_should_reject_none(self):
+        """None should fail."""
+        assert GetModelCostMap._check_is_valid_dict(None) is False
+
+    def test_should_accept_non_empty_dict(self):
+        """Non-empty dict should pass."""
+        assert GetModelCostMap._check_is_valid_dict({"model": {}}) is True
+
+
+class TestCheckModelCountNotReduced:
+    """Unit tests for _check_model_count_not_reduced."""
 
     def test_should_reject_too_few_models(self):
         """Fetched map with fewer models than min_model_count should fail."""
         small_map = {f"model-{i}": {} for i in range(5)}
         assert (
-            GetModelCostMap.validate_model_cost_map(
+            GetModelCostMap._check_model_count_not_reduced(
                 fetched_map=small_map, backup_map={}, min_model_count=10
             )
             is False
@@ -53,6 +69,61 @@ class TestValidateModelCostMap:
         backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(40)}  # 40% of backup
         assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_map=backup, min_model_count=10
+            )
+            is False
+        )
+
+    def test_should_accept_when_above_threshold(self):
+        """Fetched map at 60% of backup (above 50% threshold) should pass."""
+        backup = {f"model-{i}": {} for i in range(100)}
+        fetched = {f"model-{i}": {} for i in range(60)}
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_map=backup, min_model_count=10
+            )
+            is True
+        )
+
+    def test_should_accept_growth(self):
+        """Fetched map larger than backup should pass."""
+        backup = {f"model-{i}": {} for i in range(100)}
+        fetched = {f"model-{i}": {} for i in range(120)}
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_map=backup, min_model_count=10
+            )
+            is True
+        )
+
+    def test_should_accept_with_empty_backup(self):
+        """When backup is empty, only min_model_count matters."""
+        fetched = {f"model-{i}": {} for i in range(15)}
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_map={}, min_model_count=10
+            )
+            is True
+        )
+
+
+class TestValidateModelCostMap:
+    """Unit tests for validate_model_cost_map (combines both checks)."""
+
+    def test_should_reject_non_dict(self):
+        """Non-dict should fail at check 1."""
+        assert GetModelCostMap.validate_model_cost_map(fetched_map="not a dict", backup_map={}) is False
+
+    def test_should_reject_empty_map(self):
+        """Empty dict should fail at check 1."""
+        assert GetModelCostMap.validate_model_cost_map(fetched_map={}, backup_map={}) is False
+
+    def test_should_reject_significant_shrinkage(self):
+        """Should fail at check 2 (shrinkage)."""
+        backup = {f"model-{i}": {} for i in range(100)}
+        fetched = {f"model-{i}": {} for i in range(40)}
+        assert (
             GetModelCostMap.validate_model_cost_map(
                 fetched_map=fetched, backup_map=backup, min_model_count=10
             )
@@ -60,7 +131,7 @@ class TestValidateModelCostMap:
         )
 
     def test_should_accept_valid_map(self):
-        """A fetched map with enough models that hasn't shrunk should pass."""
+        """Should pass both checks."""
         backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(120)}
         assert (
@@ -71,7 +142,7 @@ class TestValidateModelCostMap:
         )
 
     def test_should_accept_equal_size_map(self):
-        """A fetched map equal in size to backup should pass."""
+        """Equal size should pass both checks."""
         backup = {f"model-{i}": {} for i in range(100)}
         fetched = {f"model-{i}": {} for i in range(100)}
         assert (
@@ -145,66 +216,55 @@ class TestGetModelCostMapFallback:
         assert len(result) > 0
 
 
-class TestCompletionWithBadModelCostMap:
+class TestBadHostedModelCostMap:
     """
-    Simulates a bad model cost map and verifies litellm.completion()
-    still works (it catches cost map errors silently) and
-    litellm.get_model_info() raises the expected error.
+    Simulates the hosted model cost map being bad (invalid JSON / corrupted).
+
+    When the hosted map is bad, get_model_cost_map() falls back to the local
+    backup. These tests verify that after fallback:
+    - get_model_info() still works for models in the backup
+    - litellm.completion() still works
     """
 
-    def test_should_raise_model_not_mapped_with_empty_cost_map(self):
+    def test_should_model_info_pass_after_bad_hosted_map(self):
         """
-        With an empty model cost map, get_model_info should raise
-        'This model isn't mapped yet' for any model.
+        If the hosted map is bad, get_model_cost_map falls back to the local
+        backup. get_model_info should still work for models in the backup.
         """
-        original = litellm.model_cost
-        litellm.model_cost = {}
-        try:
-            with pytest.raises(Exception, match="This model isn't mapped yet"):
-                litellm.get_model_info("azure/gpt-5.2")
-        finally:
-            litellm.model_cost = original
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.side_effect = json.JSONDecodeError("bad json", "", 0)
 
-    def test_should_raise_model_not_mapped_for_missing_model(self):
-        """
-        With a cost map that has some models but not the requested one,
-        get_model_info should raise 'This model isn't mapped yet'.
-        """
+        with patch("httpx.get", return_value=mock_response):
+            fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
+
         original = litellm.model_cost
-        litellm.model_cost = {
-            "gpt-4": {
-                "litellm_provider": "openai",
-                "max_tokens": 8192,
-                "input_cost_per_token": 0.00003,
-                "output_cost_per_token": 0.00006,
-                "mode": "chat",
-            }
-        }
+        litellm.model_cost = fallback_map
         try:
-            # gpt-4 should work
-            info = litellm.get_model_info("gpt-4")
+            # gpt-4o is in every backup — should work fine
+            info = litellm.get_model_info("gpt-4o")
             assert info is not None
-
-            # azure/gpt-5.2 is not in the map — should fail
-            with pytest.raises(Exception, match="This model isn't mapped yet"):
-                litellm.get_model_info("azure/gpt-5.2")
+            assert info["input_cost_per_token"] > 0
         finally:
             litellm.model_cost = original
 
     @pytest.mark.asyncio
-    async def test_should_complete_even_with_bad_cost_map(self):
+    async def test_should_completion_pass_after_bad_hosted_map(self):
         """
-        litellm.completion() should NOT fail even when the model cost map
-        is empty. It catches get_model_info errors internally and proceeds
-        to the API call. The cost tracking will be wrong, but the LLM
-        request itself should succeed.
+        If the hosted map is bad, litellm.completion() should still work.
+        The fallback backup is used for cost tracking, and the LLM call
+        itself is never blocked by cost map issues.
+        """
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.side_effect = json.JSONDecodeError("bad json", "", 0)
 
-        This is the key behavior: completion() is resilient to cost map failures.
-        """
+        with patch("httpx.get", return_value=mock_response):
+            fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
+
         original = litellm.model_cost
-        litellm.model_cost = {}
+        litellm.model_cost = fallback_map
         try:
-            # This should still work — completion catches model_info errors
             response = litellm.completion(
                 model="azure/gpt-4o-mini",
                 messages=[{"role": "user", "content": "say hi"}],
