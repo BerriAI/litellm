@@ -1085,6 +1085,17 @@ const sidebars = {
         "troubleshoot/max_callbacks",
       ],
     },
+    {
+      type: "category",
+      label: "Blog",
+      items: [
+        {
+          type: "link",
+          label: "Incident: Broken Model Cost Map",
+          href: "/blog/model-cost-map-incident",
+        },
+      ],
+    },
   ],
 };
 
