@@ -72,21 +72,21 @@ export const PaginatedModelSelect = ({
     const { modelName, modelId } = option.data;
 
     return (
-      <Space direction="vertical">
+      <>
         {modelName ? (
-          <>
+          <Space direction="vertical">
             <Space direction="horizontal">
               <Text strong>Model name:</Text>
-              <Text>{modelName}</Text>
+              <Text ellipsis>{modelName}</Text>
             </Space>
-            <Text type="secondary" >
+            <Text ellipsis type="secondary" >
               Model ID: {modelId}
             </Text>
-          </>
+          </Space>
         ) : (
-          <Text type="secondary">Model ID: {modelId}</Text>
+          <Text ellipsis type="secondary">Model ID: {modelId}</Text>
         )}
-      </Space>
+      </>
     );
   };
 
