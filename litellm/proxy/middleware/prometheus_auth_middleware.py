@@ -44,7 +44,13 @@ class PrometheusAuthMiddleware(BaseHTTPMiddleware):
                     )
 
         # Process the request and get the response
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except RuntimeError as e:
+            if "No response returned" in str(e):
+                # Client disconnected before response was produced (e.g., ALB timeout)
+                return Response(status_code=499)  # Client Closed Request
+            raise
 
         return response
 
