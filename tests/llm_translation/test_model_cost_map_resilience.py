@@ -268,10 +268,10 @@ class TestBadHostedModelCostMap:
     def test_should_completion_pass_after_bad_hosted_map(self):
         """
         If the hosted map is bad, litellm.completion() should still work.
-        The fallback backup is used for cost tracking, and the LLM call
-        itself is never blocked by cost map issues.
 
-        Uses a mock LLM response so this test runs without API credentials.
+        Uses litellm's built-in mock_response param so the real completion
+        path is exercised (routing, cost calculator, logging) without
+        needing API credentials.
         """
         # Simulate bad hosted map → fallback to backup
         mock_http = MagicMock()
@@ -281,33 +281,17 @@ class TestBadHostedModelCostMap:
         with patch("httpx.get", return_value=mock_http):
             fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
 
-        # Build a fake streaming response that litellm.completion would return
-        mock_chunk = litellm.ModelResponseStream(
-            id="chatcmpl-mock",
-            choices=[
-                {
-                    "index": 0,
-                    "delta": {"content": "hi"},
-                    "finish_reason": None,
-                }
-            ],
-            model="gpt-4o-mini",
-        )
-        mock_stream = MagicMock()
-        mock_stream.__iter__ = MagicMock(return_value=iter([mock_chunk]))
-
         original = litellm.model_cost
         litellm.model_cost = fallback_map
         try:
-            with patch("litellm.completion", return_value=mock_stream):
-                response = litellm.completion(
-                    model="azure/gpt-4o-mini",
-                    messages=[{"role": "user", "content": "say hi"}],
-                    stream=True,
-                )
-                chunks = []
-                for chunk in response:
-                    chunks.append(chunk)
-                assert len(chunks) > 0, "Expected streaming chunks from completion()"
+            # mock_response goes through the real completion path —
+            # routing, cost calculator, logging — but skips the HTTP call
+            response = litellm.completion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "say hi"}],
+                mock_response="hello from mock",
+            )
+            assert response is not None
+            assert response.choices[0].message.content == "hello from mock"
         finally:
             litellm.model_cost = original
