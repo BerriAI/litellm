@@ -31,6 +31,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    get_request_base_url,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -1972,7 +1975,7 @@ if MCP_AVAILABLE:
                 )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
                     request = StarletteRequest(scope)
-                    base_url = str(request.base_url).rstrip("/")
+                    base_url = get_request_base_url(request)
 
                     authorization_uri = (
                         f"Bearer authorization_uri="
