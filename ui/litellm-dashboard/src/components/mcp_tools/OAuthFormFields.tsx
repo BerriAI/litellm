@@ -98,37 +98,37 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
       ) : (
         <>
           <Form.Item
-            label={<FieldLabel label="OAuth Client ID (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />}
+            label={<FieldLabel label="Client ID (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />}
             name={["credentials", "client_id"]}
           >
-            <TextInput type="password" placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
+            <TextInput type="password" placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="OAuth Client Secret (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />}
+            label={<FieldLabel label="Client Secret (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />}
             name={["credentials", "client_secret"]}
           >
-            <TextInput type="password" placeholder={`Enter OAuth client secret${placeholderSuffix}`} className={fieldClassName} />
+            <TextInput type="password" placeholder={`Enter client secret${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="OAuth Scopes (optional)" tooltip="Optional scopes requested during token exchange. Separate multiple scopes with enter or commas." />}
+            label={<FieldLabel label="Scopes (optional)" tooltip="Optional scopes requested during token exchange. Separate multiple scopes with enter or commas." />}
             name={["credentials", "scopes"]}
           >
             <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Authorization URL Override (optional)" tooltip="Optional override for the authorization endpoint." />}
+            label={<FieldLabel label="Authorization URL (optional)" tooltip="Optional override for the authorization endpoint." />}
             name="authorization_url"
           >
             <TextInput placeholder="https://example.com/oauth/authorize" className={fieldClassName} />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Token URL Override (optional)" tooltip="Optional override for the token endpoint." />}
+            label={<FieldLabel label="Token URL (optional)" tooltip="Optional override for the token endpoint." />}
             name="token_url"
           >
             <TextInput placeholder="https://example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Registration URL Override (optional)" tooltip="Optional override for the dynamic client registration endpoint." />}
+            label={<FieldLabel label="Registration URL (optional)" tooltip="Optional override for the dynamic client registration endpoint." />}
             name="registration_url"
           >
             <TextInput placeholder="https://example.com/oauth/register" className={fieldClassName} />
