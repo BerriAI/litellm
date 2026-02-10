@@ -571,6 +571,12 @@ class ModelGroupInfo(BaseModel):
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
     input_cost_per_pixel: Optional[float] = None
+    output_cost_per_image: Optional[float] = None
+    output_cost_per_audio_per_second: Optional[float] = None
+    input_cost_per_audio_per_second: Optional[float] = None
+    output_cost_per_video_per_second: Optional[float] = None
+    input_cost_per_request: Optional[float] = None
+    output_cost_per_request: Optional[float] = None
     mode: Optional[
         Union[
             str,
