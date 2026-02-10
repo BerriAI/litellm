@@ -198,15 +198,24 @@ async def disable_team_logging(
 
         # Update team metadata to disable logging
         team_metadata = _existing_team.metadata
-        team_callback_settings = team_metadata.get("callback_settings", {})
+        # Read from "logging" key first (where add_team_callbacks stores data),
+        # falling back to "callback_settings" for backwards compatibility.
+        team_callback_settings = team_metadata.get("logging")
+        if team_callback_settings is None:
+            # Read from "logging" key first (where add_team_callbacks stores data),
+        # falling back to "callback_settings" for backwards compatibility.
+        team_callback_settings = team_metadata.get("logging")
+        if team_callback_settings is None:
+            team_callback_settings = team_metadata.get("callback_settings", {})
         team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
 
         # Reset callbacks
         team_callback_settings_obj.success_callback = []
         team_callback_settings_obj.failure_callback = []
 
-        # Update metadata
+        # Update metadata - clear both keys to ensure consistency
         team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        team_metadata["logging"] = []
         team_metadata_json = json.dumps(team_metadata)
 
         # Update team in database
@@ -307,7 +316,11 @@ async def get_team_callbacks(
 
         # Retrieve team callback settings from metadata
         team_metadata = _existing_team.metadata
-        team_callback_settings = team_metadata.get("callback_settings", {})
+        # Read from "logging" key first (where add_team_callbacks stores data),
+        # falling back to "callback_settings" for backwards compatibility.
+        team_callback_settings = team_metadata.get("logging")
+        if team_callback_settings is None:
+            team_callback_settings = team_metadata.get("callback_settings", {})
 
         # Convert to TeamCallbackMetadata object for consistent structure
         team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
