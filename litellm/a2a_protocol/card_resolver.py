@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from a2a.types import AgentCard
 
 # Runtime imports with availability check
+AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
+PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
+
 try:
     from a2a.client import A2ACardResolver as _A2ACardResolver  # type: ignore[no-redef]
     from a2a.utils.constants import (  # type: ignore[no-redef]
