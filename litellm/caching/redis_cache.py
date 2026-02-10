@@ -831,7 +831,7 @@ class RedisCache(BaseCache):
             return []
         with self.redis_client.pipeline(transaction=False) as pipe:
             for key in keys:
-                pipe.get(key)
+                pipe.get(key)  # type: ignore
             return pipe.execute()
 
     async def _async_run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
@@ -846,7 +846,7 @@ class RedisCache(BaseCache):
 
         async with async_redis_client.pipeline(transaction=False) as pipe:
             for key in keys:
-                pipe.get(key)
+                pipe.get(key)  # type: ignore
             return await pipe.execute()
 
     def batch_get_cache(
@@ -1103,7 +1103,7 @@ class RedisCache(BaseCache):
             return
         async with _redis_client.pipeline(transaction=False) as pipe:
             for key in keys:
-                pipe.delete(key)
+                pipe.delete(key)  # type: ignore
             await pipe.execute()
 
     def client_list(self) -> List:
