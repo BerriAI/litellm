@@ -1,0 +1,200 @@
+[proxy] user_api_key_auth called at 458626.259434
+[proxy] user_api_key_auth called at 458626.260343
+[proxy] user_api_key_auth called at 458626.263699
+[proxy] user_api_key_auth called at 458626.264477
+[proxy] user_api_key_auth called at 458626.265182
+[proxy] user_api_key_auth called at 458626.265859
+[proxy] user_api_key_auth called at 458626.266409
+[proxy] user_api_key_auth called at 458626.272102
+[proxy] user_api_key_auth called at 458626.272732
+[proxy] user_api_key_auth called at 458626.273369
+[proxy] user_api_key_auth called at 458626.273997
+[proxy] user_api_key_auth called at 458626.275732
+[proxy] user_api_key_auth called at 458626.276062
+[proxy] user_api_key_auth called at 458626.276704
+[proxy] user_api_key_auth called at 458626.277722
+[proxy] user_api_key_auth called at 458626.278686
+[proxy] user_api_key_auth called at 458626.279798
+[proxy] user_api_key_auth called at 458626.280318
+[proxy] user_api_key_auth called at 458626.280976
+[proxy] user_api_key_auth called at 458626.281896
+[proxy] user_api_key_auth called at 458626.282671
+[proxy] user_api_key_auth called at 458626.283262
+[proxy] user_api_key_auth called at 458626.284119
+[proxy] user_api_key_auth called at 458626.284843
+[proxy] user_api_key_auth called at 458626.285497
+[proxy] user_api_key_auth called at 458626.286083
+[proxy] user_api_key_auth called at 458626.286939
+[proxy] user_api_key_auth called at 458626.287776
+[proxy] user_api_key_auth called at 458626.288529
+[proxy] user_api_key_auth called at 458626.289112
+[proxy] user_api_key_auth called at 458626.290070
+[proxy] user_api_key_auth called at 458626.291322
+[proxy] user_api_key_auth called at 458626.291988
+[proxy] user_api_key_auth called at 458626.292823
+[proxy] user_api_key_auth called at 458626.293563
+[proxy] user_api_key_auth called at 458626.294018
+[proxy] user_api_key_auth called at 458626.294842
+[proxy] user_api_key_auth called at 458626.295402
+[proxy] user_api_key_auth called at 458626.296127
+[proxy] user_api_key_auth called at 458626.296874
+[proxy] user_api_key_auth called at 458626.297501
+[proxy] user_api_key_auth called at 458626.298369
+[proxy] user_api_key_auth called at 458626.299049
+[proxy] user_api_key_auth called at 458626.300423
+[proxy] user_api_key_auth called at 458626.301013
+[proxy] user_api_key_auth called at 458626.302233
+[proxy] user_api_key_auth called at 458626.302777
+[proxy] user_api_key_auth called at 458626.303490
+[proxy] user_api_key_auth called at 458626.304148
+[proxy] user_api_key_auth called at 458626.305102
+[proxy] user_api_key_auth called at 458626.305794
+[proxy] user_api_key_auth called at 458626.306393
+[proxy] user_api_key_auth called at 458626.307298
+[proxy] user_api_key_auth called at 458626.308002
+[proxy] user_api_key_auth called at 458626.308762
+[proxy] user_api_key_auth called at 458626.309396
+[proxy] user_api_key_auth called at 458626.310071
+[proxy] user_api_key_auth called at 458626.310866
+[proxy] user_api_key_auth called at 458626.312019
+[proxy] user_api_key_auth called at 458626.312748
+[proxy] user_api_key_auth called at 458626.313444
+[proxy] user_api_key_auth called at 458626.314135
+[proxy] user_api_key_auth called at 458626.314723
+[proxy] user_api_key_auth called at 458626.315771
+[proxy] user_api_key_auth called at 458626.316611
+[proxy] user_api_key_auth called at 458626.317431
+[proxy] user_api_key_auth called at 458626.317975
+[proxy] user_api_key_auth called at 458626.318449
+[proxy] user_api_key_auth called at 458626.318966
+[proxy] user_api_key_auth called at 458626.319474
+[proxy] user_api_key_auth called at 458626.319975
+[proxy] user_api_key_auth called at 458626.320710
+[proxy] user_api_key_auth called at 458626.321206
+[proxy] user_api_key_auth called at 458626.322210
+[proxy] user_api_key_auth called at 458626.322969
+[proxy] user_api_key_auth called at 458626.323702
+[proxy] user_api_key_auth called at 458626.324399
+[proxy] user_api_key_auth called at 458626.325157
+[proxy] user_api_key_auth called at 458626.325685
+[proxy] user_api_key_auth called at 458626.326396
+[proxy] user_api_key_auth called at 458626.327111
+[proxy] user_api_key_auth called at 458626.328389
+[proxy] user_api_key_auth called at 458626.329031
+[proxy] user_api_key_auth called at 458626.329700
+[proxy] user_api_key_auth called at 458626.330446
+[proxy] user_api_key_auth called at 458626.331154
+[proxy] user_api_key_auth called at 458626.331878
+[proxy] user_api_key_auth called at 458626.332556
+[proxy] user_api_key_auth called at 458626.333142
+[proxy] user_api_key_auth called at 458626.333931
+[proxy] user_api_key_auth called at 458626.334671
+[proxy] user_api_key_auth called at 458626.335092
+[proxy] user_api_key_auth called at 458626.335875
+[proxy] chat/completions request received at 458626.383190
+[proxy] chat/completions request received at 458626.387888
+[proxy] user_api_key_auth called at 458626.404458
+[proxy] user_api_key_auth called at 458626.405484
+[proxy] user_api_key_auth called at 458626.406599
+[proxy] user_api_key_auth called at 458626.407300
+[proxy] user_api_key_auth called at 458626.408812
+[proxy] user_api_key_auth called at 458626.410469
+[proxy] user_api_key_auth called at 458626.411026
+[proxy] chat/completions request received at 458626.412175
+[proxy] chat/completions request received at 458626.413903
+[proxy] chat/completions request received at 458626.415731
+[proxy] chat/completions request received at 458626.416982
+[proxy] chat/completions request received at 458626.418196
+[proxy] chat/completions request received at 458626.425021
+[proxy] chat/completions request received at 458626.427665
+[proxy] chat/completions request received at 458626.428964
+[proxy] chat/completions request received at 458626.430299
+[proxy] chat/completions request received at 458626.431541
+[proxy] chat/completions request received at 458626.433099
+[proxy] chat/completions request received at 458626.434548
+[proxy] chat/completions request received at 458626.435844
+[proxy] chat/completions request received at 458626.436964
+[proxy] chat/completions request received at 458626.438202
+[proxy] chat/completions request received at 458626.439465
+[proxy] chat/completions request received at 458626.440965
+[proxy] chat/completions request received at 458626.442050
+[proxy] chat/completions request received at 458626.443162
+[proxy] chat/completions request received at 458626.444564
+[proxy] chat/completions request received at 458626.446019
+[proxy] chat/completions request received at 458626.447662
+[proxy] chat/completions request received at 458626.448882
+[proxy] chat/completions request received at 458626.450605
+[proxy] chat/completions request received at 458626.451894
+[proxy] chat/completions request received at 458626.453000
+[proxy] chat/completions request received at 458626.454765
+[proxy] chat/completions request received at 458626.455957
+[proxy] chat/completions request received at 458626.457026
+[proxy] chat/completions request received at 458626.458121
+[proxy] chat/completions request received at 458626.459161
+[proxy] chat/completions request received at 458626.460304
+[proxy] chat/completions request received at 458626.462182
+[proxy] chat/completions request received at 458626.463288
+[proxy] chat/completions request received at 458626.464376
+[proxy] chat/completions request received at 458626.465626
+[proxy] chat/completions request received at 458626.466707
+[proxy] chat/completions request received at 458626.468095
+[proxy] chat/completions request received at 458626.468889
+[proxy] chat/completions request received at 458626.469997
+[proxy] chat/completions request received at 458626.470969
+[proxy] chat/completions request received at 458626.471814
+[proxy] chat/completions request received at 458626.472907
+[proxy] chat/completions request received at 458626.474021
+[proxy] chat/completions request received at 458626.475289
+[proxy] chat/completions request received at 458626.475982
+[proxy] chat/completions request received at 458626.477192
+[proxy] chat/completions request received at 458626.478717
+[proxy] chat/completions request received at 458626.480478
+[proxy] chat/completions request received at 458626.481467
+[proxy] chat/completions request received at 458626.482433
+[proxy] chat/completions request received at 458626.483693
+[proxy] chat/completions request received at 458626.484972
+[proxy] chat/completions request received at 458626.486520
+[proxy] chat/completions request received at 458626.487813
+[proxy] chat/completions request received at 458626.488799
+[proxy] chat/completions request received at 458626.489880
+[proxy] chat/completions request received at 458626.491082
+[proxy] chat/completions request received at 458626.492569
+[proxy] chat/completions request received at 458626.493645
+[proxy] chat/completions request received at 458626.495492
+[proxy] chat/completions request received at 458626.496632
+[proxy] chat/completions request received at 458626.498029
+[proxy] chat/completions request received at 458626.499608
+[proxy] chat/completions request received at 458626.501026
+[proxy] chat/completions request received at 458626.502168
+[proxy] chat/completions request received at 458626.503368
+[proxy] chat/completions request received at 458626.504645
+[proxy] chat/completions request received at 458626.505842
+[proxy] chat/completions request received at 458626.506996
+[proxy] chat/completions request received at 458626.508344
+[proxy] chat/completions request received at 458626.509759
+[proxy] chat/completions request received at 458626.510973
+[proxy] chat/completions request received at 458626.512121
+[proxy] chat/completions request received at 458626.513206
+[proxy] chat/completions request received at 458626.514167
+[proxy] chat/completions request received at 458626.515147
+[proxy] chat/completions request received at 458626.516422
+[proxy] chat/completions request received at 458626.517336
+[proxy] chat/completions request received at 458626.518202
+[proxy] chat/completions request received at 458626.519194
+[proxy] chat/completions request received at 458626.520121
+[proxy] chat/completions request received at 458626.520895
+[proxy] chat/completions request received at 458626.522344
+[proxy] chat/completions request received at 458626.523263
+[proxy] chat/completions request received at 458626.524130
+[proxy] chat/completions request received at 458626.525325
+[proxy] chat/completions request received at 458626.526238
+[proxy] chat/completions request received at 458626.527445
+[proxy] chat/completions request received at 458626.528801
+[proxy] chat/completions request received at 458626.529827
+[proxy] chat/completions request received at 458626.901397
+[proxy] chat/completions request received at 458626.902839
+[proxy] chat/completions request received at 458626.903932
+[proxy] chat/completions request received at 458626.905016
+[proxy] chat/completions request received at 458626.906077
+[proxy] chat/completions request received at 458626.907022
+[proxy] chat/completions request received at 458626.908120
