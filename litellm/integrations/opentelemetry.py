@@ -72,6 +72,13 @@ class OpenTelemetryConfig:
     model_id: Optional[str] = None
 
     def __post_init__(self) -> None:
+        # If endpoint is specified but exporter is still the default "console",
+        # automatically infer "otlp_http" to send traces to the endpoint.
+        # This fixes an issue where UI-configured OTEL settings would default
+        # to console output instead of sending traces to the configured endpoint.
+        if self.endpoint and isinstance(self.exporter, str) and self.exporter == "console":
+            self.exporter = "otlp_http"
+
         if not self.service_name:
             self.service_name = os.getenv("OTEL_SERVICE_NAME", "litellm")
         if not self.deployment_environment:
