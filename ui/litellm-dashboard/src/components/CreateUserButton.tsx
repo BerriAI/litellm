@@ -1,33 +1,29 @@
-import React, { useState, useEffect } from "react";
-import { Button, Modal, Form, Input, Select, Select as Select2 } from "antd";
-import {
-  Button as Button2,
-  Text,
-  TextInput,
-  SelectItem,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-  Title,
-} from "@tremor/react";
-import OnboardingModal from "./onboarding_link";
-import { InvitationLink } from "./onboarding_link";
-import {
-  userCreateCall,
-  modelAvailableCall,
-  invitationCreateCall,
-  getProxyUISettings,
-  getProxyBaseUrl,
-} from "./networking";
-import BulkCreateUsers from "./bulk_create_users_button";
-const { Option } = Select;
-import { Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
-import NotificationsManager from "./molecules/notifications_manager";
+import {
+  Accordion,
+  AccordionBody,
+  AccordionHeader,
+  Button as Button2,
+  SelectItem,
+  TextInput,
+} from "@tremor/react";
+import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
+import React, { useEffect, useState } from "react";
+import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
-
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import NotificationsManager from "./molecules/notifications_manager";
+import {
+  getProxyBaseUrl,
+  getProxyUISettings,
+  invitationCreateCall,
+  modelAvailableCall,
+  userCreateCall,
+} from "./networking";
+import OnboardingModal, { InvitationLink } from "./onboarding_link";
+const { Option } = Select;
+const { Text, Link, Title } = Typography;
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -58,14 +54,8 @@ interface UISettings {
   SSO_ENABLED: boolean;
 }
 
-const Createuser: React.FC<CreateuserProps> = ({
-  userID,
-  accessToken,
-  teams,
-  possibleUIRoles,
-  onUserCreated,
-  isEmbedded = false,
-}) => {
+export const CreateUserButton: React.FC<CreateuserProps> = ({
+  userID, accessToken, teams, possibleUIRoles, onUserCreated, isEmbedded = false }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
@@ -75,28 +65,18 @@ const Createuser: React.FC<CreateuserProps> = ({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  // get all models
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const userRole = "any"; // You may need to get the user role dynamically
+        const userRole = "any";
         const modelDataResponse = await modelAvailableCall(accessToken, userID, userRole);
-        // Assuming modelDataResponse.data contains an array of model objects with a 'model_name' property
         const availableModels = [];
         for (let i = 0; i < modelDataResponse.data.length; i++) {
           const model = modelDataResponse.data[i];
           availableModels.push(model.id);
         }
-        console.log("Model data response:", modelDataResponse.data);
-        console.log("Available models:", availableModels);
-
-        // Assuming modelDataResponse.data contains an array of model names
         setUserModels(availableModels);
-
-        // get ui settings
         const uiSettingsResponse = await getProxyUISettings(accessToken);
-        console.log("uiSettingsResponse:", uiSettingsResponse);
-
         setUISettings(uiSettingsResponse);
       } catch (error) {
         console.error("Error fetching model data:", error);
@@ -104,9 +84,8 @@ const Createuser: React.FC<CreateuserProps> = ({
     };
 
     setBaseUrl(getProxyBaseUrl());
-
-    fetchData(); // Call the function to fetch model data when the component mounts
-  }, []); // Empty dependency array to run only once
+    fetchData();
+  }, []);
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -126,25 +105,19 @@ const Createuser: React.FC<CreateuserProps> = ({
         setIsModalVisible(true);
       }
       if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
-        console.log("formValues.user_role", formValues.user_role);
-        // If models is empty or undefined, set it to "no-default-models"
         formValues.models = ["no-default-models"];
       }
-      console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
       await queryClient.invalidateQueries({ queryKey: ["userList"] });
-      console.log("user create Response:", response);
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
 
-      // Call the callback if provided (for embedded mode)
       if (onUserCreated && isEmbedded) {
         onUserCreated(user_id);
         form.resetFields();
-        return; // Skip the invitation flow when embedded
+        return;
       }
 
-      // only do invite link flow if sso is not enabled
       if (!uiSettings?.SSO_ENABLED) {
         invitationCreateCall(accessToken, user_id).then((data) => {
           data.has_user_setup_sso = false;
@@ -184,6 +157,21 @@ const Createuser: React.FC<CreateuserProps> = ({
   if (isEmbedded) {
     return (
       <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
+        <Alert
+          message="Email invitations"
+          description={
+            <>
+              New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.
+              {" "}
+              <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
+                Learn how to set up email notifications
+              </Link>
+            </>
+          }
+          type="info"
+          showIcon
+          className="mb-4"
+        />
         <Form.Item label="User Email" name="user_email">
           <TextInput placeholder="" />
         </Form.Item>
@@ -194,9 +182,9 @@ const Createuser: React.FC<CreateuserProps> = ({
                 <SelectItem key={role} value={role} title={ui_label}>
                   <div className="flex">
                     {ui_label}{" "}
-                    <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
+                    <Text className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
                       {description}
-                    </p>
+                    </Text>
                   </div>
                 </SelectItem>
               ))}
@@ -234,16 +222,33 @@ const Createuser: React.FC<CreateuserProps> = ({
         onOk={handleOk}
         onCancel={handleCancel}
       >
-        <Text className="mb-1">Create a User who can own keys</Text>
+        <Space direction="vertical" size="middle">
+          <Text className="mb-1">Create a User who can own keys</Text>
+          <Alert
+            message="Email invitations"
+            description={
+              <>
+                New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.
+                {" "}
+                <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
+                  Learn how to set up email notifications
+                </Link>
+              </>
+            }
+            type="info"
+            showIcon
+            className="mb-4"
+          />
+        </Space>
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           <Form.Item label="User Email" name="user_email">
-            <TextInput placeholder="" />
+            <Input />
           </Form.Item>
           <Form.Item
             label={
               <span>
                 Global Proxy Role{" "}
-                <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                <Tooltip title="This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings">
                   <InfoCircleOutlined />
                 </Tooltip>
               </span>
@@ -254,12 +259,12 @@ const Createuser: React.FC<CreateuserProps> = ({
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
                   <SelectItem key={role} value={role} title={ui_label}>
-                    <div className="flex">
-                      {ui_label}{" "}
-                      <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
-                        {description}
-                      </p>
-                    </div>
+                    <Text>
+                      {ui_label}
+                    </Text>
+                    <Text type="secondary">
+                      {" - "}{description}
+                    </Text>
                   </SelectItem>
                 ))}
             </Select2>
@@ -279,7 +284,7 @@ const Createuser: React.FC<CreateuserProps> = ({
           </Form.Item>
           <Accordion>
             <AccordionHeader>
-              <Title>Personal Key Creation</Title>
+              <Text strong>Personal Key Creation</Text>
             </AccordionHeader>
             <AccordionBody>
               <Form.Item
@@ -312,7 +317,7 @@ const Createuser: React.FC<CreateuserProps> = ({
             </AccordionBody>
           </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button htmlType="submit">Create User</Button>
+            <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">Invite User</Button>
           </div>
         </Form>
       </Modal>
@@ -327,5 +332,3 @@ const Createuser: React.FC<CreateuserProps> = ({
     </div>
   );
 };
-
-export default Createuser;

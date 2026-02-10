@@ -5,10 +5,9 @@ Covers the critical path: resolve_mcp_auth(), token caching, auth priority,
 fallback to static token, and the skip-condition property.
 """
 
-import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
@@ -120,3 +119,39 @@ def test_needs_user_oauth_token_property():
 
     # Non-OAuth2 → never needs user OAuth token
     assert _server(auth_type=MCPAuth.bearer_token).needs_user_oauth_token is False
+
+
+@pytest.mark.asyncio
+async def test_http_error_raises_value_error():
+    """HTTP errors from the token endpoint are wrapped in a clear ValueError."""
+    server = _server()
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Unauthorized", request=MagicMock(), response=mock_response,
+    )
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ), pytest.raises(ValueError, match="failed with status 401"):
+        await resolve_mcp_auth(server)
+
+
+@pytest.mark.asyncio
+async def test_non_dict_response_raises_value_error():
+    """A non-dict JSON response raises a clear ValueError."""
+    server = _server()
+    resp = MagicMock()
+    resp.json.return_value = ["not", "a", "dict"]
+    resp.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.post.return_value = resp
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ), pytest.raises(ValueError, match="non-object JSON"):
+        await resolve_mcp_auth(server)
