@@ -885,9 +885,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
             raise ProxyException(
-                message="No connected db.",
-                type=ProxyErrorTypes.no_db_connection,
-                code=400,
+                message="Authentication Error: Invalid API key. No database connected — only the master key is accepted for authentication. Set DATABASE_URL to enable virtual keys.",
+                type=ProxyErrorTypes.auth_error,
+                code=401,
                 param=None,
             )
 
