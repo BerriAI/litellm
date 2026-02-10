@@ -6146,6 +6146,7 @@ def validate_environment(  # noqa: PLR0915
                 or "AWS_PROFILE" in os.environ
                 or "AWS_WEB_IDENTITY_TOKEN_FILE" in os.environ
                 or "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" in os.environ  # ECS task role
+                or "AWS_CONTAINER_CREDENTIALS_FULL_URI" in os.environ  # ECS/Fargate full URI credential delivery
             ):
                 keys_in_environment = True
             else:
