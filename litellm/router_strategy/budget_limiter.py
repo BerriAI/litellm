@@ -353,13 +353,7 @@ class RouterBudgetLimiting(CustomLogger):
             self.redis_increment_operation_queue.append(increment_op)
 
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
-        queue_lock: Optional[asyncio.Lock] = getattr(
-            self, "_redis_increment_queue_lock", None
-        )
-        if queue_lock is None:
-            queue_lock = asyncio.Lock()
-            self._redis_increment_queue_lock = queue_lock
-        return queue_lock
+        return self._redis_increment_queue_lock
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
