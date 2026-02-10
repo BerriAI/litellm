@@ -245,9 +245,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             allow_redirects=False,
             auto_decompress=False,
             timeout=ClientTimeout(
-                sock_connect=timeout.get("connect"),
-                sock_read=timeout.get("read"),
-                connect=timeout.get("pool"),
+                sock_connect=_normalize_timeout(timeout.get("connect")),
+                sock_read=_normalize_timeout(timeout.get("read")),
+                connect=_normalize_timeout(timeout.get("pool")),
             ),
             proxy=proxy,
             server_hostname=sni_hostname,
