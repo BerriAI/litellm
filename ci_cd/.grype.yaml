@@ -1,3 +1,20 @@
 ignore:
   - vulnerability: CVE-2026-22184
     reason: no fixed zlib package is available yet in the Wolfi repositories, so this is ignored temporarily until an upstream release exists
+  # Wolfi base image: Python 3.13 has no fixed apk build yet (Node 24.13 fixed via Dockerfile pin)
+  - vulnerability: CVE-2026-0865
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-15282
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2026-0672
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-15366
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-15367
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-11468
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-12781
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2026-1299
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet

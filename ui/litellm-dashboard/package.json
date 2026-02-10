@@ -79,6 +79,7 @@
     "vitest": "^3.2.4"
   },
   "overrides": {
+    "diff": ">=8.0.3",
     "prismjs": ">=1.30.0",
     "webpack-dev-server": ">=5.2.1",
     "mermaid": ">=11.10.0",
