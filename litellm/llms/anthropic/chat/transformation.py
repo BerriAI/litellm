@@ -208,24 +208,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
         
         Anthropic's output_format doesn't support certain JSON schema properties:
-        - maxItems: Not supported for array types
-        - minItems: Not supported for array types
+        - maxItems/minItems: Not supported for array types
+        - minimum/maximum: Not supported for numeric types
+        - minLength/maxLength: Not supported for string types
         
-        This function recursively removes these unsupported fields while preserving
-        all other valid schema properties.
+        This mirrors the transformation done by the Anthropic Python SDK.
+        See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
+        
+        The SDK approach:
+        1. Remove unsupported constraints from schema
+        2. Add constraint info to description (e.g., "Must be at least 100")
+        3. Validate responses against original schema
         
         Args:
             schema: The JSON schema dictionary to filter
             
         Returns:
-            A new dictionary with unsupported fields removed
+            A new dictionary with unsupported fields removed and descriptions updated
             
-        Related issue: https://github.com/BerriAI/litellm/issues/19444
+        Related issues: 
+        - https://github.com/BerriAI/litellm/issues/19444
         """
         if not isinstance(schema, dict):
             return schema
 
-        unsupported_fields = {"maxItems", "minItems"}
+        # All numeric/string/array constraints not supported by Anthropic
+        unsupported_fields = {
+            "maxItems", "minItems",           # array constraints
+            "minimum", "maximum",             # numeric constraints  
+            "exclusiveMinimum", "exclusiveMaximum",  # numeric constraints
+            "minLength", "maxLength",         # string constraints
+        }
 
         result: Dict[str, Any] = {}
         for key, value in schema.items():
