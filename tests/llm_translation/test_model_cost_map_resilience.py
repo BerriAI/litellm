@@ -216,6 +216,23 @@ class TestGetModelCostMapFallback:
         assert len(result) > 0
 
 
+class TestBackupModelCostMapExists:
+    """Validates the local backup file is always present and valid."""
+
+    def test_should_have_backup_file(self):
+        """The backup model cost map must exist and be loadable."""
+        backup = GetModelCostMap.load_local_model_cost_map()
+        assert isinstance(backup, dict)
+        assert len(backup) > 0, "Backup model cost map is empty"
+
+    def test_should_have_minimum_models_in_backup(self):
+        """The backup must contain a reasonable number of models."""
+        backup = GetModelCostMap.load_local_model_cost_map()
+        assert len(backup) > 100, (
+            f"Backup has only {len(backup)} models, expected > 100"
+        )
+
+
 class TestBadHostedModelCostMap:
     """
     Simulates the hosted model cost map being bad (invalid JSON / corrupted).
