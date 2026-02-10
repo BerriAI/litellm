@@ -445,13 +445,13 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         if isinstance(image_item, dict):
                             image_url_obj = image_item.get("image_url")
                             if isinstance(image_url_obj, dict):
-                                image_url = image_url_obj.get("url")
+                                assistant_image_url = image_url_obj.get("url")
                                 format = image_url_obj.get("format")
                                 detail = image_url_obj.get("detail")
                                 media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
-                                if image_url:
+                                if assistant_image_url:
                                     _part = _process_gemini_media(
-                                        image_url=image_url,
+                                        image_url=assistant_image_url,
                                         format=format,
                                         media_resolution_enum=media_resolution_enum,
                                         model=model,
