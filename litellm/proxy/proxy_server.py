@@ -13,6 +13,14 @@ import time
 import traceback
 import warnings
 from datetime import datetime, timedelta, timezone
+
+# Patch Uvicorn so scope gets _uvicorn_received_at (request ready → app entry timing)
+try:
+    from litellm.proxy.uvicorn_handoff_patch import apply_uvicorn_handoff_patch
+
+    apply_uvicorn_handoff_patch()
+except Exception:
+    pass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1222,8 +1230,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.add_middleware(PrometheusAuthMiddleware)
 
 
-class _UvicornHandoffTimingMiddleware:
-    """Raw ASGI middleware to timestamp when Uvicorn hands request to our app."""
+class _UvicornHandoffLoggingMiddleware:
+    """ASGI middleware: log time from Uvicorn request ready → app entry (when patch applied)."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -1232,7 +1240,13 @@ class _UvicornHandoffTimingMiddleware:
         self, scope: dict, receive: Any, send: Any
     ) -> None:
         if scope.get("type") == "http":
-            scope["_uvicorn_handoff_at"] = time.perf_counter()
+            t_received = scope.get("_uvicorn_received_at")
+            if t_received is not None:
+                delta_ms = (time.perf_counter() - t_received) * 1000
+                print(
+                    f"[proxy] uvicorn receive → app entry: {delta_ms:.2f}ms",
+                    flush=True,
+                )
         await self.app(scope, receive, send)
 
 
@@ -1242,14 +1256,6 @@ class _ChatCompletionsEarlyReturnMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.scope.get("path", "")
         if "chat/completions" in path and request.method == "POST":
-            t_handoff = request.scope.get("_uvicorn_handoff_at")
-            if t_handoff is not None:
-                delta_ms = (time.perf_counter() - t_handoff) * 1000
-                print(
-                    f"[proxy] Uvicorn handoff → middleware: {delta_ms:.2f}ms",
-                    flush=True,
-                )
-            print("[proxy] _ChatCompletionsEarlyReturnMiddleware: early return", flush=True)
             return JSONResponse(
                 content={"message": "Hello, world!", "status": "success"},
                 status_code=200,
@@ -1258,6 +1264,7 @@ class _ChatCompletionsEarlyReturnMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(_ChatCompletionsEarlyReturnMiddleware)
+app.add_middleware(_UvicornHandoffLoggingMiddleware)
 
 
 def mount_swagger_ui():
@@ -11889,5 +11896,3 @@ app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
 
-# Wrap app so Uvicorn's handoff to our ASGI stack is timestamped for perf tracing
-app = _UvicornHandoffTimingMiddleware(app)
