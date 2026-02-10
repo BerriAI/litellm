@@ -20,6 +20,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
+    ResponseAPIUsage,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -39,7 +40,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
-        return "perplexity"
+        return LlmProviders.PERPLEXITY
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -105,7 +106,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         - Supports 'instructions' parameter for system-level guidance
         - Tools are specified differently (web_search, fetch_url)
         """
-        mapped_params = {}
+        mapped_params: Dict[str, Any] = {}
         
         # Map standard parameters
         if response_api_optional_params.get("max_output_tokens"):
@@ -123,18 +124,23 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         if response_api_optional_params.get("stream_options"):
             mapped_params["stream_options"] = response_api_optional_params["stream_options"]
         
-        # Map Perplexity-specific parameters
-        if response_api_optional_params.get("preset"):
-            mapped_params["preset"] = response_api_optional_params["preset"]
+        # Map Perplexity-specific parameters (using .get() with Any dict access)
+        preset = response_api_optional_params.get("preset")  # type: ignore
+        if preset:
+            mapped_params["preset"] = preset
         
-        if response_api_optional_params.get("instructions"):
-            mapped_params["instructions"] = response_api_optional_params["instructions"]
+        instructions = response_api_optional_params.get("instructions")  # type: ignore
+        if instructions:
+            mapped_params["instructions"] = instructions
         
         if response_api_optional_params.get("reasoning"):
             mapped_params["reasoning"] = response_api_optional_params["reasoning"]
         
-        if response_api_optional_params.get("tools"):
-            mapped_params["tools"] = self._transform_tools(response_api_optional_params["tools"])
+        tools = response_api_optional_params.get("tools")
+        if tools:
+            # Convert tools to list of dicts for transformation
+            tools_list = [dict(tool) if hasattr(tool, '__dict__') else tool for tool in tools]  # type: ignore
+            mapped_params["tools"] = self._transform_tools(tools_list)  # type: ignore
         
         return mapped_params
 
@@ -260,7 +266,10 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
 
         # Transform usage to handle Perplexity's cost structure
         usage_data = raw_response_json.get("usage", {})
-        transformed_usage = self._transform_usage(usage_data)
+        transformed_usage_dict = self._transform_usage(usage_data)
+        
+        # Convert usage dict to ResponseAPIUsage object
+        usage_obj = ResponseAPIUsage(**transformed_usage_dict) if transformed_usage_dict else None
         
         # Map Perplexity response to OpenAI Responses API format
         response = ResponsesAPIResponse(
@@ -270,7 +279,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             status=raw_response_json.get("status", "completed"),
             model=raw_response_json.get("model", model),
             output=raw_response_json.get("output", []),
-            usage=transformed_usage,
+            usage=usage_obj,
         )
 
         return response
