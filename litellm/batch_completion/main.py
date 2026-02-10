@@ -244,9 +244,16 @@ def batch_completion_models_all_responses(*args, **kwargs):
 
     responses = []
 
+    futures = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
         for idx, model in enumerate(models):
-            future = executor.submit(litellm.completion, *args, model=model, **kwargs)
+            futures[model] = executor.submit(
+                litellm.completion, *args, model=model, **kwargs
+            )
+
+        for model, future in sorted(
+            futures.items(), key=lambda x: models.index(x[0])
+        ):
             if future.result() is not None:
                 responses.append(future.result())
 
