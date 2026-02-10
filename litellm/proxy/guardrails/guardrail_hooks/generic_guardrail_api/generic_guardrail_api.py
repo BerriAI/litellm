@@ -5,6 +5,7 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import fnmatch
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
@@ -29,25 +30,41 @@ if TYPE_CHECKING:
 
 GUARDRAIL_NAME = "generic_guardrail_api"
 
-_SENSITIVE_HEADER_DENYLIST = {
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "set-cookie",
-    # common secret-bearing headers
-    "x-api-key",
-    "api-key",
-    "x-auth-token",
-    "x-authorization",
-}
+# Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
+_HEADER_VALUE_ALLOWLIST = frozenset({
+    "host",
+    "accept-encoding",
+    "connection",
+    "accept",
+    "content-type",
+    "user-agent",
+    "x-stainless-*",
+    "x-litellm-*",
+    "content-length",
+})
+
+# Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
+_HEADER_PRESENT_PLACEHOLDER = "[present]"
+
+
+def _header_value_allowed(header_name: str) -> bool:
+    """Return True if this header's value may be forwarded (allowlist, including globs)."""
+    lower = header_name.lower()
+    if lower in _HEADER_VALUE_ALLOWLIST:
+        return True
+    for pattern in _HEADER_VALUE_ALLOWLIST:
+        if "*" in pattern and fnmatch.fnmatch(lower, pattern):
+            return True
+    return False
 
 
 def _sanitize_inbound_headers(headers: Any) -> Optional[Dict[str, str]]:
     """
     Sanitize inbound headers before passing them to a 3rd party guardrail service.
 
-    - Drops sensitive headers (case-insensitive)
-    - Coerces values to str (for JSON serialization)
+    - Allowlist: only headers in the allowlist have their values forwarded (exact + glob: x-stainless-*, x-litellm-*).
+    - All other headers are included with value "[present]" so the guardrail knows the header existed.
+    - Coerces values to str (for JSON serialization).
     """
     if not headers or not isinstance(headers, dict):
         return None
@@ -57,14 +74,13 @@ def _sanitize_inbound_headers(headers: Any) -> Optional[Dict[str, str]]:
         if k is None:
             continue
         key = str(k)
-        if key.lower() in _SENSITIVE_HEADER_DENYLIST:
-            continue
-        # Coerce all values to strings for stable serialization
-        try:
-            sanitized[key] = str(v)
-        except Exception:
-            # non-blocking if it can't cast to a str
-            continue
+        if _header_value_allowed(key):
+            try:
+                sanitized[key] = str(v)
+            except Exception:
+                continue
+        else:
+            sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
 
     return sanitized or None
 

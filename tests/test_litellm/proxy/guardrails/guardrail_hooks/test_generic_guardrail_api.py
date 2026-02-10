@@ -19,6 +19,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
+    _HEADER_PRESENT_PLACEHOLDER,
+)
 from litellm.types.utils import Choices, Message
 
 
@@ -357,8 +360,8 @@ class TestMetadataExtraction:
         self, generic_guardrail, mock_request_data_input
     ):
         """
-        Ensure inbound proxy request headers are forwarded in JSON payload,
-        sensitive headers are removed, and LiteLLM version is included.
+        Ensure inbound proxy request headers are forwarded in JSON payload with allowlist:
+        allowed headers show their value; all other headers show presence only ([present]).
         """
         # Add proxy_server_request headers as they exist in proxy request context
         request_data = dict(mock_request_data_input)
@@ -394,16 +397,15 @@ class TestMetadataExtraction:
             assert json_payload["litellm_version"] == litellm_version
             assert "request_headers" in json_payload
             assert isinstance(json_payload["request_headers"], dict)
+            req_headers = json_payload["request_headers"]
 
-            # User-Agent should be forwarded
-            assert json_payload["request_headers"].get("User-Agent") == "OpenAI/Python 2.17.0"
+            # Allowed: value forwarded
+            assert req_headers.get("User-Agent") == "OpenAI/Python 2.17.0"
 
-            # Sensitive headers must be removed (case-insensitive denylist)
-            assert "Authorization" not in json_payload["request_headers"]
-            assert "Cookie" not in json_payload["request_headers"]
-
-            # Non-sensitive headers should remain
-            assert json_payload["request_headers"].get("X-Request-Id") == "req_123"
+            # Not on allowlist: key present, value is placeholder only
+            assert req_headers.get("Authorization") == _HEADER_PRESENT_PLACEHOLDER
+            assert req_headers.get("Cookie") == _HEADER_PRESENT_PLACEHOLDER
+            assert req_headers.get("X-Request-Id") == _HEADER_PRESENT_PLACEHOLDER
 
 
 class TestGuardrailActions:
