@@ -195,6 +195,10 @@ DEFAULT_SSL_CIPHERS = os.getenv(
     "AES128-GCM-SHA256",  # Last resort (maximum compatibility)
 )
 
+#### Model Cost Map Validation ####
+# The real map has ~2500+ entries. This catches corrupted/truncated/empty responses.
+MIN_MODEL_COST_MAP_ENTRIES = 100
+
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
