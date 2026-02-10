@@ -831,6 +831,7 @@ class RedisCache(BaseCache):
             return []
         with self.redis_client.pipeline(transaction=False) as pipe:
             for key in keys:
+                key = self.check_and_fix_namespace(key)
                 pipe.get(key)  # type: ignore
             return pipe.execute()
 
@@ -846,6 +847,7 @@ class RedisCache(BaseCache):
 
         async with async_redis_client.pipeline(transaction=False) as pipe:
             for key in keys:
+                key = self.check_and_fix_namespace(key)
                 pipe.get(key)  # type: ignore
             return await pipe.execute()
 
@@ -1103,6 +1105,7 @@ class RedisCache(BaseCache):
             return
         async with _redis_client.pipeline(transaction=False) as pipe:
             for key in keys:
+                key = self.check_and_fix_namespace(key)
                 pipe.delete(key)  # type: ignore
             await pipe.execute()
 

@@ -6,15 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 
 
-@patch("litellm._redis.init_redis_cluster")
-def test_redis_cluster_batch_get(mock_init_redis_cluster):
+@patch("litellm._redis.get_redis_client")
+def test_redis_cluster_batch_get(mock_get_redis_client):
     """
     Test that RedisClusterCache uses pipeline instead of mget for batch operations
     """
@@ -24,7 +20,7 @@ def test_redis_cluster_batch_get(mock_init_redis_cluster):
     mock_redis.pipeline.return_value.__enter__.return_value = mock_pipe
     mock_pipe.execute.return_value = [None, None]
     
-    mock_init_redis_cluster.return_value = mock_redis
+    mock_get_redis_client.return_value = mock_redis
 
     # Create RedisClusterCache instance with mock client
     cache = RedisClusterCache(
@@ -43,8 +39,8 @@ def test_redis_cluster_batch_get(mock_init_redis_cluster):
 
 
 @pytest.mark.asyncio
-@patch("litellm._redis.init_redis_cluster")
-async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
+@patch("litellm._redis.get_redis_client")
+async def test_redis_cluster_async_batch_get(mock_get_redis_client):
     """
     Test that RedisClusterCache uses pipeline instead of mget for async batch operations
     """
