@@ -40,7 +40,15 @@ try:
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
-    pass
+    class _A2AClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def send_message(self, *args, **kwargs):
+            raise ImportError("a2a-sdk is not installed")
+
+        def send_message_streaming(self, *args, **kwargs):
+            raise ImportError("a2a-sdk is not installed")
 
 # Import our custom card resolver that supports multiple well-known paths
 from litellm.a2a_protocol.card_resolver import LiteLLMA2ACardResolver
@@ -623,6 +631,7 @@ async def create_a2a_client(
     a2a_client = _A2AClient(
         httpx_client=httpx_client,
         agent_card=agent_card,
+        url=base_url,
     )
 
     # Store agent_card on client for later retrieval (SDK doesn't expose it)
