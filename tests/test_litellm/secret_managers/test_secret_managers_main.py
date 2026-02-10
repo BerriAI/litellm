@@ -151,20 +151,18 @@ def test_oidc_azure_file_success(mock_env, tmp_path):
 
 
 @patch("litellm.secret_managers.main.get_azure_ad_token_provider")
-@patch.dict(os.environ, {}, clear=False)  # Ensure AZURE_FEDERATED_TOKEN_FILE is not set
-def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider):
-    # Ensure the env var is not set so it falls through to Azure AD token provider
-    if "AZURE_FEDERATED_TOKEN_FILE" in os.environ:
-        del os.environ["AZURE_FEDERATED_TOKEN_FILE"]
-    
+def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider, monkeypatch):
+    # Force-unset so we always hit the Azure AD token provider path (CI may set AZURE_FEDERATED_TOKEN_FILE)
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+
     # Mock the token provider function that gets returned and called
     mock_token_provider = Mock(return_value="azure_ad_token")
     mock_get_azure_ad_token_provider.return_value = mock_token_provider
-    
+
     # Also mock the Azure Identity SDK to prevent any real Azure calls
     with patch("azure.identity.get_bearer_token_provider") as mock_bearer:
         mock_bearer.return_value = mock_token_provider
-        
+
         secret_name = "oidc/azure/api://azure-audience"
         result = get_secret(secret_name)
 
