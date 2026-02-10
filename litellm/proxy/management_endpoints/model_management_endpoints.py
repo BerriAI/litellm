@@ -632,22 +632,26 @@ async def _remove_deleted_model_from_virtual_keys(
 ) -> None:
     """
     Remove a deleted model from virtual key models lists.
-    Keys store model_id; model_name is included for backward compatibility.
+    Uses a single UPDATE for all affected keys (O(1) vs O(n) round-trips).
     """
-    to_remove = {model_id}
+    ids_to_remove = [model_id]
     if model_name and model_name != model_id:
-        to_remove.add(model_name)
+        ids_to_remove.append(model_name)
 
-    rows = await prisma_client.db.litellm_verificationtoken.find_many()
-    for row in rows:
-        if not row.models:
-            continue
-        filtered = [m for m in row.models if m not in to_remove]
-        if len(filtered) != len(row.models):
-            await prisma_client.db.litellm_verificationtoken.update(
-                where={"token": row.token},
-                data={"models": filtered},
-            )
+    if len(ids_to_remove) == 1:
+        sql = """
+            UPDATE "LiteLLM_VerificationToken"
+            SET models = array_remove(models, $1)
+            WHERE $1 = ANY(models)
+        """
+        await prisma_client.db.execute_raw(sql, ids_to_remove[0])
+    else:
+        sql = """
+            UPDATE "LiteLLM_VerificationToken"
+            SET models = array_remove(array_remove(models, $1), $2)
+            WHERE $1 = ANY(models) OR $2 = ANY(models)
+        """
+        await prisma_client.db.execute_raw(sql, ids_to_remove[0], ids_to_remove[1])
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
