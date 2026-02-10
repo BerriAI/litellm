@@ -482,7 +482,7 @@ def generic_response_convertor(
                 )
 
     # Build extra_fields dict from GENERIC_USER_EXTRA_ATTRIBUTES if specified
-    extra_fields = None
+    extra_fields: Optional[Dict[str, Any]] = None
     if generic_user_extra_attributes:
         extra_fields = {}
         for attr_name in generic_user_extra_attributes.split(","):
