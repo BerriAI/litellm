@@ -305,6 +305,8 @@ class TestExecuteWithMcpClient:
         assert result["status"] == "error"
         assert result["error"] is True
         assert "Failed to connect to MCP server" in result["message"]
+        # Error message must not leak raw exception details
+        assert "cancel scope" not in result["message"]
 
 
 class TestTestConnection:

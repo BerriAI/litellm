@@ -24,7 +24,6 @@ export const TRANSPORT = {
 };
 
 export const handleTransport = (transport?: string | null): string => {
-  console.log(transport);
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
   }

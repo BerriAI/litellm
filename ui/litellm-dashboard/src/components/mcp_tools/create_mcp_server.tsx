@@ -479,7 +479,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               rules={[
                 {
                   required: false,
-                  message: "Please enter a server description!!!!!!!!!",
+                  message: "Please enter a server description",
                 },
               ]}
             >

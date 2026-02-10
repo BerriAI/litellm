@@ -595,7 +595,7 @@ if MCP_AVAILABLE:
             return {
                 "status": "error",
                 "error": True,
-                "message": f"Failed to connect to MCP server: {e}",
+                "message": "Failed to connect to MCP server. Check proxy logs for details.",
             }
 
     @router.post("/test/connection", dependencies=[Depends(user_api_key_auth)])

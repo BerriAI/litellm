@@ -45,13 +45,6 @@ mcp_servers:
   deepwiki:
     transport: "http"
     url: "https://mcp.deepwiki.com/mcp"
-  test_oauth2_server:
-    url: "http://localhost:8765/mcp"
-    transport: "http"
-    auth_type: "oauth2"
-    client_id: "test-client"
-    client_secret: "test-secret"
-    token_url: "http://localhost:8765/oauth/token"
 
 
 # General Settings
