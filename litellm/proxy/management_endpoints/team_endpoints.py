@@ -496,10 +496,16 @@ async def _check_org_team_limits(
         )
 
     # Validate team models against organization's allowed models
-    if data.models is not None and len(org_table.models) > 0:
+    if len(org_table.models) > 0:
         # If organization has 'all-proxy-models', skip validation as it allows all models
         if SpecialModelNames.all_proxy_models.value in org_table.models:
             pass
+        elif data.models is None or len(data.models) == 0:
+            # When the org has model restrictions but team specifies no models
+            # (None or []), inherit the org's models to prevent bypassing
+            # org restrictions. An empty model list would otherwise grant
+            # access to all proxy models, exceeding the org's allowed set.
+            data.models = list(org_table.models)
         else:
             for m in data.models:
                 if m not in org_table.models:
