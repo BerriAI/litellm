@@ -584,7 +584,7 @@ litellm_settings:
   num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
   request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
-  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  allowed_fails: 3 # cooldown model if it fails > 3 calls in a minute. 
   cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
 ```
 
