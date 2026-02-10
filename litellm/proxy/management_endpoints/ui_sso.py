@@ -190,9 +190,15 @@ def process_sso_jwt_access_token(
     if access_token_str and result:
         import jwt
 
-        access_token_payload = jwt.decode(
-            access_token_str, options={"verify_signature": False}
-        )
+        try:
+            access_token_payload = jwt.decode(
+                access_token_str, options={"verify_signature": False}
+            )
+        except jwt.exceptions.DecodeError:
+            verbose_proxy_logger.debug(
+                "Access token is not a valid JWT (possibly an opaque token), skipping JWT-based extraction"
+            )
+            return
 
         # Extract team IDs from access token if sso_jwt_handler is available
         if sso_jwt_handler:
