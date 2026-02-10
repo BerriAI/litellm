@@ -32210,6 +32210,23 @@
             "1280x720"
         ]
     },
+    "openai/sora-2-pro-high-res": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.5,
+        "source": "https://platform.openai.com/docs/api-reference/videos",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1024x1792",
+            "1792x1024"
+        ]
+    },
     "azure/sora-2": {
         "litellm_provider": "azure",
         "mode": "video_generation",
@@ -35849,7 +35866,9 @@
     "gpt-realtime-mini-2025-10-06": {
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_audio_token": 1e-05,
+        "input_cost_per_image": 8e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -35880,7 +35899,9 @@
     "gpt-realtime-mini-2025-12-15": {
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_audio_token": 1e-05,
+        "input_cost_per_image": 8e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -35940,6 +35961,23 @@
         "supported_resolutions": [
             "720x1280",
             "1280x720"
+        ]
+    },
+    "sora-2-pro-high-res": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.5,
+        "source": "https://platform.openai.com/docs/api-reference/videos",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1024x1792",
+            "1792x1024"
         ]
     },
     "chatgpt-image-latest": {
