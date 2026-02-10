@@ -124,7 +124,13 @@ class Scheduler:
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
-                return response
+                # JSON serialization (used by Redis) converts tuples to
+                # lists.  heapq operations require consistent types for
+                # comparison, so convert inner lists back to tuples.
+                return [
+                    tuple(item) if isinstance(item, list) else item
+                    for item in response
+                ]
         return self.queue
 
     async def save_queue(self, queue: list, model_name: str) -> None:
