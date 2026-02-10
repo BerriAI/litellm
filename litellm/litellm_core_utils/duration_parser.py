@@ -264,8 +264,9 @@ def _handle_hour_reset(
 
     # Handle overnight case
     if next_hour >= 24:
+        extra_days = next_hour // 24
         next_hour = next_hour % 24
-        next_day = base_midnight + timedelta(days=1)
+        next_day = base_midnight + timedelta(days=extra_days)
         return next_day.replace(hour=next_hour)
 
     return current_time.replace(hour=next_hour, minute=0, second=0, microsecond=0)
@@ -304,8 +305,9 @@ def _handle_minute_reset(
 
     # Handle overnight case
     if next_hour >= 24:
+        extra_days = next_hour // 24
         next_hour = next_hour % 24
-        next_day = base_midnight + timedelta(days=1)
+        next_day = base_midnight + timedelta(days=extra_days)
         return next_day.replace(
             hour=next_hour, minute=next_minute, second=0, microsecond=0
         )
@@ -353,8 +355,9 @@ def _handle_second_reset(
 
     # Handle overnight case
     if next_hour >= 24:
+        extra_days = next_hour // 24
         next_hour = next_hour % 24
-        next_day = base_midnight + timedelta(days=1)
+        next_day = base_midnight + timedelta(days=extra_days)
         return next_day.replace(
             hour=next_hour, minute=next_minute, second=next_second, microsecond=0
         )
