@@ -164,10 +164,9 @@ def get_model_cost_map(url: str) -> dict:
     only costs a cheap integer comparison — the full backup JSON is only
     parsed when it needs to be *returned* as a fallback.
     """
-    if (
-        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
-        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
-    ):
+    # Note: can't use get_secret_bool here — this runs during litellm.__init__
+    # before litellm._key_management_settings is set.
+    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
         return GetModelCostMap.load_local_model_cost_map()
 
     try:
