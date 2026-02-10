@@ -124,7 +124,10 @@ class Scheduler:
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
-                return response
+                # Normalize items from cache - JSON serialization converts
+                # tuples to lists, causing TypeError in heapq comparisons
+                # when mixing cached (list) items with new (tuple) items
+                return [tuple(item) if isinstance(item, list) else item for item in response]
         return self.queue
 
     async def save_queue(self, queue: list, model_name: str) -> None:
