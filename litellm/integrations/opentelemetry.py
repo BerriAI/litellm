@@ -678,7 +678,7 @@ class OpenTelemetry(CustomLogger):
             # Ensure proxy-request parent span is annotated with the actual operation kind
             if (
                 parent_span is not None
-                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+                and getattr(parent_span, 'name', None) == LITELLM_PROXY_REQUEST_SPAN_NAME
             ):
                 self.set_attributes(parent_span, kwargs, response_obj)
         else:
