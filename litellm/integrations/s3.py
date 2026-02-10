@@ -1,8 +1,8 @@
 #### What this does ####
-#    On success + failure, log events to Supabase
+#    On success + failure, log events to S3
 
 from datetime import datetime
-from typing import Optional, cast
+from typing import Any, Dict, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -34,6 +34,7 @@ class S3Logger:
             )
 
             s3_use_team_prefix = False
+            s3_log_response = True  # Default: log both prompts and responses
 
             if litellm.s3_callback_params is not None:
                 # read in .env variables - example os.environ/AWS_BUCKET_NAME
@@ -62,10 +63,17 @@ class S3Logger:
                 s3_use_team_prefix = bool(
                     litellm.s3_callback_params.get("s3_use_team_prefix", False)
                 )
+                # New param: control whether to log responses
+                # Set to False to log only prompts (no responses)
+                s3_log_response = litellm.s3_callback_params.get(
+                    "s3_log_response", True
+                )
             self.s3_use_team_prefix = s3_use_team_prefix
+            self.s3_log_response = s3_log_response
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
+            verbose_logger.debug(f"s3 logger s3_log_response={s3_log_response}")
             # Create an S3 client with custom endpoint URL
             self.s3_client = boto3.client(
                 "s3",
@@ -88,6 +96,33 @@ class S3Logger:
         self, kwargs, response_obj, start_time, end_time, print_verbose
     ):
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+
+    def _filter_payload_fields(
+        self, payload: StandardLoggingPayload
+    ) -> Dict[str, Any]:
+        """
+        Filter out fields from the payload based on configuration.
+        
+        When s3_log_response is False, removes the 'response' field from the payload
+        to log only prompts (no responses).
+        
+        Args:
+            payload: The StandardLoggingPayload to filter
+            
+        Returns:
+            A dictionary with filtered fields
+        """
+        # Convert TypedDict to regular dict for modification
+        filtered_payload: Dict[str, Any] = dict(payload)
+        
+        if not self.s3_log_response:
+            # Remove response field when s3_log_response is False
+            filtered_payload.pop("response", None)
+            verbose_logger.debug(
+                "s3 Logger - s3_log_response=False, excluding response from payload"
+            )
+        
+        return filtered_payload
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
@@ -156,7 +191,9 @@ class S3Logger:
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            payload_str = safe_dumps(payload)
+            # Filter payload fields based on configuration
+            filtered_payload = self._filter_payload_fields(payload)
+            payload_str = safe_dumps(filtered_payload)
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
