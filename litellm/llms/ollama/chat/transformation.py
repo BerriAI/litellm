@@ -502,12 +502,12 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             reasoning_content: Optional[str] = None
             content: Optional[str] = None
             if chunk["message"].get("thinking") is not None:
-                if self.started_reasoning_content is False:
-                    reasoning_content = chunk["message"].get("thinking")
-                    self.started_reasoning_content = True
-                elif self.finished_reasoning_content is False:
-                    reasoning_content = chunk["message"].get("thinking")
-                    self.finished_reasoning_content = True
+                # Capture ALL thinking chunks - not just the first two.
+                # The previous logic set finished_reasoning_content on the
+                # second chunk, silently dropping all subsequent thinking
+                # deltas.
+                reasoning_content = chunk["message"].get("thinking")
+                self.started_reasoning_content = True
             elif chunk["message"].get("content") is not None:
                 message_content = chunk["message"].get("content")
                 if "<think>" in message_content:
