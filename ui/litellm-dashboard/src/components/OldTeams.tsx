@@ -52,7 +52,7 @@ import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
+import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
@@ -223,6 +223,7 @@ const Teams: React.FC<TeamProps> = ({
   const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
@@ -273,7 +274,22 @@ const Teams: React.FC<TeamProps> = ({
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        if (accessToken == null) {
+          return;
+        }
+
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPolicies();
   }, [accessToken]);
 
   const fetchMcpAccessGroups = async () => {
@@ -1328,6 +1344,36 @@ const Teams: React.FC<TeamProps> = ({
                           unCheckedChildren={
                             premiumUser ? "No" : "Premium feature - Upgrade to disable global guardrails by team"
                           }
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Policies{" "}
+                            <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                              <a
+                                href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </a>
+                            </Tooltip>
+                          </span>
+                        }
+                        name="policies"
+                        className="mt-8"
+                        help="Select existing policies or enter new ones"
+                      >
+                        <Select2
+                          mode="tags"
+                          style={{ width: "100%" }}
+                          placeholder="Select or enter policies"
+                          options={policiesList.map((name) => ({
+                            value: name,
+                            label: name,
+                          }))}
                         />
                       </Form.Item>
                       <Form.Item
