@@ -276,6 +276,12 @@ class PostHogLogger(CustomBatchLogger):
 
         for key, value in metadata.items():
             if key not in litellm_internal_fields:
+                # Convert Pydantic models / non-serializable objects to dicts
+                # to avoid "Object of type X is not JSON serializable" errors
+                if hasattr(value, "model_dump"):
+                    value = value.model_dump()
+                elif hasattr(value, "dict"):
+                    value = value.dict()
                 properties[key] = value
 
     def _get_distinct_id(
