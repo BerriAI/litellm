@@ -935,15 +935,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             model_mappings={model_id: original_file_id},
                             user_api_key_dict=user_api_key_dict,
                         )
-            asyncio.create_task(
-                self.store_unified_object_id(
-                    unified_object_id=response.id,
-                    file_object=response,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                    model_object_id=original_response_id,
-                    file_purpose="batch",
-                    user_api_key_dict=user_api_key_dict,
-                )
+            await self.store_unified_object_id(
+                unified_object_id=response.id,
+                file_object=response,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                model_object_id=original_response_id,
+                file_purpose="batch",
+                user_api_key_dict=user_api_key_dict,
             )
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
@@ -960,15 +958,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 response.id = self.get_unified_generic_response_id(
                     model_id=model_id, generic_response_id=response.id
                 )
-            asyncio.create_task(
-                self.store_unified_object_id(
-                    unified_object_id=response.id,
-                    file_object=response,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                    model_object_id=original_response_id,
-                    file_purpose="fine-tune",
-                    user_api_key_dict=user_api_key_dict,
-                )
+            await self.store_unified_object_id(
+                unified_object_id=response.id,
+                file_object=response,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                model_object_id=original_response_id,
+                file_purpose="fine-tune",
+                user_api_key_dict=user_api_key_dict,
             )
         elif isinstance(response, AsyncCursorPage):
             """
