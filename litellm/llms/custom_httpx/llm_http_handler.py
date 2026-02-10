@@ -2997,7 +2997,13 @@ class BaseLLMHTTPHandler:
 
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
-        litellm_params_with_url["upload_url"] = api_base
+        # For pre-signed requests (e.g., Bedrock S3), use the actual URL that
+        # was used for the upload — not api_base, which may have been generated
+        # by a separate get_complete_file_url() call with a different UUID.
+        if isinstance(transformed_request, dict) and "url" in transformed_request:
+            litellm_params_with_url["upload_url"] = transformed_request["url"]
+        else:
+            litellm_params_with_url["upload_url"] = api_base
 
         return provider_config.transform_create_file_response(
             model=None,
@@ -3120,11 +3126,21 @@ class BaseLLMHTTPHandler:
         else:
             raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
+        # Store the upload URL in litellm_params for the transformation method
+        litellm_params_with_url = dict(litellm_params)
+        # For pre-signed requests (e.g., Bedrock S3), use the actual URL that
+        # was used for the upload — not api_base, which may have been generated
+        # by a separate get_complete_file_url() call with a different UUID.
+        if isinstance(transformed_request, dict) and "url" in transformed_request:
+            litellm_params_with_url["upload_url"] = transformed_request["url"]
+        else:
+            litellm_params_with_url["upload_url"] = api_base
+
         return provider_config.transform_create_file_response(
             model=None,
             raw_response=upload_response,
             logging_obj=logging_obj,
-            litellm_params=litellm_params,
+            litellm_params=litellm_params_with_url,
         )
 
     def create_batch(
