@@ -123,6 +123,12 @@ class RedisCache(BaseCache):
         else:
             self.service_logger_obj = ServiceLogging()
 
+        # Pop litellm-specific cache config params that should not be forwarded
+        # to the redis client. These are consumed by the Cache/DualCache layer.
+        _default_redis_ttl = kwargs.pop("default_redis_ttl", None)
+        if _default_redis_ttl is not None:
+            litellm.default_redis_ttl = float(_default_redis_ttl)
+
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_async_client: Optional[
