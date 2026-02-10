@@ -83,6 +83,20 @@ MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
     os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
 )
 
+# MCP OAuth2 Client Credentials Defaults
+MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200")
+)
+MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600")
+)
+MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
