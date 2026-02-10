@@ -386,6 +386,54 @@ if ! grep -q 'model_name: auto' "$CONFIG_FILE"; then
     ok "Added auto-router entry to proxy_config.yaml (default: $AUTO_DEFAULT)"
 fi
 
+# ---------- 5d. Register litellm provider with OpenClaw ---------------------
+
+OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
+
+if [ -f "$OPENCLAW_CONFIG" ]; then
+    info "Registering litellm provider in OpenClaw config..."
+    python << 'PYEOF'
+import json, os
+
+config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+with open(config_path) as f:
+    config = json.load(f)
+
+# Ensure models.providers path exists
+config.setdefault("models", {})
+config["models"].setdefault("providers", {})
+
+config["models"]["providers"]["litellm"] = {
+    "baseUrl": "http://127.0.0.1:4000/v1",
+    "apiKey": "sk-1234",
+    "api": "openai-completions",
+    "models": [
+        {
+            "id": "auto",
+            "name": "LiteLLM Auto",
+            "reasoning": False,
+            "input": ["text"],
+            "cost": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 8192
+        }
+    ]
+}
+
+with open(config_path, "w") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+PYEOF
+    ok "Added litellm provider with auto model to $OPENCLAW_CONFIG"
+else
+    info "OpenClaw not found (~/.openclaw/openclaw.json missing) — skipping provider registration"
+fi
+
 # ---------- 6. Start proxy ---------------------------------------------------
 
 echo ""
