@@ -325,13 +325,23 @@ Profile captured with `test_config_minimal.yaml`. Ordered by cumtime, normalized
 
 ### Results
 
-| Concurrency | File | avg | p95 | max | >1s | >5s | >10s |
-|-------------|------|-----|-----|-----|-----|-----|------|
-| 1           | `concurrency_1_requests_100.txt`   | 0.012s | 0.007s | 0.716s | 0%   | 0% | 0%  |
-| 10          | `concurrency_10_requests_100.txt`  | 0.144s | 1.195s | 2.034s | 7%   | 0% | 0%  |
-| 30          | `concurrency_30_requests_100.txt`  | 0.833s | 3.861s | 4.836s | 27%  | 0% | 0%  |
-| 50          | `concurrency_50_requests_100.txt`  | 2.087s | 6.975s | 7.689s | 47%  | 18% | 0% |
+| Concurrency | File                              | avg    | p95    | max    | >1s | >5s | >10s |
+|-------------|-----------------------------------|--------|--------|--------|-----|-----|------|
+| 1           | `concurrency_1_requests_100.txt`  | 0.012s | 0.007s | 0.716s | 0%  | 0%  | 0%   |
+| 10          | `concurrency_10_requests_100.txt` | 0.144s | 1.195s | 2.034s | 7%  | 0%  | 0%   |
+| 30          | `concurrency_30_requests_100.txt` | 0.833s | 3.861s | 4.836s | 27% | 0%  | 0%   |
+| 50          | `concurrency_50_requests_100.txt` | 2.087s | 6.975s | 7.689s | 47% | 18% | 0%   |
 | 100         | `concurrency_100_requests_100.txt` | 7.721s | 14.019s | 14.657s | 97% | 69% | 33% |
+
+**Δ vs baseline (c=1):**
+
+| Concurrency | Δ avg              | Δ p95               | Δ max          |
+|-------------|--------------------|---------------------|----------------|
+| 1           | —                  | —                   | —              |
+| 10          | +1,100% (12×)      | +16,971% (171×)     | +184% (2.8×)   |
+| 30          | +6,842% (69×)      | +55,057% (551×)     | +575% (6.8×)   |
+| 50          | +17,292% (174×)    | +99,529% (996×)     | +974% (10.7×)  |
+| 100         | +64,242% (643×)    | +200,129% (2,002×)  | +1,947% (20.5×)|
 
 ### Analysis
 
@@ -344,6 +354,36 @@ Profile captured with `test_config_minimal.yaml`. Ordered by cumtime, normalized
 4. **Tail latency** — At c=100, 33% of requests exceed 10 s. Worst-case (14.6 s) is far above the ~5 ms steady-state per-request cost, indicating substantial proxy overhead under load.
 
 5. **Config context** — These runs use minimal config (no DB, Redis, callbacks) and the Prisma fast-path fix, so the bottleneck is in core proxy handling: auth, routing, and/or async event-loop behavior under concurrency.
+
+### cProfile Collection
+
+cProfile was run at each concurrency level with:
+`$env:DATABASE_URL = $null; $env:REDIS_URL = $null; python -m cProfile -o concurrency_N_requests_100.prof -m litellm.proxy.proxy_cli --config test_config_minimal.yaml`
+(Proxy runs until latency test completes 100 requests, then stopped.)
+
+| Concurrency | Profile file                         |
+|-------------|--------------------------------------|
+| 1           | `concurrency_1_requests_100.prof`   |
+| 10          | `concurrency_10_requests_100.prof`  |
+| 30          | `concurrency_30_requests_100.prof`  |
+| 50          | `concurrency_50_requests_100.prof`  |
+| 100         | `concurrency_100_requests_100.prof` |
+
+- [x] `concurrency_1_requests_100.prof`
+- [x] `concurrency_10_requests_100.prof`
+- [x] `concurrency_30_requests_100.prof`
+- [x] `concurrency_50_requests_100.prof`
+- [x] `concurrency_100_requests_100.prof`
+
+### cProfile Analysis
+
+**Hypothesis (c=1 vs c=100):**
+
+- **2× more completion calls per request** *(all OS)* – `router.acompletion` chain: ~309 calls (~3/req) at c=1 vs ~599 (~6/req) at c=100; suggests retries, fallbacks, or middleware work scaling with concurrency.
+- **Thread pool teardown** *(all OS)* – c=100: ~14.7s in `threading.join` / ThreadPoolExecutor shutdown (29 threads); c=1: negligible. Suggests blocking work delegated to thread pool under load.
+- **Context switching** *(all OS)* – `Context.run` ~15s cumtime at c=100 (7,503 calls); not in top 100 at c=1.
+- **I/O contention** *(Windows-specific metric)* – `GetQueuedCompletionStatus` ~21ms/call at c=100 vs ~13ms at c=1 (~60% slower per call under high concurrency). Same underlying phenomenon applies on Linux/macOS (epoll/kqueue).
+- **Event loop saturation** *(all OS)* – c=100: ~16 `_run_once`/s vs c=1: ~41/s; each iteration does more work under load.
 
 ### Checklist
 
