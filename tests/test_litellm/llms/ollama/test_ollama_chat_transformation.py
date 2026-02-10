@@ -6,9 +6,7 @@ from typing import cast
 import pytest
 from pydantic import BaseModel
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.ollama.chat.transformation import OllamaChatConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -35,9 +33,9 @@ class TestOllamaChatConfigResponseFormat:
         expected_schema_structure = TestEvent.model_json_schema()
         transformed_format.pop("additionalProperties")
 
-        assert (
-            transformed_format == expected_schema_structure
-        ), f"Transformed schema does not match expected. Got: {transformed_format}, Expected: {expected_schema_structure}"
+        assert transformed_format == expected_schema_structure, (
+            f"Transformed schema does not match expected. Got: {transformed_format}, Expected: {expected_schema_structure}"
+        )
 
     def test_map_openai_params_with_dict_json_schema(self):
         config = OllamaChatConfig()
@@ -57,9 +55,9 @@ class TestOllamaChatConfigResponseFormat:
         )
 
         assert "format" in optional_params
-        assert (
-            optional_params["format"] == direct_schema
-        ), f"Schema from dict did not pass through correctly. Got: {optional_params['format']}, Expected: {direct_schema}"
+        assert optional_params["format"] == direct_schema, (
+            f"Schema from dict did not pass through correctly. Got: {optional_params['format']}, Expected: {direct_schema}"
+        )
 
     def test_map_openai_params_with_json_object(self):
         optional_params = get_optional_params(
@@ -69,9 +67,9 @@ class TestOllamaChatConfigResponseFormat:
         )
 
         assert "format" in optional_params
-        assert (
-            optional_params["format"] == "json"
-        ), f"Expected 'json' for type 'json_object', got: {optional_params['format']}"
+        assert optional_params["format"] == "json", (
+            f"Expected 'json' for type 'json_object', got: {optional_params['format']}"
+        )
 
     def test_transform_request_loads_config_parameters(self):
         """Test that transform_request loads config parameters without overriding existing optional_params"""
@@ -140,9 +138,7 @@ class TestOllamaChatConfigResponseFormat:
         config = OllamaChatConfig()
 
         # Test message with content as string
-        messages = cast(
-            list[AllMessageValues], [{"role": "user", "content": "Hello world!"}]
-        )
+        messages = cast(list[AllMessageValues], [{"role": "user", "content": "Hello world!"}])
 
         result = config.transform_request(
             model="llama2",
@@ -191,9 +187,7 @@ class TestOllamaChatConfigResponseFormat:
                         {"type": "text", "text": "What's in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-                            },
+                            "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."},
                         },
                     ],
                 }
@@ -233,9 +227,7 @@ class TestOllamaChatConfigResponseFormat:
                         {"type": "text", "text": "Compare these images:"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64,image1data..."
-                            },
+                            "image_url": {"url": "data:image/jpeg;base64,image1data..."},
                         },
                         {"type": "text", "text": " and "},
                         {
@@ -473,3 +465,92 @@ class TestOllamaToolCalling:
         # finish_reason should be "stop" (default behavior)
         assert result.choices[0].finish_reason == "stop"
         assert result.choices[0].message.tool_calls is None
+
+    def test_streaming_finish_reason_tool_calls_across_chunks(self):
+        """Test that streaming sets finish_reason to 'tool_calls' when tool_calls are in a previous chunk.
+
+        Ollama sends tool_calls in one chunk and done:true in a separate chunk.
+        The streaming iterator must track tool_calls state across chunks to set
+        the correct finish_reason in the final chunk.
+
+        Issue: https://github.com/BerriAI/litellm/issues/18922
+        """
+        from litellm.llms.ollama.chat.transformation import OllamaChatCompletionResponseIterator
+
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),  # Empty, we'll call chunk_parser directly
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Chunk 1: Contains tool_calls but done=false
+        chunk_with_tool_calls = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "Tokyo"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        # Process chunk with tool_calls
+        result1 = iterator.chunk_parser(chunk_with_tool_calls)
+        assert iterator.seen_tool_calls is True, "seen_tool_calls should be True after processing tool_calls"
+        assert result1.choices[0].finish_reason is None, "finish_reason should be None when done=false"
+
+        # Chunk 2: done=true but no tool_calls in this chunk
+        final_chunk = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:01.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+            },
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 50,
+        }
+
+        # Process final chunk - should still have finish_reason="tool_calls"
+        result2 = iterator.chunk_parser(final_chunk)
+        assert result2.choices[0].finish_reason == "tool_calls", (
+            f"Expected finish_reason='tool_calls' but got '{result2.choices[0].finish_reason}'"
+        )
+
+    def test_streaming_finish_reason_stop_when_no_tool_calls(self):
+        """Test that streaming finish_reason is 'stop' when no tool_calls were seen."""
+        from litellm.llms.ollama.chat.transformation import OllamaChatCompletionResponseIterator
+
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Regular response without tool_calls
+        chunk = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "Hello!",
+            },
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 50,
+        }
+
+        result = iterator.chunk_parser(chunk)
+        assert iterator.seen_tool_calls is False
+        assert result.choices[0].finish_reason == "stop"
