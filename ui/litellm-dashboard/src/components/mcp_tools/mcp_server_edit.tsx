@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { AUTH_TYPE, MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
+import OAuthFormFields from "./OAuthFormFields";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
@@ -41,7 +42,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
-  
+  const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
+  const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
+
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
 
   const persistEditUiState = () => {
@@ -128,6 +131,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     () => ({
       ...mcpServer,
       static_headers: initialStaticHeaders,
+      oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
     }),
     [mcpServer, initialStaticHeaders],
   );
@@ -214,7 +218,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return;
     }
 
-    if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !oauthAccessToken) {
+    const isM2M = mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !!mcpServer.token_url;
+    if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !isM2M && !oauthAccessToken) {
       return;
     }
 
@@ -452,129 +457,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             )}
 
             {isOAuthAuthType && (
-              <>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client ID (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_id"]}
-                >
-                  <TextInput
-                    type="password"
-                    placeholder="Enter OAuth client ID (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client Secret (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_secret"]}
-                >
-                  <TextInput
-                    type="password"
-                    placeholder="Enter OAuth client secret (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Scopes (optional)
-                      <Tooltip title="Add scopes to override the default scope list used for this MCP server.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "scopes"]}
-                >
-                  <Select
-                    mode="tags"
-                    tokenSeparators={[","]}
-                    placeholder="Add scopes"
-                    className="rounded-lg"
-                    size="large"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Authorization URL Override (optional)
-                      <Tooltip title="Optional override for the authorization endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="authorization_url"
-                >
-                  <TextInput
-                    placeholder="https://example.com/oauth/authorize"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Token URL Override (optional)
-                      <Tooltip title="Optional override for the token endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="token_url"
-                >
-                  <TextInput
-                    placeholder="https://example.com/oauth/token"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Registration URL Override (optional)
-                      <Tooltip title="Optional override for the dynamic client registration endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="registration_url"
-                >
-                  <TextInput
-                    placeholder="https://example.com/oauth/register"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
-                  <Button
-                    variant="secondary"
-                    onClick={startOAuthFlow}
-                    disabled={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
-                  >
-                    {oauthStatus === "authorizing"
-                      ? "Waiting for authorization..."
-                      : oauthStatus === "exchanging"
-                        ? "Exchanging authorization code..."
-                        : "Authorize & Fetch Token"}
-                  </Button>
-                  {oauthError && <p className="text-sm text-red-500">{oauthError}</p>}
-                  {oauthStatus === "success" && oauthTokenResponse?.access_token && (
-                    <p className="text-sm text-green-600">
-                      Token fetched. Expires in {oauthTokenResponse.expires_in ?? "?"} seconds.
-                    </p>
-                  )}
-                </div>
-              </>
+              <OAuthFormFields
+                isM2M={isM2MFlow}
+                isEditing
+                oauthFlow={{
+                  startOAuthFlow,
+                  status: oauthStatus,
+                  error: oauthError,
+                  tokenResponse: oauthTokenResponse,
+                }}
+              />
             )}
 
             {/* Permission Management / Access Control Section */}
@@ -600,6 +492,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   transport: mcpServer.transport,
                   auth_type: mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
+                  oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
                 }}
                 allowedTools={allowedTools}
                 existingAllowedTools={mcpServer.allowed_tools || null}

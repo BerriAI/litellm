@@ -13,13 +13,17 @@ export const AUTH_TYPE = {
   OAUTH2: "oauth2",
 };
 
+export const OAUTH_FLOW = {
+  INTERACTIVE: "interactive",
+  M2M: "m2m",
+};
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
 };
 
 export const handleTransport = (transport?: string | null): string => {
-  console.log(transport);
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
   }

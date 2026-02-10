@@ -2506,3 +2506,164 @@ def test_compaction_block_empty_list_not_added():
     provider_fields = result.choices[0].message.provider_specific_fields
     if provider_fields:
         assert "compaction_blocks" not in provider_fields or provider_fields.get("compaction_blocks") is None
+
+
+def test_fast_mode_beta_header():
+    """
+    Test that fast mode correctly adds the fast-mode-2026-02-01 beta header.
+    """
+    config = AnthropicConfig()
+    
+    headers = {}
+    optional_params = {"speed": "fast"}
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers=headers,
+        optional_params=optional_params
+    )
+    
+    assert "anthropic-beta" in result_headers
+    assert "fast-mode-2026-02-01" in result_headers["anthropic-beta"]
+
+
+def test_fast_mode_with_other_beta_headers():
+    """
+    Test that fast mode beta header is combined with other beta headers.
+    """
+    config = AnthropicConfig()
+    
+    headers = {}
+    optional_params = {
+        "speed": "fast",
+        "output_format": {"type": "json_object"}
+    }
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers=headers,
+        optional_params=optional_params
+    )
+    
+    assert "anthropic-beta" in result_headers
+    assert "fast-mode-2026-02-01" in result_headers["anthropic-beta"]
+    assert "structured-outputs-2025-11-13" in result_headers["anthropic-beta"]
+
+
+def test_fast_mode_usage_calculation():
+    """
+    Test that fast mode speed parameter is passed through to usage object.
+    """
+    config = AnthropicConfig()
+    
+    usage_object = {
+        "input_tokens": 1000,
+        "output_tokens": 500,
+    }
+    
+    usage = config.calculate_usage(
+        usage_object=usage_object,
+        reasoning_content=None,
+        speed="fast"
+    )
+    
+    assert usage.prompt_tokens == 1000
+    assert usage.completion_tokens == 500
+    assert hasattr(usage, "speed")
+    assert usage.speed == "fast"
+
+
+def test_fast_mode_cost_calculation():
+    """
+    Test that fast mode correctly prepends 'fast/' to model name for pricing lookup.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import Usage
+
+    # Mock the generic_cost_per_token to verify correct model name is passed
+    with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
+        mock_cost.return_value = (0.03, 0.15)  # $30 and $150 per MTok
+        
+        # Test fast mode
+        usage_fast = Usage(
+            prompt_tokens=1000,
+            completion_tokens=1000,
+            speed="fast"
+        )
+        
+        prompt_cost, completion_cost = cost_per_token(
+            model="claude-opus-4-6",
+            usage=usage_fast
+        )
+        
+        # Verify that generic_cost_per_token was called with "fast/claude-opus-4-6"
+        mock_cost.assert_called_once()
+        call_args = mock_cost.call_args
+        assert call_args[1]['model'] == "fast/claude-opus-4-6"
+        assert call_args[1]['custom_llm_provider'] == "anthropic"
+
+
+def test_fast_mode_with_inference_geo():
+    """
+    Test that fast mode works correctly with inference_geo prefix.
+    Expected format: fast/us/claude-opus-4-6
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import Usage
+
+    # Mock the generic_cost_per_token to verify correct model name is passed
+    with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
+        mock_cost.return_value = (0.03, 0.15)
+        
+        # Test with both speed and inference_geo
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=1000,
+            speed="fast",
+            inference_geo="us"
+        )
+        
+        # This should look up "fast/us/claude-opus-4-6" in pricing
+        prompt_cost, completion_cost = cost_per_token(
+            model="claude-opus-4-6",
+            usage=usage
+        )
+        
+        # Verify that generic_cost_per_token was called with "fast/us/claude-opus-4-6"
+        mock_cost.assert_called_once()
+        call_args = mock_cost.call_args
+        assert call_args[1]['model'] == "fast/us/claude-opus-4-6"
+        assert call_args[1]['custom_llm_provider'] == "anthropic"
+
+
+def test_fast_mode_parameter_in_supported_params():
+    """
+    Test that 'speed' is in the list of supported OpenAI params.
+    """
+    config = AnthropicConfig()
+    
+    supported_params = config.get_supported_openai_params(model="claude-opus-4-6")
+    
+    assert "speed" in supported_params
+
+
+def test_fast_mode_parameter_mapping():
+    """
+    Test that speed parameter is correctly mapped in map_openai_params.
+    """
+    config = AnthropicConfig()
+    
+    non_default_params = {"speed": "fast"}
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-opus-4-6",
+        drop_params=False
+    )
+    
+    assert "speed" in result
+    assert result["speed"] == "fast"
