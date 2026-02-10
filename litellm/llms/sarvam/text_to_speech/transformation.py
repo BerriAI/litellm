@@ -36,7 +36,7 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
 
     Supported models:
     - bulbul:v2
-    - bulbul:v3-beta
+    - bulbul:v3
 
     Available speakers:
 
@@ -44,7 +44,7 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
       Female: Anushka (default), Manisha, Vidya, Arya
       Male: Abhilash, Karun, Hitesh
 
-    bulbul:v3-beta:
+    bulbul:v3:
       Shubh (default), Prabhat, Ritu, Ashutosh, Priya, Neha, Rahul,
       Pooja, Rohan, Simran, Kavya, Amit, Dev, Ishita, Shreya,
       Ratan, Varun, Manan, Sumit, Roopa, Kabir, Aayan, Advait, Amelia, Sophia
@@ -58,12 +58,12 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
     TTS_ENDPOINT_PATH = "/text-to-speech"
     DEFAULT_LANGUAGE = "en-IN"
     DEFAULT_SPEAKER_V2 = "anushka"
-    DEFAULT_SPEAKER_V3_BETA = "shubh"
+    DEFAULT_SPEAKER_V3 = "shubh"
 
     def _get_default_speaker(self, model: str) -> str:
         """Get the default speaker based on model version."""
         if "v3" in model.lower():
-            return self.DEFAULT_SPEAKER_V3_BETA
+            return self.DEFAULT_SPEAKER_V3
         return self.DEFAULT_SPEAKER_V2
 
     def get_supported_openai_params(self, model: str) -> list:
