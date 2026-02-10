@@ -114,6 +114,16 @@ class Scheduler:
         """Get the status of items in the queue"""
         return self.queue
 
+    async def remove_request(self, request_id: str, model_name: str) -> None:
+        """Remove a request from the queue by its ID.
+
+        Used to clean up timed-out requests that would otherwise leak.
+        """
+        queue = await self.get_queue(model_name=model_name)
+        updated_queue = [item for item in queue if item[1] != request_id]
+        if len(updated_queue) != len(queue):
+            await self.save_queue(queue=updated_queue, model_name=model_name)
+
     async def get_queue(self, model_name: str) -> list:
         """
         Return a queue for that specific model group
