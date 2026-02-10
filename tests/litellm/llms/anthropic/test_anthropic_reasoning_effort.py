@@ -5,7 +5,6 @@ Verifies that reasoning_effort=None returns None for all models,
 including Claude Opus 4.6.
 """
 
-import pytest
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
