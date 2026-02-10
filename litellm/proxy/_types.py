@@ -359,7 +359,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/vector_store/list",
         "/v1/vector_store/list",
-
         # search
         "/search",
         "/v1/search",
@@ -1071,6 +1070,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
+    available_on_public_internet: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -1132,6 +1132,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
+    available_on_public_internet: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -1185,6 +1186,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
+    available_on_public_internet: bool = False
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -1488,6 +1490,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
     # Budget fields
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     budget_duration: Optional[str] = None
 
     models: list = []
@@ -1559,6 +1562,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
@@ -2094,6 +2098,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
+    mcp_internal_ip_ranges: Optional[List[str]] = Field(
+        None,
+        description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
+    )
+    mcp_trusted_proxy_ranges: Optional[List[str]] = Field(
+        None,
+        description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -2160,6 +2172,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
+    router_settings: Optional[dict] = None
     model_config = ConfigDict(protected_namespaces=())
 
 
@@ -2188,6 +2201,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
+    team_soft_budget: Optional[float] = None
     team_models: List = []
     team_blocked: bool = False
     soft_budget: Optional[float] = None
@@ -2217,13 +2231,22 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
     def __init__(self, **kwargs):
-        # Handle litellm_budget_table_* keys
+        # Handle litellm_budget_table_* keys (budget table overrides when key value is None or empty)
         for key, value in list(kwargs.items()):
             if key.startswith("litellm_budget_table_") and value is not None:
                 # Extract the corresponding attribute name
                 attr_name = key.replace("litellm_budget_table_", "")
-                # Check if the value is None and set the corresponding attribute
-                if getattr(self, attr_name, None) is None:
+                # Use key's value from kwargs (from DB view), not class default
+                current = kwargs.get(attr_name)
+                if current is None:
+                    current = getattr(self, attr_name, None)
+                # Apply budget value when key has no value, or for model_max_budget when key has empty dict
+                should_apply = current is None or (
+                    attr_name == "model_max_budget"
+                    and isinstance(current, dict)
+                    and len(current) == 0
+                )
+                if should_apply:
                     kwargs[attr_name] = value
             if key == "end_user_id" and value is not None and isinstance(value, int):
                 kwargs[key] = str(value)
@@ -2646,6 +2669,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
     event_group: Litellm_EntityType
+    alert_emails: Optional[List[str]] = Field(
+        default=None,
+        description="Additional email addresses to send alerts to (e.g., from team metadata)",
+    )
 
 
 class WebhookEvent(CallInfo):

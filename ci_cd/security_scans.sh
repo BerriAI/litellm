@@ -155,6 +155,7 @@ run_grype_scans() {
         "CVE-2025-12781" # No fix available yet
         "CVE-2025-11468" # No fix available yet
         "CVE-2026-1299" # Python 3.13 email module header injection - not applicable, LiteLLM doesn't use BytesGenerator for email serialization
+        "CVE-2026-0775" # npm cli incorrect permission assignment - no fix available yet, npm is only used at build/prisma-generate time
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

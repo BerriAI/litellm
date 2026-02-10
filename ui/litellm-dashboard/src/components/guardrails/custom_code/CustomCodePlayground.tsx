@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { Card, Title, Text, Button } from "@tremor/react";
+import { Card, Text, Button } from "@tremor/react";
 import { Collapse, Typography, Tooltip, Spin, Alert, Tabs } from "antd";
 import {
   PlayCircleOutlined,
