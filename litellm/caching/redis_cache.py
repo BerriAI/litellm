@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import threading
 import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
@@ -87,6 +88,8 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
 
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
+
+    _async_client_init_lock: threading.Lock = threading.Lock()
 
     def __init__(
         self,
@@ -240,14 +243,34 @@ class RedisCache(BaseCache):
                 Union[async_redis_client, async_redis_cluster_client], cached_client
             )
         else:
-            # Create new connection pool and client for current event loop
-            self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
-            redis_async_client = get_redis_async_client(
-                connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
-            )
-            in_memory_llm_clients_cache.set_cache(
-                key=cache_key, value=redis_async_client
-            )
+            # Use double-checked locking to prevent multiple concurrent
+            # requests from each creating a separate connection pool during
+            # startup.  Without this, N concurrent cache-misses create N
+            # pools (N × max_connections connections) instead of one.
+            with RedisCache._async_client_init_lock:
+                # Re-check after acquiring the lock — another thread may
+                # have populated the cache while we were waiting.
+                cached_client = in_memory_llm_clients_cache.get_cache(
+                    key=cache_key
+                )
+                if cached_client is not None:
+                    redis_async_client = cast(
+                        Union[
+                            async_redis_client, async_redis_cluster_client
+                        ],
+                        cached_client,
+                    )
+                else:
+                    self.async_redis_conn_pool = get_redis_connection_pool(
+                        **self.redis_kwargs
+                    )
+                    redis_async_client = get_redis_async_client(
+                        connection_pool=self.async_redis_conn_pool,
+                        **self.redis_kwargs,
+                    )
+                    in_memory_llm_clients_cache.set_cache(
+                        key=cache_key, value=redis_async_client
+                    )
 
         self.redis_async_client = redis_async_client  # type: ignore
         return redis_async_client
