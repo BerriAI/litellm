@@ -96,6 +96,7 @@ export function useLogFilterLogic({
           filters[FILTER_KEYS.USER_ID] || undefined,
           filters[FILTER_KEYS.END_USER] || undefined,
           filters[FILTER_KEYS.STATUS] || undefined,
+          undefined,
           filters[FILTER_KEYS.MODEL] || undefined,
           filters[FILTER_KEYS.KEY_ALIAS] || undefined,
           filters[FILTER_KEYS.ERROR_CODE] || undefined,
