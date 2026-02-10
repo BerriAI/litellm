@@ -127,3 +127,95 @@ def test_usage_completion_tokens_details_text_tokens():
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
+
+
+def test_usage_openai_cached_tokens_populates_cache_read_input_tokens():
+    """
+    Test that OpenAI's prompt_tokens_details.cached_tokens populates
+    _cache_read_input_tokens. This is the fix for GH issue #19684.
+
+    OpenAI returns cached tokens in prompt_tokens_details.cached_tokens,
+    but _cache_read_input_tokens was not being set, causing the UI to
+    show "Cache Read Tokens: 0".
+    """
+    from litellm.types.utils import Usage
+
+    # Simulate OpenAI response usage (exactly what comes from response.model_dump())
+    openai_usage = {
+        "prompt_tokens": 2829,
+        "completion_tokens": 29,
+        "total_tokens": 2858,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cached_tokens": 2816,
+        },
+    }
+
+    usage = Usage(**openai_usage)
+
+    # _cache_read_input_tokens should be populated from prompt_tokens_details.cached_tokens
+    assert usage._cache_read_input_tokens == 2816
+    # prompt_tokens_details.cached_tokens should also be preserved
+    assert usage.prompt_tokens_details.cached_tokens == 2816
+
+
+def test_usage_openai_cached_tokens_zero_does_not_set_cache_read():
+    """
+    When OpenAI returns cached_tokens=0, _cache_read_input_tokens should stay 0.
+    """
+    from litellm.types.utils import Usage
+
+    openai_usage = {
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "total_tokens": 110,
+        "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cached_tokens": 0,
+        },
+    }
+
+    usage = Usage(**openai_usage)
+    assert usage._cache_read_input_tokens == 0
+
+
+def test_usage_anthropic_cache_read_not_overwritten_by_prompt_details():
+    """
+    When Anthropic explicitly passes cache_read_input_tokens, the OpenAI
+    fallback mapping should NOT overwrite it.
+    """
+    from litellm.types.utils import Usage
+
+    # Anthropic passes cache_read_input_tokens explicitly in **params
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=50,
+        total_tokens=1050,
+        prompt_tokens_details={"cached_tokens": 500},
+        cache_read_input_tokens=500,
+    )
+
+    # Should use the explicit Anthropic value, not overwrite it
+    assert usage._cache_read_input_tokens == 500
+    assert usage.prompt_tokens_details.cached_tokens == 500
+
+
+def test_usage_no_prompt_tokens_details_no_error():
+    """
+    When there's no prompt_tokens_details at all, nothing should break.
+    """
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+    )
+
+    assert usage._cache_read_input_tokens == 0
