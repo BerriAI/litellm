@@ -124,7 +124,7 @@ RUN for i in 1 2 3; do \
     apk upgrade --no-cache && break || sleep 5; \
     done \
   && for i in 1 2 3; do \
-    apk add --no-cache bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
+    apk add --no-cache bash openssl ca-certificates-bundle tzdata nodejs npm supervisor && break || sleep 5; \
     done \
   && npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 \
   && GLOBAL="$(npm root -g)" \

@@ -60,7 +60,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies (with retry for transient APK mirror errors)
-RUN for i in 1 2 3; do apk add --no-cache bash openssl tzdata nodejs npm libsndfile && break || sleep 5; done && \
+RUN for i in 1 2 3; do apk add --no-cache bash openssl ca-certificates-bundle tzdata nodejs npm libsndfile && break || sleep 5; done && \
     npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
     # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
     # levels inside its dependency tree. `npm install -g <pkg>` only creates a
