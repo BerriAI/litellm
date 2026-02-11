@@ -11,7 +11,7 @@ import os
 import time
 import uuid as uuid_module
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
+from typing import Any, Coroutine, Dict, Literal, NamedTuple, Optional, Union, cast
 
 import httpx
 
@@ -55,6 +55,68 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 bedrock_files_instance = BedrockFilesHandler()
 anthropic_files_instance = AnthropicFilesHandler()
 #################################################
+
+
+class OpenAICredentials(NamedTuple):
+    api_base: Optional[str]
+    api_key: Optional[str]
+    organization: Optional[str]
+
+
+class AzureCredentials(NamedTuple):
+    api_base: Optional[str]
+    api_key: Optional[str]
+    api_version: Optional[str]
+
+
+def _get_openai_credentials(
+    optional_params: GenericLiteLLMParams,
+) -> OpenAICredentials:
+    """Resolve OpenAI credentials from optional_params, litellm globals, and env vars."""
+    api_base = (
+        optional_params.api_base
+        or litellm.api_base
+        or os.getenv("OPENAI_BASE_URL")
+        or os.getenv("OPENAI_API_BASE")
+        or "https://api.openai.com/v1"
+    )
+    organization = (
+        optional_params.organization
+        or litellm.organization
+        or os.getenv("OPENAI_ORGANIZATION", None)
+        or None
+    )
+    api_key = (
+        optional_params.api_key
+        or litellm.api_key
+        or litellm.openai_key
+        or os.getenv("OPENAI_API_KEY")
+    )
+    return OpenAICredentials(api_base=api_base, api_key=api_key, organization=organization)
+
+
+def _get_azure_credentials(
+    optional_params: GenericLiteLLMParams,
+) -> AzureCredentials:
+    """Resolve Azure credentials from optional_params, litellm globals, and env vars."""
+    api_base = (
+        optional_params.api_base
+        or litellm.api_base
+        or get_secret_str("AZURE_API_BASE")
+    )
+    api_version = (
+        optional_params.api_version
+        or litellm.api_version
+        or get_secret_str("AZURE_API_VERSION")
+    )
+    api_key = (
+        optional_params.api_key
+        or litellm.api_key
+        or litellm.azure_key
+        or get_secret_str("AZURE_OPENAI_API_KEY")
+        or get_secret_str("AZURE_API_KEY")
+    )
+    return AzureCredentials(api_base=api_base, api_key=api_key, api_version=api_version)
 
 
 @client
@@ -185,94 +247,27 @@ def create_file(
                 timeout=timeout,
             )
         elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
-            )
-            organization = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            # set API KEY
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
-
+            openai_creds = _get_openai_credentials(optional_params)
             response = openai_files_instance.create_file(
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
+                api_base=openai_creds.api_base,
+                api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
-                organization=organization,
+                organization=openai_creds.organization,
                 create_file_data=_create_file_request,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
-
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or litellm.azure_key
-                or get_secret_str("AZURE_OPENAI_API_KEY")
-                or get_secret_str("AZURE_API_KEY")
-            )  # type: ignore
-
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-
+            azure_creds = _get_azure_credentials(optional_params)
             response = azure_files_instance.create_file(
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
-                api_version=api_version,
+                api_base=azure_creds.api_base,
+                api_key=azure_creds.api_key,
+                api_version=azure_creds.api_version,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_file_data=_create_file_request,
                 litellm_params=litellm_params_dict,
-            )
-        elif custom_llm_provider == "vertex_ai":
-            api_base = optional_params.api_base or ""
-            vertex_ai_project = (
-                optional_params.vertex_project
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location = (
-                optional_params.vertex_location
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
-            )
-            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
-                "VERTEXAI_CREDENTIALS"
-            )
-
-            response = vertex_ai_files_instance.create_file(
-                _is_async=_is_async,
-                api_base=api_base,
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                vertex_credentials=vertex_credentials,
-                timeout=timeout,
-                max_retries=optional_params.max_retries,
-                create_file_data=_create_file_request,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -367,64 +362,23 @@ def file_retrieve(
         _is_async = kwargs.pop("is_async", False) is True
 
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
-            )
-            organization = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            # set API KEY
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
-
+            openai_creds = _get_openai_credentials(optional_params)
             response = openai_files_instance.retrieve_file(
                 file_id=file_id,
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
+                api_base=openai_creds.api_base,
+                api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
-                organization=organization,
+                organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
-
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or litellm.azure_key
-                or get_secret_str("AZURE_OPENAI_API_KEY")
-                or get_secret_str("AZURE_API_KEY")
-            )  # type: ignore
-
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-
+            azure_creds = _get_azure_credentials(optional_params)
             response = azure_files_instance.retrieve_file(
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
-                api_version=api_version,
+                api_base=azure_creds.api_base,
+                api_key=azure_creds.api_key,
+                api_version=azure_creds.api_version,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_id=file_id,
@@ -576,63 +530,23 @@ def file_delete(
             timeout = 600.0
         _is_async = kwargs.pop("is_async", False) is True
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
-            )
-            organization = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            # set API KEY
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
+            openai_creds = _get_openai_credentials(optional_params)
             response = openai_files_instance.delete_file(
                 file_id=file_id,
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
+                api_base=openai_creds.api_base,
+                api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
-                organization=organization,
+                organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
-
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or litellm.azure_key
-                or get_secret_str("AZURE_OPENAI_API_KEY")
-                or get_secret_str("AZURE_API_KEY")
-            )  # type: ignore
-
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-
+            azure_creds = _get_azure_credentials(optional_params)
             response = azure_files_instance.delete_file(
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
-                api_version=api_version,
+                api_base=azure_creds.api_base,
+                api_key=azure_creds.api_key,
+                api_version=azure_creds.api_version,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_id=file_id,
@@ -815,64 +729,23 @@ def file_list(
             )
             return response
         elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
-            )
-            organization = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            # set API KEY
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
-
+            openai_creds = _get_openai_credentials(optional_params)
             response = openai_files_instance.list_files(
                 purpose=purpose,
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
+                api_base=openai_creds.api_base,
+                api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
-                organization=organization,
+                organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
-
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or litellm.azure_key
-                or get_secret_str("AZURE_OPENAI_API_KEY")
-                or get_secret_str("AZURE_API_KEY")
-            )  # type: ignore
-
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-
+            azure_creds = _get_azure_credentials(optional_params)
             response = azure_files_instance.list_files(
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
-                api_version=api_version,
+                api_base=azure_creds.api_base,
+                api_key=azure_creds.api_key,
+                api_version=azure_creds.api_version,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 purpose=purpose,
@@ -1003,64 +876,23 @@ def file_content(
             return response
 
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
-            )
-            organization = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            # set API KEY
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
-
+            openai_creds = _get_openai_credentials(optional_params)
             response = openai_files_instance.file_content(
                 _is_async=_is_async,
                 file_content_request=_file_content_request,
-                api_base=api_base,
-                api_key=api_key,
+                api_base=openai_creds.api_base,
+                api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
-                organization=organization,
+                organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
-
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or litellm.azure_key
-                or get_secret_str("AZURE_OPENAI_API_KEY")
-                or get_secret_str("AZURE_API_KEY")
-            )  # type: ignore
-
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-
+            azure_creds = _get_azure_credentials(optional_params)
             response = azure_files_instance.file_content(
                 _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
-                api_version=api_version,
+                api_base=azure_creds.api_base,
+                api_key=azure_creds.api_key,
+                api_version=azure_creds.api_version,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_content_request=_file_content_request,
