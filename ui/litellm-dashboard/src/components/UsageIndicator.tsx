@@ -1,3 +1,4 @@
+import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { Badge } from "@tremor/react";
 import { AlertTriangle, ChevronDown, ChevronUp, Loader2, Minus, TrendingUp, UserCheck, Users } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -23,7 +24,7 @@ interface UsageData {
 }
 
 export default function UsageIndicator({ accessToken, width = 220 }: UsageIndicatorProps) {
-  const position = "bottom-left";
+  const disableUsageIndicator = useDisableUsageIndicator();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [data, setData] = useState<UsageData | null>(null);
@@ -541,8 +542,8 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     );
   };
 
-  // Don't render anything if no access token or if both total_users and total_teams are null
-  if (!accessToken || (data?.total_users === null && data?.total_teams === null)) {
+  // Don't render anything if disabled, no access token, or if both total_users and total_teams are null
+  if (disableUsageIndicator || !accessToken || (data?.total_users === null && data?.total_teams === null)) {
     return null;
   }
 

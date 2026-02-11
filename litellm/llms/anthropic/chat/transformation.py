@@ -833,6 +833,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "sonnet-4-5",
                         "opus-4.1",
                         "opus-4-1",
+                        "opus-4.5",
+                        "opus-4-5",
+                        "opus-4.6",
+                        "opus-4-6",
                     }
                 ):
                     _output_format = (

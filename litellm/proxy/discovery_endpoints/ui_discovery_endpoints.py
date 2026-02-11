@@ -19,13 +19,15 @@ async def get_ui_config():
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
     auto_redirect_ui_login_to_sso = (
-        os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "true").lower() == "true"
+        os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "false").lower() == "true"
     )
     admin_ui_disabled = os.getenv("DISABLE_ADMIN_UI", "false").lower() == "true"
 
+    sso_configured = _has_user_setup_sso()
     return UiDiscoveryEndpoints(
         server_root_path=get_server_root_path(),
         proxy_base_url=get_proxy_base_url(),
-        auto_redirect_to_sso=_has_user_setup_sso() and auto_redirect_ui_login_to_sso,
+        auto_redirect_to_sso=sso_configured and auto_redirect_ui_login_to_sso,
         admin_ui_disabled=admin_ui_disabled,
+        sso_configured=sso_configured,
     )
