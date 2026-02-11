@@ -2711,8 +2711,10 @@ class ProxyConfig:
                 )
             )
             ## BATCH POLLING INTERVAL ##
-            proxy_batch_polling_interval = general_settings.get(
-                "proxy_batch_polling_interval", proxy_batch_polling_interval
+            proxy_batch_polling_interval = int(
+                general_settings.get(
+                    "proxy_batch_polling_interval", proxy_batch_polling_interval
+                )
             )
             ## BATCH WRITER ##
             proxy_batch_write_at = int(
