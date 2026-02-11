@@ -39,7 +39,11 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("LITELLM_PROXY_API_KEY")
+            or "fake-api-key"
+        )  # litellm_proxy may not require an api key (e.g. service mesh, VPC-internal), but OpenAI client requires non-None value
         return api_base, dynamic_api_key
 
     def get_models(
@@ -55,7 +59,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        return api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        return api_key or get_secret_str("LITELLM_PROXY_API_KEY") or "fake-api-key"
 
     @staticmethod
     def _should_use_litellm_proxy_by_default(
