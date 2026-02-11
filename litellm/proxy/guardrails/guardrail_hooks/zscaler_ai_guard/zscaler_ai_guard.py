@@ -350,9 +350,10 @@ class ZscalerAIGuard(CustomGuardrail):
             "direction": direction,
             "content": content,
         }
-        # Only include policyId when using execute-policy endpoint (not resolve-and-execute-policy)
-        # resolve-and-execute-policy infers the policy from headers (e.g., user-api-key-alias)
-        if policy_id is not None and policy_id > 0:
+        # Only include policyId when explicitly configured (policy_id >= 1)
+        # When policy_id is None, 0, or -1 (default), use resolve-and-execute-policy which infers
+        # the policy from headers (e.g., user-api-key-alias)
+        if policy_id is not None and policy_id >= 1:
             data["policyId"] = policy_id
         try:
             response = await self._send_request(
