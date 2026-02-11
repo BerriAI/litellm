@@ -798,7 +798,7 @@ def test_openai_transform_video_content_request_empty_params():
 def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
     from litellm.types.router import GenericLiteLLMParams
-    
+
     handler = BaseLLMHTTPHandler()
     config = OpenAIVideoConfig()
 
@@ -807,7 +807,12 @@ def test_video_content_handler_uses_get_for_openai():
     mock_response.content = b"mp4-bytes"
     mock_client.get.return_value = mock_response
 
+    # Patch both where _get_httpx_client is used and where it is defined so the mock
+    # is used regardless of import order / CI environment
     with patch(
+        "litellm.llms.custom_httpx.http_handler._get_httpx_client",
+        return_value=mock_client,
+    ), patch(
         "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
         return_value=mock_client,
     ):

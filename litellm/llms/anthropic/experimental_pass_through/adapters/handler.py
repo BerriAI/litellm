@@ -64,7 +64,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model = completion_kwargs.get("model")
         if isinstance(model, str) and model and not model.startswith("responses/"):
-            reasoning_effort = completion_kwargs.get("reasoning_effort")
+            # Prefix model with "responses/" to route to OpenAI Responses API
+            completion_kwargs["model"] = f"responses/{model}"
+            
+        reasoning_effort = completion_kwargs.get("reasoning_effort")
         if isinstance(reasoning_effort, str) and reasoning_effort:
             completion_kwargs["reasoning_effort"] = {
                 "effort": reasoning_effort,

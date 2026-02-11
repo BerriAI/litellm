@@ -1039,10 +1039,6 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",
     ),
-    "PerplexityResponsesConfig": (
-        ".llms.perplexity.responses.transformation",
-        "PerplexityResponsesConfig",
-    ),
     "AzureOpenAIO1Config": (
         ".llms.azure.chat.o_series_transformation",
         "AzureOpenAIO1Config",

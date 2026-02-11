@@ -140,12 +140,14 @@ run_grype_scans() {
         "GHSA-34x7-hfp2-rc4v" # node-tar hardlink path traversal - not applicable, tar CLI not exposed in application code
         "GHSA-r6q2-hw4h-h46w" # node-tar not used by application runtime, Linux-only container, not affect by macOS APFS-specific exploit
         "GHSA-8rrh-rw8j-w5fx" # wheel is from chainguard and will be handled by then TODO: Remove this after Chainguard updates the wheel
-        "CVE-2025-59465" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-55131" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-59466" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-55130" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-59467" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2026-21637" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59465" # Node only used for Admin UI build/prisma
+        "CVE-2025-55131" # Node only used for Admin UI build/prisma
+        "CVE-2025-59466" # Node only used for Admin UI build/prisma
+        "CVE-2025-55130" # Node only used for Admin UI build/prisma
+        "CVE-2025-59467" # Node only used for Admin UI build/prisma
+        "CVE-2026-21637" # Node only used for Admin UI build/prisma
+        "CVE-2025-55132" # Node only used for Admin UI build/prisma
+        "GHSA-hx9q-6w63-j58v" # orjson dumps recursion; allowlisted
         "CVE-2025-15281" # No fix available yet
         "CVE-2026-0865" # No fix available yet
         "CVE-2025-15282" # No fix available yet

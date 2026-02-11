@@ -21,6 +21,7 @@ sys.path.insert(
 def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
     mock_prisma = MagicMock()
+    mock_table = MagicMock()
     mock_table.create = AsyncMock(side_effect=lambda *, data: data)
     mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
 
