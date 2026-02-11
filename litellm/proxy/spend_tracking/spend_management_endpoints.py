@@ -1672,6 +1672,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     model: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by model"
     ),
+    model_id: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by model ID (litellm model deployment id)"
+    ),
     key_alias: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by key alias"
     ),
@@ -1762,6 +1765,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if model is not None:
             where_conditions["model"] = model
+
+        if model_id is not None:
+            where_conditions["model_id"] = model_id
 
         # Build metadata filters
         metadata_filters = []
