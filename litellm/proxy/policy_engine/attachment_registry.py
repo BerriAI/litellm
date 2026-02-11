@@ -84,6 +84,7 @@ class AttachmentRegistry:
             teams=attachment_data.get("teams"),
             keys=attachment_data.get("keys"),
             models=attachment_data.get("models"),
+            tags=attachment_data.get("tags"),
         )
 
     def get_attached_policies(self, context: PolicyMatchContext) -> List[str]:
@@ -96,21 +97,68 @@ class AttachmentRegistry:
         Returns:
             List of policy names that are attached to matching scopes
         """
+        return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context)]
+
+    def get_attached_policies_with_reasons(
+        self, context: PolicyMatchContext
+    ) -> List[Dict[str, Any]]:
+        """
+        Get list of policy names and match reasons for the given context.
+
+        Returns a list of dicts with 'policy_name' and 'matched_via' keys.
+        The 'matched_via' describes which dimension caused the match.
+        """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        attached_policies: List[str] = []
+        results: List[Dict[str, Any]] = []
+        seen_policies: set = set()
 
         for attachment in self._attachments:
             scope = attachment.to_policy_scope()
             if PolicyMatcher.scope_matches(scope=scope, context=context):
-                if attachment.policy not in attached_policies:
-                    attached_policies.append(attachment.policy)
+                if attachment.policy not in seen_policies:
+                    seen_policies.add(attachment.policy)
+                    matched_via = self._describe_match_reason(attachment, context)
+                    results.append(
+                        {
+                            "policy_name": attachment.policy,
+                            "matched_via": matched_via,
+                        }
+                    )
                     verbose_proxy_logger.debug(
                         f"Attachment matched: policy={attachment.policy}, "
+                        f"matched_via={matched_via}, "
                         f"context=(team={context.team_alias}, key={context.key_alias}, model={context.model})"
                     )
 
-        return attached_policies
+        return results
+
+    @staticmethod
+    def _describe_match_reason(
+        attachment: PolicyAttachment, context: PolicyMatchContext
+    ) -> str:
+        """Describe why an attachment matched the context."""
+        from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+
+        if attachment.is_global():
+            return "scope:*"
+
+        reasons = []
+        if attachment.tags and context.tags:
+            matching_tags = [
+                t for t in context.tags
+                if PolicyMatcher.matches_pattern(t, attachment.tags)
+            ]
+            if matching_tags:
+                reasons.append(f"tag:{matching_tags[0]}")
+        if attachment.teams and context.team_alias:
+            reasons.append(f"team:{context.team_alias}")
+        if attachment.keys and context.key_alias:
+            reasons.append(f"key:{context.key_alias}")
+        if attachment.models and context.model:
+            reasons.append(f"model:{context.model}")
+
+        return "+".join(reasons) if reasons else "scope:default"
 
     def is_policy_attached(
         self, policy_name: str, context: PolicyMatchContext
@@ -238,6 +286,7 @@ class AttachmentRegistry:
                         "teams": attachment_request.teams or [],
                         "keys": attachment_request.keys or [],
                         "models": attachment_request.models or [],
+                        "tags": attachment_request.tags or [],
                         "created_at": datetime.now(timezone.utc),
                         "updated_at": datetime.now(timezone.utc),
                         "created_by": created_by,
@@ -253,6 +302,7 @@ class AttachmentRegistry:
                 teams=attachment_request.teams,
                 keys=attachment_request.keys,
                 models=attachment_request.models,
+                tags=attachment_request.tags,
             )
             self.add_attachment(attachment)
 
@@ -263,6 +313,7 @@ class AttachmentRegistry:
                 teams=created_attachment.teams or [],
                 keys=created_attachment.keys or [],
                 models=created_attachment.models or [],
+                tags=created_attachment.tags or [],
                 created_at=created_attachment.created_at,
                 updated_at=created_attachment.updated_at,
                 created_by=created_attachment.created_by,
@@ -344,6 +395,7 @@ class AttachmentRegistry:
                 teams=attachment.teams or [],
                 keys=attachment.keys or [],
                 models=attachment.models or [],
+                tags=attachment.tags or [],
                 created_at=attachment.created_at,
                 updated_at=attachment.updated_at,
                 created_by=attachment.created_by,
@@ -381,6 +433,7 @@ class AttachmentRegistry:
                     teams=a.teams or [],
                     keys=a.keys or [],
                     models=a.models or [],
+                    tags=a.tags or [],
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                     created_by=a.created_by,
@@ -415,6 +468,7 @@ class AttachmentRegistry:
                     teams=attachment_response.teams if attachment_response.teams else None,
                     keys=attachment_response.keys if attachment_response.keys else None,
                     models=attachment_response.models if attachment_response.models else None,
+                    tags=attachment_response.tags if attachment_response.tags else None,
                 )
                 self._attachments.append(attachment)
 
