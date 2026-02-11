@@ -71,6 +71,20 @@ class LoggingWorker:
             verbose_logger.debug(
                 "LoggingWorker: Event loop changed, reinitializing queue and worker"
             )
+            # Suppress unhandled exceptions on old tasks to prevent
+            # "Task exception was never retrieved" warnings when the old
+            # event loop is closed (e.g. pytest-asyncio creating new loops)
+            if self._worker_task is not None and self._worker_task.done():
+                try:
+                    self._worker_task.exception()
+                except (asyncio.CancelledError, asyncio.InvalidStateError):
+                    pass
+            for task in self._running_tasks:
+                if task.done():
+                    try:
+                        task.exception()
+                    except (asyncio.CancelledError, asyncio.InvalidStateError):
+                        pass
             # Clear old state - these are bound to the old loop
             self._queue = None
             self._sem = None
@@ -134,6 +148,14 @@ class LoggingWorker:
             verbose_logger.debug("LoggingWorker cancelled during shutdown")
             # Attempt to clear remaining items to prevent "never awaited" warnings
             await self.clear_queue()
+        except RuntimeError as e:
+            # Handle event loop change gracefully (e.g., pytest-asyncio
+            # creates a new event loop for each test, leaving the old queue
+            # bound to a now-closed loop). Exit silently instead of leaving
+            # an unhandled "Task exception was never retrieved" warning.
+            if "bound to a different event loop" in str(e):
+                return
+            raise
 
     def enqueue(self, coroutine: Coroutine) -> None:
         """
@@ -383,11 +405,11 @@ class LoggingWorker:
         if self._queue is None:
             return
 
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         for _ in range(MAX_ITERATIONS_TO_CLEAR_QUEUE):
             # Check if we've exceeded the maximum time
-            if asyncio.get_event_loop().time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
+            if asyncio.get_running_loop().time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
                 verbose_logger.warning(
                     f"clear_queue exceeded max_time of {MAX_TIME_TO_CLEAR_QUEUE}s, stopping early"
                 )

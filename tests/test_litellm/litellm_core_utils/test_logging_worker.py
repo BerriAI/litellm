@@ -360,3 +360,122 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+    @pytest.mark.asyncio
+    async def test_worker_loop_handles_stale_event_loop_gracefully(self):
+        """
+        When the event loop changes (e.g. pytest-asyncio creates a new loop
+        per test), the old _worker_loop should exit gracefully instead of
+        leaving an unhandled RuntimeError ("bound to a different event loop").
+
+        This tests the fix for GitHub issue #14521.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+
+        # Start the worker to bind it to the current loop
+        worker.start()
+        await asyncio.sleep(0.05)
+
+        # Simulate the event loop change scenario: the worker loop catches
+        # RuntimeError about a stale queue and exits instead of crashing.
+        # We test this by directly calling _worker_loop with a queue bound
+        # to a *different* loop (mock).
+        import unittest.mock as mock
+
+        old_queue = worker._queue
+        fake_old_loop = mock.MagicMock()
+
+        # Create a new worker where _bound_loop differs from the running loop
+        worker2 = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker2._queue = asyncio.Queue(maxsize=10)
+        worker2._sem = asyncio.Semaphore(1)
+        worker2._bound_loop = fake_old_loop  # Different from current loop
+
+        # Manually set the queue's internal loop binding to trigger the error
+        # by patching Queue.get to raise the expected RuntimeError
+        async def raise_stale_loop_error():
+            raise RuntimeError(
+                "<Queue at 0xdeadbeef> is bound to a different event loop"
+            )
+
+        with mock.patch.object(
+            worker2._queue, "get", side_effect=raise_stale_loop_error
+        ):
+            with mock.patch.object(worker2._sem, "acquire", return_value=None):
+                # _worker_loop should exit cleanly, not raise
+                await worker2._worker_loop()
+
+        await worker.stop()
+
+    @pytest.mark.asyncio
+    async def test_ensure_queue_suppresses_old_task_exceptions(self):
+        """
+        When _ensure_queue detects an event loop change, it should suppress
+        exceptions on old done tasks so Python's GC doesn't report
+        'Task exception was never retrieved'.
+
+        This tests the fix for GitHub issue #14521.
+        """
+        import unittest.mock as mock
+
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+
+        # Start the worker
+        worker.start()
+        await asyncio.sleep(0.05)
+
+        # Simulate a done worker task with an unhandled exception
+        old_task = mock.MagicMock()
+        old_task.done.return_value = True
+        old_task.exception.return_value = RuntimeError("stale loop")
+
+        old_running_task = mock.MagicMock()
+        old_running_task.done.return_value = True
+        old_running_task.exception.return_value = RuntimeError("stale loop")
+
+        # Save actual worker task for cleanup
+        actual_worker_task = worker._worker_task
+
+        # Set up stale state: bound to a fake (old) loop
+        worker._worker_task = old_task
+        worker._running_tasks = {old_running_task}
+        worker._bound_loop = mock.MagicMock()  # Different from current loop
+
+        # _ensure_queue should detect the loop change and suppress exceptions
+        worker._ensure_queue()
+
+        # Verify exception() was called on old tasks (marks them as retrieved)
+        old_task.exception.assert_called_once()
+        old_running_task.exception.assert_called_once()
+
+        # Verify state was reset
+        assert worker._queue is not None
+        assert worker._bound_loop is asyncio.get_running_loop()
+
+        # Clean up the actual worker task
+        if actual_worker_task and not actual_worker_task.done():
+            actual_worker_task.cancel()
+            try:
+                await actual_worker_task
+            except (asyncio.CancelledError, RuntimeError):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_clear_queue_uses_get_running_loop(self):
+        """
+        clear_queue should use asyncio.get_running_loop() instead of the
+        deprecated asyncio.get_event_loop() to avoid DeprecationWarning
+        on Python 3.10+ and potential hangs on Python <= 3.11.
+
+        This tests the fix for GitHub issue #16518.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._ensure_queue()
+
+        mock_coro = AsyncMock()
+        worker.enqueue(mock_coro())
+
+        # clear_queue should work without triggering any deprecation warning
+        # If it used get_event_loop(), Python 3.12+ would issue a warning
+        await worker.clear_queue()
+        assert worker._queue.empty()
