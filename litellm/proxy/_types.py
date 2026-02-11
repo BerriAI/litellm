@@ -3016,6 +3016,7 @@ class ProxyException(Exception):
         if (
             "No healthy deployment available" in self.message
             or "No deployments available" in self.message
+            or RouterErrors.user_defined_ratelimit_error.value in self.message
         ):
             self.code = "429"
         elif RouterErrors.no_deployments_with_tag_routing.value in self.message:

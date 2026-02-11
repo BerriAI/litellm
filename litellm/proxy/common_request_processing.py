@@ -1046,9 +1046,20 @@ class ProxyBaseLLMRequestProcessing:
         version: Optional[str] = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
-        )
+        from litellm.types.router import RouterRateLimitErrorBasic
+
+        # Rate-limit errors are expected operational signals, not crashes.
+        # Log them at warning level without a stack trace to avoid flooding
+        # server logs (see #20867).
+        if isinstance(e, (RouterRateLimitErrorBasic, litellm.RateLimitError)):
+            verbose_proxy_logger.warning(
+                "litellm.proxy.proxy_server._handle_llm_api_exception(): %s",
+                str(e),
+            )
+        else:
+            verbose_proxy_logger.exception(
+                f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
+            )
         # Allow callbacks to transform the error response
         transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,

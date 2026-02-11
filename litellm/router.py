@@ -4613,7 +4613,10 @@ class Router:
         """
         Common utilities for async_function_with_fallbacks
         """
-        verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
+        # Skip noisy traceback logging for rate-limit errors; they are
+        # expected operational signals, not unexpected crashes (#20867).
+        if not isinstance(e, RouterRateLimitErrorBasic):
+            verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
         original_exception = e
         fallback_model_group = None
         original_model_group: Optional[str] = kwargs.get("model")  # type: ignore

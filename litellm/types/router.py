@@ -734,15 +734,26 @@ class RouterGeneralSettings(BaseModel):
 
 class RouterRateLimitErrorBasic(ValueError):
     """
-    Raise a basic error inside helper functions.
+    Raise a basic error inside helper functions when all deployments for
+    a model group have been excluded by pre-call rate-limit checks (RPM).
+
+    Carries ``status_code = 429`` so the proxy can surface the correct
+    HTTP status without relying on message-string matching.
     """
+
+    status_code: int = 429
 
     def __init__(
         self,
         model: str,
     ):
         self.model = model
-        _message = f"{RouterErrors.no_deployments_available.value}."
+        self.status_code = 429
+        _message = (
+            f"{RouterErrors.user_defined_ratelimit_error.value} "
+            f"Passed model={model}. All deployments for this model are at "
+            f"their RPM limit."
+        )
         super().__init__(_message)
 
 
