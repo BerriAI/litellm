@@ -158,7 +158,7 @@ class AttachmentRegistry:
         if attachment.models and context.model:
             reasons.append(f"model:{context.model}")
 
-        return ", ".join(reasons) if reasons else "scope:default"
+        return "+".join(reasons) if reasons else "scope:default"
 
     def is_policy_attached(
         self, policy_name: str, context: PolicyMatchContext

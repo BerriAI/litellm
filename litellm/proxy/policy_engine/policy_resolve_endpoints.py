@@ -73,10 +73,15 @@ def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> l
     return parsed.get("tags", []) or []
 
 
-async def _find_affected_keys_by_tags(
-    prisma_client: object, tag_patterns: list
-) -> tuple:
-    """Find key aliases whose metadata.tags match any of the given patterns.
+async def _fetch_all_teams(prisma_client: object) -> list:
+    """Fetch teams from DB once. Reuse the result across tag and alias lookups."""
+    return await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
+        where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
+    )
+
+
+def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
+    """Filter key rows whose metadata.tags match any of the given patterns.
 
     Returns (named_aliases, unnamed_count).
     """
@@ -84,9 +89,6 @@ async def _find_affected_keys_by_tags(
 
     affected: list = []
     unnamed_count = 0
-    keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
-        where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
-    )
     for key in keys:
         key_alias = key.key_alias or ""
         key_tags = _get_tags_from_metadata(
@@ -104,10 +106,8 @@ async def _find_affected_keys_by_tags(
     return affected, unnamed_count
 
 
-async def _find_affected_teams_by_tags(
-    prisma_client: object, tag_patterns: list
-) -> tuple:
-    """Find team aliases whose metadata.tags match any of the given patterns.
+def _filter_teams_by_tags(teams: list, tag_patterns: list) -> tuple:
+    """Filter pre-fetched team rows whose metadata.tags match any patterns.
 
     Returns (named_aliases, unnamed_count).
     """
@@ -115,9 +115,6 @@ async def _find_affected_teams_by_tags(
 
     affected: list = []
     unnamed_count = 0
-    teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
-        where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
-    )
     for team in teams:
         team_alias = team.team_alias or ""
         team_tags = _get_tags_from_metadata(team.metadata)
@@ -134,9 +131,13 @@ async def _find_affected_teams_by_tags(
 
 
 async def _find_affected_by_team_patterns(
-    prisma_client: object, team_patterns: list, existing_teams: list, existing_keys: list
+    prisma_client: object,
+    all_teams: list,
+    team_patterns: list,
+    existing_teams: list,
+    existing_keys: list,
 ) -> tuple:
-    """Find teams matching alias patterns and keys belonging to those teams.
+    """Filter pre-fetched teams by alias patterns, then fetch their keys.
 
     Returns (new_teams, new_keys, unnamed_keys_count).
     """
@@ -145,11 +146,7 @@ async def _find_affected_by_team_patterns(
     new_teams: list = []
     matched_team_ids: list = []
 
-    teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
-        where=_build_alias_where("team_alias", team_patterns),
-        order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
-    )
-    for team in teams:
+    for team in all_teams:
         team_alias = team.team_alias or ""
         if team_alias and any(
             RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat)
@@ -359,21 +356,30 @@ async def estimate_attachment_impact(
         unnamed_keys = 0
         unnamed_teams = 0
 
-        # Tag-based impact
         tag_patterns = request.tags or []
+        team_patterns = request.teams or []
+
+        # Fetch teams once — reused by both tag-based and alias-based lookups
+        all_teams: list = []
+        if tag_patterns or team_patterns:
+            all_teams = await _fetch_all_teams(prisma_client)
+
+        # Tag-based impact
         if tag_patterns:
-            affected_keys, unnamed_keys = await _find_affected_keys_by_tags(
-                prisma_client, tag_patterns,
+            keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+                where={}, order={"created_at": "desc"},
+                take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
             )
-            affected_teams, unnamed_teams = await _find_affected_teams_by_tags(
-                prisma_client, tag_patterns,
+            affected_keys, unnamed_keys = _filter_keys_by_tags(keys, tag_patterns)
+            affected_teams, unnamed_teams = _filter_teams_by_tags(
+                all_teams, tag_patterns,
             )
 
         # Team-based impact (alias matching + keys belonging to those teams)
-        team_patterns = request.teams or []
         if team_patterns:
             new_teams, new_keys, new_unnamed = await _find_affected_by_team_patterns(
-                prisma_client, team_patterns, affected_teams, affected_keys,
+                prisma_client, all_teams, team_patterns,
+                affected_teams, affected_keys,
             )
             affected_teams.extend(new_teams)
             affected_keys.extend(new_keys)

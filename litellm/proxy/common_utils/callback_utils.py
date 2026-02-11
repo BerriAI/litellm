@@ -397,7 +397,8 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
     if "policy_sources" in _metadata:
         sources = _metadata["policy_sources"]
         if isinstance(sources, dict) and sources:
-            headers["x-litellm-policy-sources"] = ",".join(
+            # Use ';' as delimiter — matched_via reasons may contain commas
+            headers["x-litellm-policy-sources"] = "; ".join(
                 f"{name}={reason}" for name, reason in sources.items()
             )
 
