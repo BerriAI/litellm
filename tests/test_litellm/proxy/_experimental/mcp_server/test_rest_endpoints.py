@@ -526,6 +526,325 @@ class TestListToolsRestAPI:
         assert result["message"] == "Successfully retrieved tools"
 
 
+class TestListPromptsRestAPI:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_rejects_disallowed_server(self, monkeypatch):
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/prompts/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_prompts_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+        assert "server server-1" in exc_info.value.detail["message"]
+
+    async def test_lists_prompts_for_allowed_server(self, monkeypatch):
+        from mcp.types import Prompt
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        fake_prompt = Prompt(
+            name="code_review",
+            description="Review code",
+            arguments=[],
+        )
+
+        async def fake_get_prompts_from_server(
+            server, mcp_auth_header=None, add_prefix=True, raw_headers=None, **kwargs
+        ):
+            return [fake_prompt]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_prompts_from_server",
+            fake_get_prompts_from_server,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/prompts/list", method="GET")
+        result = await rest_endpoints.list_prompts_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert len(result["prompts"]) == 1
+        assert result["prompts"][0]["name"] == "code_review"
+        assert result["nextCursor"] is None
+        assert result["error"] is None
+        assert result["message"] == "Successfully retrieved prompts"
+
+    async def test_returns_nextcursor_in_response(self, monkeypatch):
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_prompts_from_server(
+            server, mcp_auth_header=None, add_prefix=True, raw_headers=None, **kwargs
+        ):
+            return []
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_prompts_from_server",
+            fake_get_prompts_from_server,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/prompts/list", method="GET")
+        result = await rest_endpoints.list_prompts_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert "nextCursor" in result
+        assert result["nextCursor"] is None
+
+
+class TestGetPromptRestAPI:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_rejects_missing_server_id(self, monkeypatch):
+        request = _build_request(
+            path="/mcp-rest/prompts/get",
+            method="POST",
+            json_body={"name": "code_review"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.get_prompt_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "missing_parameter"
+        assert "server_id" in exc_info.value.detail["message"]
+
+    async def test_rejects_missing_name(self, monkeypatch):
+        request = _build_request(
+            path="/mcp-rest/prompts/get",
+            method="POST",
+            json_body={"server_id": "server-1"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.get_prompt_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "missing_parameter"
+        assert "name" in exc_info.value.detail["message"]
+
+    async def test_rejects_disallowed_server(self, monkeypatch):
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+
+        request = _build_request(
+            path="/mcp-rest/prompts/get",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "code_review"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.get_prompt_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+
+    async def test_gets_prompt_when_allowed(self, monkeypatch):
+        from mcp.types import GetPromptResult, PromptMessage, TextContent
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        fake_result = GetPromptResult(
+            description="Code review prompt",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(type="text", text="Please review: x = 1"),
+                )
+            ],
+        )
+
+        captured = {}
+
+        async def fake_get_prompt_from_server(
+            server, prompt_name, arguments=None, mcp_auth_header=None, raw_headers=None, **kwargs
+        ):
+            captured["prompt_name"] = prompt_name
+            captured["arguments"] = arguments
+            return fake_result
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_prompt_from_server",
+            fake_get_prompt_from_server,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "filter_server_ids_by_ip",
+            lambda ids, ip: ids,
+            raising=False,
+        )
+
+        request = _build_request(
+            path="/mcp-rest/prompts/get",
+            method="POST",
+            json_body={
+                "server_id": "server-1",
+                "name": "code_review",
+                "arguments": {"code": "x = 1"},
+            },
+        )
+        result = await rest_endpoints.get_prompt_rest_api(
+            request,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["description"] == "Code review prompt"
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["role"] == "user"
+        assert result["error"] is None
+        assert result["message"] == "Successfully retrieved prompt"
+        assert captured["prompt_name"] == "code_review"
+        assert captured["arguments"] == {"code": "x = 1"}
+
+
 class TestCallToolRestAPI:
     pytestmark = pytest.mark.asyncio
 

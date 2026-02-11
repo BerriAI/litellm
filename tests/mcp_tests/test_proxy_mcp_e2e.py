@@ -234,3 +234,130 @@ class TestProxyMcpSimpleConnections:
                     )
                     assert stdio_result == "5"
                     assert streamable_result == "9"
+
+
+class TestProxyMcpPrompts:
+    @pytest.mark.asyncio
+    async def test_list_prompts_single_server_stdio(self, proxy_server_url: str) -> None:
+        async with asyncio.timeout(20):
+            async with streamablehttp_client(
+                url=f"{proxy_server_url}/mcp",
+                headers={
+                    "Authorization": PROXY_AUTHORIZATION_HEADER,
+                    "x-mcp-servers": "math_stdio",
+                },
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.list_prompts()
+                    prompt_names = {p.name for p in result.prompts}
+                    assert "code_review" in prompt_names
+                    assert "summarize" in prompt_names
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_single_server_streamable_http(
+        self, proxy_server_url: str
+    ) -> None:
+        async with asyncio.timeout(20):
+            async with streamablehttp_client(
+                url=f"{proxy_server_url}/mcp",
+                headers={
+                    "Authorization": PROXY_AUTHORIZATION_HEADER,
+                    "x-mcp-servers": "math_streamable_http",
+                },
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.list_prompts()
+                    prompt_names = {p.name for p in result.prompts}
+                    assert "code_review" in prompt_names
+                    assert "summarize" in prompt_names
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_all_servers_prefixed(
+        self, proxy_server_url: str
+    ) -> None:
+        async with asyncio.timeout(20):
+            async with streamablehttp_client(
+                url=f"{proxy_server_url}/mcp",
+                headers={"Authorization": PROXY_AUTHORIZATION_HEADER},
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.list_prompts()
+                    prompt_names = {p.name for p in result.prompts}
+                    expected = {
+                        "math_stdio-code_review",
+                        "math_stdio-summarize",
+                        "math_streamable_http-code_review",
+                        "math_streamable_http-summarize",
+                    }
+                    assert expected <= prompt_names
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_single_server_stdio(self, proxy_server_url: str) -> None:
+        async with asyncio.timeout(20):
+            async with streamablehttp_client(
+                url=f"{proxy_server_url}/mcp",
+                headers={
+                    "Authorization": PROXY_AUTHORIZATION_HEADER,
+                    "x-mcp-servers": "math_stdio",
+                },
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.get_prompt(
+                        "code_review", arguments={"code": "def hello(): pass"}
+                    )
+                    assert result.messages
+                    first_msg = result.messages[0]
+                    assert first_msg.role == "user"
+                    text = getattr(first_msg.content, "text", None)
+                    assert text is not None
+                    assert "def hello(): pass" in text
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_single_server_streamable_http(
+        self, proxy_server_url: str
+    ) -> None:
+        async with asyncio.timeout(20):
+            async with streamablehttp_client(
+                url=f"{proxy_server_url}/mcp",
+                headers={
+                    "Authorization": PROXY_AUTHORIZATION_HEADER,
+                    "x-mcp-servers": "math_streamable_http",
+                },
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.get_prompt(
+                        "summarize",
+                        arguments={"text": "Hello world", "style": "brief"},
+                    )
+                    assert result.messages
+                    first_msg = result.messages[0]
+                    assert first_msg.role == "user"
+                    text = getattr(first_msg.content, "text", None)
+                    assert text is not None
+                    assert "Hello world" in text
+                    assert "brief" in text
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_prefixed_name_all_servers(
+        self, proxy_server_url: str
+    ) -> None:
+        async with asyncio.timeout(20):
+            async with streamablehttp_client(
+                url=f"{proxy_server_url}/mcp",
+                headers={"Authorization": PROXY_AUTHORIZATION_HEADER},
+            ) as (read, write, _get_session_id):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.get_prompt(
+                        "math_stdio-code_review",
+                        arguments={"code": "x = 1"},
+                    )
+                    assert result.messages
+                    text = getattr(result.messages[0].content, "text", None)
+                    assert text is not None
+                    assert "x = 1" in text
