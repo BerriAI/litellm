@@ -7,9 +7,10 @@ Policy resolve and attachment impact estimation endpoints.
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_POLICY_ESTIMATE_IMPACT_ROWS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
@@ -24,6 +25,36 @@ from litellm.types.proxy.policy_engine import (
 )
 
 router = APIRouter()
+
+_UNNAMED_KEY_PLACEHOLDER = "(unnamed key)"
+_UNNAMED_TEAM_PLACEHOLDER = "(unnamed team)"
+
+
+def _build_alias_where(field: str, patterns: list) -> dict:
+    """Build a Prisma ``where`` clause for alias patterns.
+
+    Supports exact matches and suffix wildcards (``prefix*``).
+    Returns something like:
+        {"OR": [{"field": {"in": ["a","b"]}}, {"field": {"startsWith": "dev-"}}]}
+    """
+    exact: list = []
+    prefix_conditions: list = []
+    for pat in patterns:
+        if pat.endswith("*"):
+            prefix_conditions.append({field: {"startsWith": pat[:-1]}})
+        else:
+            exact.append(pat)
+
+    conditions: list = []
+    if exact:
+        conditions.append({field: {"in": exact}})
+    conditions.extend(prefix_conditions)
+
+    if not conditions:
+        return {field: {"not": None}}
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"OR": conditions}
 
 
 def _parse_metadata(raw_metadata: object) -> dict:
@@ -53,7 +84,7 @@ async def _find_affected_keys_by_tags(
 
     affected: list = []
     keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
-        where={}, order={"created_at": "desc"},
+        where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
     for key in keys:
         key_alias = key.key_alias or ""
@@ -65,7 +96,7 @@ async def _find_affected_keys_by_tags(
             for tag in key_tags
             for pat in tag_patterns
         ):
-            affected.append(key_alias or str(key.token)[:8] + "...")
+            affected.append(key_alias or _UNNAMED_KEY_PLACEHOLDER)
     return affected
 
 
@@ -77,7 +108,7 @@ async def _find_affected_teams_by_tags(
 
     affected: list = []
     teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
-        where={}, order={"created_at": "desc"},
+        where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
     for team in teams:
         team_alias = team.team_alias or ""
@@ -87,7 +118,7 @@ async def _find_affected_teams_by_tags(
             for tag in team_tags
             for pat in tag_patterns
         ):
-            affected.append(team_alias or str(team.team_id)[:8] + "...")
+            affected.append(team_alias or _UNNAMED_TEAM_PLACEHOLDER)
     return affected
 
 
@@ -99,8 +130,10 @@ async def _find_affected_by_team_patterns(
 
     new_teams: list = []
     matched_team_ids: list = []
+
     teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
-        where={}, order={"created_at": "desc"},
+        where=_build_alias_where("team_alias", team_patterns),
+        order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
     for team in teams:
         team_alias = team.team_alias or ""
@@ -116,10 +149,10 @@ async def _find_affected_by_team_patterns(
     if matched_team_ids:
         keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
             where={"team_id": {"in": matched_team_ids}},
-            order={"created_at": "desc"},
+            order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
         )
         for key in keys:
-            key_alias = key.key_alias or str(key.token)[:8] + "..."
+            key_alias = key.key_alias or _UNNAMED_KEY_PLACEHOLDER
             if key_alias not in existing_keys:
                 new_keys.append(key_alias)
 
@@ -133,8 +166,10 @@ async def _find_affected_keys_by_alias(
     from litellm.proxy.auth.route_checks import RouteChecks
 
     affected: list = []
+
     keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
-        where={}, order={"created_at": "desc"},
+        where=_build_alias_where("key_alias", key_patterns),
+        order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
     for key in keys:
         key_alias = key.key_alias or ""
@@ -160,6 +195,10 @@ async def _find_affected_keys_by_alias(
 )
 async def resolve_policies_for_context(
     request: PolicyResolveRequest,
+    force_sync: bool = Query(
+        default=False,
+        description="Force a DB sync before resolving. Default uses in-memory cache.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -187,9 +226,10 @@ async def resolve_policies_for_context(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Sync from DB to ensure in-memory state is current
-        await get_policy_registry().sync_policies_from_db(prisma_client)
-        await get_attachment_registry().sync_attachments_from_db(prisma_client)
+        # Only sync from DB when explicitly requested; otherwise use in-memory cache
+        if force_sync:
+            await get_policy_registry().sync_policies_from_db(prisma_client)
+            await get_attachment_registry().sync_attachments_from_db(prisma_client)
 
         # Build context from request
         context = PolicyMatchContext(
