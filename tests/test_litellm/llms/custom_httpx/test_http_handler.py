@@ -3,7 +3,7 @@ import os
 import pathlib
 import ssl
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import certifi
 import httpx
@@ -15,7 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_configuration
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, get_ssl_configuration
 
 
 @pytest.mark.asyncio
@@ -632,3 +632,92 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         assert req.headers.get("User-Agent") == "Claude Code"
     finally:
         await handler.close()
+
+def test_extract_query_params_standard_url():
+    """Test extract_query_params with standard key=value query strings."""
+    result = HTTPHandler.extract_query_params(
+        "https://example.com/path?foo=1&bar=2"
+    )
+    assert result == {"foo": "1", "bar": "2"}
+
+
+def test_extract_query_params_no_keyvalue_pairs():
+    """Test extract_query_params returns empty dict for non key=value query strings.
+
+    CDN image processing URLs (e.g. Qiniu) use path-style query strings like
+    `?imageMogr2/thumbnail/800x800/format/jpg` which don't contain `=`.
+    `parse_qsl` cannot parse these and returns an empty list.
+    """
+    result = HTTPHandler.extract_query_params(
+        "https://cdn.example.com/img.png?imageMogr2/thumbnail/800x800/format/jpg"
+    )
+    assert result == {}
+
+
+def test_extract_query_params_no_query_string():
+    """Test extract_query_params with no query string at all."""
+    result = HTTPHandler.extract_query_params("https://example.com/path")
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_async_get_preserves_query_string_when_no_keyvalue_params():
+    """Test that AsyncHTTPHandler.get() preserves the original query string
+    when extract_query_params returns an empty dict.
+
+    Regression test: previously, passing `params={}` to httpx caused it to
+    strip the original query string from the URL entirely. This broke CDN
+    image processing URLs that use non-standard query strings without `=`.
+    """
+    handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=10.0))
+
+    cdn_url = "https://cdn.example.com/img.png?imageMogr2/thumbnail/800x800%3E/format/jpg"
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+
+    with patch.object(handler.client, "get", new_callable=AsyncMock, return_value=mock_response) as mock_get:
+        await handler.get(cdn_url, follow_redirects=True)
+
+        # Verify the URL passed to httpx still contains the query string
+        call_args = mock_get.call_args
+        actual_url = call_args[0][0] if call_args[0] else call_args[1].get("url")
+        assert "imageMogr2" in str(actual_url), (
+            f"Query string was stripped from URL. Got: {actual_url}"
+        )
+
+        # Verify params is None (not empty dict) so httpx doesn't strip query string
+        actual_params = call_args[1].get("params")
+        assert actual_params is None, (
+            f"Expected params=None when no key=value pairs in query string, got: {actual_params}"
+        )
+
+
+def test_sync_get_preserves_query_string_when_no_keyvalue_params():
+    """Test that HTTPHandler.get() preserves the original query string
+    when extract_query_params returns an empty dict.
+
+    Regression test: same issue as async variant above.
+    """
+    handler = HTTPHandler(timeout=httpx.Timeout(timeout=10.0))
+
+    cdn_url = "https://cdn.example.com/img.png?imageMogr2/thumbnail/800x800%3E/format/jpg"
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+
+    with patch.object(handler.client, "get", return_value=mock_response) as mock_get:
+        handler.get(cdn_url, follow_redirects=True)
+
+        # Verify the URL passed to httpx still contains the query string
+        call_args = mock_get.call_args
+        actual_url = call_args[0][0] if call_args[0] else call_args[1].get("url")
+        assert "imageMogr2" in str(actual_url), (
+            f"Query string was stripped from URL. Got: {actual_url}"
+        )
+
+        # Verify params is None (not empty dict) so httpx doesn't strip query string
+        actual_params = call_args[1].get("params")
+        assert actual_params is None, (
+            f"Expected params=None when no key=value pairs in query string, got: {actual_params}"
+        )

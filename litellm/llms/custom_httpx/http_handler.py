@@ -422,8 +422,15 @@ class AsyncHTTPHandler:
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
 
+        # Only pass params when non-empty; passing an empty dict causes httpx to
+        # strip the original query-string from the URL entirely, which breaks
+        # URLs whose query-string doesn't use key=value pairs (e.g. CDN image
+        # processing URLs like `?imageMogr2/thumbnail/800x800/format/jpg`).
         response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            url,
+            params=params or None,
+            headers=headers,
+            follow_redirects=_follow_redirects,  # type: ignore
         )
         return response
 
@@ -964,9 +971,13 @@ class HTTPHandler:
         params = params or {}
         params.update(self.extract_query_params(url))
 
+        # Only pass params when non-empty; passing an empty dict causes httpx to
+        # strip the original query-string from the URL entirely, which breaks
+        # URLs whose query-string doesn't use key=value pairs (e.g. CDN image
+        # processing URLs like `?imageMogr2/thumbnail/800x800/format/jpg`).
         response = self.client.get(
             url,
-            params=params,
+            params=params or None,
             headers=headers,
         )
 
