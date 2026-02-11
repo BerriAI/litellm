@@ -529,6 +529,17 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         raise e
 
 
+def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
+    """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
+    extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+    if extra_body is not None:
+        for k, v in extra_body.items():
+            if k in data and isinstance(data[k], dict) and isinstance(v, dict):
+                data[k].update(v)
+            else:
+                data[k] = v
+
+
 def _transform_request_body(
     messages: List[AllMessageValues],
     model: str,
@@ -583,7 +594,6 @@ def _transform_request_body(
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
             "safety_settings", None
         )  # type: ignore
-        extra_body: Optional[dict] = optional_params.pop("extra_body", None)
         config_fields = GenerationConfig.__annotations__.keys()
 
         # If the LiteLLM client sends Gemini-supported parameter "labels", add it
@@ -620,16 +630,7 @@ def _transform_request_body(
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
-        # Merge extra_body into the request body. Use one-level deep merge
-        # so that dict values (e.g. generationConfig) are merged rather than
-        # replaced, preserving both normal params and extra_body additions
-        # like responseModalities and imageConfig.
-        if extra_body is not None:
-            for k, v in extra_body.items():
-                if k in data and isinstance(data[k], dict) and isinstance(v, dict):
-                    data[k].update(v)
-                else:
-                    data[k] = v
+        _pop_and_merge_extra_body(data, optional_params)
     except Exception as e:
         raise e
 
