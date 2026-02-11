@@ -127,3 +127,46 @@ def test_usage_completion_tokens_details_text_tokens():
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
+
+
+def test_streaming_choices_serialization_no_warnings():
+    """
+    Verify that serializing a StreamingChoices object with
+    provider_specific_fields containing a Message does not emit
+    PydanticSerializationUnexpectedValue warnings.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/17631.
+    """
+    import warnings
+
+    from litellm.types.utils import (
+        Delta,
+        Message,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    message = Message(content="test content", role="assistant")
+    choice = StreamingChoices(
+        delta=Delta(content="chunk-content"),
+        finish_reason="stop",
+        provider_specific_fields={"message": message},
+    )
+    chunk = ModelResponseStream(
+        choices=[choice],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        chunk.model_dump()
+
+    pydantic_warnings = [
+        w
+        for w in caught
+        if "PydanticSerializationUnexpectedValue" in str(w.category.__name__)
+        or "PydanticSerializationUnexpectedValue" in str(w.message)
+    ]
+    assert (
+        len(pydantic_warnings) == 0
+    ), f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"

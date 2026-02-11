@@ -1577,6 +1577,8 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
 
 class StreamingChoices(OpenAIObject):
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+
     def __init__(
         self,
         finish_reason=None,
@@ -1584,12 +1586,14 @@ class StreamingChoices(OpenAIObject):
         delta: Optional[Delta] = None,
         logprobs=None,
         enhancements=None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
         # Fix Perplexity return both delta and message cause OpenWebUI repect text
         # https://github.com/BerriAI/litellm/issues/8455
         params.pop("message", None)
         super(StreamingChoices, self).__init__(**params)
+        add_provider_specific_fields(self, provider_specific_fields)
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
         else:
