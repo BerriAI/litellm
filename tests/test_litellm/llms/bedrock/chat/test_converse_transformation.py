@@ -3023,6 +3023,13 @@ def test_transform_response_with_both_json_tool_call_and_real_tool():
         == '{"location": "San Francisco, CA", "unit": "fahrenheit"}'
     )
 
+    # json_tool_call content should be preserved as message text
+    content = result.choices[0].message.content
+    assert content is not None
+    parsed = json.loads(content)
+    assert parsed["Current_Temperature"] == 62
+    assert parsed["Weather_Explanation"] == "Mild and cool."
+
 
 def test_transform_response_does_not_mutate_optional_params():
     """
