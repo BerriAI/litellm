@@ -2081,3 +2081,67 @@ def test_update_kwargs_with_deployment_no_tags():
 
     # No tags key should be added if deployment has no tags
     assert "tags" not in kwargs["metadata"]
+
+
+def test_time_to_sleep_before_retry_uses_current_exception_headers():
+    """
+    Verify that _time_to_sleep_before_retry reads Retry-After from the
+    exception it is given, not from a stale/original exception.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20722.
+    """
+    import httpx
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    "api_key": "fake",
+                },
+            }
+        ],
+        num_retries=3,
+        retry_after=0,
+    )
+
+    # Build two exceptions with different Retry-After headers
+    exc_short = litellm.RateLimitError(
+        message="rate limited (short)",
+        model="gpt-4",
+        llm_provider="openai",
+    )
+    exc_short.litellm_response_headers = httpx.Headers({"retry-after": "2"})
+
+    exc_long = litellm.RateLimitError(
+        message="rate limited (long)",
+        model="gpt-4",
+        llm_provider="openai",
+    )
+    exc_long.litellm_response_headers = httpx.Headers({"retry-after": "60"})
+
+    # Single deployment → won't early-return 0
+    all_deployments = [{"model_name": "gpt-4"}]
+
+    timeout_short = router._time_to_sleep_before_retry(
+        e=exc_short,
+        remaining_retries=2,
+        num_retries=3,
+        healthy_deployments=[],
+        all_deployments=all_deployments,
+    )
+
+    timeout_long = router._time_to_sleep_before_retry(
+        e=exc_long,
+        remaining_retries=2,
+        num_retries=3,
+        healthy_deployments=[],
+        all_deployments=all_deployments,
+    )
+
+    # The long exception must produce a longer sleep than the short one.
+    # Before the fix, both would return the same value because the router
+    # always passed the original (short) exception.
+    assert timeout_long > timeout_short
+    assert timeout_long >= 60
