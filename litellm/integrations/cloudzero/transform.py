@@ -104,6 +104,7 @@ class CBFTransformer:
         entity_id = str(team_alias) if team_alias else (str(team_id) if team_id else 'unknown')
         
         # Get alias fields if they exist
+        api_key_alias = row.get('api_key_alias')
         organization_alias = row.get('organization_alias')
         project_alias = row.get('project_alias')
         user_alias = row.get('user_alias')
