@@ -1687,9 +1687,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     error_message: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by error message (partial string match)"
     ),
-    sort_by: Optional[str] = fastapi.Query(
-        default=None,
-        description="Sort logs by field: spend, total_tokens, startTime, or endTime (default: startTime)",
+    sort_by: str = fastapi.Query(
+        default="startTime",
+        description="Sort logs by field: spend, total_tokens, startTime, or endTime",
     ),
     sort_order: Optional[str] = fastapi.Query(
         default="desc",
@@ -1728,7 +1728,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
     # Validate sort_by and sort_order
     valid_sort_fields = {"spend", "total_tokens", "startTime", "endTime"}
-    if sort_by is not None and sort_by not in valid_sort_fields:
+    if sort_by not in valid_sort_fields:
         raise ProxyException(
             message=f"Invalid sort_by: {sort_by}. Must be one of: {', '.join(sorted(valid_sort_fields))}",
             type="bad_request",
@@ -1856,7 +1856,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         skip = (page - 1) * page_size
 
         # Build order clause from sort_by and sort_order
-        order_column = sort_by if sort_by else "startTime"
+        order_column = sort_by
         order_direction = (sort_order or "desc").lower()
         order_clause = {order_column: order_direction}
 
