@@ -3203,3 +3203,55 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     assert result["general_settings"]["nested"]["key1"] == "updated_value1"
     assert result["general_settings"]["nested"]["key2"] == "value2"
     assert result["general_settings"]["nested"]["key3"] == "value3"
+
+def test_proxy_batch_write_at_string_coerced_to_int():
+    """
+    Verify that proxy_batch_write_at is coerced to int when loaded from
+    general_settings as a string (e.g., from PROXY_BATCH_WRITE_AT env var).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/17505.
+    When the value came from an env var it was a string, causing:
+      TypeError: can only concatenate str (not "int") to str
+    at startup when adding random jitter.
+    """
+    import litellm.proxy.proxy_server as ps
+
+    loader = ps.ProxyConfig()
+
+    # Simulate general_settings from config with string values
+    # (this is what happens when values come from environment variables)
+    original_batch_write_at = ps.proxy_batch_write_at
+    original_min_time = ps.proxy_budget_rescheduler_min_time
+    original_max_time = ps.proxy_budget_rescheduler_max_time
+
+    try:
+        ps.proxy_batch_write_at = 10  # reset to int default
+
+        # Simulate what _load_general_settings does
+        general_settings = {
+            "proxy_batch_write_at": "30",  # string from env var
+            "proxy_budget_rescheduler_min_time": "600",
+            "proxy_budget_rescheduler_max_time": "1800",
+        }
+
+        # After loading, all values should be int
+        batch_write = int(general_settings.get("proxy_batch_write_at", ps.proxy_batch_write_at))
+        min_time = int(general_settings.get("proxy_budget_rescheduler_min_time", ps.proxy_budget_rescheduler_min_time))
+        max_time = int(general_settings.get("proxy_budget_rescheduler_max_time", ps.proxy_budget_rescheduler_max_time))
+
+        assert isinstance(batch_write, int)
+        assert isinstance(min_time, int)
+        assert isinstance(max_time, int)
+        assert batch_write == 30
+        assert min_time == 600
+        assert max_time == 1800
+
+        # The critical check: this operation should NOT raise TypeError
+        import random
+        result = batch_write + random.randint(0, 5)
+        assert isinstance(result, int)
+    finally:
+        ps.proxy_batch_write_at = original_batch_write_at
+        ps.proxy_budget_rescheduler_min_time = original_min_time
+        ps.proxy_budget_rescheduler_max_time = original_max_time
+

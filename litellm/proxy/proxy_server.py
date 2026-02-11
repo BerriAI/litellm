@@ -2698,19 +2698,27 @@ class ProxyConfig:
                     "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
                 )
             ## BUDGET RESCHEDULER ##
-            proxy_budget_rescheduler_min_time = general_settings.get(
-                "proxy_budget_rescheduler_min_time", proxy_budget_rescheduler_min_time
+            proxy_budget_rescheduler_min_time = int(
+                general_settings.get(
+                    "proxy_budget_rescheduler_min_time",
+                    proxy_budget_rescheduler_min_time,
+                )
             )
-            proxy_budget_rescheduler_max_time = general_settings.get(
-                "proxy_budget_rescheduler_max_time", proxy_budget_rescheduler_max_time
+            proxy_budget_rescheduler_max_time = int(
+                general_settings.get(
+                    "proxy_budget_rescheduler_max_time",
+                    proxy_budget_rescheduler_max_time,
+                )
             )
             ## BATCH POLLING INTERVAL ##
             proxy_batch_polling_interval = general_settings.get(
                 "proxy_batch_polling_interval", proxy_batch_polling_interval
             )
             ## BATCH WRITER ##
-            proxy_batch_write_at = general_settings.get(
-                "proxy_batch_write_at", proxy_batch_write_at
+            proxy_batch_write_at = int(
+                general_settings.get(
+                    "proxy_batch_write_at", proxy_batch_write_at
+                )
             )
             ## DISABLE SPEND LOGS ## - gives a perf improvement
             disable_spend_logs = general_settings.get(
