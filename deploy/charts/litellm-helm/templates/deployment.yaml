@@ -10,7 +10,7 @@ metadata:
     {{- toYaml .Values.deploymentLabels | nindent 4 }}
     {{- end }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
+  {{- if and (not .Values.keda.enabled) (not .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
@@ -38,6 +38,10 @@ spec:
       serviceAccountName: {{ include "litellm.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ include "litellm.name" . }}
           securityContext:
@@ -170,7 +174,8 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: litellm-config
-              mountPath: /etc/litellm/
+              mountPath: /etc/litellm/config.yaml
+              subPath: config.yaml
           {{ if .Values.securityContext.readOnlyRootFilesystem }}
             - name: tmp
               mountPath: /tmp
@@ -180,6 +185,10 @@ spec:
               mountPath: /.npm
           {{- end }}
           {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.lifecycle }}
+          lifecycle:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- with .Values.extraContainers }}

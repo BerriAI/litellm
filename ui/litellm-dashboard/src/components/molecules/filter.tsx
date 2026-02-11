@@ -1,7 +1,13 @@
-import React, { useState, useCallback, useEffect } from "react";
-import { Button, Input, Select } from "antd";
 import { FilterIcon } from "@heroicons/react/outline";
+import { Button, Input, Select } from "antd";
 import debounce from "lodash/debounce";
+import React, { useCallback, useEffect, useState } from "react";
+
+export interface FilterOptionCustomComponentProps {
+  value?: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}
 
 export interface FilterOption {
   name: string;
@@ -9,6 +15,7 @@ export interface FilterOption {
   isSearchable?: boolean;
   searchFn?: (searchText: string) => Promise<Array<{ label: string; value: string }>>;
   options?: Array<{ label: string; value: string }>;
+  customComponent?: React.ComponentType<FilterOptionCustomComponentProps>;
 }
 
 interface FilterValues {
@@ -129,6 +136,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Key Alias",
     "User ID",
     "End User",
+    "Error Code",
+    "Error Message",
     "Key Hash",
     "Model",
   ];
@@ -162,7 +171,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                     placeholder={`Search ${option.label || option.name}...`}
                     value={tempValues[option.name] || undefined}
                     onChange={(value) => handleFilterChange(option.name, value)}
-                    onDropdownVisibleChange={(open) => handleDropdownVisibleChange(open, option)}
+                    onOpenChange={(open) => handleDropdownVisibleChange(open, option)}
                     onSearch={(value) => {
                       setSearchInputValueMap((prev) => ({
                         ...prev,
@@ -192,6 +201,17 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                       </Select.Option>
                     ))}
                   </Select>
+                ) : option.customComponent ? (
+                  (() => {
+                    const CustomComponent = option.customComponent;
+                    return (
+                      <CustomComponent
+                        value={tempValues[option.name] || undefined}
+                        onChange={(value) => handleFilterChange(option.name, value ?? "")}
+                        placeholder={`Select ${option.label || option.name}...`}
+                      />
+                    );
+                  })()
                 ) : (
                   <Input
                     className="w-full"

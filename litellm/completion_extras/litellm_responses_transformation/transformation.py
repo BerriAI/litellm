@@ -3,6 +3,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 """
 
 import json
+import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,6 +23,7 @@ from typing import (
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel
 
+import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -29,6 +31,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionToolParamFunctionChunk,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
@@ -88,9 +91,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     content_type = content_item.get("type")
                     if content_type == "output_text":
                         response_text = content_item.get("text", "")
+                        # Extract annotations from content if present
+                        annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                            content_item.get("annotations", None)
+                        )
                         msg = Message(
                             role=item.get("role", "assistant"),
                             content=response_text if response_text else "",
+                            annotations=annotations,
                         )
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
@@ -269,6 +277,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
                 responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+            elif key == "web_search_options":
+                self._add_web_search_tool(responses_api_request, value)
 
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -319,6 +329,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else:
                     request_data[key] = value
 
+        if headers:
+            request_data["extra_headers"] = headers
+
         return request_data
 
     @staticmethod
@@ -362,10 +375,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
+                    # Extract annotations from content if present
+                    raw_annotations = getattr(content, "annotations", None)
+                    annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                        raw_annotations
+                    )
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
+                        annotations=annotations,
                     )
 
                     choices.append(
@@ -691,20 +710,55 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
 
-        # If string is passed, map without summary (default)
+        # Check if auto-summary is enabled via flag or environment variable
+        # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
+        auto_summary_enabled = (
+            litellm.reasoning_auto_summary
+            or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
+        )
+
+        # If string is passed, map with optional summary based on flag/env var
         if reasoning_effort == "none":
-            return Reasoning(effort="none")  # type: ignore
+            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
-            return Reasoning(effort="high")
+            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
         elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
+            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
-            return Reasoning(effort="medium")
+            return Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
         elif reasoning_effort == "low":
-            return Reasoning(effort="low")
+            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
         elif reasoning_effort == "minimal":
-            return Reasoning(effort="minimal")
+            return Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
         return None
+
+    def _add_web_search_tool(
+        self,
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+        web_search_options: Any,
+    ) -> None:
+        """
+        Add web search tool to responses API request.
+
+        Args:
+            responses_api_request: The responses API request dict to modify
+            web_search_options: Web search configuration (dict or other value)
+        """
+        if "tools" not in responses_api_request or responses_api_request["tools"] is None:
+            responses_api_request["tools"] = []
+
+        # Get the tools list with proper type narrowing
+        tools = responses_api_request["tools"]
+        if tools is None:
+            tools = []
+            responses_api_request["tools"] = tools
+
+        web_search_tool: Dict[str, Any] = {"type": "web_search"}
+        if isinstance(web_search_options, dict):
+            web_search_tool.update(web_search_options)
+
+        # Cast to Any to match the expected union type for tools list items
+        tools.append(cast(Any, web_search_tool))
 
     def _transform_response_format_to_text_format(
         self, response_format: Union[Dict[str, Any], Any]
@@ -754,6 +808,42 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return {"format": {"type": "text"}}
 
         return None
+    
+    @staticmethod
+    def _convert_annotations_to_chat_format(
+        annotations: Optional[List[Any]],
+    ) -> Optional[List[ChatCompletionAnnotation]]:
+        """
+        Convert annotations from Responses API to Chat Completions format.
+
+        Annotations are already in compatible format between both APIs,
+        so we just need to convert Pydantic models to dicts.
+        """
+        if not annotations:
+            return None
+
+        result: List[ChatCompletionAnnotation] = []
+        for annotation in annotations:
+            try:
+                # Convert Pydantic models to dicts (handles both v1 and v2)
+                if hasattr(annotation, "model_dump"):
+                    annotation_dict = annotation.model_dump()
+                elif hasattr(annotation, "dict"):
+                    annotation_dict = annotation.dict()
+                elif isinstance(annotation, dict):
+                    annotation_dict = annotation
+                else:
+                    # Skip unsupported annotation types
+                    verbose_logger.debug(f"Skipping unsupported annotation type: {type(annotation)}")
+                    continue
+
+                result.append(annotation_dict)  # type: ignore
+            except Exception as e:
+                # Skip malformed annotations
+                verbose_logger.debug(f"Skipping malformed annotation: {annotation}, error: {e}")
+                continue
+
+        return result if result else None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
         """Map responses API status to chat completion finish_reason"""

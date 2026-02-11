@@ -19,7 +19,11 @@ general_settings:
   master_key: sk-1234      # enter your own master key, ensure it starts with 'sk-'
   alerting: ["slack"]      # Setup slack alerting - get alerts on LLM exceptions, Budget Alerts, Slow LLM Responses
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
-  database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
+  database_connection_pool_limit: 10 # connection pool limit per worker process. Total connections = limit × workers × instances. Calculate: MAX_DB_CONNECTIONS / (instances × workers). Default: 10.
+
+:::warning
+**Multiple instances:** If running multiple LiteLLM instances (e.g., Kubernetes pods), remember each instance multiplies your total connections. Example: 3 instances × 4 workers × 10 connections = 120 total connections.
+:::
 
   # OPTIONAL Best Practices
   disable_error_logs: True # turn off writing LLM Exceptions to DB
@@ -54,8 +58,8 @@ For optimal performance in production, we recommend the following minimum machin
 
 | Resource | Recommended Value |
 |----------|------------------|
-| CPU      | 2 vCPU           |
-| Memory   | 4 GB RAM         |
+| CPU      | 4 vCPU           |
+| Memory   | 8 GB RAM         |
 
 These specifications provide:
 - Sufficient compute power for handling concurrent requests
@@ -273,7 +277,12 @@ Set the following environment variable(s):
 ```bash
 SEPARATE_HEALTH_APP="1" # Default "0" 
 SEPARATE_HEALTH_PORT="8001" # Default "4001", Works only if `SEPARATE_HEALTH_APP` is "1"
+SUPERVISORD_STOPWAITSECS="3600" # Optional: Upper bound timeout in seconds for graceful shutdown. Default: 3600 (1 hour). Only used when SEPARATE_HEALTH_APP=1.
 ```
+
+**Graceful Shutdown:**
+
+Previously, `stopwaitsecs` was not set, defaulting to 10 seconds and causing in-flight requests to fail. `SUPERVISORD_STOPWAITSECS` (default: 3600) provides an upper bound for graceful shutdown, allowing uvicorn to wait for all in-flight requests to complete.
 
 <video controls width="100%" style={{ borderRadius: '8px', marginBottom: '1em' }}>
   <source src="https://cdn.loom.com/sessions/thumbnails/b08be303331246b88fdc053940d03281-1718990992822.mp4" type="video/mp4" />

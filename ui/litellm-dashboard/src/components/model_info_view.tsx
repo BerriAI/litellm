@@ -1,3 +1,6 @@
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
@@ -15,10 +18,11 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import CacheControlSettings from "./add_model/cache_control_settings";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -37,18 +41,13 @@ import { getProviderLogoAndName } from "./provider_info_helpers";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 
 interface ModelInfoViewProps {
   modelId: string;
   onClose: () => void;
-  modelData: any;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
-  editModel: boolean;
-  setEditModalVisible: (visible: boolean) => void;
-  setSelectedModel: (model: any) => void;
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
@@ -56,19 +55,16 @@ interface ModelInfoViewProps {
 export default function ModelInfoView({
   modelId,
   onClose,
-  modelData,
   accessToken,
   userID,
   userRole,
-  editModel,
-  setEditModalVisible,
-  setSelectedModel,
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -79,28 +75,70 @@ export default function ModelInfoView({
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+
+  // Fetch model data using hook
+  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
+  const { data: modelCostMapData } = useModelCostMap();
+  const { data: modelHubData } = useModelHub();
+
+  // Transform the model data
+  const getProviderFromModel = (model: string) => {
+    if (modelCostMapData !== null && modelCostMapData !== undefined) {
+      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+        return modelCostMapData[model]["litellm_provider"];
+      }
+    }
+    return "openai";
+  };
+
+  const transformedModelData = useMemo(() => {
+    if (!rawModelDataResponse?.data || rawModelDataResponse.data.length === 0) {
+      return null;
+    }
+    const transformed = transformModelData(rawModelDataResponse, getProviderFromModel);
+    return transformed.data[0] || null;
+  }, [rawModelDataResponse, modelCostMapData]);
+
+  // Keep modelData variable name for backwards compatibility
+  const modelData = transformedModelData;
+
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
-  const { data: modelsInfoData } = useModelsInfo(accessToken, userID, userRole);
-  console.log("modelsInfoData, ", modelsInfoData);
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
-  console.log("usingExistingCredential, ", usingExistingCredential);
-  console.log("modelData.litellm_params.litellm_credential_name, ", modelData?.litellm_params?.litellm_credential_name);
 
-  console.log("tagsList, ", modelData.litellm_params?.tags);
+  // Initialize localModelData from modelData when available
+  useEffect(() => {
+    if (modelData && !localModelData) {
+      let processedModelData = modelData;
+      if (!processedModelData.litellm_model_name) {
+        processedModelData = {
+          ...processedModelData,
+          litellm_model_name:
+            processedModelData?.litellm_params?.litellm_model_name ??
+            processedModelData?.litellm_params?.model ??
+            processedModelData?.model_info?.key ??
+            null,
+        };
+      }
+      setLocalModelData(processedModelData);
+
+      // Check if cache control is enabled
+      if (processedModelData?.litellm_params?.cache_control_injection_points) {
+        setShowCacheControl(true);
+      }
+    }
+  }, [modelData, localModelData]);
 
   useEffect(() => {
     const getExistingCredential = async () => {
-      console.log("accessToken, ", accessToken);
       if (!accessToken) return;
       if (usingExistingCredential) return;
       let existingCredentialResponse = await credentialGetCall(accessToken, null, modelId);
-      console.log("existingCredentialResponse, ", existingCredentialResponse);
       setExistingCredential({
         credential_name: existingCredentialResponse["credential_name"],
         credential_values: existingCredentialResponse["credential_values"],
@@ -110,8 +148,9 @@ export default function ModelInfoView({
 
     const getModelInfo = async () => {
       if (!accessToken) return;
+      // Only fetch if we don't have modelData yet
+      if (modelData) return;
       let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
-      console.log("modelInfoResponse, ", modelInfoResponse);
       let specificModelData = modelInfoResponse.data[0];
       if (specificModelData && !specificModelData.litellm_model_name) {
         specificModelData = {
@@ -159,7 +198,6 @@ export default function ModelInfoView({
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
-    console.log("values, ", values);
     if (!accessToken) return;
     let credentialItem = {
       credential_name: values.credential_name,
@@ -170,7 +208,6 @@ export default function ModelInfoView({
     };
     NotificationsManager.info("Storing credential..");
     let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
-    console.log("credentialResponse, ", credentialResponse);
     NotificationsManager.success("Credential stored successfully");
   };
 
@@ -178,8 +215,6 @@ export default function ModelInfoView({
     try {
       if (!accessToken) return;
       setIsSaving(true);
-
-      console.log("values.model_name, ", values.model_name);
 
       // Parse LiteLLM extra params from JSON text area
       let parsedExtraParams: Record<string, any> = {};
@@ -274,6 +309,19 @@ export default function ModelInfoView({
     }
   };
 
+  // Show loading state
+  if (isLoadingModel) {
+    return (
+      <div className="p-4">
+        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+          Back to Models
+        </TremorButton>
+        <Text>Loading...</Text>
+      </div>
+    );
+  }
+
+  // Show not found if model is not found
   if (!modelData) {
     return (
       <div className="p-4">
@@ -318,6 +366,7 @@ export default function ModelInfoView({
 
   const handleDelete = async () => {
     try {
+      setDeleteLoading(true);
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
       NotificationsManager.success("Model deleted successfully");
@@ -333,6 +382,9 @@ export default function ModelInfoView({
     } catch (error) {
       console.error("Error deleting the model:", error);
       NotificationsManager.fromBackend("Failed to delete model");
+    } finally {
+      setDeleteLoading(false);
+      setIsDeleteModalOpen(false);
     }
   };
 
@@ -369,11 +421,10 @@ export default function ModelInfoView({
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["model-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
           </div>
         </div>
@@ -484,10 +535,10 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -598,7 +649,7 @@ export default function ModelInfoView({
                               ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.input_cost_per_token
                                 ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4)
-                                : null}
+                                : "Not Set"}
                           </div>
                         )}
                       </div>
@@ -615,7 +666,7 @@ export default function ModelInfoView({
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.output_cost_per_token
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
-                                : null}
+                                : "Not Set"}
                           </div>
                         )}
                       </div>
@@ -891,27 +942,19 @@ export default function ModelInfoView({
                                 optionFilterProp="children"
                                 allowClear
                                 options={(() => {
-                                  const seen = new Set();
-                                  return modelsInfoData?.data
+                                  const wildcardProvider = modelData.litellm_model_name.split("/")[0];
+                                  return modelHubData?.data
                                     ?.filter((model: any) => {
-                                      const modelProvider = model.provider;
-                                      const wildcardProvider = modelData.litellm_model_name.split("/")[0];
+                                      // Filter by provider to match the wildcard provider
                                       return (
-                                        modelProvider === wildcardProvider &&
-                                        model.model_name !== modelData.litellm_model_name
+                                        model.providers?.includes(wildcardProvider) &&
+                                        model.model_group !== modelData.litellm_model_name
                                       );
                                     })
-                                    .filter((model: any) => {
-                                      if (seen.has(model.model_name)) {
-                                        return false;
-                                      }
-                                      seen.add(model.model_name);
-                                      return true;
-                                    })
                                     .map((model: any) => ({
-                                      value: model.model_name,
-                                      label: model.model_name,
-                                    }));
+                                      value: model.model_group,
+                                      label: model.model_group,
+                                    })) || [];
                                 })()}
                               />
                             </Form.Item>
@@ -1046,39 +1089,34 @@ export default function ModelInfoView({
         </TabPanels>
       </TabGroup>
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Model</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this model?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={handleDelete} className="ml-2" danger>
-                  Delete
-                </Button>
-                <Button onClick={() => setIsDeleteModalOpen(false)}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Model"
+        alertMessage="This action cannot be undone."
+        message="Are you sure you want to delete this model?"
+        resourceInformationTitle="Model Information"
+        resourceInformation={[
+          {
+            label: "Model Name",
+            value: modelData?.model_name || "Not Set",
+          },
+          {
+            label: "LiteLLM Model Name",
+            value: modelData?.litellm_model_name || "Not Set",
+          },
+          {
+            label: "Provider",
+            value: modelData?.provider || "Not Set",
+          },
+          {
+            label: "Created By",
+            value: modelData?.model_info?.created_by || "Not Set",
+          },
+        ]}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        onOk={handleDelete}
+        confirmLoading={deleteLoading}
+      />
 
       {isCredentialModalOpen && !usingExistingCredential ? (
         <ReuseCredentialsModal

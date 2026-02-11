@@ -3,15 +3,33 @@
 import os
 import traceback
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
-from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+from litellm.litellm_core_utils.core_helpers import (
+    safe_deep_copy,
+    reconstruct_model_name,
+    filter_exceptions_from_params,
+)
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.integrations.langfuse.langfuse_mock_client import (
+    create_mock_langfuse_client,
+    should_use_langfuse_mock,
+)
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -35,6 +53,41 @@ else:
     DynamicLoggingCache = Any
     StatefulTraceClient = Any
     Langfuse = Any
+
+
+def _extract_cache_read_input_tokens(usage_obj) -> int:
+    """
+    Extract cache_read_input_tokens from usage object.
+
+    Checks both:
+    1. Top-level cache_read_input_tokens (Anthropic format)
+    2. prompt_tokens_details.cached_tokens (Gemini, OpenAI format)
+
+    See: https://github.com/BerriAI/litellm/issues/18520
+
+    Args:
+        usage_obj: Usage object from LLM response
+
+    Returns:
+        int: Number of cached tokens read, defaults to 0
+    """
+    cache_read_input_tokens = usage_obj.get("cache_read_input_tokens") or 0
+
+    # Check prompt_tokens_details.cached_tokens (used by Gemini and other providers)
+    if hasattr(usage_obj, "prompt_tokens_details"):
+        prompt_tokens_details = getattr(usage_obj, "prompt_tokens_details", None)
+        if prompt_tokens_details is not None and hasattr(
+            prompt_tokens_details, "cached_tokens"
+        ):
+            cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
+            if (
+                cached_tokens is not None
+                and isinstance(cached_tokens, (int, float))
+                and cached_tokens > 0
+            ):
+                cache_read_input_tokens = cached_tokens
+
+    return cache_read_input_tokens
 
 
 class LangFuseLogger:
@@ -70,8 +123,14 @@ class LangFuseLogger:
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
             flush_interval
         )
-        http_client = _get_httpx_client()
-        self.langfuse_client = http_client.client
+        
+        if should_use_langfuse_mock():
+            self.langfuse_client = create_mock_langfuse_client()
+            self.is_mock_mode = True
+        else:
+            http_client = _get_httpx_client()
+            self.langfuse_client = http_client.client
+            self.is_mock_mode = False
 
         parameters = {
             "public_key": self.public_key,
@@ -90,11 +149,15 @@ class LangFuseLogger:
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
-        try:
-            project_id = self.Langfuse.client.projects.get().data[0].id
-            os.environ["LANGFUSE_PROJECT_ID"] = project_id
-        except Exception:
-            project_id = None
+        if self.is_mock_mode:
+            os.environ["LANGFUSE_PROJECT_ID"] = "mock-project-id"
+            verbose_logger.debug("Langfuse Mock: Using mock project ID")
+        else:
+            try:
+                project_id = self.Langfuse.client.projects.get().data[0].id
+                os.environ["LANGFUSE_PROJECT_ID"] = project_id
+            except Exception:
+                project_id = None
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
             upstream_langfuse_debug = (
@@ -437,12 +500,17 @@ class LangFuseLogger:
             )
         )
 
+        custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
+        model_name = reconstruct_model_name(
+            kwargs.get("model", ""), custom_llm_provider, metadata
+        )
+
         trace.generation(
             CreateGeneration(
                 name=metadata.get("generation_name", "litellm-completion"),
                 startTime=start_time,
                 endTime=end_time,
-                model=kwargs["model"],
+                model=model_name,
                 modelParameters=optional_params,
                 prompt=input,
                 completion=output,
@@ -472,7 +540,6 @@ class LangFuseLogger:
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
-            metadata = metadata or {}
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
                 kwargs.get("standard_logging_object", None),
@@ -539,28 +606,10 @@ class LangFuseLogger:
             trace_id = clean_metadata.pop("trace_id", None)
             # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
             # This allows standard trace_id to be used when provided in standard_logging_object
-            # However, we skip standard_logging_object.trace_id if it's a UUID (from litellm_trace_id default),
-            # as we want to fall back to litellm_call_id instead for better traceability.
-            # Note: Users can still explicitly set a UUID trace_id via metadata["trace_id"] (highest priority)
             if trace_id is None and standard_logging_object is not None:
-                standard_trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
-                # Only use standard_logging_object.trace_id if it's not a UUID
-                # UUIDs are 36 characters with hyphens in format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-                # We check for this specific pattern to avoid rejecting valid trace_ids that happen to have hyphens
-                # This primarily filters out default litellm_trace_id UUIDs, while still allowing user-provided
-                # trace_ids via metadata["trace_id"] (which is checked first and not affected by this logic)
-                if standard_trace_id is not None:
-                    # Check if it's a UUID: 36 chars, 4 hyphens, specific pattern
-                    is_uuid = (
-                        len(standard_trace_id) == 36
-                        and standard_trace_id.count("-") == 4
-                        and standard_trace_id[8] == "-"
-                        and standard_trace_id[13] == "-"
-                        and standard_trace_id[18] == "-"
-                        and standard_trace_id[23] == "-"
-                    )
-                    if not is_uuid:
-                        trace_id = standard_trace_id
+                trace_id = cast(
+                    Optional[str], standard_logging_object.get("trace_id")
+                )
             # Fallback to litellm_call_id if no trace_id found
             if trace_id is None:
                 trace_id = litellm_call_id
@@ -575,7 +624,9 @@ class LangFuseLogger:
             mask_output = clean_metadata.pop("mask_output", False)
             # Look for masking function in the dedicated location first (set by scrub_sensitive_keys_in_metadata)
             # Fall back to metadata for backwards compatibility
-            masking_function = litellm_params.get("_langfuse_masking_function") or clean_metadata.pop("langfuse_masking_function", None)
+            masking_function = litellm_params.get(
+                "_langfuse_masking_function"
+            ) or clean_metadata.pop("langfuse_masking_function", None)
 
             # Apply custom masking function if provided
             if masking_function is not None and callable(masking_function):
@@ -654,9 +705,10 @@ class LangFuseLogger:
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:
-                clean_metadata["hidden_params"] = standard_logging_object[
-                    "hidden_params"
-                ]
+                hidden_params = standard_logging_object.get("hidden_params", {})
+                clean_metadata["hidden_params"] = filter_exceptions_from_params(
+                    hidden_params
+                )
 
             if (
                 litellm.langfuse_default_tags is not None
@@ -735,8 +787,8 @@ class LangFuseLogger:
                     cache_creation_input_tokens = (
                         _usage_obj.get("cache_creation_input_tokens") or 0
                     )
-                    cache_read_input_tokens = (
-                        _usage_obj.get("cache_read_input_tokens") or 0
+                    cache_read_input_tokens = _extract_cache_read_input_tokens(
+                        _usage_obj
                     )
 
                     usage = {
@@ -776,12 +828,17 @@ class LangFuseLogger:
             if system_fingerprint is not None:
                 optional_params["system_fingerprint"] = system_fingerprint
 
+            custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
+            model_name = reconstruct_model_name(
+                kwargs.get("model", ""), custom_llm_provider, metadata
+            )
+
             generation_params = {
                 "name": generation_name,
                 "id": clean_metadata.pop("generation_id", generation_id),
                 "start_time": start_time,
                 "end_time": end_time,
-                "model": kwargs["model"],
+                "model": model_name,
                 "model_parameters": optional_params,
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
@@ -918,7 +975,9 @@ class LangFuseLogger:
         return Version(self.langfuse_sdk_version) >= Version("2.7.3")
 
     @staticmethod
-    def _apply_masking_function(data: Any, masking_function: Callable[[Any], Any]) -> Any:
+    def _apply_masking_function(
+        data: Any, masking_function: Callable[[Any], Any]
+    ) -> Any:
         """
         Apply a masking function to data, handling different data types.
 

@@ -9,7 +9,11 @@ import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -54,6 +58,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         self,
         headers: Optional[Dict[str, Any]] = None,
         api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -61,6 +66,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
         self.headers = headers or {}
+
+        # If api_key is provided, add it as x-api-key header
+        if api_key:
+            self.headers["x-api-key"] = api_key
+
         base_url = api_base or os.environ.get("GENERIC_GUARDRAIL_API_BASE")
 
         if not base_url:
@@ -143,6 +153,7 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         return result_metadata
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -178,6 +189,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools = inputs.get("tools")
         structured_messages = inputs.get("structured_messages")
         tool_calls = inputs.get("tool_calls")
+        model = inputs.get("model")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -208,6 +220,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
+            model=model,
         )
 
         # Prepare headers
@@ -217,9 +230,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         try:
             # Make the API request
+            # Use mode="json" to ensure all iterables are converted to lists
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.model_dump(),
+                json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
             )
 
@@ -241,7 +255,11 @@ class GenericGuardrailAPI(CustomGuardrail):
                 verbose_proxy_logger.warning(
                     "Generic Guardrail API blocked request: %s", error_message
                 )
-                raise Exception(f"Content blocked by guardrail: {error_message}")
+                raise GuardrailRaisedException(
+                    guardrail_name=GUARDRAIL_NAME,
+                    message=error_message,
+                    should_wrap_with_default_message=False,
+                )
 
             # Action is NONE or no modifications needed
             return_inputs = GenericGuardrailAPIInputs(texts=texts)
@@ -257,10 +275,10 @@ class GenericGuardrailAPI(CustomGuardrail):
                 return_inputs["tools"] = tools
             return return_inputs
 
+        except GuardrailRaisedException:
+            # Re-raise guardrail exceptions as-is
+            raise
         except Exception as e:
-            # Check if it's already an exception we raised
-            if "Content blocked by guardrail" in str(e):
-                raise
             verbose_proxy_logger.error(
                 "Generic Guardrail API: failed to make request: %s", str(e)
             )

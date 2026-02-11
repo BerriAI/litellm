@@ -73,7 +73,74 @@ def test_routing_strategy_init(model_list):
     from litellm.types.router import RoutingStrategy
 
     router = Router(model_list=model_list)
-    for strategy in RoutingStrategy._member_names_:
+    for strategy in RoutingStrategy:
+        router.routing_strategy_init(
+            routing_strategy=strategy, routing_strategy_args={}
+        )
+
+
+def test_routing_strategy_init_invalid_strategy(model_list):
+    """Test that invalid routing_strategy raises ValueError with helpful message.
+
+    See: https://github.com/BerriAI/litellm/issues/11330
+    Invalid strategies like 'simple' (without '-shuffle') should fail fast
+    with a clear error, not silently cause 'No deployments available' errors.
+    """
+    router = Router(model_list=model_list)
+
+    # Test common mistake: "simple" instead of "simple-shuffle"
+    with pytest.raises(ValueError) as exc_info:
+        router.routing_strategy_init(
+            routing_strategy="simple",
+            routing_strategy_args={}
+        )
+
+    # Verify error message is helpful
+    error_msg = str(exc_info.value)
+    assert "Invalid routing_strategy" in error_msg
+    assert "simple" in error_msg
+    assert "simple-shuffle" in error_msg  # Suggests the correct option
+    # Verify error message tells user WHERE to fix it
+    assert "config.yaml" in error_msg
+    assert "router_settings.routing_strategy" in error_msg
+    assert "Router SDK" in error_msg
+
+    # Test completely invalid strategy
+    with pytest.raises(ValueError) as exc_info:
+        router.routing_strategy_init(
+            routing_strategy="not-a-real-strategy",
+            routing_strategy_args={}
+        )
+    assert "Invalid routing_strategy" in str(exc_info.value)
+
+
+def test_routing_strategy_init_valid_string_strategies(model_list):
+    """Test that all valid string routing strategies work without error.
+
+    Valid strategies are derived from RoutingStrategy enum values plus 'simple-shuffle'.
+    """
+    from litellm.types.router import RoutingStrategy
+
+    router = Router(model_list=model_list)
+
+    # All strategies from enum + simple-shuffle (default, not in enum)
+    valid_strategies = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
+
+    for strategy in valid_strategies:
+        # Should not raise
+        router.routing_strategy_init(
+            routing_strategy=strategy, routing_strategy_args={}
+        )
+
+
+def test_routing_strategy_init_valid_enum_strategies(model_list):
+    """Test that RoutingStrategy enum values work without error."""
+    from litellm.types.router import RoutingStrategy
+
+    router = Router(model_list=model_list)
+
+    for strategy in RoutingStrategy:
+        # Should not raise when passing enum directly
         router.routing_strategy_init(
             routing_strategy=strategy, routing_strategy_args={}
         )
@@ -2102,3 +2169,32 @@ def test_resolve_model_name_from_model_id():
 
     result = router.resolve_model_name_from_model_id("gpt-3.5-turbo")
     assert result == "gpt-3.5-turbo"
+
+
+def test_get_valid_args():
+    """Test get_valid_args static method returns valid Router.__init__ arguments"""
+    # Call the static method
+    valid_args = Router.get_valid_args()
+    
+    # Verify it returns a list
+    assert isinstance(valid_args, list)
+    assert len(valid_args) > 0
+    
+    # Verify it contains expected Router.__init__ arguments
+    expected_args = [
+        "model_list",
+        "routing_strategy",
+        "cache_responses",
+        "num_retries",
+        "timeout",
+        "fallbacks",
+    ]
+    for arg in expected_args:
+        assert arg in valid_args, f"Expected argument '{arg}' not found in valid_args"
+    
+    # Verify "self" is not in the list (since it's removed)
+    assert "self" not in valid_args
+    
+    # Verify it contains keyword-only arguments too
+    # These are common Router.__init__ parameters
+    assert "assistants_config" in valid_args or "search_tools" in valid_args

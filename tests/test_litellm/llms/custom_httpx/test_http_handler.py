@@ -141,6 +141,83 @@ async def test_ssl_verification_with_aiohttp_transport():
 
 
 @pytest.mark.asyncio
+async def test_ssl_verification_with_shared_session():
+    """
+    Test that ssl_verify=False is respected even with shared sessions.
+
+    This was a bug where shared sessions bypassed SSL configuration because
+    _create_aiohttp_transport returned immediately without passing ssl_verify
+    to the LiteLLMAiohttpTransport constructor.
+
+    The fix stores ssl_verify in the transport and passes it per-request.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a shared session (simulating what happens in production)
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and ssl_verify=False
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=False,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL setting is stored in the transport for per-request use
+            assert transport._ssl_verify is False
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_ssl_context_with_shared_session():
+    """
+    Test that ssl_context is respected even with shared sessions.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a custom SSL context
+        custom_ssl_context = ssl.create_default_context()
+
+        # Create a shared session
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and custom ssl_context
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_context=custom_ssl_context,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL context is stored in the transport for per-request use
+            assert transport._ssl_verify is custom_ssl_context
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
 async def test_aiohttp_transport_trust_env_setting(monkeypatch):
     """Test that trust_env setting is properly configured in aiohttp transport"""
     # Test 1: Default trust_env behavior
@@ -471,3 +548,87 @@ def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, m
                     assert isinstance(ssl_context, ssl.SSLContext)
         finally:
             litellm.ssl_ecdh_curve = original_value
+
+
+def test_default_user_agent_is_litellm_version(monkeypatch):
+    from litellm._version import version
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    assert get_default_headers()["User-Agent"] == f"litellm/{version}"
+
+
+def test_user_agent_can_be_overridden_via_env_var(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    assert get_default_headers()["User-Agent"] == "Claude Code"
+
+
+def test_user_agent_env_var_can_be_empty_string(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "")
+
+    assert get_default_headers()["User-Agent"] == ""
+
+
+def test_user_agent_override_is_not_appended_to_default(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request(
+            "GET",
+            "https://example.com",
+            headers={"user-agent": "Claude Code"},
+        )
+
+        assert req.headers.get_list("User-Agent") == ["Claude Code"]
+    finally:
+        handler.close()
+
+
+def test_sync_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = AsyncHTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_httpx_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()

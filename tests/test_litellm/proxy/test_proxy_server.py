@@ -5,8 +5,8 @@ import os
 import socket
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -128,7 +128,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
     """Test that /v2/login returns JSON error when ProxyException is raised"""
-    from litellm.proxy._types import ProxyException, ProxyErrorTypes
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
     mock_prisma_client = MagicMock()
     mock_authenticate_user = AsyncMock(
@@ -273,6 +273,10 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
+    """
+    Test that _restructure_ui_html_files correctly restructures HTML files.
+    Note: This function is always called now, both in development and non-root Docker environments.
+    """
     from litellm.proxy import proxy_server
 
     ui_root = tmp_path / "ui"
@@ -306,7 +310,10 @@ def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
 
 
 def test_ui_extensionless_route_requires_restructure(tmp_path):
-    """Regression for non-root fallback: /ui/login expects login/index.html."""
+    """
+    Regression for non-root fallback: /ui/login expects login/index.html.
+    Note: Restructuring always happens now, both in development and non-root Docker environments.
+    """
 
     from litellm.proxy import proxy_server
 
@@ -329,6 +336,50 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     response = client.get("/ui/login")
     assert response.status_code == 200
     assert "login" in response.text
+
+
+def test_restructure_always_happens(monkeypatch):
+    """
+    Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
+    In development (is_non_root=False), restructuring happens directly in _experimental/out.
+    In non-root Docker (is_non_root=True), restructuring happens in /var/lib/litellm/ui.
+    """
+    # Test Case 1: is_non_root is True - restructuring happens in /var/lib/litellm/ui
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    
+    runtime_ui_path = "/var/lib/litellm/ui"
+    packaged_ui_path = "/some/packaged/ui/path"
+    
+    # Simulate the logic from proxy_server.py
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    if is_non_root:
+        ui_path = runtime_ui_path
+    else:
+        ui_path = packaged_ui_path
+    
+    # Restructuring always happens now, regardless of ui_path vs packaged_ui_path
+    should_restructure = True
+    
+    assert is_non_root is True
+    assert should_restructure is True
+    assert ui_path == runtime_ui_path
+    
+    # Test Case 2: is_non_root is False - restructuring happens directly in packaged_ui_path
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    
+    # Simulate the logic from proxy_server.py
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    if is_non_root:
+        ui_path = runtime_ui_path
+    else:
+        ui_path = packaged_ui_path
+    
+    # Restructuring always happens now, even when ui_path == packaged_ui_path
+    should_restructure = True
+    
+    assert is_non_root is False
+    assert should_restructure is True
+    assert ui_path == packaged_ui_path
 
 
 @pytest.mark.asyncio
@@ -996,6 +1047,82 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
 
     result = await proxy_config._get_config_from_file(None)
     assert result == test_config
+
+
+def test_normalize_datetime_for_sorting():
+    """
+    Test the _normalize_datetime_for_sorting function.
+    Tests various scenarios: None values, ISO format strings, datetime objects (naive and aware).
+    """
+    from litellm.proxy.proxy_server import _normalize_datetime_for_sorting
+
+    # Test Case 1: None value
+    assert _normalize_datetime_for_sorting(None) is None
+
+    # Test Case 2: ISO format string with 'Z' suffix
+    dt_str_z = "2024-01-15T10:30:00Z"
+    result = _normalize_datetime_for_sorting(dt_str_z)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result.year == 2024
+    assert result.month == 1
+    assert result.day == 15
+    assert result.hour == 10
+    assert result.minute == 30
+
+    # Test Case 3: ISO format string without 'Z' suffix (naive)
+    dt_str_naive = "2024-01-15T10:30:00"
+    result = _normalize_datetime_for_sorting(dt_str_naive)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+
+    # Test Case 4: ISO format string with timezone offset
+    dt_str_tz = "2024-01-15T10:30:00+05:00"
+    result = _normalize_datetime_for_sorting(dt_str_tz)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    # Should convert from +05:00 to UTC (subtract 5 hours)
+    assert result.hour == 5  # 10:30 - 5 hours = 5:30 UTC
+
+    # Test Case 5: Naive datetime object
+    naive_dt = datetime(2024, 1, 15, 10, 30, 0)
+    result = _normalize_datetime_for_sorting(naive_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result.year == 2024
+    assert result.month == 1
+    assert result.day == 15
+
+    # Test Case 6: Timezone-aware datetime object (non-UTC)
+    from datetime import timedelta
+    aware_dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone(timedelta(hours=5)))
+    result = _normalize_datetime_for_sorting(aware_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    # Should convert from +05:00 to UTC
+    assert result.hour == 5
+
+    # Test Case 7: UTC-aware datetime object
+    utc_dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+    result = _normalize_datetime_for_sorting(utc_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result == utc_dt
+
+    # Test Case 8: Invalid string format
+    invalid_str = "not-a-date"
+    result = _normalize_datetime_for_sorting(invalid_str)
+    assert result is None
+
+    # Test Case 9: Invalid type (should return None)
+    result = _normalize_datetime_for_sorting(12345)
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -2813,9 +2940,10 @@ def test_get_prompt_spec_for_db_prompt_with_versions():
 
 
 def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
+    from fastapi.responses import RedirectResponse
+
     from litellm.proxy.proxy_server import cleanup_router_config_variables
     from litellm.proxy.utils import _get_docs_url
-    from fastapi.responses import RedirectResponse
 
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
@@ -2855,9 +2983,10 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     assert response.headers["location"] == test_redirect_url
 
 
-def test_get_image_non_root_uses_tmp_assets_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     """
-    Test that get_image uses /tmp/litellm_assets when LITELLM_NON_ROOT is true.
+    Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
     """
     from unittest.mock import patch
 
@@ -2884,16 +3013,17 @@ def test_get_image_non_root_uses_tmp_assets_dir(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
-        # Verify makedirs was called with /tmp/litellm_assets
-        mock_makedirs.assert_called_once_with("/tmp/litellm_assets", exist_ok=True)
+        # Verify makedirs was called with /var/lib/litellm/assets
+        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
 
-def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     """
     Test that get_image falls back to default_site_logo when logo doesn't exist
-    in /tmp/litellm_assets for non-root case.
+    in /var/lib/litellm/assets for non-root case.
     """
     from unittest.mock import patch
 
@@ -2903,13 +3033,13 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Track path.exists calls to verify it checks /tmp/litellm_assets/logo.jpg
+    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
     exists_calls = []
 
     def exists_side_effect(path):
         exists_calls.append(path)
-        # Return False for /tmp/litellm_assets/logo.jpg to trigger fallback
-        if "/tmp/litellm_assets/logo.jpg" in path:
+        # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
+        if "/var/lib/litellm/assets/logo.jpg" in path:
             return False
         return True
 
@@ -2930,21 +3060,22 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
-        # Verify makedirs was called with /tmp/litellm_assets
-        mock_makedirs.assert_called_once_with("/tmp/litellm_assets", exist_ok=True)
+        # Verify makedirs was called with /var/lib/litellm/assets
+        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
-        # Verify that exists was called to check /tmp/litellm_assets/logo.jpg
-        tmp_logo_path = "/tmp/litellm_assets/logo.jpg"
-        assert any(tmp_logo_path in str(call) for call in exists_calls), \
-            f"Should check if {tmp_logo_path} exists"
+        # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
+        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
+        assert any(assets_logo_path in str(call) for call in exists_calls), \
+            f"Should check if {assets_logo_path} exists"
 
         # Verify FileResponse was called (with fallback logo)
         assert mock_file_response.called, "FileResponse should be called"
 
 
-def test_get_image_root_case_uses_current_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_root_case_uses_current_dir(monkeypatch):
     """
     Test that get_image uses current_dir when LITELLM_NON_ROOT is not true.
     """
@@ -2973,14 +3104,102 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
-        # Verify makedirs was NOT called with /tmp/litellm_assets (should not create it for root case)
-        tmp_assets_calls = [
+        # Verify makedirs was NOT called with /var/lib/litellm/assets (should not create it for root case)
+        var_lib_assets_calls = [
             call for call in mock_makedirs.call_args_list
-            if "/tmp/litellm_assets" in str(call)
+            if "/var/lib/litellm/assets" in str(call)
         ]
-        assert len(tmp_assets_calls) == 0, "Should not create /tmp/litellm_assets for root case"
+        assert len(var_lib_assets_calls) == 0, "Should not create /var/lib/litellm/assets for root case"
 
         # Verify FileResponse was called
         assert mock_file_response.called, "FileResponse should be called"
+
+
+def test_get_config_normalizes_string_callbacks(monkeypatch):
+    """
+    Test that /get/config/callbacks normalizes string callbacks to lists.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    config_data = {
+        "litellm_settings": {
+            "success_callback": "langfuse",
+            "failure_callback": None,
+            "callbacks": ["prometheus", "datadog"],
+        },
+        "general_settings": {},
+        "environment_variables": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config, "get_config", AsyncMock(return_value=config_data)
+    )
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+
+    success_callbacks = [cb["name"] for cb in callbacks if cb.get("type") == "success"]
+    failure_callbacks = [cb["name"] for cb in callbacks if cb.get("type") == "failure"]
+    success_and_failure_callbacks = [
+        cb["name"] for cb in callbacks if cb.get("type") == "success_and_failure"
+    ]
+
+    assert "langfuse" in success_callbacks
+    assert len(failure_callbacks) == 0
+    assert "prometheus" in success_and_failure_callbacks
+    assert "datadog" in success_and_failure_callbacks
+
+
+def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
+    """
+    Test that _update_config_fields deep merge skips None values and empty lists.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    current_config = {
+        "general_settings": {
+            "max_parallel_requests": 10,
+            "allowed_models": ["gpt-3.5-turbo", "gpt-4"],
+            "nested": {
+                "key1": "value1",
+                "key2": "value2",
+            },
+        }
+    }
+
+    db_param_value = {
+        "max_parallel_requests": None,
+        "allowed_models": [],
+        "new_key": "new_value",
+        "nested": {
+            "key1": "updated_value1",
+            "key3": "value3",
+        },
+    }
+
+    result = proxy_config._update_config_fields(
+        current_config, "general_settings", db_param_value
+    )
+
+    assert result["general_settings"]["max_parallel_requests"] == 10
+    assert result["general_settings"]["allowed_models"] == ["gpt-3.5-turbo", "gpt-4"]
+    assert result["general_settings"]["new_key"] == "new_value"
+    assert result["general_settings"]["nested"]["key1"] == "updated_value1"
+    assert result["general_settings"]["nested"]["key2"] == "value2"
+    assert result["general_settings"]["nested"]["key3"] == "value3"

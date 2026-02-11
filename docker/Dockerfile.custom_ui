@@ -5,7 +5,19 @@ FROM ghcr.io/berriai/litellm:litellm_fwd_server_root_path-dev
 WORKDIR /app
 
 # Install Node.js and npm (adjust version as needed)
-RUN apt-get update && apt-get install -y nodejs npm
+RUN apt-get update && apt-get install -y nodejs npm && \
+    npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
+    GLOBAL="$(npm root -g)" && \
+    find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    npm cache clean --force
 
 # Copy the UI source into the container
 COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
@@ -32,8 +44,9 @@ RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
 WORKDIR /app
 
 # Make sure your docker/entrypoint.sh is executable
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x docker/prod_entrypoint.sh
+# Convert Windows line endings to Unix for entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
+RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp

@@ -14,7 +14,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import { Button, Form, Input, Select, Divider, Tooltip } from "antd";
-import { InfoCircleOutlined, EyeInvisibleOutlined, StopOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, EyeInvisibleOutlined, StopOutlined, CodeOutlined } from "@ant-design/icons";
 import {
   getGuardrailInfo,
   updateGuardrailCall,
@@ -29,6 +29,7 @@ import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_f
 import ToolPermissionRulesEditor, {
   ToolPermissionConfig,
 } from "./tool_permission/ToolPermissionRulesEditor";
+import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -94,6 +95,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   };
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(emptyToolPermissionConfig);
   const [toolPermissionDirty, setToolPermissionDirty] = useState(false);
+  const [customCodeModalVisible, setCustomCodeModalVisible] = useState(false);
 
   // Content Filter data ref (managed by ContentFilterManager)
   const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[] }>({
@@ -271,22 +273,17 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       }
 
       // Only add Content Filter patterns if there are changes
-      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter") {
+      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter" && hasUnsavedContentFilterChanges) {
         const originalPatterns = guardrailData.litellm_params?.patterns || [];
         const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
 
         const formattedData = formatContentFilterDataForAPI(
-          contentFilterDataRef.current.patterns,
-          contentFilterDataRef.current.blockedWords,
+          contentFilterDataRef.current.patterns || [],
+          contentFilterDataRef.current.blockedWords || [],
         );
 
-        if (JSON.stringify(originalPatterns) !== JSON.stringify(formattedData.patterns)) {
-          updateData.litellm_params.patterns = formattedData.patterns;
-        }
-
-        if (JSON.stringify(originalBlockedWords) !== JSON.stringify(formattedData.blocked_words)) {
-          updateData.litellm_params.blocked_words = formattedData.blocked_words;
-        }
+        updateData.litellm_params.patterns = formattedData.patterns;
+        updateData.litellm_params.blocked_words = formattedData.blocked_words;
       }
 
       if (guardrailData.litellm_params?.guardrail === "tool_permission") {
@@ -357,6 +354,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
         console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
+          if (paramName === "patterns" || paramName === "blocked_words") {
+            return;
+          }
           // Check for both direct parameter name and nested optional_params object
           let paramValue = values[paramName];
           if (paramValue === undefined || paramValue === null || paramValue === "") {
@@ -554,6 +554,33 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               </Card>
             )}
 
+            {/* Custom Code Display */}
+            {guardrailData.litellm_params?.guardrail === "custom_code" && guardrailData.litellm_params?.custom_code && (
+              <Card className="mt-6">
+                <div className="flex justify-between items-center mb-4">
+                  <div className="flex items-center gap-2">
+                    <CodeOutlined className="text-blue-500" />
+                    <Text className="font-medium text-lg">Custom Code</Text>
+                  </div>
+                  {isAdmin && !isConfigGuardrail && (
+                    <TremorButton 
+                      size="xs"
+                      variant="secondary"
+                      icon={CodeOutlined}
+                      onClick={() => setCustomCodeModalVisible(true)}
+                    >
+                      Edit Code
+                    </TremorButton>
+                  )}
+                </div>
+                <div className="relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e]">
+                  <pre className="p-4 text-sm text-gray-200 overflow-x-auto" style={{ fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace" }}>
+                    <code>{guardrailData.litellm_params.custom_code}</code>
+                  </pre>
+                </div>
+              </Card>
+            )}
+
             {/* Content Filter Configuration Display */}
             <ContentFilterManager
               guardrailData={guardrailData}
@@ -575,7 +602,16 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </Tooltip>
                   )}
                   {!isEditing && !isConfigGuardrail && (
-                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                    guardrailData.litellm_params?.guardrail === "custom_code" ? (
+                      <TremorButton 
+                        icon={CodeOutlined}
+                        onClick={() => setCustomCodeModalVisible(true)}
+                      >
+                        Edit Code
+                      </TremorButton>
+                    ) : (
+                      <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                    )
                   )}
                 </div>
 
@@ -759,6 +795,22 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
           )}
         </TabPanels>
       </TabGroup>
+
+      {/* Custom Code Editor Modal */}
+      <CustomCodeModal
+        visible={customCodeModalVisible}
+        onClose={() => setCustomCodeModalVisible(false)}
+        onSuccess={() => {
+          setCustomCodeModalVisible(false);
+          fetchGuardrailInfo();
+        }}
+        accessToken={accessToken}
+        editData={guardrailData ? {
+          guardrail_id: guardrailData.guardrail_id,
+          guardrail_name: guardrailData.guardrail_name,
+          litellm_params: guardrailData.litellm_params,
+        } as EditGuardrailData : null}
+      />
     </div>
   );
 };

@@ -197,3 +197,123 @@ class TestOCIGetCompleteUrl:
 
         assert "eu-frankfurt-1" in url
         assert "inference.generativeai" in url
+
+
+class TestOCIImageUrlTransformation:
+    """Tests for OCI image_url format handling in multimodal messages.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/18270
+    Fixes: https://github.com/BerriAI/litellm/issues/19589
+    """
+
+    def test_image_url_as_string(self):
+        """Test that image_url as a plain string works."""
+        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": "https://example.com/image.png"},
+                ],
+            }
+        ]
+
+        result = adapt_messages_to_generic_oci_standard(messages)
+
+        assert len(result) == 1
+        assert result[0].role == "USER"
+        assert len(result[0].content) == 2
+        # imageUrl is now an OCIImageUrl object with a 'url' property
+        assert result[0].content[1].imageUrl.url == "https://example.com/image.png"
+
+    def test_image_url_as_openai_object(self):
+        """Test that image_url as OpenAI-style object {"url": "..."} works."""
+        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                ],
+            }
+        ]
+
+        result = adapt_messages_to_generic_oci_standard(messages)
+
+        assert len(result) == 1
+        assert result[0].role == "USER"
+        assert len(result[0].content) == 2
+        # imageUrl is now an OCIImageUrl object with a 'url' property
+        assert result[0].content[1].imageUrl.url == "https://example.com/image.png"
+
+    def test_image_url_serializes_as_object(self):
+        """Test that imageUrl serializes as {"url": "..."} for OCI API.
+
+        Fixes: https://github.com/BerriAI/litellm/issues/19589
+        OCI expects imageUrl to be an object with a 'url' property, not a plain string.
+        """
+        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,ABC123"}},
+                ],
+            }
+        ]
+
+        result = adapt_messages_to_generic_oci_standard(messages)
+        image_part = result[0].content[1]
+
+        # Serialize as OCI would receive it (with exclude_none=True)
+        serialized = image_part.model_dump(exclude_none=True)
+
+        # Verify the structure matches OCI's expected format
+        assert serialized == {
+            "type": "IMAGE",
+            "imageUrl": {"url": "data:image/png;base64,ABC123"}
+        }
+
+    def test_image_url_invalid_type_raises_error(self):
+        """Test that invalid image_url type raises an error."""
+        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": 12345},  # Invalid type
+                ],
+            }
+        ]
+
+        with pytest.raises(Exception) as exc_info:
+            adapt_messages_to_generic_oci_standard(messages)
+
+        assert "image_url" in str(exc_info.value)
+
+    def test_image_url_object_missing_url_raises_error(self):
+        """Test that object without 'url' property raises an error."""
+        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": {"detail": "high"}},  # Missing 'url'
+                ],
+            }
+        ]
+
+        with pytest.raises(Exception) as exc_info:
+            adapt_messages_to_generic_oci_standard(messages)
+
+        assert "image_url" in str(exc_info.value)

@@ -17,9 +17,14 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 ## Overview
 | Feature | Description |
 |---------|-------------|
-| MCP Operations | • List Tools<br/>• Call Tools |
+| MCP Operations | • List Tools<br/>• Call Tools <br/>• Prompts <br/>• Resources |
 | Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | • By Key<br/>• By Team<br/>• By Organization |
+
+:::caution MCP protocol update
+Starting in LiteLLM v1.80.18, the LiteLLM MCP protocol version is `2025-11-25`.<br/> 
+LiteLLM namespaces multiple MCP servers by prefixing each tool name with its MCP server name, so newly created servers now must use names that comply with SEP-986—noncompliant names cannot be added anymore. Existing servers that still violate SEP-986 only emit warnings today, but future MCP-side rollouts may block those names entirely, so we recommend updating any legacy server names proactively before MCP enforcement makes them unusable.
+:::
 
 ## Adding your MCP
 
@@ -59,6 +64,8 @@ model_list:
 **See all available object types:** [Config Settings - supported_db_objects](./proxy/config_settings.md#general_settings---reference)
 
 If `supported_db_objects` is not set, all object types are loaded from the database (default behavior).
+
+For diagnosing connectivity problems after setup, see the [MCP Troubleshooting Guide](./mcp_troubleshoot.md).
 
 <Tabs>
 <TabItem value="ui" label="LiteLLM UI">
@@ -108,6 +115,22 @@ For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport t
 />
 
 <br/>
+<br/>
+
+### OAuth Configuration & Overrides
+
+LiteLLM attempts [OAuth 2.0 Authorization Server Discovery](https://datatracker.ietf.org/doc/html/rfc8414) by default. When you create an MCP server in the UI and set `Authentication: OAuth`, LiteLLM will locate the provider metadata, dynamically register a client, and perform PKCE-based authorization without you providing any additional details.
+
+**Customize the OAuth flow when needed:**
+
+<Image 
+  img={require('../img/mcp_oauth.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+- **Provide explicit client credentials** – If the MCP provider does not offer dynamic client registration or you prefer to manage the client yourself, fill in `client_id`, `client_secret`, and the desired `scopes`.
+- **Override discovery URLs** – In some environments, LiteLLM might not be able to reach the provider's metadata endpoints. Use the optional `authorization_url`, `token_url`, and `registration_url` fields to point LiteLLM directly to the correct endpoints.
+
 <br/>
 
 ### Static Headers
@@ -182,6 +205,7 @@ mcp_servers:
   - `http` - Streamable HTTP transport
   - `stdio` - Standard Input/Output transport
 - **Command**: The command to execute for stdio transport (required for stdio)
+- **allow_all_keys**: Set to `true` to make the server available to every LiteLLM API key, even if the key/team doesn't list the server in its MCP permissions.
 - **Args**: Array of arguments to pass to the command (optional for stdio)
 - **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
@@ -308,6 +332,7 @@ litellm_settings:
 
 </TabItem>
 </Tabs>
+
 
 ## Converting OpenAPI Specs to MCP Servers
 
@@ -481,11 +506,18 @@ Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
 - **Operation IDs**: Each operation should have a unique `operationId` (this becomes the tool name)
 - **Parameters**: Request parameters should be properly documented with types and descriptions
 
-## MCP Oauth
+## MCP OAuth
+
+LiteLLM supports OAuth 2.0 for MCP servers -- both interactive (PKCE) flows for user-facing clients and machine-to-machine (M2M) `client_credentials` for backend services.
+
+See the **[MCP OAuth guide](./mcp_oauth.md)** for setup instructions, sequence diagrams, and a test server.
+
+<details>
+<summary>Detailed OAuth reference (click to expand)</summary>
 
 LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
 
-This configuration is currently available on the config.yaml, with UI support coming soon.
+You can configure this either in `config.yaml` or directly from the LiteLLM UI (MCP Servers → Authentication → OAuth).
 
 ```yaml
 mcp_servers:
@@ -562,6 +594,8 @@ sequenceDiagram
 6. **MCP Invocation**: With a valid token, the client sends the MCP JSON-RPC request (plus LiteLLM API key) to LiteLLM, which forwards it to the MCP server and relays the tool response.
 
 See the official [MCP Authorization Flow](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-flow-steps) for additional reference.
+
+</details>
 
 
 ## Forwarding Custom Headers to MCP Servers
@@ -746,8 +780,33 @@ curl --location 'http://localhost:4000/github_mcp/mcp' \
 3. **Header Forwarding**: LiteLLM automatically forwards matching headers to the backend MCP server
 4. **Authentication**: The backend MCP server receives both the configured auth headers and the custom headers
 
----
 
+### Passing Request Headers to STDIO env Vars
+
+If your stdio MCP server needs per-request credentials, you can map HTTP headers from the client request directly into the environment for the launched stdio process. Reference the header name in the env value using the `${X-HEADER_NAME}` syntax. LiteLLM will read that header from the incoming request and set the env var before starting the command.
+
+```json title="Forward X-GITHUB_PERSONAL_ACCESS_TOKEN header to stdio env" showLineNumbers
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${X-GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+In this example, when a client makes a request with the `X-GITHUB_PERSONAL_ACCESS_TOKEN` header, the proxy forwards that value into the stdio process as the `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable.
 
 ## Using your MCP with client side credentials
 
@@ -1431,3 +1490,17 @@ async with stdio_client(server_params) as (read, write):
 
 </TabItem>
 </Tabs>
+
+## FAQ
+
+**Q: How do I use OAuth2 client_credentials (machine-to-machine) with MCP servers behind LiteLLM?**
+
+LiteLLM supports automatic token management for the `client_credentials` grant. Configure `client_id`, `client_secret`, and `token_url` on your MCP server and LiteLLM will fetch, cache, and refresh tokens automatically. See the [MCP OAuth M2M guide](./mcp_oauth.md#machine-to-machine-m2m-auth) for setup instructions.
+
+**Q: When I fetch an OAuth token from the LiteLLM UI, where is it stored?**
+
+The UI keeps only transient state in `sessionStorage` so the OAuth redirect flow can finish; the token is not persisted in the server or database.
+
+**Q: I'm seeing MCP connection errors—what should I check?**
+
+Walk through the [MCP Troubleshooting Guide](./mcp_troubleshoot.md) for step-by-step isolation (Client → LiteLLM vs. LiteLLM → MCP), log examples, and verification methods like MCP Inspector and `curl`.

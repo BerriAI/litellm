@@ -55,11 +55,12 @@ class TestAzureAnthropicMessagesConfig:
             assert isinstance(call_args[1]["litellm_params"], GenericLiteLLMParams)
             assert call_args[1]["litellm_params"].api_key == "test-api-key"
             assert "anthropic-version" in result
-            # api-key header is preserved as-is (no conversion to x-api-key)
-            assert "api-key" in result
+            assert "x-api-key" in result
+            assert result["x-api-key"] == "test-api-key"
+            assert "api-key" not in result
 
-    def test_validate_anthropic_messages_environment_preserves_api_key_header(self):
-        """Test that api-key header is preserved as-is (Azure handles the header internally)"""
+    def test_validate_anthropic_messages_environment_converts_api_key_to_x_api_key(self):
+        """Test that api-key header is converted to x-api-key"""
         config = AzureAnthropicMessagesConfig()
         headers = {}
         model = "claude-sonnet-4-5"
@@ -79,9 +80,10 @@ class TestAzureAnthropicMessagesConfig:
                 litellm_params=litellm_params,
             )
 
-            # Verify api-key header is preserved as-is
-            assert "api-key" in result
-            assert result["api-key"] == "test-api-key"
+            # Verify api-key was converted to x-api-key
+            assert "x-api-key" in result
+            assert result["x-api-key"] == "test-api-key"
+            assert "api-key" not in result
 
     def test_validate_anthropic_messages_environment_sets_headers(self):
         """Test that required headers are set"""
@@ -108,8 +110,7 @@ class TestAzureAnthropicMessagesConfig:
             assert result["anthropic-version"] == "2023-06-01"
             assert "content-type" in result
             assert result["content-type"] == "application/json"
-            # api-key header is preserved as-is
-            assert "api-key" in result
+            assert "x-api-key" in result
 
     def test_get_complete_url_with_base_url(self):
         """Test get_complete_url with base URL"""

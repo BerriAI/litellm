@@ -501,6 +501,88 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 raise e
 
+    async def _call_agentic_completion_hooks_openai(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        optional_params: Dict,
+        logging_obj: LiteLLMLoggingObj,
+        stream: bool,
+        litellm_params: Dict,
+    ) -> Optional[Any]:
+        """
+        Call agentic completion hooks for all custom loggers (OpenAI Chat Completions API).
+
+        1. Call async_should_run_chat_completion_agentic_loop to check if agentic loop is needed
+        2. If yes, call async_run_chat_completion_agentic_loop to execute the loop
+
+        Returns the response from agentic loop, or None if no hook runs.
+        """
+        from litellm._logging import verbose_logger
+        from litellm.integrations.custom_logger import CustomLogger
+
+        callbacks = litellm.callbacks + (
+            logging_obj.dynamic_success_callbacks or []
+        )
+        # Avoid logging full callback objects to prevent leaking sensitive data
+        verbose_logger.debug(
+            "LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks)
+        )
+        tools = optional_params.get("tools", [])
+        # Avoid logging full tools payloads; they may contain sensitive parameters
+        verbose_logger.debug(
+            "LiteLLM.AgenticHooks: tools_count=%s", len(tools) if isinstance(tools, list) else 1 if tools else 0
+        )
+        # Get custom_llm_provider from litellm_params
+        custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    # Check if the callback has the chat completion agentic loop methods
+                    if not hasattr(callback, 'async_should_run_chat_completion_agentic_loop'):
+                        continue
+                        
+                    # First: Check if agentic loop should run (using chat completion method)
+                    should_run, tool_calls = (
+                        await callback.async_should_run_chat_completion_agentic_loop(
+                            response=response,
+                            model=model,
+                            messages=messages,
+                            tools=tools,
+                            stream=stream,
+                            custom_llm_provider=custom_llm_provider,
+                            kwargs=litellm_params,
+                        )
+                    )
+
+                    if should_run:
+                        # Second: Execute agentic loop
+                        kwargs_with_provider = litellm_params.copy() if litellm_params else {}
+                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                        
+                        # For OpenAI Chat Completions, use the chat completion agentic loop method
+                        agentic_response = await callback.async_run_chat_completion_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            optional_params=optional_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        )
+                        # First hook that runs agentic loop wins
+                        return agentic_response
+
+            except Exception as e:
+                verbose_logger.exception(
+                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: {str(e)}"
+                )
+
+        return None
+
     def mock_streaming(
         self,
         response: ModelResponse,
@@ -555,9 +637,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             provider_config: Optional[BaseConfig] = None
 
             if custom_llm_provider is not None and model is not None:
-                provider_config = ProviderConfigManager.get_provider_chat_config(
-                    model=model, provider=LlmProviders(custom_llm_provider)
-                )
+                try:
+                    provider_config = ProviderConfigManager.get_provider_chat_config(
+                        model=model, provider=LlmProviders(custom_llm_provider)
+                    )
+                except ValueError:
+                    # JSON-configured providers may not be in LlmProviders enum
+                    provider_config = None
 
             if provider_config is None:
                 provider_config = OpenAIConfig()
@@ -840,7 +926,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     logging_obj=logging_obj,
                 )
                 stringified_response = response.model_dump()
-
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
@@ -854,6 +939,20 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     hidden_params={"headers": headers},
                     _response_headers=headers,
                 )
+
+                # Call agentic completion hooks (e.g., for websearch_interception)
+                agentic_response = await self._call_agentic_completion_hooks_openai(
+                    response=final_response_obj,
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    logging_obj=logging_obj,
+                    stream=False,
+                    litellm_params=litellm_params,
+                )
+                
+                if agentic_response is not None:
+                    final_response_obj = agentic_response
 
                 if fake_stream is True:
                     return self.mock_streaming(
@@ -1919,10 +2018,10 @@ class OpenAIBatchesAPI(BaseLLM):
         self,
         cancel_batch_data: CancelBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         verbose_logger.debug("async cancelling batch, args= %s", cancel_batch_data)
         response = await openai_client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def cancel_batch(
         self,
@@ -1958,8 +2057,13 @@ class OpenAIBatchesAPI(BaseLLM):
                 cancel_batch_data=cancel_batch_data, openai_client=openai_client
             )
 
+        # At this point, openai_client is guaranteed to be a sync OpenAI client
+        if not isinstance(openai_client, OpenAI):
+            raise ValueError(
+                "OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client."
+            )
         response = openai_client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     async def alist_batches(
         self,

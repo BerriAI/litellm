@@ -269,6 +269,25 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
+            elif isinstance(callback, str) and callback == "websearch_interception":
+                from litellm.integrations.websearch_interception.handler import (
+                    WebSearchInterceptionLogger,
+                )
+
+                websearch_interception_obj = (
+                    WebSearchInterceptionLogger.initialize_from_proxy_config(
+                        litellm_settings=litellm_settings,
+                        callback_specific_params=callback_specific_params,
+                    )
+                )
+                imported_list.append(websearch_interception_obj)
+            elif isinstance(callback, str) and callback == "datadog_cost_management":
+                from litellm.integrations.datadog.datadog_cost_management import (
+                    DatadogCostManagementLogger,
+                )
+
+                datadog_cost_management_obj = DatadogCostManagementLogger()
+                imported_list.append(datadog_cost_management_obj)
             elif isinstance(callback, CustomLogger):
                 imported_list.append(callback)
             else:
@@ -343,17 +362,17 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
     remaining_requests = _metadata.get(remaining_requests_variable_name, None)
     if remaining_requests:
-        headers[f"x-litellm-key-remaining-requests-{h11_model_group_name}"] = (
-            remaining_requests
-        )
+        headers[
+            f"x-litellm-key-remaining-requests-{h11_model_group_name}"
+        ] = remaining_requests
 
     # Remaining Tokens
     remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
     remaining_tokens = _metadata.get(remaining_tokens_variable_name, None)
     if remaining_tokens:
-        headers[f"x-litellm-key-remaining-tokens-{h11_model_group_name}"] = (
-            remaining_tokens
-        )
+        headers[
+            f"x-litellm-key-remaining-tokens-{h11_model_group_name}"
+        ] = remaining_tokens
 
     return headers
 
@@ -369,6 +388,19 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
         headers["x-litellm-applied-guardrails"] = ",".join(
             _metadata["applied_guardrails"]
         )
+
+    if "applied_policies" in _metadata:
+        headers["x-litellm-applied-policies"] = ",".join(
+            _metadata["applied_policies"]
+        )
+
+    if "policy_sources" in _metadata:
+        sources = _metadata["policy_sources"]
+        if isinstance(sources, dict) and sources:
+            # Use ';' as delimiter — matched_via reasons may contain commas
+            headers["x-litellm-policy-sources"] = "; ".join(
+                f"{name}={reason}" for name, reason in sources.items()
+            )
 
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
@@ -396,15 +428,57 @@ def add_guardrail_to_applied_guardrails_header(
     request_data["metadata"] = _metadata
 
 
+def add_policy_to_applied_policies_header(
+    request_data: Dict, policy_name: Optional[str]
+):
+    """
+    Add a policy name to the applied_policies list in request metadata.
+
+    This is used to track which policies were applied to a request,
+    similar to how applied_guardrails tracks guardrails.
+    """
+    if policy_name is None:
+        return
+    _metadata = request_data.get("metadata", None) or {}
+    if "applied_policies" in _metadata:
+        if policy_name not in _metadata["applied_policies"]:
+            _metadata["applied_policies"].append(policy_name)
+    else:
+        _metadata["applied_policies"] = [policy_name]
+    # Ensure metadata is set back to request_data (important when metadata didn't exist)
+    request_data["metadata"] = _metadata
+
+
+def add_policy_sources_to_metadata(
+    request_data: Dict, policy_sources: Dict[str, str]
+):
+    """
+    Store policy match reasons in metadata for x-litellm-policy-sources header.
+
+    Args:
+        request_data: The request data dict
+        policy_sources: Map of policy_name -> matched_via reason
+    """
+    if not policy_sources:
+        return
+    _metadata = request_data.get("metadata", None) or {}
+    existing = _metadata.get("policy_sources", {})
+    if not isinstance(existing, dict):
+        existing = {}
+    existing.update(policy_sources)
+    _metadata["policy_sources"] = existing
+    request_data["metadata"] = _metadata
+
+
 def add_guardrail_response_to_standard_logging_object(
     litellm_logging_obj: Optional["LiteLLMLogging"],
     guardrail_response: StandardLoggingGuardrailInformation,
 ):
     if litellm_logging_obj is None:
         return
-    standard_logging_object: Optional[StandardLoggingPayload] = (
-        litellm_logging_obj.model_call_details.get("standard_logging_object")
-    )
+    standard_logging_object: Optional[
+        StandardLoggingPayload
+    ] = litellm_logging_obj.model_call_details.get("standard_logging_object")
     if standard_logging_object is None:
         return
     guardrail_information = standard_logging_object.get("guardrail_information", [])
@@ -433,7 +507,9 @@ def get_metadata_variable_name_from_kwargs(
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
 
-def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+def process_callback(
+    _callback: str, callback_type: str, environment_variables: dict
+) -> dict:
     """Process a single callback and return its data with environment variables"""
     env_vars = CustomLogger.get_callback_env_vars(_callback)
 
@@ -445,11 +521,9 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
         else:
             env_vars_dict[_var] = env_variable
 
-    return {
-        "name": _callback,
-        "variables": env_vars_dict,
-        "type": callback_type
-    }
+    return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
+
+
 def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []

@@ -114,6 +114,189 @@ Set `JWT_PUBLIC_KEY_URL` in your environment to a comma-separated list of URLs f
 export JWT_PUBLIC_KEY_URL="https://demo.duendesoftware.com/.well-known/openid-configuration/jwks,https://accounts.google.com/.well-known/openid-configuration/jwks"
 ```
 
+### Kubernetes ServiceAccount Authentication
+
+Use Kubernetes ServiceAccount tokens to authenticate workloads running in your cluster. This is useful when you want pods to authenticate to LiteLLM using their native Kubernetes identity.
+
+#### Prerequisites
+
+1. Your Kubernetes cluster must have ServiceAccount token projection enabled (default in Kubernetes 1.20+)
+2. Your cluster's OIDC issuer must be accessible (for EKS, GKE, AKS this is automatic)
+
+#### Step 1: Configure the OIDC Discovery URL
+
+Set `JWT_PUBLIC_KEY_URL` to your cluster's OIDC discovery endpoint:
+
+<Tabs>
+<TabItem value="eks" label="Amazon EKS">
+
+```bash
+# Get your EKS OIDC issuer URL
+aws eks describe-cluster --name <cluster-name> --query "cluster.identity.oidc.issuer" --output text
+
+# Set the JWKS URL (append /keys to the issuer URL)
+export JWT_PUBLIC_KEY_URL="https://oidc.eks.<region>.amazonaws.com/id/<id>/keys"
+```
+
+</TabItem>
+<TabItem value="gke" label="Google GKE">
+
+```bash
+# GKE uses Google's OIDC provider
+export JWT_PUBLIC_KEY_URL="https://container.googleapis.com/v1/projects/<project>/locations/<location>/clusters/<cluster>/jwks"
+```
+
+</TabItem>
+<TabItem value="aks" label="Azure AKS">
+
+```bash
+# Get your AKS OIDC issuer URL
+az aks show --name <cluster-name> --resource-group <resource-group> --query "oidcIssuerProfile.issuerUrl" -o tsv
+
+# Set the JWKS URL
+export JWT_PUBLIC_KEY_URL="<issuer-url>/openid/v1/jwks"
+```
+
+</TabItem>
+<TabItem value="self-managed" label="Self-Managed">
+
+```bash
+# For self-managed clusters, check your API server's --service-account-issuer flag
+# The JWKS endpoint is typically at:
+export JWT_PUBLIC_KEY_URL="https://<api-server>/openid/v1/jwks"
+```
+
+</TabItem>
+</Tabs>
+
+#### Step 2: Configure LiteLLM
+
+Configure LiteLLM to extract identity information from Kubernetes ServiceAccount tokens:
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:  
+    # Use namespace as team identifier (resolves via team_alias in DB)
+    team_alias_jwt_field: "kubernetes\.io.namespace"
+```
+
+#### Step 3: Create ServiceAccount and Configure Pod
+
+Create a ServiceAccount with an associated secret and configure your pod to use the token:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: my-llm-client
+  namespace: my-app
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-llm-client-token
+  namespace: my-app
+  annotations:
+    kubernetes.io/service-account.name: my-llm-client
+type: kubernetes.io/service-account-token
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: llm-client-pod
+  namespace: my-app
+spec:
+  serviceAccountName: my-llm-client
+  containers:
+  - name: app
+    image: my-app:latest
+    env:
+    - name: LITELLM_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: my-llm-client-token
+          key: token
+```
+
+Set the expected audience in LiteLLM:
+
+```bash
+export JWT_AUDIENCE="https://kubernetes.default.svc"
+```
+
+#### Step 4: Create Team for Namespace
+
+Create a team in LiteLLM that matches the namespace (using `team_alias`):
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-d '{
+    "team_alias": "my-app",
+    "team_id": "my-app",
+    "models": ["gpt-4", "claude-sonnet-4-20250514"]
+}'
+```
+
+#### Step 5: Use the Token
+
+From within the pod, the token is available in the `LITELLM_TOKEN` environment variable:
+
+```bash
+# Make a request to LiteLLM using the env var
+curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H "Authorization: Bearer $LITELLM_TOKEN" \
+-d '{
+  "model": "gpt-4",
+  "messages": [{"role": "user", "content": "Hello!"}]
+}'
+```
+
+#### Example: ServiceAccount Token Structure
+
+A Kubernetes ServiceAccount token looks like this:
+
+```json
+{
+  "aud": ["litellm-proxy"],
+  "exp": 1234567890,
+  "iat": 1234567890,
+  "iss": "https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE",
+  "kubernetes.io": {
+    "namespace": "my-app",
+    "pod": {
+      "name": "llm-client-pod",
+      "uid": "pod-uid"
+    },
+    "serviceaccount": {
+      "name": "my-llm-client",
+      "uid": "sa-uid"
+    }
+  },
+  "nbf": 1234567890,
+  "sub": "system:serviceaccount:my-app:my-llm-client"
+}
+```
+
+#### Advanced: Map Namespace to Team Using Name Resolution
+
+Use the `team_alias_jwt_field` to automatically resolve namespaces to teams:
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    # Map the namespace to team_alias in the database
+    team_alias_jwt_field: "kubernetes\.io.namespace"
+    user_id_upsert: true
+```
+
+This way, pods in namespace `production` automatically get associated with the team that has `team_alias: production`.
+
 ### Set Accepted JWT Scope Names 
 
 Change the string in JWT 'scopes', that litellm evaluates to see if a user has admin access.
@@ -182,6 +365,62 @@ litellm_jwtauth:
 ```
 
 Now litellm will automatically update the spend for the user/team/org in the db for each call. 
+
+### Resolve by Name (Alias) Instead of ID
+
+Sometimes your JWT token contains human-readable names instead of database IDs. LiteLLM can resolve these names to IDs by looking them up in the database.
+
+**Use Case:** Your IDP provides team/org names in the JWT, but LiteLLM needs the actual database IDs for spend tracking and access control.
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    # Name-based fields (resolved via database lookup)
+    team_alias_jwt_field: "team_alias"       # Resolves team by team_alias in DB
+    org_alias_jwt_field: "org_alias"         # Resolves org by organization_alias in DB
+```
+
+**Expected JWT:**
+
+```json
+{
+  "sub": "user-123",
+  "team_alias": "engineering-team",
+  "org_alias": "acme-corp"
+}
+```
+
+**How It Works:**
+
+1. LiteLLM extracts the name from the configured JWT field
+2. Looks up the entity in the database by its alias field:
+   - Teams: `team_alias` column in `LiteLLM_TeamTable`
+   - Organizations: `organization_alias` column in `LiteLLM_OrganizationTable`
+3. Uses the resolved ID for spend tracking and access control
+
+**Precedence:** ID fields always take precedence over name fields. If both `team_id_jwt_field` and `team_alias_jwt_field` are configured and both values exist in the JWT, the ID will be used.
+
+```yaml
+# Example: ID takes precedence
+litellm_jwtauth:
+  team_id_jwt_field: "team_id"        # Used if present in JWT
+  team_alias_jwt_field: "team_alias"   # Fallback if team_id not present
+```
+
+**Nested Fields:** Name fields also support dot notation for nested claims:
+
+```yaml
+litellm_jwtauth:
+  team_alias_jwt_field: "organization.team.name"
+  org_alias_jwt_field: "company.name"
+```
+
+**Important Notes:**
+- The entity (team/org) must already exist in the database with the matching alias
+- Aliases should be unique - if multiple entities share the same alias, an error will be returned
+- Name resolution adds a database lookup, so using IDs directly is slightly more performant
 
 ### JWT Scopes
 

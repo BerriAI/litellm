@@ -52,6 +52,7 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
         value={value}
         loading={loading}
         className={className}
+        allowClear
         options={guardrails.map((guardrail) => {
           console.log("Mapping guardrail:", guardrail);
           return {

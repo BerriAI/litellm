@@ -83,8 +83,13 @@ class OpenAIContainerConfig(BaseContainerConfig):
     ) -> str:
         """Get the complete URL for OpenAI container API.
         """
-        if api_base is None:
-            api_base = "https://api.openai.com/v1"
+        api_base = (
+            api_base
+            or litellm.api_base
+            or get_secret_str("OPENAI_BASE_URL")
+            or get_secret_str("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
 
         return f"{api_base.rstrip('/')}/containers"
 

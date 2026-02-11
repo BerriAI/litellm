@@ -42,6 +42,7 @@ from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -1186,114 +1187,130 @@ class DBSpendUpdateWriter:
                         )
                         break
 
-                    async with prisma_client.db.batch_() as batcher:
-                        for _, transaction in transactions_to_process.items():
-                            entity_id = transaction.get(entity_id_field)
+                    try:
+                        async with prisma_client.db.batch_() as batcher:
+                            for _, transaction in transactions_to_process.items():
+                                entity_id = transaction.get(entity_id_field)
 
-                            # Construct the where clause dynamically
-                            where_clause = {
-                                unique_constraint_name: {
+                                # Construct the where clause dynamically
+                                where_clause = {
+                                    unique_constraint_name: {
+                                        entity_id_field: entity_id,
+                                        "date": transaction["date"],
+                                        "api_key": transaction["api_key"],
+                                        "model": transaction["model"],
+                                        "custom_llm_provider": transaction.get(
+                                            "custom_llm_provider"
+                                        )
+                                        or "",
+                                        "mcp_namespaced_tool_name": transaction.get(
+                                            "mcp_namespaced_tool_name"
+                                        )
+                                        or "",
+                                        "endpoint": transaction.get("endpoint") or "",
+                                    }
+                                }
+
+                                # Get the table dynamically
+                                table = getattr(batcher, table_name)
+
+                                # Common data structure for both create and update
+                                common_data = {
                                     entity_id_field: entity_id,
                                     "date": transaction["date"],
                                     "api_key": transaction["api_key"],
-                                    "model": transaction["model"],
-                                    "custom_llm_provider": transaction.get(
-                                        "custom_llm_provider"
-                                    )
-                                    or "",
+                                    "model": transaction.get("model"),
+                                    "model_group": transaction.get("model_group"),
                                     "mcp_namespaced_tool_name": transaction.get(
                                         "mcp_namespaced_tool_name"
                                     )
                                     or "",
+                                    "custom_llm_provider": transaction.get(
+                                        "custom_llm_provider"
+                                    ),
+                                    "endpoint": transaction.get("endpoint") or "",
+                                    "prompt_tokens": transaction["prompt_tokens"],
+                                    "completion_tokens": transaction["completion_tokens"],
+                                    "spend": transaction["spend"],
+                                    "api_requests": transaction["api_requests"],
+                                    "successful_requests": transaction[
+                                        "successful_requests"
+                                    ],
+                                    "failed_requests": transaction["failed_requests"],
                                 }
-                            }
 
-                            # Get the table dynamically
-                            table = getattr(batcher, table_name)
-
-                            # Common data structure for both create and update
-                            common_data = {
-                                entity_id_field: entity_id,
-                                "date": transaction["date"],
-                                "api_key": transaction["api_key"],
-                                "model": transaction.get("model"),
-                                "model_group": transaction.get("model_group"),
-                                "mcp_namespaced_tool_name": transaction.get(
-                                    "mcp_namespaced_tool_name"
-                                )
-                                or "",
-                                "custom_llm_provider": transaction.get(
-                                    "custom_llm_provider"
-                                ),
-                                "prompt_tokens": transaction["prompt_tokens"],
-                                "completion_tokens": transaction["completion_tokens"],
-                                "spend": transaction["spend"],
-                                "api_requests": transaction["api_requests"],
-                                "successful_requests": transaction[
-                                    "successful_requests"
-                                ],
-                                "failed_requests": transaction["failed_requests"],
-                            }
-
-                            # Add cache-related fields if they exist
-                            if "cache_read_input_tokens" in transaction:
-                                common_data["cache_read_input_tokens"] = (
-                                    transaction.get("cache_read_input_tokens", 0)
-                                )
-                            if "cache_creation_input_tokens" in transaction:
-                                common_data["cache_creation_input_tokens"] = (
-                                    transaction.get("cache_creation_input_tokens", 0)
-                                )
-
-                            if entity_type == "tag" and "request_id" in transaction:
-                                common_data["request_id"] = transaction.get(
-                                    "request_id"
-                                )
-
-                            # Create update data structure
-                            update_data = {
-                                "prompt_tokens": {
-                                    "increment": transaction["prompt_tokens"]
-                                },
-                                "completion_tokens": {
-                                    "increment": transaction["completion_tokens"]
-                                },
-                                "spend": {"increment": transaction["spend"]},
-                                "api_requests": {
-                                    "increment": transaction["api_requests"]
-                                },
-                                "successful_requests": {
-                                    "increment": transaction["successful_requests"]
-                                },
-                                "failed_requests": {
-                                    "increment": transaction["failed_requests"]
-                                },
-                            }
-
-                            # Add cache-related fields to update if they exist
-                            if "cache_read_input_tokens" in transaction:
-                                update_data["cache_read_input_tokens"] = {
-                                    "increment": transaction.get(
-                                        "cache_read_input_tokens", 0
+                                # Add cache-related fields if they exist
+                                if "cache_read_input_tokens" in transaction:
+                                    common_data["cache_read_input_tokens"] = (
+                                        transaction.get("cache_read_input_tokens", 0)
                                     )
-                                }
-                            if "cache_creation_input_tokens" in transaction:
-                                update_data["cache_creation_input_tokens"] = {
-                                    "increment": transaction.get(
-                                        "cache_creation_input_tokens", 0
+                                if "cache_creation_input_tokens" in transaction:
+                                    common_data["cache_creation_input_tokens"] = (
+                                        transaction.get("cache_creation_input_tokens", 0)
                                     )
+
+                                if entity_type == "tag" and "request_id" in transaction:
+                                    common_data["request_id"] = transaction.get(
+                                        "request_id"
+                                    )
+
+                                # Create update data structure
+                                update_data = {
+                                    "prompt_tokens": {
+                                        "increment": transaction["prompt_tokens"]
+                                    },
+                                    "completion_tokens": {
+                                        "increment": transaction["completion_tokens"]
+                                    },
+                                    "spend": {"increment": transaction["spend"]},
+                                    "api_requests": {
+                                        "increment": transaction["api_requests"]
+                                    },
+                                    "successful_requests": {
+                                        "increment": transaction["successful_requests"]
+                                    },
+                                    "failed_requests": {
+                                        "increment": transaction["failed_requests"]
+                                    },
                                 }
 
-                            if entity_type == "tag" and "request_id" in transaction:
-                                update_data["request_id"] = transaction.get("request_id")
+                                # Add cache-related fields to update if they exist
+                                if "cache_read_input_tokens" in transaction:
+                                    update_data["cache_read_input_tokens"] = {
+                                        "increment": transaction.get(
+                                            "cache_read_input_tokens", 0
+                                        )
+                                    }
+                                if "cache_creation_input_tokens" in transaction:
+                                    update_data["cache_creation_input_tokens"] = {
+                                        "increment": transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        )
+                                    }
 
-                            table.upsert(
-                                where=where_clause,
-                                data={
-                                    "create": common_data,
-                                    "update": update_data,
-                                },
-                            )
+                                if entity_type == "tag" and "request_id" in transaction:
+                                    update_data["request_id"] = transaction.get("request_id")
+
+                                # Add endpoint to update_data so existing rows get their endpoint field updated
+                                update_data["endpoint"] = transaction.get("endpoint") or ""
+
+                                table.upsert(
+                                    where=where_clause,
+                                    data={
+                                        "create": common_data,
+                                        "update": update_data,
+                                    },
+                                )
+                    except Exception as batch_error:
+                        # Log detailed error information for debugging batch upsert failures
+                        # This helps diagnose issues like unique constraint violations
+                        verbose_proxy_logger.exception(
+                            f"Daily {entity_type} spend batch upsert failed. "
+                            f"Table: {table_name}, Constraint: {unique_constraint_name}, "
+                            f"Batch size: {len(transactions_to_process)}, "
+                            f"Error: {str(batch_error)}"
+                        )
+                        raise
 
                     verbose_proxy_logger.debug(
                         f"Processed {len(transactions_to_process)} daily {entity_type} transactions in {time.time() - start_time:.2f}s"
@@ -1347,7 +1364,7 @@ class DBSpendUpdateWriter:
             entity_type="user",
             entity_id_field="user_id",
             table_name="litellm_dailyuserspend",
-            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1368,7 +1385,7 @@ class DBSpendUpdateWriter:
             entity_type="team",
             entity_id_field="team_id",
             table_name="litellm_dailyteamspend",
-            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1389,7 +1406,7 @@ class DBSpendUpdateWriter:
             entity_type="org",
             entity_id_field="organization_id",
             table_name="litellm_dailyorganizationspend",
-            unique_constraint_name="organization_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+            unique_constraint_name="organization_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1410,7 +1427,7 @@ class DBSpendUpdateWriter:
             entity_type="end_user",
             entity_id_field="end_user_id",
             table_name="litellm_dailyenduserspend",
-            unique_constraint_name="end_user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+            unique_constraint_name="end_user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1431,7 +1448,7 @@ class DBSpendUpdateWriter:
             entity_type="agent",
             entity_id_field="agent_id",
             table_name="litellm_dailyagentspend",
-            unique_constraint_name="agent_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+            unique_constraint_name="agent_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1452,7 +1469,7 @@ class DBSpendUpdateWriter:
             entity_type="tag",
             entity_id_field="tag",
             table_name="litellm_dailytagspend",
-            unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+            unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
@@ -1513,6 +1530,12 @@ class DBSpendUpdateWriter:
             )
             return None
         try:
+            # Map call_type to endpoint using ROUTE_ENDPOINT_MAPPING
+            call_type = payload.get("call_type", None)
+            endpoint = None
+            if call_type:
+                endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
+            
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
@@ -1520,6 +1543,7 @@ class DBSpendUpdateWriter:
                 model_group=payload.get("model_group", None),
                 mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
+                endpoint=endpoint,
                 prompt_tokens=payload["prompt_tokens"],
                 completion_tokens=payload["completion_tokens"],
                 spend=payload["spend"],
@@ -1563,7 +1587,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
 
-        daily_transaction_key = f"{payload['user']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+        endpoint_str = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{payload['user']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyUserSpendTransaction(
             user_id=payload["user"], **base_daily_transaction
         )
@@ -1595,7 +1620,8 @@ class DBSpendUpdateWriter:
             )
             return
 
-        daily_transaction_key = f"{payload['team_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+        endpoint_str = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{payload['team_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyTeamSpendTransaction(
             team_id=payload["team_id"], **base_daily_transaction
         )
@@ -1637,7 +1663,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
 
-        daily_transaction_key = f"{org_id}_{base_daily_transaction['date']}_{payload_with_org['api_key']}_{payload_with_org['model']}_{payload_with_org['custom_llm_provider']}"
+        endpoint_str = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{org_id}_{base_daily_transaction['date']}_{payload_with_org['api_key']}_{payload_with_org['model']}_{payload_with_org['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyOrganizationSpendTransaction(
             organization_id=org_id, **base_daily_transaction
         )
@@ -1679,7 +1706,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
 
-        daily_transaction_key = f"{end_user_id}_{base_daily_transaction['date']}_{payload_with_end_user_id['api_key']}_{payload_with_end_user_id['model']}_{payload_with_end_user_id['custom_llm_provider']}"
+        endpoint_str = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{end_user_id}_{base_daily_transaction['date']}_{payload_with_end_user_id['api_key']}_{payload_with_end_user_id['model']}_{payload_with_end_user_id['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyEndUserSpendTransaction(
             end_user_id=end_user_id, **base_daily_transaction
         )
@@ -1723,7 +1751,8 @@ class DBSpendUpdateWriter:
         )
         if base_daily_transaction is None:
             return
-        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}"
+        endpoint_str = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyAgentSpendTransaction(
             agent_id=payload['agent_id'], **base_daily_transaction
         )
@@ -1763,7 +1792,8 @@ class DBSpendUpdateWriter:
         else:
             raise ValueError(f"Invalid request_tags: {payload['request_tags']}")
         for tag in request_tags:
-            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+            endpoint_str = base_daily_transaction.get("endpoint") or ""
+            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
             daily_transaction = DailyTagSpendTransaction(
                 tag=tag, **base_daily_transaction, request_id=payload["request_id"]
             )
