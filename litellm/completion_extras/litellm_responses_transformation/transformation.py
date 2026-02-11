@@ -354,6 +354,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
+        from openai.types.responses.response_output_item import ResponseApplyPatchToolCall
 
         from litellm.types.utils import Choices, Message
 
@@ -407,6 +408,24 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     tool_call_item=item,
                     index=tool_call_index,
                 )
+                accumulated_tool_calls.append(tool_call_dict)
+                tool_call_index += 1
+
+            elif isinstance(item, ResponseApplyPatchToolCall):
+                # Convert apply_patch_call to a ChatCompletions-style tool call.
+                # The operation (create_file / update_file / delete_file) is
+                # serialised as JSON so it appears in function.arguments, just
+                # like any other tool call.
+                operation_dict = item.operation.model_dump()
+                tool_call_dict = {
+                    "id": item.call_id,
+                    "function": {
+                        "name": "apply_patch",
+                        "arguments": json.dumps(operation_dict),
+                    },
+                    "type": "function",
+                    "index": tool_call_index,
+                }
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1
 
@@ -486,7 +505,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raw_response.usage
             ),
         )
-        
+
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
         raw_response_hidden_params = getattr(raw_response, "_hidden_params", {})
@@ -503,7 +522,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     model_response._hidden_params[key] = merged_headers
                 else:
                     model_response._hidden_params[key] = value
-        
+
         return model_response
 
     def get_model_response_iterator(
@@ -808,7 +827,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return {"format": {"type": "text"}}
 
         return None
-    
+
     @staticmethod
     def _convert_annotations_to_chat_format(
         annotations: Optional[List[Any]],

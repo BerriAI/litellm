@@ -1012,11 +1012,11 @@ def test_multiple_tool_calls_in_single_choice():
 def test_map_reasoning_effort_adds_summary_detailed():
     """
     Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.
-    
+
     By default (flag=False), summary should NOT be added to avoid:
     1. Breaking for users without verified OpenAI orgs (400 errors)
     2. Making requests more expensive by including summary reasoning tokens
-    
+
     When flag is enabled (flag=True or env var), summary="detailed" is added.
     """
     import os
@@ -1030,64 +1030,64 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
     # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
     effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
-    
+
     # Save original flag value
     original_flag = litellm.reasoning_auto_summary
     original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
-    
+
     try:
         # Test 1: Default behavior (flag=False, no env var) - NO summary
         litellm.reasoning_auto_summary = False
         if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
-        
+
         for effort in effort_levels:
             result = handler._map_reasoning_effort(effort)
-            
+
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
             assert "summary" not in result, f"Summary should NOT be present by default for effort={effort}"
-            
+
             print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)")
-        
+
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
-        
+
         for effort in effort_levels:
             result = handler._map_reasoning_effort(effort)
-            
+
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
             assert result["summary"] == "detailed", f"Summary should be 'detailed' when flag is enabled for effort={effort}"
-            
+
             print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)")
-        
+
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
         os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
-        
+
         result = handler._map_reasoning_effort("high")
         assert result["summary"] == "detailed", "Summary should be 'detailed' when env var is enabled"
         print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
-        
+
         # Test 4: Dict input is passed through as-is (no modification)
         litellm.reasoning_auto_summary = False
         if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
-        
+
         dict_input = {"effort": "high", "summary": "custom_summary"}
         result_dict = handler._map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
-        
+
         # Test 5: None/unknown values return None
         result_unknown = handler._map_reasoning_effort("unknown_value")
         assert result_unknown is None
         print("✓ Unknown reasoning_effort values return None")
-        
+
         print("✓ All reasoning_effort behaviors work correctly with flag/env var control")
-    
+
     finally:
         # Restore original values
         litellm.reasoning_auto_summary = original_flag
@@ -1100,10 +1100,10 @@ def test_map_reasoning_effort_adds_summary_detailed():
 def test_transform_response_preserves_annotations():
     """
     Test that annotations from Responses API are preserved when transforming to Chat Completions format.
-    
+
     This is a regression test for the bug where annotations (like url_citation) were being
     dropped during the transformation from ResponsesAPIResponse to ModelResponse.
-    
+
     The fix ensures annotations are extracted from ResponseOutputText content items and
     passed through to the Message object in the Chat Completions response.
     """
@@ -1278,3 +1278,139 @@ def test_transform_response_preserves_annotations():
     assert result.usage.total_tokens == 30
 
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+
+
+def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
+    """
+    Test that ResponseApplyPatchToolCall items from the Responses API are
+    correctly converted to ChatCompletions-style tool calls by the bridge.
+
+    This is a regression test for a bug where litellm.completion() with a
+    responses/ model prefix crashed when the model returned an
+    apply_patch_call, because _convert_response_output_to_choices did not
+    handle ResponseApplyPatchToolCall items. The model DID use the tool,
+    but the bridge silently dropped it (or raised an error), while the
+    native litellm.responses() path worked correctly.
+    """
+    import json
+    from unittest.mock import Mock
+
+    from openai.types.responses.response_apply_patch_tool_call import (
+        OperationCreateFile,
+    )
+    from openai.types.responses.response_output_item import (
+        ResponseApplyPatchToolCall,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Build an apply_patch_call item like the model would return
+    operation = OperationCreateFile(
+        diff="--- /dev/null\n+++ b/hello.py\n@@ -0,0 +1 @@\n+print('hello world')\n",
+        path="hello.py",
+        type="create_file",
+    )
+    apply_patch_item = ResponseApplyPatchToolCall(
+        id="apc_001",
+        call_id="call_patch_hello",
+        operation=operation,
+        status="completed",
+        type="apply_patch_call",
+    )
+
+    # Minimal usage
+    usage = ResponseAPIUsage(
+        input_tokens=30,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=40,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=70,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_apply_patch_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.2-codex",
+        object="response",
+        output=[apply_patch_item],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-apply-patch",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-5.2-codex",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.2-codex"},
+        messages=[
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Create hello.py"},
+        ],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Should have exactly one choice with finish_reason="tool_calls"
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+
+    # The choice should contain one tool call for apply_patch
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None, "tool_calls should not be None"
+    assert len(tool_calls) == 1, f"Expected 1 tool_call, got {len(tool_calls)}"
+
+    tc = tool_calls[0]
+    assert tc["id"] == "call_patch_hello"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "apply_patch"
+
+    # The operation should be serialised as JSON in arguments
+    args = json.loads(tc["function"]["arguments"])
+    assert args["type"] == "create_file"
+    assert args["path"] == "hello.py"
+    assert "print('hello world')" in args["diff"]
+
+    print("✓ apply_patch_call correctly converted to ChatCompletions tool call")
