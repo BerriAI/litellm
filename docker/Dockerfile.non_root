@@ -62,8 +62,10 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
+# NOTE: Do NOT run `npm install -g npm@latest` here — the upgraded binary can
+# contain ARM-specific instructions that crash under QEMU when cross-building
+# for linux/arm64.  The system npm from apk is sufficient for building the UI.
 RUN mkdir -p /var/lib/litellm/ui && \
-    npm install -g npm@latest && npm cache clean --force && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
