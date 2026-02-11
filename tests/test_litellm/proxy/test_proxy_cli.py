@@ -485,7 +485,7 @@ class TestPrometheusMultiprocessSetup:
     """Test cases for auto-configuring PROMETHEUS_MULTIPROC_DIR with multiple workers"""
 
     @staticmethod
-    def _write_config(tmp_path, callbacks=None):
+    def _write_config(tmp_path, callbacks=None, success_callback=None):
         """Write a minimal config yaml and return the path."""
         import yaml
 
@@ -495,6 +495,8 @@ class TestPrometheusMultiprocessSetup:
         }
         if callbacks is not None:
             config["litellm_settings"]["callbacks"] = callbacks
+        if success_callback is not None:
+            config["litellm_settings"]["success_callback"] = success_callback
         config_path = os.path.join(str(tmp_path), "config.yaml")
         with open(config_path, "w") as f:
             yaml.dump(config, f)
@@ -612,6 +614,57 @@ class TestPrometheusMultiprocessSetup:
                 os.environ["PROMETHEUS_MULTIPROC_DIR"] = orig_val
             else:
                 os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+
+
+    @patch("uvicorn.run")
+    def test_prometheus_multiproc_dir_auto_created_via_success_callback(
+        self, mock_uvicorn_run, tmp_path
+    ):
+        """When num_workers > 1 and prometheus is in success_callback, PROMETHEUS_MULTIPROC_DIR should be auto-set"""
+        import shutil
+
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        config_path = self._write_config(
+            tmp_path, success_callback=["prometheus"]
+        )
+
+        orig_val = os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+        try:
+            with patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args:
+                mock_get_args.return_value = {
+                    "app": "litellm.proxy.proxy_server:app",
+                    "host": "localhost",
+                    "port": 8000,
+                }
+
+                result = runner.invoke(
+                    run_server,
+                    [
+                        "--config",
+                        config_path,
+                        "--num_workers",
+                        "4",
+                        "--skip_server_startup",
+                    ],
+                )
+
+                assert result.exit_code == 0, result.output
+                assert "PROMETHEUS_MULTIPROC_DIR" in os.environ
+                prom_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
+                assert "litellm_prometheus_" in prom_dir
+                assert os.path.isdir(prom_dir)
+        finally:
+            prom_dir = os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            if prom_dir and os.path.exists(prom_dir):
+                shutil.rmtree(prom_dir, ignore_errors=True)
+            if orig_val is not None:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = orig_val
 
 
 class TestHealthAppFactory:

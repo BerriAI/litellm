@@ -1,10 +1,13 @@
 # ruff: noqa: T201
+import atexit
 import importlib
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -691,15 +694,20 @@ def run_server(  # noqa: PLR0915
                 if litellm_settings
                 else []
             )
+            _success_callbacks = (
+                litellm_settings.get("success_callback", [])
+                if litellm_settings
+                else []
+            )
+            _has_prometheus = (
+                "prometheus" in _callbacks
+                or "prometheus" in _success_callbacks
+            )
             if (
                 num_workers > 1
-                and "prometheus" in _callbacks
+                and _has_prometheus
                 and "PROMETHEUS_MULTIPROC_DIR" not in os.environ
             ):
-                import atexit
-                import shutil
-                import tempfile
-
                 _prom_dir = tempfile.mkdtemp(prefix="litellm_prometheus_")
                 os.environ["PROMETHEUS_MULTIPROC_DIR"] = _prom_dir
                 print(  # noqa
@@ -713,7 +721,7 @@ def run_server(  # noqa: PLR0915
                 atexit.register(_cleanup_prometheus_dir)
             elif (
                 num_workers > 1
-                and "prometheus" in _callbacks
+                and _has_prometheus
                 and "PROMETHEUS_MULTIPROC_DIR" in os.environ
             ):
                 print(  # noqa
