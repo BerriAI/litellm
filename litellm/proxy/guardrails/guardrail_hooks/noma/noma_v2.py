@@ -235,7 +235,7 @@ class NomaV2Guardrail(CustomGuardrail):
         updated_texts = list(texts)
         anonymized_index = 0
 
-        for idx in range(len(updated_texts)):
+        for idx, _text in enumerate(updated_texts):
             role_for_idx = text_roles[idx] if idx < len(text_roles) else target_role
             if role_for_idx != target_role:
                 continue
@@ -244,6 +244,7 @@ class NomaV2Guardrail(CustomGuardrail):
             anonymized_index += 1
 
         if anonymized_index == 0:
+            # Best-effort fallback: no role-matched entry was found, so apply to the last text.
             updated_texts[-1] = anonymized_values[0]
 
         updated_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
