@@ -661,6 +661,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_url_context": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
+                "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {

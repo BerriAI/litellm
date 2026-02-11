@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -79,6 +79,7 @@
     "vitest": "^3.2.4"
   },
   "overrides": {
+    "diff": ">=8.0.3",
     "prismjs": ">=1.30.0",
     "webpack-dev-server": ">=5.2.1",
     "mermaid": ">=11.10.0",

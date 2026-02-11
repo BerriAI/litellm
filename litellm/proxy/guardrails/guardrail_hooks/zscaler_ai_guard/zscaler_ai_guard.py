@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Literal, Optional
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -70,6 +73,7 @@ class ZscalerAIGuard(CustomGuardrail):
             return str(value).strip()
         return "N/A"
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -92,7 +96,7 @@ class ZscalerAIGuard(CustomGuardrail):
         Raises:
             Exception: If content is blocked by Zscaler AI Guard
         """
-        
+
         texts = inputs.get("texts", [])
         try:
             verbose_proxy_logger.debug(f"ZscalerAIGuard: Checking {len(texts)} text(s)")
@@ -102,8 +106,8 @@ class ZscalerAIGuard(CustomGuardrail):
             team_metadata = metadata.get("team_metadata", {}) or {}
 
             # Precedence for policy_id:
-            # 1. metadata.zguard_policy_id # request level 
-            # 2. user_api_key_metadata.zguard_policy_id # Key level 
+            # 1. metadata.zguard_policy_id # request level
+            # 2. user_api_key_metadata.zguard_policy_id # Key level
             # 3. team_metadata.zguard_policy_id # Team level
             # 4. self.policy_id (from environment) # Global
             policy_id = (
@@ -154,9 +158,7 @@ class ZscalerAIGuard(CustomGuardrail):
                 zscaler_ai_guard_result
                 and zscaler_ai_guard_result.get("action") == "BLOCK"
             ):
-                blocking_info = zscaler_ai_guard_result.get(
-                    "zscaler_ai_guard_response"
-                )
+                blocking_info = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
                 error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
                 raise Exception(error_message)
         except Exception as e:

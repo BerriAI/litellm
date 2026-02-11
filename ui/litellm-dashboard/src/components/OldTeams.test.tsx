@@ -52,7 +52,7 @@ vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
   }),
 }));
 
-vi.mock("@/components/team/team_info", () => ({
+vi.mock("@/components/team/TeamInfo", () => ({
   __esModule: true,
   default: (props: any) => {
     mockTeamInfoView(props);
