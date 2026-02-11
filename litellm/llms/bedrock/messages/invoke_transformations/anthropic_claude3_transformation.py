@@ -222,6 +222,44 @@ class AmazonAnthropicClaudeMessagesConfig(
             for beta in beta_headers_to_remove:
                 beta_set.discard(beta)
 
+    def _supports_tool_search_on_bedrock(self, model: str) -> bool:
+        """
+        Check if the model supports tool search on Bedrock.
+
+        On Amazon Bedrock, server-side tool search is supported on Claude Opus 4.5
+        and Claude Sonnet 4.5 with the tool-search-tool-2025-10-19 beta header.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+
+        Args:
+            model: The model name
+
+        Returns:
+            True if the model supports tool search on Bedrock
+        """
+        model_lower = model.lower()
+
+        # Supported models for tool search on Bedrock
+        supported_patterns = [
+            # Opus 4.5
+            "opus-4.5",
+            "opus_4.5",
+            "opus-4-5",
+            "opus_4_5",
+            # Sonnet 4.5
+            "sonnet-4.5",
+            "sonnet_4.5",
+            "sonnet-4-5",
+            "sonnet_4_5",
+            # Opus 4.6
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
+        ]
+
+        return any(pattern in model_lower for pattern in supported_patterns)
+
     def _get_tool_search_beta_header_for_bedrock(
         self,
         model: str,
