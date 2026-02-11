@@ -81,6 +81,9 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsResponse,
     Skill,
 )
+from litellm.anthropic_beta_headers_manager import (
+            update_headers_with_filtered_beta,
+        )
 from litellm.types.llms.openai import (
     CreateBatchRequest,
     CreateFileRequest,
@@ -1858,6 +1861,13 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             api_base=api_base,
         )
+        
+        print( "🔥headers before filtering", headers )
+        print( "🔥custom_llm_provider", custom_llm_provider )
+        headers = update_headers_with_filtered_beta(
+            headers=headers, provider=custom_llm_provider
+        )
+        print( "🔥headers after filtering", headers )
 
         logging_obj.update_environment_variables(
             model=model,
