@@ -3305,3 +3305,27 @@ class TestIsStreamingRequest:
 
     def test_stream_true_overrides_non_streaming_call_type(self):
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
+
+def test_is_async_request_includes_acreate_file():
+    """
+    Verify that _is_async_request recognizes acreate_file as an async call.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20798.
+    Missing acreate_file caused RuntimeWarning: coroutine was never awaited.
+    """
+    from litellm.utils import _is_async_request
+
+    # All async file/thread/skill/interaction operations should be recognized
+    assert _is_async_request({"acreate_file": True}) is True
+    assert _is_async_request({"acreate_thread": True}) is True
+    assert _is_async_request({"acreate_skill": True}) is True
+    assert _is_async_request({"acreate_interaction": True}) is True
+
+    # Pre-existing ones should still work
+    assert _is_async_request({"acompletion": True}) is True
+    assert _is_async_request({"acreate_batch": True}) is True
+
+    # Non-async should return False
+    assert _is_async_request({"some_other_key": True}) is False
+    assert _is_async_request(None) is False
+
