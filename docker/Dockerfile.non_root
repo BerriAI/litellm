@@ -1,6 +1,6 @@
 # Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 ARG PROXY_EXTRAS_SOURCE=published
 
 # -----------------
@@ -14,24 +14,29 @@ USER root
 # Install build dependencies with retry logic (includes node for UI build)
 RUN for i in 1 2 3; do \
     apk add --no-cache \
-    python3 \
-    python3-dev \
-    py3-pip \
     clang \
     llvm \
     lld \
     gcc \
+    git \
     linux-headers \
     build-base \
     bash \
     nodejs \
     npm && break || sleep 5; \
     done \
-  && pip install --no-cache-dir --upgrade pip build
+  && python -m pip install --no-cache-dir --upgrade pip build
+
+# Allow forward-compatible ABI for PyO3-based packages on Python 3.14
+ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
 # Cache Python dependencies
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
+
+# Install build dependencies needed for git-based packages
+RUN pip install --no-cache-dir hatchling hatch-vcs
+
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ --only-binary=Pillow,tokenizers -r requirements.txt \
   && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.9.0"
 
 # Copy source after dependency layers
@@ -77,7 +82,7 @@ RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
     XDG_CACHE_HOME=/app/.cache \
-    PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
+    PATH="/usr/lib/python3.14/site-packages/nodejs/bin:${PATH}"
 
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.12.0 \
     && mkdir -p /app/.cache/npm
@@ -102,7 +107,7 @@ RUN for i in 1 2 3; do \
     apk upgrade --no-cache && break || sleep 5; \
     done \
   && for i in 1 2 3; do \
-    apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
+    apk add --no-cache bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
     done \
   && npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 \
   && GLOBAL="$(npm root -g)" \
@@ -130,11 +135,11 @@ COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 COPY --from=builder /app/.cache /app/.cache
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 COPY --from=builder \
-  /usr/lib/python3.13/site-packages/nodejs* \
-  /usr/lib/python3.13/site-packages/prisma* \
-  /usr/lib/python3.13/site-packages/tomlkit* \
-  /usr/lib/python3.13/site-packages/nodeenv* \
-  /usr/lib/python3.13/site-packages/
+  /usr/lib/python3.14/site-packages/nodejs* \
+  /usr/lib/python3.14/site-packages/prisma* \
+  /usr/lib/python3.14/site-packages/tomlkit* \
+  /usr/lib/python3.14/site-packages/nodeenv* \
+  /usr/lib/python3.14/site-packages/
 COPY --from=builder /usr/bin/prisma /usr/bin/prisma
 
 # Final runtime environment configuration

@@ -21,6 +21,12 @@ RUN apk add --no-cache \
 
 RUN python -m pip install build
 
+# Install build dependencies needed for git-based packages
+RUN pip install --no-cache-dir hatchling hatch-vcs
+
+# Allow forward-compatible ABI for PyO3-based packages on Python 3.14
+ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
 # Copy the current directory contents into the container at /app
 COPY . .
 
@@ -38,7 +44,7 @@ RUN ls -1 dist/*.whl | head -1
 RUN pip install dist/*.whl
 
 # install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ --only-binary=Pillow,tokenizers -r requirements.txt
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -47,7 +53,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+RUN apk add --no-cache bash openssl tzdata nodejs npm libsndfile && \
     npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
