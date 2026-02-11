@@ -3,9 +3,12 @@
 # Start the proxy with:
 #   litellm --config proxy_config_wonderfence.yaml
 #
-# Make sure to set the following environment variables:
-#   export WONDERFENCE_API_KEY="your-wonderfence-api-key"
-#   export OPENAI_API_KEY="your-openai-api-key"
+# Environment variables:
+#   WONDERFENCE_API_KEY          - Required: API key for WonderFence
+#   WONDERFENCE_APP_NAME         - Optional: Application name (default: litellm)
+#   WONDERFENCE_RETRY_MAX        - Optional: Max retries for API calls (SDK default: 3)
+#   WONDERFENCE_RETRY_BASE_DELAY - Optional: Base retry delay in seconds (SDK default: 1.0)
+#   OPENAI_API_KEY               - Required: API key for OpenAI
 
 model_list:
   - model_name: gpt-4
@@ -44,8 +47,6 @@ guardrails:
       app_name: "my-litellm-app"
       api_timeout: 10.0
       platform: "aws"           # Optional: cloud platform context
-      retry_max: 3              # Optional: max retries for API calls
-      retry_base_delay: 1.0     # Optional: base delay for retry backoff
       default_on: false         # Enable per-request only
 
 # Example usage with curl:

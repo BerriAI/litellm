@@ -12,31 +12,23 @@ class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
 
     api_key: Optional[str] = Field(
         default=None,
-        description="API key for Alice WonderFence. Can also be set via WONDERFENCE_API_KEY environment variable.",
+        description="API key for WonderFence. Can also be set via WONDERFENCE_API_KEY.",
     )
     api_base: Optional[str] = Field(
         default=None,
-        description="Override for the WonderFence API base URL. Optional - uses SDK default if not provided.",
+        description="Override for WonderFence API base URL.",
     )
     app_name: Optional[str] = Field(
         default="litellm",
-        description="Application name for WonderFence. Defaults to 'litellm' if not provided. Can also be set via WONDERFENCE_APP_NAME environment variable.",
+        description="Application name for WonderFence. Can also be set via WONDERFENCE_APP_NAME.",
     )
     api_timeout: Optional[float] = Field(
         default=10.0,
-        description="Timeout in seconds for WonderFence API calls. Defaults to 10.0 seconds.",
+        description="Timeout in seconds for API calls.",
     )
     platform: Optional[str] = Field(
         default=None,
-        description="Cloud platform where the model is hosted (e.g., aws, azure, databricks). Optional contextual info for WonderFence.",
-    )
-    retry_max: Optional[int] = Field(
-        default=None,
-        description="Maximum number of retries for failed API requests. Uses SDK default (3) if not provided.",
-    )
-    retry_base_delay: Optional[float] = Field(
-        default=None,
-        description="Base delay in seconds for retry backoff. Uses SDK default (1.0) if not provided.",
+        description="Cloud platform (e.g., aws, azure, databricks).",
     )
 
     @staticmethod
