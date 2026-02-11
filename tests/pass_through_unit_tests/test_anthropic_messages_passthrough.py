@@ -525,7 +525,6 @@ async def test_anthropic_messages_with_extra_headers():
     # Set up test parameters
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
     extra_headers = {
-        "anthropic-beta": "very-custom-beta-value",
         "anthropic-version": "custom-version-for-test",
     }
 
