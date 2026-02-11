@@ -8,6 +8,7 @@
 import asyncio
 import json
 import os
+import warnings
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -58,6 +59,7 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 # Type aliases
 MessageRole = Literal["user", "assistant"]
 LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
+_LEGACY_NOMA_DEPRECATION_WARNED = False
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -112,6 +114,16 @@ class NomaGuardrail(CustomGuardrail):
         anonymize_input: Optional[bool] = None,
         **kwargs,
     ):
+        global _LEGACY_NOMA_DEPRECATION_WARNED
+        if not _LEGACY_NOMA_DEPRECATION_WARNED:
+            warnings.warn(
+                "Guardrail provider 'noma' is deprecated. "
+                "Please migrate to 'noma_v2'.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            _LEGACY_NOMA_DEPRECATION_WARNED = True
+
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
@@ -784,35 +796,33 @@ class NomaGuardrail(CustomGuardrail):
         endpoint = urljoin(
             self.api_base or "https://api.noma.security/", NomaGuardrail._AIDR_ENDPOINT
         )
+        noma_payload = {
+            **payload,
+            "x-noma-context": {
+                "applicationId": extra_data.get("application_id")
+                or request_data.get("metadata", {})
+                .get("headers", {})
+                .get("x-noma-application-id")
+                or self.application_id
+                or user_auth.key_alias
+                or self.default_application_id,
+                "ipAddress": request_data.get("metadata", {}).get(
+                    "requester_ip_address", None
+                ),
+                "userId": (
+                    user_auth.user_email if user_auth.user_email else user_auth.user_id
+                ),
+                "sessionId": call_id,
+                "requestId": llm_request_id,
+            },
+        }
 
         response = await self.async_handler.post(
             endpoint,
             headers=headers,
-            json={
-                **payload,
-                "x-noma-context": {
-                    "applicationId": extra_data.get("application_id")
-                    or request_data.get("metadata", {})
-                    .get("headers", {})
-                    .get("x-noma-application-id")
-                    or self.application_id
-                    or user_auth.key_alias
-                    or self.default_application_id,
-                    "ipAddress": request_data.get("metadata", {}).get(
-                        "requester_ip_address", None
-                    ),
-                    "userId": (
-                        user_auth.user_email
-                        if user_auth.user_email
-                        else user_auth.user_id
-                    ),
-                    "sessionId": call_id,
-                    "requestId": llm_request_id,
-                },
-            },
+            json=noma_payload,
         )
         response.raise_for_status()
-
         return response.json()
 
     async def _check_verdict(

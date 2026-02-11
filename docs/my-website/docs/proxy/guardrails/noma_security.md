@@ -6,6 +6,15 @@ import TabItem from '@theme/TabItem';
 
 Use [Noma Security](https://noma.security/) to protect your LLM applications with comprehensive AI content moderation and safety guardrails.
 
+:::warning Deprecated: `guardrail: noma` (Legacy)
+`guardrail: noma` is deprecated and users should migrate to `guardrail: noma_v2`.
+
+For easier migration of existing integrations, you can keep `guardrail: noma` and set `use_v2: true`.
+When `use_v2: true`, legacy flags `monitor_mode`, `block_failures`, and `anonymize_input` are ignored, so behavior may change.
+:::
+
+## Noma guardrails (Legacy)
+
 ## Quick Start
 
 ### 1. Define Guardrails on your LiteLLM config.yaml
@@ -315,4 +324,100 @@ When content is blocked, Noma provides detailed information about the violations
     }
   }
 }
+```
+
+
+## Noma v2 guardrails (Recommended)
+
+### Quick Start
+
+```yaml showLineNumbers title="litellm config.yaml"
+guardrails:
+  - guardrail_name: "noma-v2-guard"
+    litellm_params:
+      guardrail: noma_v2
+      mode: "pre_call"
+      api_key: os.environ/NOMA_API_KEY
+      api_base: os.environ/NOMA_API_BASE
+```
+
+If you want to migrate gradually without changing guardrail names yet:
+
+```yaml showLineNumbers title="litellm config.yaml"
+guardrails:
+  - guardrail_name: "noma-guard"
+    litellm_params:
+      guardrail: noma
+      use_v2: true
+      mode: "pre_call"
+      api_key: os.environ/NOMA_API_KEY
+      api_base: os.environ/NOMA_API_BASE
+```
+
+### Supported Params
+
+- **`guardrail`**: Use `noma_v2` (recommended), or `noma` with `use_v2: true` for migration
+- **`mode`**: `pre_call`, `post_call`, `during_call`, `pre_mcp_call`, `during_mcp_call`
+- **`api_key`**: Noma API key (optional if using OAuth client credentials)
+- **`client_id`**: OAuth client ID (used when `api_key` is not set)
+- **`client_secret`**: OAuth client secret (used when `api_key` is not set)
+- **`token_url`**: Optional OAuth token URL (defaults to `<api_base>/auth`)
+- **`api_base`**: Noma API base URL (defaults to `https://api.noma.security/`)
+- **`application_id`**: Application identifier
+- **`use_v2`**: Migration toggle when `guardrail: noma` is used
+
+### Environment Variables
+
+```shell
+export NOMA_API_KEY="your-api-key-here"          # Optional if using OAuth client credentials
+export NOMA_CLIENT_ID="your-client-id"           # Optional if using API key
+export NOMA_CLIENT_SECRET="your-client-secret"   # Optional if using API key
+export NOMA_TOKEN_URL="https://api.noma.security/auth"  # Optional
+export NOMA_API_BASE="https://api.noma.security/"       # Optional
+export NOMA_APPLICATION_ID="my-app"                     # Optional
+```
+
+### Multiple Guardrails
+
+Apply different v2 configurations for input and output:
+
+```yaml showLineNumbers title="litellm config.yaml"
+guardrails:
+  - guardrail_name: "noma-v2-input"
+    litellm_params:
+      guardrail: noma_v2
+      mode: "pre_call"
+      api_key: os.environ/NOMA_API_KEY
+
+  - guardrail_name: "noma-v2-output"
+    litellm_params:
+      guardrail: noma_v2
+      mode: "post_call"
+      api_key: os.environ/NOMA_API_KEY
+```
+
+### Pass Additional Parameters
+
+This is supported in v2 via `extra_body`.  
+Currently, `noma_v2` consumes dynamic `application_id`.
+
+```shell showLineNumbers title="Curl Request"
+curl 'http://0.0.0.0:4000/v1/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello, how are you?"
+      }
+    ],
+    "guardrails": {
+      "noma-v2-guard": {
+        "extra_body": {
+          "application_id": "my-specific-app-id"
+        }
+      }
+    }
+  }'
 ```

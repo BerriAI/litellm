@@ -1,10 +1,27 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from .base import GuardrailConfigModel
 
+
 class NomaGuardrailConfigModel(GuardrailConfigModel):
+    use_v2: Optional[bool] = Field(
+        default=False,
+        description="If True and guardrail='noma', route to the new Noma v2 implementation.",
+    )
+    client_id: Optional[str] = Field(
+        default=None,
+        description="Noma OAuth client ID. Used when api_key is not provided.",
+    )
+    client_secret: Optional[str] = Field(
+        default=None,
+        description="Noma OAuth client secret. Used when api_key is not provided.",
+    )
+    token_url: Optional[str] = Field(
+        default=None,
+        description="Optional OAuth token URL. Defaults to <api_base>/auth if not provided.",
+    )
     api_key: Optional[str] = Field(
         default=None,
         description="The Noma API key. Reads from NOMA_API_KEY env var if None.",
@@ -21,3 +38,34 @@ class NomaGuardrailConfigModel(GuardrailConfigModel):
     @staticmethod
     def ui_friendly_name() -> str:
         return "Noma Security"
+
+
+class NomaV2GuardrailConfigModel(GuardrailConfigModel):
+    api_key: Optional[str] = Field(
+        default=None,
+        description="The Noma API key. Reads from NOMA_API_KEY env var if None.",
+    )
+    api_base: Optional[str] = Field(
+        default=None,
+        description="The Noma API base URL. Defaults to https://api.noma.security.",
+    )
+    application_id: Optional[str] = Field(
+        default=None,
+        description="The Noma Application ID. Reads from NOMA_APPLICATION_ID env var if None.",
+    )
+    client_id: Optional[str] = Field(
+        default=None,
+        description="Noma OAuth client ID. Used when api_key is not provided.",
+    )
+    client_secret: Optional[str] = Field(
+        default=None,
+        description="Noma OAuth client secret. Used when api_key is not provided.",
+    )
+    token_url: Optional[str] = Field(
+        default=None,
+        description="Optional OAuth token URL. Defaults to <api_base>/auth if not provided.",
+    )
+
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Noma Security v2"
