@@ -23,6 +23,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.wonderfence import (
+    WonderFenceGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -70,6 +73,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    WONDERFENCE = "wonderfence"
 
 
 class Role(Enum):
@@ -692,6 +696,7 @@ class LitellmParams(
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
+    WonderFenceGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
