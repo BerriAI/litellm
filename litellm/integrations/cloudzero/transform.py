@@ -133,7 +133,6 @@ class CBFTransformer:
         service_type, provider, region, owner_account_id, resource_type, cloud_local_id = czrn_components
 
         # Build resource/account as concat of api_key_alias and api_key_prefix
-        api_key_alias = str(row.get('api_key_alias', ''))
         resource_account = f"{api_key_alias}|{api_key_hash}" if api_key_alias else api_key_hash
 
         # CloudZero CBF format with proper column names
