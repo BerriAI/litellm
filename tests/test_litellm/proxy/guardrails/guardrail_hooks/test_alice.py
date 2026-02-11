@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy.guardrails.guardrail_hooks.wonderfence.wonderfence import (
+from litellm.proxy.guardrails.guardrail_hooks.alice.alice_wonderfence import (
     WonderFenceGuardrail,
     WonderFenceMissingSecrets,
 )
@@ -391,7 +391,7 @@ async def test_skip_non_user_messages(
 
 def test_get_config_model():
     """Test that get_config_model returns the correct model."""
-    from litellm.types.proxy.guardrails.guardrail_hooks.wonderfence import (
+    from litellm.types.proxy.guardrails.guardrail_hooks.alice import (
         WonderFenceGuardrailConfigModel,
     )
 
