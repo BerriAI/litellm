@@ -22,34 +22,21 @@ def initialize_guardrail(
     if not guardrail_name:
         raise ValueError("WonderFence guardrail requires a guardrail_name")
 
-    optional_params = getattr(litellm_params, "optional_params", None)
-
     wonderfence_guardrail = WonderFenceGuardrail(
         guardrail_name=guardrail_name,
         api_key=litellm_params.api_key or "",
-        api_base=_get_config_value(litellm_params, optional_params, "api_base"),
-        app_name=_get_config_value(litellm_params, optional_params, "app_name"),
-        api_timeout=_get_config_value(litellm_params, optional_params, "api_timeout")
-        or 10.0,
-        platform=_get_config_value(litellm_params, optional_params, "platform"),
-        retry_max=_get_config_value(litellm_params, optional_params, "retry_max"),
-        retry_base_delay=_get_config_value(
-            litellm_params, optional_params, "retry_base_delay"
-        ),
+        api_base=getattr(litellm_params, "api_base", None),
+        app_name=getattr(litellm_params, "app_name", None),
+        api_timeout=getattr(litellm_params, "api_timeout", None) or 10.0,
+        platform=getattr(litellm_params, "platform", None),
+        retry_max=getattr(litellm_params, "retry_max", None),
+        retry_base_delay=getattr(litellm_params, "retry_base_delay", None),
         event_hook=litellm_params.mode,  # type: ignore[arg-type]
         default_on=litellm_params.default_on if litellm_params.default_on is not None else True,
     )
 
     litellm.logging_callback_manager.add_litellm_callback(wonderfence_guardrail)
     return wonderfence_guardrail
-
-
-def _get_config_value(litellm_params, optional_params, attribute_name):
-    if optional_params is not None:
-        value = getattr(optional_params, attribute_name, None)
-        if value is not None:
-            return value
-    return getattr(litellm_params, attribute_name, None)
 
 
 guardrail_initializer_registry = {

@@ -47,9 +47,8 @@ guardrails:
       guardrail: wonderfence
       mode: ["pre_call", "post_call"]  # Evaluate both input and output
       api_key: os.environ/WONDERFENCE_API_KEY
-      optional_params:
-        app_name: os.environ/WONDERFENCE_APP_NAME  # Optional
-        api_timeout: 30.0                          # Timeout in seconds
+      app_name: os.environ/WONDERFENCE_APP_NAME  # Optional
+      api_timeout: 10.0                          # Timeout in seconds
       default_on: true
 
 general_settings:
@@ -114,9 +113,12 @@ When `mode` includes `post_call`, WonderFence evaluates LLM responses before ret
 |-----------|------|-------------|
 | `api_key` | string | WonderFence API key. Reads from `WONDERFENCE_API_KEY` if omitted. |
 | `mode` | string or list | Guardrail stages (`pre_call`, `post_call`, or both). |
-| `optional_params.app_name` | string | Application name for WonderFence. Defaults to `"litellm"` or `WONDERFENCE_APP_NAME`. |
-| `optional_params.api_base` | string | Optional override for the WonderFence API base URL. |
-| `optional_params.api_timeout` | number | Timeout in seconds for WonderFence API calls. Defaults to `10.0`. |
+| `app_name` | string | Application name for WonderFence. Defaults to `"litellm"` or `WONDERFENCE_APP_NAME`. |
+| `api_base` | string | Optional override for the WonderFence API base URL. |
+| `api_timeout` | number | Timeout in seconds for WonderFence API calls. Defaults to `10.0`. |
+| `platform` | string | Cloud platform where the model is hosted (e.g., `aws`, `azure`, `databricks`). Optional. |
+| `retry_max` | number | Maximum number of retries for failed API requests. Uses SDK default (3) if not provided. |
+| `retry_base_delay` | number | Base delay in seconds for retry backoff. Uses SDK default (1.0) if not provided. |
 | `default_on` | boolean | Run the guardrail on every request by default. Set to `false` to enable per-request only. |
 
 ---
@@ -331,8 +333,11 @@ export WONDERFENCE_API_KEY="your-api-key"
 If you're experiencing timeouts, increase the `api_timeout`:
 
 ```yaml
-optional_params:
-  api_timeout: 60.0  # Increase to 60 seconds
+guardrails:
+  - guardrail_name: "wonderfence-guard"
+    litellm_params:
+      guardrail: wonderfence
+      api_timeout: 60.0  # Increase to 60 seconds
 ```
 
 ### Guardrail Not Running
