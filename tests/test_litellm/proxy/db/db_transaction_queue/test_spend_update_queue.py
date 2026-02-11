@@ -226,6 +226,42 @@ async def test_aggregate_queue_updates_accuracy(spend_queue):
 
 
 @pytest.mark.asyncio
+async def test_aggregation_does_not_mutate_original_dicts(spend_queue):
+    """Test that _get_aggregated_spend_update_queue_item does not modify original dicts.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20875.
+    When multiple updates share the same entity key, aggregation must not
+    mutate the original SpendUpdateQueueItem dicts passed in.
+    """
+    update1: SpendUpdateQueueItem = {
+        "entity_type": Litellm_EntityType.USER,
+        "entity_id": "user1",
+        "response_cost": 1.0,
+    }
+    update2: SpendUpdateQueueItem = {
+        "entity_type": Litellm_EntityType.USER,
+        "entity_id": "user1",
+        "response_cost": 2.0,
+    }
+
+    # Keep copies of the original values
+    original_cost_1 = update1["response_cost"]
+    original_cost_2 = update2["response_cost"]
+
+    aggregated = spend_queue._get_aggregated_spend_update_queue_item(
+        [update1, update2]
+    )
+
+    # Aggregated result should be correct
+    assert len(aggregated) == 1
+    assert aggregated[0]["response_cost"] == 3.0
+
+    # Original dicts must NOT have been mutated
+    assert update1["response_cost"] == original_cost_1
+    assert update2["response_cost"] == original_cost_2
+
+
+@pytest.mark.asyncio
 async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
     """Test that queue size is actually reduced when dealing with many items"""
     # Set a smaller MAX_SIZE for testing
