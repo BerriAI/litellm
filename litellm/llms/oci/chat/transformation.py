@@ -838,6 +838,15 @@ class OCIChatConfig(BaseConfig):
             if not user_messages:
                 raise Exception("No user message found for Cohere model")
 
+            # Extract system messages into preambleOverride
+            system_messages = [msg for msg in messages if msg.get("role") == "system"]
+            preamble_override = None
+            if system_messages:
+                preamble = "\n".join(
+                    self._extract_text_content(msg["content"]) for msg in system_messages
+                )
+                if preamble:
+                    preamble_override = preamble
 
             # Create Cohere-specific chat request
             optional_cohere_params = self._get_optional_params(OCIVendors.COHERE, optional_params)
@@ -845,6 +854,7 @@ class OCIChatConfig(BaseConfig):
                 apiFormat="COHERE",
                 message=self._extract_text_content(user_messages[-1]["content"]),
                 chatHistory=self.adapt_messages_to_cohere_standard(messages),
+                preambleOverride=preamble_override,
                 **optional_cohere_params
             )
 

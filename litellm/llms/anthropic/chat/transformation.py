@@ -935,6 +935,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
+        Filters out system messages containing x-anthropic-billing-header metadata.
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
@@ -945,6 +946,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if isinstance(system_message_block["content"], str):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
+                        continue
+                    # Skip system messages containing x-anthropic-billing-header metadata
+                    if system_message_block["content"].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -963,6 +967,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         # Skip empty text blocks - Anthropic API raises errors for empty text
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
+                            continue
+                        # Skip system messages containing x-anthropic-billing-header metadata
+                        if _content.get("type") == "text" and text_value and text_value.startswith("x-anthropic-billing-header:"):
                             continue
                         anthropic_system_message_content = (
                             AnthropicSystemMessageContent(
