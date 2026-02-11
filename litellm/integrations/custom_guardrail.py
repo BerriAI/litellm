@@ -29,6 +29,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
+from fastapi.exceptions import HTTPException
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -652,13 +653,12 @@ class CustomGuardrail(CustomLogger):
     def _is_guardrail_intervention(e: Exception) -> bool:
         """
         Returns True if the exception represents an intentional guardrail block
-        (as opposed to a technical failure).
+        (this was logged previously as an API failure - guardrail_failed_to_respond).
 
         Guardrails signal intentional blocks by raising:
         - HTTPException with status 400 (content policy violation)
         - ModifyResponseException (passthrough mode violation)
         """
-        from fastapi.exceptions import HTTPException
 
         if isinstance(e, ModifyResponseException):
             return True
