@@ -343,10 +343,16 @@ class AttachmentImpactResponse(BaseModel):
     """Response for estimating the impact of a policy attachment."""
 
     affected_keys_count: int = Field(
-        default=0, description="Number of keys that would be affected."
+        default=0, description="Number of keys that would be affected (named + unnamed)."
     )
     affected_teams_count: int = Field(
-        default=0, description="Number of teams that would be affected."
+        default=0, description="Number of teams that would be affected (named + unnamed)."
+    )
+    unnamed_keys_count: int = Field(
+        default=0, description="Number of affected keys without an alias."
+    )
+    unnamed_teams_count: int = Field(
+        default=0, description="Number of affected teams without an alias."
     )
     sample_keys: List[str] = Field(
         default_factory=list,

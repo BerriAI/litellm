@@ -26,9 +26,6 @@ from litellm.types.proxy.policy_engine import (
 
 router = APIRouter()
 
-_UNNAMED_KEY_PLACEHOLDER = "(unnamed key)"
-_UNNAMED_TEAM_PLACEHOLDER = "(unnamed team)"
-
 
 def _build_alias_where(field: str, patterns: list) -> dict:
     """Build a Prisma ``where`` clause for alias patterns.
@@ -78,11 +75,15 @@ def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> l
 
 async def _find_affected_keys_by_tags(
     prisma_client: object, tag_patterns: list
-) -> list:
-    """Find key aliases whose metadata.tags match any of the given patterns."""
+) -> tuple:
+    """Find key aliases whose metadata.tags match any of the given patterns.
+
+    Returns (named_aliases, unnamed_count).
+    """
     from litellm.proxy.auth.route_checks import RouteChecks
 
     affected: list = []
+    unnamed_count = 0
     keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
         where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
@@ -96,17 +97,24 @@ async def _find_affected_keys_by_tags(
             for tag in key_tags
             for pat in tag_patterns
         ):
-            affected.append(key_alias or _UNNAMED_KEY_PLACEHOLDER)
-    return affected
+            if key_alias:
+                affected.append(key_alias)
+            else:
+                unnamed_count += 1
+    return affected, unnamed_count
 
 
 async def _find_affected_teams_by_tags(
     prisma_client: object, tag_patterns: list
-) -> list:
-    """Find team aliases whose metadata.tags match any of the given patterns."""
+) -> tuple:
+    """Find team aliases whose metadata.tags match any of the given patterns.
+
+    Returns (named_aliases, unnamed_count).
+    """
     from litellm.proxy.auth.route_checks import RouteChecks
 
     affected: list = []
+    unnamed_count = 0
     teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
         where={}, order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
@@ -118,14 +126,20 @@ async def _find_affected_teams_by_tags(
             for tag in team_tags
             for pat in tag_patterns
         ):
-            affected.append(team_alias or _UNNAMED_TEAM_PLACEHOLDER)
-    return affected
+            if team_alias:
+                affected.append(team_alias)
+            else:
+                unnamed_count += 1
+    return affected, unnamed_count
 
 
 async def _find_affected_by_team_patterns(
     prisma_client: object, team_patterns: list, existing_teams: list, existing_keys: list
 ) -> tuple:
-    """Find teams matching alias patterns and keys belonging to those teams."""
+    """Find teams matching alias patterns and keys belonging to those teams.
+
+    Returns (new_teams, new_keys, unnamed_keys_count).
+    """
     from litellm.proxy.auth.route_checks import RouteChecks
 
     new_teams: list = []
@@ -146,17 +160,21 @@ async def _find_affected_by_team_patterns(
                 matched_team_ids.append(str(team.team_id))
 
     new_keys: list = []
+    unnamed_keys_count = 0
     if matched_team_ids:
         keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
             where={"team_id": {"in": matched_team_ids}},
             order={"created_at": "desc"}, take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
         )
         for key in keys:
-            key_alias = key.key_alias or _UNNAMED_KEY_PLACEHOLDER
-            if key_alias not in existing_keys:
-                new_keys.append(key_alias)
+            key_alias = key.key_alias or ""
+            if key_alias:
+                if key_alias not in existing_keys:
+                    new_keys.append(key_alias)
+            else:
+                unnamed_keys_count += 1
 
-    return new_teams, new_keys
+    return new_teams, new_keys, unnamed_keys_count
 
 
 async def _find_affected_keys_by_alias(
@@ -338,21 +356,28 @@ async def estimate_attachment_impact(
 
         affected_keys: list = []
         affected_teams: list = []
+        unnamed_keys = 0
+        unnamed_teams = 0
 
         # Tag-based impact
         tag_patterns = request.tags or []
         if tag_patterns:
-            affected_keys = await _find_affected_keys_by_tags(prisma_client, tag_patterns)
-            affected_teams = await _find_affected_teams_by_tags(prisma_client, tag_patterns)
+            affected_keys, unnamed_keys = await _find_affected_keys_by_tags(
+                prisma_client, tag_patterns,
+            )
+            affected_teams, unnamed_teams = await _find_affected_teams_by_tags(
+                prisma_client, tag_patterns,
+            )
 
         # Team-based impact (alias matching + keys belonging to those teams)
         team_patterns = request.teams or []
         if team_patterns:
-            new_teams, new_keys = await _find_affected_by_team_patterns(
+            new_teams, new_keys, new_unnamed = await _find_affected_by_team_patterns(
                 prisma_client, team_patterns, affected_teams, affected_keys,
             )
             affected_teams.extend(new_teams)
             affected_keys.extend(new_keys)
+            unnamed_keys += new_unnamed
 
         # Key-based impact (direct alias matching)
         key_patterns = request.keys or []
@@ -363,8 +388,10 @@ async def estimate_attachment_impact(
             affected_keys.extend(new_keys)
 
         return AttachmentImpactResponse(
-            affected_keys_count=len(affected_keys),
-            affected_teams_count=len(affected_teams),
+            affected_keys_count=len(affected_keys) + unnamed_keys,
+            affected_teams_count=len(affected_teams) + unnamed_teams,
+            unnamed_keys_count=unnamed_keys,
+            unnamed_teams_count=unnamed_teams,
             sample_keys=affected_keys[:10],
             sample_teams=affected_teams[:10],
         )
