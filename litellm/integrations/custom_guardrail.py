@@ -636,6 +636,24 @@ class CustomGuardrail(CustomLogger):
         )
         return response
 
+    @staticmethod
+    def _is_guardrail_intervention(e: Exception) -> bool:
+        """
+        Returns True if the exception represents an intentional guardrail block
+        (as opposed to a technical failure).
+
+        Guardrails signal intentional blocks by raising:
+        - HTTPException with status 400 (content policy violation)
+        - ModifyResponseException (passthrough mode violation)
+        """
+        from fastapi.exceptions import HTTPException
+
+        if isinstance(e, ModifyResponseException):
+            return True
+        if isinstance(e, HTTPException) and e.status_code == 400:
+            return True
+        return False
+
     def _process_error(
         self,
         e: Exception,
@@ -650,10 +668,15 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
+        guardrail_status: GuardrailStatus = (
+            "guardrail_intervened"
+            if self._is_guardrail_intervention(e)
+            else "guardrail_failed_to_respond"
+        )
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=e,
             request_data=request_data,
-            guardrail_status="guardrail_failed_to_respond",
+            guardrail_status=guardrail_status,
             duration=duration,
             start_time=start_time,
             end_time=end_time,
