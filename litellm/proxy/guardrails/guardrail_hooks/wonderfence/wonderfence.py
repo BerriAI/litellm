@@ -25,8 +25,6 @@ if TYPE_CHECKING:
 class WonderFenceMissingSecrets(Exception):
     """Raised when WonderFence API key is missing."""
 
-    pass
-
 
 class WonderFenceGuardrail(CustomGuardrail):
     """
@@ -45,8 +43,6 @@ class WonderFenceGuardrail(CustomGuardrail):
         app_name: Optional[str] = None,
         api_timeout: float = 10.0,
         platform: Optional[str] = None,
-        retry_max: Optional[int] = None,
-        retry_base_delay: Optional[float] = None,
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
         default_on: bool = True,
     ):
@@ -55,15 +51,13 @@ class WonderFenceGuardrail(CustomGuardrail):
 
         Args:
             guardrail_name: The name of the guardrail instance
-            api_key: WonderFence API key (required, can also be set via WONDERFENCE_API_KEY environment variable)
+            api_key: WonderFence API key (can also be set via WONDERFENCE_API_KEY)
             api_base: Optional base URL for WonderFence API
-            app_name: Application name for WonderFence (reads from WONDERFENCE_APP_NAME or defaults to 'litellm')
-            api_timeout: Timeout in seconds for API calls (default: 10.0)
-            platform: Cloud platform where the model is hosted (e.g., aws, azure, databricks)
-            retry_max: Maximum number of retries for failed API requests
-            retry_base_delay: Base delay in seconds for retry backoff
-            event_hook: Optional event hook mode
-            default_on: Whether the guardrail is enabled by default (default: True)
+            app_name: Application name (reads from WONDERFENCE_APP_NAME or defaults to 'litellm')
+            api_timeout: Timeout in seconds for API calls
+            platform: Cloud platform (e.g., aws, azure, databricks)
+            event_hook: Event hook mode
+            default_on: Whether the guardrail is enabled by default
         """
         try:
             from wonderfence_sdk.client import WonderFenceClient
@@ -94,10 +88,6 @@ class WonderFenceGuardrail(CustomGuardrail):
             client_kwargs["base_url"] = self.api_base
         if self.platform:
             client_kwargs["platform"] = self.platform
-        if retry_max is not None:
-            client_kwargs["retry_max"] = retry_max
-        if retry_base_delay is not None:
-            client_kwargs["retry_base_delay"] = retry_base_delay
 
         self.client = WonderFenceClient(**client_kwargs)
 
