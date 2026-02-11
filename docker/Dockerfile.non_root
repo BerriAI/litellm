@@ -166,23 +166,29 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     LITELLM_NON_ROOT=true \
     XDG_CACHE_HOME=/app/.cache
 
-# Install packages from wheels and optional extras without network
-RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
-    pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
-    PYTHON_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)") && \
-    if [ "$PYTHON_MINOR" -lt 14 ]; then \
-      pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11; \
-      pip install --no-index --find-links=/wheels/ aurelio-sdk==0.0.19; \
-    else \
-      echo "Skipping semantic_router/aurelio-sdk: not supported on Python 3.14+"; \
-    fi && \
-    if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
-      if ls /wheels/litellm_proxy_extras-*.whl >/dev/null 2>&1; then \
-        pip install --no-index --find-links=/wheels/ /wheels/litellm_proxy_extras-*.whl; \
-      else \
-        echo "litellm_proxy_extras wheel not found; skipping local install"; \
-      fi; \
-    fi
+# Install all pre-built wheels (avoids re-cloning git URLs from requirements.txt
+# in a runtime stage that lacks git/gcc/hatchling).
+# First deduplicate: the builder may produce multiple versions of the same package
+# (e.g. PyJWT 2.9.0 + 2.10.1) which causes a pip conflict when installing all at once.
+RUN printf '%s\n' \
+      'import os, re' \
+      'd = {}' \
+      'for f in os.listdir("/wheels/"):' \
+      '    if not f.endswith(".whl"): continue' \
+      '    m = re.match(r"([^-]+)-([^-]+)", f)' \
+      '    if not m: continue' \
+      '    n = m.group(1).lower()' \
+      '    v = tuple(int(x) if x.isdigit() else x for x in m.group(2).split("."))' \
+      '    if n not in d or v > d[n][1]:' \
+      '        old = d.get(n)' \
+      '        if old: os.remove("/wheels/" + old[0]); print("Removed", old[0])' \
+      '        d[n] = (f, v)' \
+      '    else:' \
+      '        os.remove("/wheels/" + f); print("Removed", f)' \
+      > /tmp/_dedup.py && \
+    python3 /tmp/_dedup.py && \
+    rm /tmp/_dedup.py && \
+    pip install --no-index --find-links=/wheels/ /wheels/*.whl
 
 # SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
