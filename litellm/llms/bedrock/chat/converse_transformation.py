@@ -11,9 +11,6 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import (
-    filter_and_transform_beta_headers,
-)
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
@@ -1132,24 +1129,9 @@ class AmazonConverseConfig(BaseConfig):
 
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
-        # and will error with "unknown variant anthropic_beta" if included
         base_model = BedrockModelInfo.get_base_model(model)
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            # Remove duplicates while preserving order
-            unique_betas = []
-            seen = set()
-            for beta in anthropic_beta_list:
-                if beta not in seen:
-                    unique_betas.append(beta)
-                    seen.add(beta)
-
-            filtered_betas = filter_and_transform_beta_headers(
-                beta_headers=unique_betas,
-                provider="bedrock_converse",
-            )
-            
-            if filtered_betas:
-                additional_request_params["anthropic_beta"] = filtered_betas
+            additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
 
