@@ -593,6 +593,113 @@ class TestOCICohereToolCalls:
         assert result.usage.total_tokens == 25
 
 
+class TestOCICoherePreambleOverride:
+    """Test Cohere system message handling via preambleOverride"""
+
+    def test_single_system_message_sets_preamble_override(self):
+        """Test that a single system message is extracted into preambleOverride"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert chat_request["preambleOverride"] == "You are a helpful assistant."
+
+    def test_multiple_system_messages_combined(self):
+        """Test that multiple system messages are joined with newlines"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": "Always respond in JSON."},
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert chat_request["preambleOverride"] == "You are a helpful assistant.\nAlways respond in JSON."
+
+    def test_system_message_with_content_array(self):
+        """Test system message with list-style content (text blocks)"""
+        config = OCIChatConfig()
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a coding assistant."},
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert chat_request["preambleOverride"] == "You are a coding assistant."
+
+    def test_no_system_message_omits_preamble_override(self):
+        """Test that preambleOverride is omitted when there are no system messages"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
+
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = result["chatRequest"]
+        assert "preambleOverride" not in chat_request
+
+    def test_system_messages_excluded_from_chat_history(self):
+        """Test that system messages do not appear in chatHistory"""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Second question"},
+        ]
+
+        chat_history = config.adapt_messages_to_cohere_standard(messages)
+
+        # Should contain user and assistant only, no system
+        # Note: adapt_messages_to_cohere_standard excludes the last message
+        roles = [msg.role for msg in chat_history]
+        assert "SYSTEM" not in roles
+        assert roles == ["USER", "CHATBOT"]
+
+
 class TestOCICohereStreaming:
     """Test Cohere streaming functionality"""
     
