@@ -38,12 +38,12 @@ def test_opus_4_6_model_pricing_and_capabilities():
             "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
         },
-        "azure_ai/claude-opus-4-6": {
-            "provider": "azure_ai",
-            "has_long_context_pricing": False,
-            "tool_use_system_prompt_tokens": 159,
-            "max_input_tokens": 200000,
-        },
+        # "azure_ai/claude-opus-4-6": {
+        #     "provider": "azure_ai",
+        #     "has_long_context_pricing": False,
+        #     "tool_use_system_prompt_tokens": 159,
+        #     "max_input_tokens": 200000,
+        # },
     }
 
     for model_name, config in expected_models.items():

@@ -206,6 +206,7 @@ ignored_keys = [
     "metadata.additional_usage_values.cache_creation_input_tokens",
     "metadata.additional_usage_values.cache_read_input_tokens",
     "metadata.additional_usage_values.inference_geo",
+    "metadata.additional_usage_values.speed",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
 ]
@@ -1023,6 +1024,85 @@ async def test_ui_view_spend_logs_with_model(client, monkeypatch):
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["model"] == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_model_id(client, monkeypatch):
+    """Test that the model_id query param filters spend logs by litellm model deployment id."""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "model_id": "deployment-id-1",
+            "status": "success",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "model_id": "deployment-id-2",
+            "status": "success",
+        },
+    ]
+
+    class MockDB:
+        async def find_many(self, *args, **kwargs):
+            if (
+                "where" in kwargs
+                and "model_id" in kwargs["where"]
+                and kwargs["where"]["model_id"] == "deployment-id-1"
+            ):
+                return [mock_spend_logs[0]]
+            return mock_spend_logs
+
+        async def count(self, *args, **kwargs):
+            if (
+                "where" in kwargs
+                and "model_id" in kwargs["where"]
+                and kwargs["where"]["model_id"] == "deployment-id-1"
+            ):
+                return 1
+            return len(mock_spend_logs)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    start_date = (
+        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "model_id": "deployment-id-1",
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert len(data["data"]) == 1
+    assert data["data"][0]["model_id"] == "deployment-id-1"
 
 
 @pytest.mark.asyncio
@@ -1951,6 +2031,89 @@ async def test_ui_view_spend_logs_with_error_code(client):
         metadata = json.loads(data["data"][0]["metadata"])
         assert "error_information" in metadata
         assert metadata["error_information"]["error_code"] == "404"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_message(client):
+    """Test filtering spend logs by error message"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"error_information": {"error_message": "Rate limit exceeded"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"error_information": {"error_message": "Invalid API key"}}',
+        },
+    ]
+
+    with patch.object(ps, "prisma_client") as mock_prisma:
+        # Mock the find_many method to return filtered results
+        async def mock_find_many(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_message"]:
+                    error_message_filter = metadata_filter.get("string_contains")
+                    # Check if the error message contains the filter string
+                    if error_message_filter == "Rate limit":
+                        return [mock_spend_logs[0]]
+                    elif error_message_filter == "Invalid API":
+                        return [mock_spend_logs[1]]
+            return mock_spend_logs
+
+        async def mock_count(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_message"]:
+                    error_message_filter = metadata_filter.get("string_contains")
+                    if error_message_filter == "Rate limit":
+                        return 1
+                    elif error_message_filter == "Invalid API":
+                        return 1
+            return len(mock_spend_logs)
+
+        mock_prisma.db.litellm_spendlogs.find_many = mock_find_many
+        mock_prisma.db.litellm_spendlogs.count = mock_count
+
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_message": "Rate limit",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "error_information" in metadata
+        assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
 
 
 @pytest.mark.asyncio
