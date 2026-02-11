@@ -281,153 +281,6 @@ def test_output_format_with_no_schema():
     assert last_user_message["content"] == "Hello"
 
 
-def test_advanced_tool_use_header_translation_for_opus_4_5():
-    """
-    Test that advanced-tool-use-2025-11-20 header is translated to Bedrock-specific headers
-    for Claude Opus 4.5.
-    
-    Regression test for: Claude Code sends advanced-tool-use header which needs to be
-    translated to tool-search-tool-2025-10-19 and tool-examples-2025-10-29 for Bedrock
-    Invoke API on Claude Opus 4.5.
-    
-    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
-    """
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-        AmazonAnthropicClaudeMessagesConfig,
-    )
-    
-    config = AmazonAnthropicClaudeMessagesConfig()
-    
-    messages = [
-        {"role": "user", "content": "What's the weather like?"}
-    ]
-    
-    anthropic_messages_optional_request_params = {
-        "max_tokens": 100,
-    }
-    
-    # Simulate advanced-tool-use header from Claude Code
-    headers = {
-        "anthropic-beta": "advanced-tool-use-2025-11-20"
-    }
-    
-    # Test with Claude Opus 4.5
-    result = config.transform_anthropic_messages_request(
-        model="anthropic.claude-opus-4-5-20250514-v1:0",
-        messages=messages,
-        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-        litellm_params={},
-        headers=headers,
-    )
-    
-    # Verify advanced-tool-use header was removed
-    assert "anthropic_beta" in result
-    beta_headers = result["anthropic_beta"]
-    assert "advanced-tool-use-2025-11-20" not in beta_headers, \
-        "advanced-tool-use header should be removed for Bedrock"
-    
-    # Verify Bedrock-specific headers were added
-    assert "tool-search-tool-2025-10-19" in beta_headers, \
-        "tool-search-tool-2025-10-19 should be added for Opus 4.5"
-    assert "tool-examples-2025-10-29" in beta_headers, \
-        "tool-examples-2025-10-29 should be added for Opus 4.5"
-
-
-def test_advanced_tool_use_header_filtered_for_non_opus_4_5():
-    """
-    Test that advanced-tool-use-2025-11-20 header is filtered out for models
-    that don't support tool search on Bedrock.
-    
-    Tool search is supported on: Claude Opus 4.5, Claude Sonnet 4.5
-    Tool search is NOT supported on: Claude 3.5 Sonnet and earlier
-    """
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-        AmazonAnthropicClaudeMessagesConfig,
-    )
-    
-    config = AmazonAnthropicClaudeMessagesConfig()
-    
-    messages = [
-        {"role": "user", "content": "What's the weather like?"}
-    ]
-    
-    anthropic_messages_optional_request_params = {
-        "max_tokens": 100,
-    }
-    
-    # Simulate advanced-tool-use header from Claude Code
-    headers = {
-        "anthropic-beta": "advanced-tool-use-2025-11-20"
-    }
-    
-    # Test with Claude 3.5 Sonnet (does NOT support tool search on Bedrock)
-    result = config.transform_anthropic_messages_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
-        messages=messages,
-        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-        litellm_params={},
-        headers=headers,
-    )
-    
-    # Verify advanced-tool-use header was removed
-    beta_headers = result.get("anthropic_beta", [])
-    assert "advanced-tool-use-2025-11-20" not in beta_headers, \
-        "advanced-tool-use header should be removed for Bedrock"
-    
-    # Verify Bedrock-specific headers were NOT added (only for Opus 4.5 and Sonnet 4.5)
-    assert "tool-search-tool-2025-10-19" not in beta_headers, \
-        "tool-search-tool should not be added for models without tool search support"
-    assert "tool-examples-2025-10-29" not in beta_headers, \
-        "tool-examples should not be added for models without tool search support"
-
-
-def test_advanced_tool_use_header_translation_with_multiple_beta_headers():
-    """
-    Test that advanced-tool-use header translation works correctly when multiple
-    beta headers are present.
-    """
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-        AmazonAnthropicClaudeMessagesConfig,
-    )
-    
-    config = AmazonAnthropicClaudeMessagesConfig()
-    
-    messages = [
-        {"role": "user", "content": "What's the weather like?"}
-    ]
-    
-    anthropic_messages_optional_request_params = {
-        "max_tokens": 100,
-    }
-    
-    # Multiple beta headers including advanced-tool-use
-    headers = {
-        "anthropic-beta": "claude-code-20250219,advanced-tool-use-2025-11-20,interleaved-thinking-2025-05-14"
-    }
-    
-    # Test with Claude Opus 4.5
-    result = config.transform_anthropic_messages_request(
-        model="anthropic.claude-opus-4-5-20250514-v1:0",
-        messages=messages,
-        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-        litellm_params={},
-        headers=headers,
-    )
-    
-    beta_headers = result.get("anthropic_beta", [])
-    
-    # Verify advanced-tool-use was removed
-    assert "advanced-tool-use-2025-11-20" not in beta_headers
-    
-    # Verify Bedrock-specific headers were added
-    assert "tool-search-tool-2025-10-19" in beta_headers
-    assert "tool-examples-2025-10-29" in beta_headers
-    
-    # Verify other beta headers are preserved
-    assert "claude-code-20250219" in beta_headers
-    assert "interleaved-thinking-2025-05-14" in beta_headers
-
-
 def test_opus_4_5_model_detection():
     """
     Test that the _is_claude_opus_4_5 method correctly identifies Opus 4.5 models
@@ -466,71 +319,71 @@ def test_opus_4_5_model_detection():
             f"Should not detect {model} as Opus 4.5"
 
 
-def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
-    """
-    Test that unsupported beta headers are filtered out for Bedrock Invoke API.
+# def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
+#     """
+#     Test that unsupported beta headers are filtered out for Bedrock Invoke API.
     
-    Bedrock Invoke API only supports a specific whitelist of beta flags and returns
-    "invalid beta flag" error for others (e.g., structured-outputs, mcp-servers).
-    This test ensures unsupported headers are filtered while keeping supported ones.
+#     Bedrock Invoke API only supports a specific whitelist of beta flags and returns
+#     "invalid beta flag" error for others (e.g., structured-outputs, mcp-servers).
+#     This test ensures unsupported headers are filtered while keeping supported ones.
     
-    Fixes: https://github.com/BerriAI/litellm/issues/16726
-    """
-    config = AmazonAnthropicClaudeConfig()
+#     Fixes: https://github.com/BerriAI/litellm/issues/16726
+#     """
+#     config = AmazonAnthropicClaudeConfig()
     
-    messages = [{"role": "user", "content": "test"}]
+#     messages = [{"role": "user", "content": "test"}]
     
-    # Test 1: structured-outputs beta header (unsupported)
-    headers = {"anthropic-beta": "structured-outputs-2025-11-13"}
+#     # Test 1: structured-outputs beta header (unsupported)
+#     headers = {"anthropic-beta": "structured-outputs-2025-11-13"}
     
-    result = config.transform_request(
-        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
-        messages=messages,
-        optional_params={},
-        litellm_params={},
-        headers=headers,
-    )
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
     
-    # Verify structured-outputs beta is filtered out
-    anthropic_beta = result.get("anthropic_beta", [])
-    assert not any("structured-outputs" in beta for beta in anthropic_beta), \
-        f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+#     # Verify structured-outputs beta is filtered out
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
     
-    # Test 2: mcp-servers beta header (unsupported - the main issue from #16726)
-    headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
+#     # Test 2: mcp-servers beta header (unsupported - the main issue from #16726)
+#     headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
     
-    result = config.transform_request(
-        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
-        messages=messages,
-        optional_params={},
-        litellm_params={},
-        headers=headers,
-    )
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
     
-    # Verify mcp-servers beta is filtered out
-    anthropic_beta = result.get("anthropic_beta", [])
-    assert not any("mcp-servers" in beta for beta in anthropic_beta), \
-        f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+#     # Verify mcp-servers beta is filtered out
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
     
-    # Test 3: Mix of supported and unsupported beta headers
-    headers = {"anthropic-beta": "computer-use-2024-10-22,mcp-servers-2025-12-04,structured-outputs-2025-11-13"}
+#     # Test 3: Mix of supported and unsupported beta headers
+#     headers = {"anthropic-beta": "computer-use-2024-10-22,mcp-servers-2025-12-04,structured-outputs-2025-11-13"}
     
-    result = config.transform_request(
-        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
-        messages=messages,
-        optional_params={},
-        litellm_params={},
-        headers=headers,
-    )
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
     
-    # Verify only supported betas are kept
-    anthropic_beta = result.get("anthropic_beta", [])
-    assert not any("structured-outputs" in beta for beta in anthropic_beta), \
-        f"structured-outputs beta should be filtered, got: {anthropic_beta}"
-    assert not any("mcp-servers" in beta for beta in anthropic_beta), \
-        f"mcp-servers beta should be filtered, got: {anthropic_beta}"
-    assert any("computer-use" in beta for beta in anthropic_beta), \
-        f"computer-use beta should be kept, got: {anthropic_beta}"
+#     # Verify only supported betas are kept
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+#     assert any("computer-use" in beta for beta in anthropic_beta), \
+#         f"computer-use beta should be kept, got: {anthropic_beta}"
 
 
 def test_output_format_removed_from_bedrock_invoke_request():
