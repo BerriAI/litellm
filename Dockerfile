@@ -13,7 +13,7 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache bash gcc openssl openssl-dev
+RUN apk add --no-cache bash gcc git openssl openssl-dev
 
 RUN python -m pip install --upgrade pip setuptools && \
     python -m pip install build wheel cmake setuptools_rust maturin
