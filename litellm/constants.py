@@ -101,9 +101,7 @@ MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE = int(
 MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
     os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600")
 )
-MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
-    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
-)
+MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
@@ -1021,6 +1019,7 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 
 BEDROCK_CONVERSE_MODELS = [
     "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-coder-next",
     "qwen.qwen3-235b-a22b-2507-v1:0",
     "qwen.qwen3-coder-30b-a3b-v1:0",
     "qwen.qwen3-32b-v1:0",
