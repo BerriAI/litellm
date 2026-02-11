@@ -2,9 +2,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -94,11 +91,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
-        )
-
-        headers = update_headers_with_filtered_beta(
-            headers=headers,
-            provider="anthropic",
         )
 
         return headers, api_base

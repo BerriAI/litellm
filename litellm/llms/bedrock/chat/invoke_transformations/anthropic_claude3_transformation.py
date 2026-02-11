@@ -136,13 +136,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Filter out beta headers that Bedrock Invoke doesn't support
         # Uses centralized configuration from anthropic_beta_headers_config.json
         beta_list = list(beta_set)
-        filtered_beta_list = filter_and_transform_beta_headers(
-            beta_headers=beta_list,
-            provider="bedrock",
-        )
-
-        if filtered_beta_list:
-            _anthropic_request["anthropic_beta"] = filtered_beta_list
+        _anthropic_request["anthropic_beta"] = beta_list
 
         return _anthropic_request
 
