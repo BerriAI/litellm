@@ -19,16 +19,23 @@ RUN for i in 1 2 3; do \
     lld \
     gcc \
     git \
+    curl \
     linux-headers \
     build-base \
     bash \
     nodejs \
     npm && break || sleep 5; \
     done \
-  && python -m pip install --no-cache-dir --upgrade pip build
+  && python -m pip install --no-cache-dir --upgrade pip setuptools build wheel cmake setuptools_rust maturin
 
+# Configure Rust environment for building Rust-backed Python wheels (tiktoken, etc.)
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:$PATH
 # Allow forward-compatible ABI for PyO3-based packages on Python 3.14
 ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y && \
+    rustup default stable
 
 # Cache Python dependencies
 COPY requirements.txt .

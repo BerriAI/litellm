@@ -16,16 +16,25 @@ RUN apk add --no-cache \
     bash \
     gcc \
     git \
+    curl \
+    build-base \
     openssl \
     openssl-dev
 
-RUN python -m pip install build
+RUN python -m pip install --upgrade pip setuptools && \
+    python -m pip install build wheel cmake setuptools_rust maturin
 
 # Install build dependencies needed for git-based packages
 RUN pip install --no-cache-dir hatchling hatch-vcs
 
+# Configure Rust environment for building Rust-backed Python wheels (tiktoken, etc.)
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:$PATH
 # Allow forward-compatible ABI for PyO3-based packages on Python 3.14
 ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y && \
+    rustup default stable
 
 # Copy the current directory contents into the container at /app
 COPY . .
