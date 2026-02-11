@@ -29,7 +29,6 @@ export const FONT_SIZE_HEADER = 16;
 // Colors
 export const COLOR_BORDER = "#f0f0f0";
 export const COLOR_BACKGROUND = "#fff";
-export const COLOR_SECONDARY = "#8c8c8c";
 export const COLOR_BG_LIGHT = "#fafafa";
 
 // Spacing
@@ -38,5 +37,3 @@ export const SPACING_MEDIUM = 8;
 export const SPACING_LARGE = 12;
 export const SPACING_XLARGE = 16;
 export const SPACING_XXLARGE = 24;
-
-// Messages (kept for backwards compatibility if needed elsewhere)

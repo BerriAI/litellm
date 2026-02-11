@@ -58,7 +58,6 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -619,11 +618,12 @@ class Router:
                 self.retry_policy = RetryPolicy(**retry_policy)
             elif isinstance(retry_policy, RetryPolicy):
                 self.retry_policy = retry_policy
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
-                    self.retry_policy.model_dump(exclude_none=True)
+            if self.retry_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
+                        self.retry_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.model_group_retry_policy: Optional[
             Dict[str, RetryPolicy]
@@ -636,11 +636,12 @@ class Router:
             elif isinstance(allowed_fails_policy, AllowedFailsPolicy):
                 self.allowed_fails_policy = allowed_fails_policy
 
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
-                    self.allowed_fails_policy.model_dump(exclude_none=True)
+            if self.allowed_fails_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
+                        self.allowed_fails_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.alerting_config: Optional[AlertingConfig] = alerting_config
 
@@ -1269,13 +1270,16 @@ class Router:
 
             if silent_model is not None:
                 # Mirroring traffic to a secondary model
-                # Use shared thread pool for background calls
-                executor.submit(
-                    self._silent_experiment_completion,
-                    silent_model,
-                    messages,
-                    **kwargs,
+                # Use threading.Thread (not ThreadPoolExecutor) - executor.submit()
+                # requires pickling args, which fails when kwargs contain unpicklable
+                # objects (e.g. _thread.RLock from OTEL spans, loggers) in deployment.
+                thread = threading.Thread(
+                    target=self._silent_experiment_completion,
+                    args=(silent_model, messages),
+                    kwargs=kwargs,
+                    daemon=True,
                 )
+                thread.start()
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
@@ -1924,6 +1928,17 @@ class Router:
                 "deployment_model_name": deployment_model_name,
             }
         )
+
+        ## DEPLOYMENT-LEVEL TAGS
+        deployment_tags = deployment.get("litellm_params", {}).get("tags")
+        if deployment_tags:
+            existing_tags = kwargs[metadata_variable_name].get("tags") or []
+            merged_tags = list(existing_tags)
+            for tag in deployment_tags:
+                if tag not in merged_tags:
+                    merged_tags.append(tag)
+            kwargs[metadata_variable_name]["tags"] = merged_tags
+
         kwargs["model_info"] = model_info
 
         kwargs["timeout"] = self._get_timeout(
@@ -5925,9 +5940,20 @@ class Router:
                     deployment.litellm_params.custom_llm_provider + "/" + _model_name
                 )
 
+            # For the shared backend key, strip custom pricing fields so that
+            # one deployment's pricing overrides don't pollute another
+            # deployment sharing the same backend model name.
+            # Each deployment's full pricing is already stored under its
+            # unique model_id above.
+            _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
+            _shared_model_info = {
+                k: v
+                for k, v in _model_info.items()
+                if k not in _custom_pricing_fields
+            }
             litellm.register_model(
                 model_cost={
-                    _model_name: _model_info,
+                    _model_name: _shared_model_info,
                 }
             )
 

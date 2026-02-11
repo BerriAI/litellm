@@ -484,6 +484,7 @@ class PolicyRegistry:
                 )
                 self.add_policy(policy_response.policy_name, policy)
 
+            self._initialized = True
             verbose_proxy_logger.info(
                 f"Synced {len(policies)} policies from DB to in-memory registry"
             )

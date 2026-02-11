@@ -41,6 +41,12 @@ def test_get_api_key():
         ("Basic sk-12345678", "sk-12345678", "Basic sk-12345678"),
         ("bearer sk-12345678", "sk-12345678", "bearer sk-12345678"),
         ("sk-12345678", "sk-12345678", "sk-12345678"),
+        # AWS Signature V4 format (LangChain AWS SDK)
+        (
+            "AWS4-HMAC-SHA256 Credential=Bearer sk-12345678/20260210/us-east-1/bedrock/aws4_request, SignedHeaders=host, Signature=abc123",
+            "sk-12345678",
+            "AWS4-HMAC-SHA256 Credential=Bearer sk-12345678/20260210/us-east-1/bedrock/aws4_request, SignedHeaders=host, Signature=abc123",
+        ),
     ],
 )
 def test_get_api_key_with_custom_litellm_key_header(
@@ -243,10 +249,10 @@ async def test_proxy_admin_expired_key_from_cache():
     Regression test for issue where PROXY_ADMIN keys from cache skipped expiration check.
     """
     from datetime import datetime, timedelta, timezone
-    
+
     from fastapi import Request
     from starlette.datastructures import URL
-    
+
     from litellm.proxy._types import (
         LitellmUserRoles,
         ProxyErrorTypes,
@@ -255,7 +261,7 @@ async def test_proxy_admin_expired_key_from_cache():
     )
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
-    
+
     # Create an expired PROXY_ADMIN key
     api_key = "sk-test-proxy-admin-key"
     hashed_key = hash_token(api_key)
@@ -368,7 +374,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
     from user_obj attributes.
     """
     from datetime import datetime
-    
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
     
