@@ -12,8 +12,8 @@ WORKDIR /app
 
 USER root
 
-# Install build dependencies
-RUN apk add --no-cache bash gcc git curl build-base openssl openssl-dev
+# Install build dependencies (with retry for transient APK mirror errors)
+RUN for i in 1 2 3; do apk add --no-cache bash gcc git curl build-base openssl openssl-dev && break || sleep 5; done
 
 RUN python -m pip install --upgrade pip setuptools && \
     python -m pip install build wheel cmake setuptools_rust maturin
@@ -59,8 +59,8 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies (libsndfile needed for audio processing on ARM64)
-RUN apk add --no-cache bash openssl tzdata nodejs npm libsndfile && \
+# Install runtime dependencies (with retry for transient APK mirror errors)
+RUN for i in 1 2 3; do apk add --no-cache bash openssl tzdata nodejs npm libsndfile && break || sleep 5; done && \
     npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
     # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
     # levels inside its dependency tree. `npm install -g <pkg>` only creates a
@@ -124,7 +124,7 @@ RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoin
 
 EXPOSE 4000/tcp
 
-RUN apk add --no-cache supervisor
+RUN for i in 1 2 3; do apk add --no-cache supervisor && break || sleep 5; done
 COPY docker/supervisord.conf /etc/supervisord.conf
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]

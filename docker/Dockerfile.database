@@ -11,15 +11,17 @@ WORKDIR /app
 
 USER root
 
-# Install build dependencies
-RUN apk add --no-cache \
+# Install build dependencies (with retry for transient APK mirror errors)
+RUN for i in 1 2 3; do \
+    apk add --no-cache \
     bash \
     gcc \
     git \
     curl \
     build-base \
     openssl \
-    openssl-dev
+    openssl-dev && break || sleep 5; \
+    done
 
 RUN python -m pip install --upgrade pip setuptools && \
     python -m pip install build wheel cmake setuptools_rust maturin
@@ -61,8 +63,8 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm libsndfile && \
+# Install runtime dependencies (with retry for transient APK mirror errors)
+RUN for i in 1 2 3; do apk add --no-cache bash openssl tzdata nodejs npm libsndfile && break || sleep 5; done && \
     npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
