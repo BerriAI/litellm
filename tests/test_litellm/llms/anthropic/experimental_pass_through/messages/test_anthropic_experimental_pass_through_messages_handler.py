@@ -185,7 +185,14 @@ def test_openai_model_with_thinking_converts_to_reasoning_effort():
         
         # Verify reasoning_effort is set (converted from thinking)
         assert "reasoning_effort" in call_kwargs, "reasoning_effort should be passed to completion"
-        assert call_kwargs["reasoning_effort"] == "minimal", f"reasoning_effort should be 'minimal' for budget_tokens=1024, got {call_kwargs.get('reasoning_effort')}"
+        assert call_kwargs["reasoning_effort"] == {
+            "effort": "minimal",
+            "summary": "detailed",
+        }, f"reasoning_effort should request a reasoning summary for OpenAI responses API, got {call_kwargs.get('reasoning_effort')}"
+
+        # Verify OpenAI thinking requests are routed to the Responses API
+        assert call_kwargs.get("model") == "responses/gpt-5.2"
+        
         
         # Verify thinking is NOT passed (non-Claude model)
         assert "thinking" not in call_kwargs, "thinking should NOT be passed for non-Claude models"

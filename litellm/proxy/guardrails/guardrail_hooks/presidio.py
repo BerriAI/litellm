@@ -9,10 +9,10 @@
 
 
 import asyncio
-import threading
 import json
-from datetime import datetime
+import threading
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -39,7 +39,10 @@ if TYPE_CHECKING:
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -603,9 +606,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -706,9 +709,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
@@ -827,11 +830,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Type narrowing: StreamingChoices doesn't have .message attribute
             if not hasattr(choice, "message"):
                 continue
-            content = getattr(choice.message, "content", None)
+            content = getattr(choice.message, "content", None)  # type: ignore
             if content is None:
                 continue
             if isinstance(content, str):
-                choice.message.content = await self.check_pii(
+                choice.message.content = await self.check_pii(  # type: ignore
                     text=content,
                     output_parse_pii=False,
                     presidio_config=presidio_config,
@@ -1024,6 +1027,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception:
             pass
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
