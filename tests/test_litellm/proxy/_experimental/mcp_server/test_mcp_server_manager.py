@@ -1043,7 +1043,7 @@ class TestMCPServerManager:
             "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
             return_value=None,
         ):
-            manager._register_openapi_tools(
+            await manager._register_openapi_tools(
                 spec_path=str(spec_path),
                 server=server,
                 base_url="https://example.com",

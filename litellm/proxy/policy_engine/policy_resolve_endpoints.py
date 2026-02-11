@@ -7,7 +7,7 @@ Policy resolve and attachment impact estimation endpoints.
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from litellm.proxy.auth.route_checks import RouteChecks
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_POLICY_ESTIMATE_IMPACT_ROWS
