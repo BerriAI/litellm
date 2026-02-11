@@ -1,35 +1,41 @@
 import os
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.trace import SpanKind
-
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
-from litellm.integrations.opentelemetry import OpenTelemetry
-from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
 
 if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.trace import Span as _Span
+    from opentelemetry.trace import SpanKind
 
+    from litellm.integrations.opentelemetry import OpenTelemetry as _OpenTelemetry
     from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
     Span = Union[_Span, Any]
+    OpenTelemetry = _OpenTelemetry
 else:
     Protocol = Any
     OpenTelemetryConfig = Any
     Span = Any
+    TracerProvider = Any
+    SpanKind = Any
+    # Import OpenTelemetry at runtime
+    try:
+        from litellm.integrations.opentelemetry import OpenTelemetry
+    except ImportError:
+        OpenTelemetry = None  # type: ignore
 
 
 ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://otlp.arize.com/v1/traces"
 
 
-class ArizePhoenixLogger(OpenTelemetry):
+class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
     """
     Arize Phoenix logger that sends traces to a Phoenix endpoint.
 
@@ -50,6 +56,9 @@ class ArizePhoenixLogger(OpenTelemetry):
         By creating our own provider we guarantee Arize Phoenix always gets
         its own exporter pipeline, regardless of initialisation order.
         """
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.trace import SpanKind
+
         if tracer_provider is not None:
             # Explicitly supplied (e.g. in tests) — honour it.
             self.tracer = tracer_provider.get_tracer("litellm")
@@ -82,6 +91,8 @@ class ArizePhoenixLogger(OpenTelemetry):
 
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
 
         # Dynamic project name: check metadata first, then fall back to env var config
