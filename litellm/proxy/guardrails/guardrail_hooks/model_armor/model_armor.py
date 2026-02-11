@@ -200,12 +200,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 return await json_response
             return json_response
 
-        try:
-            return await _do_request()
-        except Exception as e:
-            if self._is_retryable_error(e):
-                return await self._call_guardrail_with_retries(_do_request)
-            raise
+        return await self._call_guardrail_with_retries(_do_request)
 
     def sanitize_file_prompt(
         self, file_bytes: bytes, file_type: str, source: str = "user_prompt"
