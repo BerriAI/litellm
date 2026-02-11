@@ -86,7 +86,6 @@ def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
 
     Returns (named_aliases, unnamed_count).
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
 
     affected: list = []
     unnamed_count = 0
@@ -112,7 +111,6 @@ def _filter_teams_by_tags(teams: list, tag_patterns: list) -> tuple:
 
     Returns (named_aliases, unnamed_count).
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
 
     affected: list = []
     unnamed_count = 0
@@ -142,7 +140,6 @@ async def _find_affected_by_team_patterns(
 
     Returns (new_teams, new_keys, unnamed_keys_count).
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
 
     new_teams: list = []
     matched_team_ids: list = []
@@ -179,7 +176,6 @@ async def _find_affected_keys_by_alias(
     prisma_client: object, key_patterns: list, existing_keys: list
 ) -> list:
     """Find keys whose alias matches the given patterns."""
-    from litellm.proxy.auth.route_checks import RouteChecks
 
     affected: list = []
 
