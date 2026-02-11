@@ -13,7 +13,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -243,13 +243,13 @@ class DualCache(BaseCache):
         current_time: float,
         keys: List[str],
         result: List[Any],
-    ) -> tuple[List[str], dict[str, Optional[float]]]:
+    ) -> Tuple[List[str], Dict[str, Optional[float]]]:
         """
         Atomically choose keys to fetch from Redis and reserve their access time.
         This prevents check-then-act races under concurrent async callers.
         """
         sublist_keys: List[str] = []
-        previous_access_times: dict[str, Optional[float]] = {}
+        previous_access_times: Dict[str, Optional[float]] = {}
 
         with self._last_redis_batch_access_time_lock:
             for key, value in zip(keys, result):
@@ -270,7 +270,7 @@ class DualCache(BaseCache):
         return sublist_keys, previous_access_times
 
     def _rollback_redis_batch_key_reservations(
-        self, previous_access_times: dict[str, Optional[float]]
+        self, previous_access_times: Dict[str, Optional[float]]
     ) -> None:
         with self._last_redis_batch_access_time_lock:
             for key, previous_time in previous_access_times.items():
@@ -306,7 +306,7 @@ class DualCache(BaseCache):
                     current_time, keys, result
                 )
 
-                # Only hit Redis if the last access time was more than 5 seconds ago
+                # Only hit Redis if enough time has passed since last access.
                 if len(sublist_keys) > 0:
                     try:
                         # If not found in in-memory cache, try fetching from Redis
