@@ -1529,3 +1529,60 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
             )
 
         assert "API Error" in str(exc_info.value)
+
+
+# ===== RETRY LOGIC TESTS =====
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [502, 504])
+async def test_model_armor_retry_on_transient_error(status_code):
+    """Test retry succeeds on second attempt for 502/504."""
+    guardrail = ModelArmorGuardrail(
+        template_id="t", project_id="p", location="us-central1",
+        guardrail_name="model-armor-test", num_retries=2, retry_after_seconds=0.01,
+    )
+
+    fail_resp = AsyncMock(status_code=status_code, text="error")
+    ok_resp = AsyncMock(status_code=200)
+    ok_resp.json = AsyncMock(return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}})
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("tok", "p"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=[fail_resp, ok_resp])) as mock_post:
+        result = await guardrail.make_model_armor_request(content="hi", source="user_prompt", request_data={})
+        assert result == {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
+        assert mock_post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_model_armor_retry_exhausted():
+    """Test raises after all retries exhausted."""
+    guardrail = ModelArmorGuardrail(
+        template_id="t", project_id="p", location="us-central1",
+        guardrail_name="model-armor-test", num_retries=2, retry_after_seconds=0.01,
+    )
+
+    fail_resp = AsyncMock(status_code=502, text="Bad Gateway")
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("tok", "p"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=fail_resp)) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_model_armor_request(content="hi", source="user_prompt", request_data={})
+        assert exc_info.value.status_code == 502
+        assert mock_post.call_count == 3  # 1 initial + 2 retries
+
+
+@pytest.mark.asyncio
+async def test_model_armor_no_retry_on_non_transient_error():
+    """Test no retry on 400 even with num_retries set."""
+    guardrail = ModelArmorGuardrail(
+        template_id="t", project_id="p", location="us-central1",
+        guardrail_name="model-armor-test", num_retries=3, retry_after_seconds=0.01,
+    )
+
+    fail_resp = AsyncMock(status_code=400, text="Bad Request")
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("tok", "p"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=fail_resp)) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_model_armor_request(content="hi", source="user_prompt", request_data={})
+        assert exc_info.value.status_code == 400
+        assert mock_post.call_count == 1

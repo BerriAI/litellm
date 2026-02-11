@@ -1,3 +1,4 @@
+import asyncio
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -9,6 +10,7 @@ from typing import (
     Union,
 )
 
+import httpx
 from fastapi import HTTPException
 
 if TYPE_CHECKING:
@@ -18,6 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
+    RETRYABLE_STATUS_CODES,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -180,23 +183,46 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             body,
         )
 
-        # Make request
+        # Make request (with retries for transient errors like 502/504)
         if self.async_handler is None:
             raise ValueError("Async handler not initialized")
 
-        response = await self.async_handler.post(
-            url=url,
-            json=body,
-            headers=headers,
-        )
+        for attempt in range(1 + self.num_retries):
+            response = await self.async_handler.post(
+                url=url,
+                json=body,
+                headers=headers,
+            )
 
-        verbose_proxy_logger.debug(
-            "Model Armor response - Status: %s, Body: %s",
-            response.status_code,
-            response.text,
-        )
+            verbose_proxy_logger.debug(
+                "Model Armor response - Status: %s, Body: %s",
+                response.status_code,
+                response.text,
+            )
 
-        if response.status_code != 200:
+            if response.status_code == 200:
+                json_response = response.json()
+                if hasattr(json_response, "__await__"):
+                    return await json_response
+                return json_response
+
+            # Retry on transient errors (502, 504, etc.)
+            if (
+                response.status_code in RETRYABLE_STATUS_CODES
+                and attempt < self.num_retries
+            ):
+                delay = self.retry_after_seconds * (2**attempt)
+                verbose_proxy_logger.warning(
+                    "Model Armor API transient error (attempt %d/%d), status: %s, retrying in %.2fs",
+                    attempt + 1,
+                    1 + self.num_retries,
+                    response.status_code,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # Non-retryable error or retries exhausted
             verbose_proxy_logger.error(
                 "Model Armor API error - Status: %s, Response: %s",
                 response.status_code,
@@ -207,10 +233,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 detail=f"Model Armor API error: {response.text}",
             )
 
-        json_response = response.json()
-        if hasattr(json_response, "__await__"):
-            return await json_response
-        return json_response
+        # Should not be reached, but satisfy type checker
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Model Armor API error after {self.num_retries} retries: {response.text}",
+        )
 
     def sanitize_file_prompt(
         self, file_bytes: bytes, file_type: str, source: str = "user_prompt"

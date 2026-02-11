@@ -646,6 +646,16 @@ class BaseLitellmParams(
         description="Whether to fail the request if Model Armor encounters an error",
     )
 
+    # Guardrail retry params (applies to all guardrail types)
+    num_retries: Optional[int] = Field(
+        default=None,
+        description="Number of retries for transient guardrail API failures (e.g. 502/504). Defaults to 0 (no retries).",
+    )
+    retry_after_seconds: Optional[float] = Field(
+        default=None,
+        description="Base delay in seconds between retries. Exponential backoff is applied (delay * 2^attempt). Defaults to 1.0.",
+    )
+
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Additional provider-specific parameters for generic guardrail APIs",
