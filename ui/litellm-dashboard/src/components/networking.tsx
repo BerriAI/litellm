@@ -259,6 +259,7 @@ export interface LiteLLMWellKnownUiConfig {
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
+  sso_configured: boolean;
 }
 
 export interface CredentialsResponse {

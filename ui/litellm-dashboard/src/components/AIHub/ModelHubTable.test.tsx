@@ -71,6 +71,7 @@ describe("ModelHubTable", () => {
       proxy_base_url: "http://localhost:4000",
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
     vi.mocked(networking.modelHubPublicModelsCall).mockResolvedValue([]);
     vi.mocked(networking.getUiSettings).mockResolvedValue({
@@ -140,6 +141,7 @@ describe("ModelHubTable", () => {
       proxy_base_url: "http://localhost:4000",
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
     modelHubPublicModelsCallMock.mockResolvedValue([]);
     vi.mocked(networking.getUiSettings).mockResolvedValue({
