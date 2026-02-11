@@ -12,9 +12,6 @@ from typing import (
 
 import httpx
 
-from litellm.anthropic_beta_headers_manager import (
-    filter_and_transform_beta_headers,
-)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
