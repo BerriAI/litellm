@@ -26,6 +26,127 @@ from litellm.types.proxy.policy_engine import (
 router = APIRouter()
 
 
+def _parse_metadata(raw_metadata: object) -> dict:
+    """Parse metadata that may be a dict, JSON string, or None."""
+    if raw_metadata is None:
+        return {}
+    if isinstance(raw_metadata, str):
+        try:
+            return json.loads(raw_metadata)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return raw_metadata if isinstance(raw_metadata, dict) else {}
+
+
+def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> list:
+    """Extract tags list from a metadata field (or metadata_json fallback)."""
+    raw = json_metadata if json_metadata is not None else metadata
+    parsed = _parse_metadata(raw)
+    return parsed.get("tags", []) or []
+
+
+async def _find_affected_keys_by_tags(
+    prisma_client: object, tag_patterns: list
+) -> list:
+    """Find key aliases whose metadata.tags match any of the given patterns."""
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    affected: list = []
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+        where={}, order={"created_at": "desc"},
+    )
+    for key in keys:
+        key_alias = key.key_alias or ""
+        key_tags = _get_tags_from_metadata(
+            key.metadata, getattr(key, "metadata_json", None)
+        )
+        if key_tags and any(
+            RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
+            for tag in key_tags
+            for pat in tag_patterns
+        ):
+            affected.append(key_alias or str(key.token)[:8] + "...")
+    return affected
+
+
+async def _find_affected_teams_by_tags(
+    prisma_client: object, tag_patterns: list
+) -> list:
+    """Find team aliases whose metadata.tags match any of the given patterns."""
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    affected: list = []
+    teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
+        where={}, order={"created_at": "desc"},
+    )
+    for team in teams:
+        team_alias = team.team_alias or ""
+        team_tags = _get_tags_from_metadata(team.metadata)
+        if team_tags and any(
+            RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
+            for tag in team_tags
+            for pat in tag_patterns
+        ):
+            affected.append(team_alias or str(team.team_id)[:8] + "...")
+    return affected
+
+
+async def _find_affected_by_team_patterns(
+    prisma_client: object, team_patterns: list, existing_teams: list, existing_keys: list
+) -> tuple:
+    """Find teams matching alias patterns and keys belonging to those teams."""
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    new_teams: list = []
+    matched_team_ids: list = []
+    teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
+        where={}, order={"created_at": "desc"},
+    )
+    for team in teams:
+        team_alias = team.team_alias or ""
+        if team_alias and any(
+            RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat)
+            for pat in team_patterns
+        ):
+            if team_alias not in existing_teams:
+                new_teams.append(team_alias)
+                matched_team_ids.append(str(team.team_id))
+
+    new_keys: list = []
+    if matched_team_ids:
+        keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+            where={"team_id": {"in": matched_team_ids}},
+            order={"created_at": "desc"},
+        )
+        for key in keys:
+            key_alias = key.key_alias or str(key.token)[:8] + "..."
+            if key_alias not in existing_keys:
+                new_keys.append(key_alias)
+
+    return new_teams, new_keys
+
+
+async def _find_affected_keys_by_alias(
+    prisma_client: object, key_patterns: list, existing_keys: list
+) -> list:
+    """Find keys whose alias matches the given patterns."""
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    affected: list = []
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+        where={}, order={"created_at": "desc"},
+    )
+    for key in keys:
+        key_alias = key.key_alias or ""
+        if key_alias and any(
+            RouteChecks._route_matches_wildcard_pattern(route=key_alias, pattern=pat)
+            for pat in key_patterns
+        ):
+            if key_alias not in existing_keys:
+                affected.append(key_alias)
+    return affected
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Policy Resolve Endpoint
 # ─────────────────────────────────────────────────────────────────────────────
@@ -160,19 +281,12 @@ async def estimate_attachment_impact(
         }'
     ```
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        tag_patterns = request.tags or []
-        team_patterns = request.teams or []
-
-        affected_keys: list = []
-        affected_teams: list = []
-
         # If global scope, everything is affected — not useful to enumerate
         if request.scope == "*":
             return AttachmentImpactResponse(
@@ -182,101 +296,31 @@ async def estimate_attachment_impact(
                 sample_teams=["(global scope — affects all teams)"],
             )
 
-        # Check tag-based impact: find keys/teams whose metadata.tags match the patterns
+        affected_keys: list = []
+        affected_teams: list = []
+
+        # Tag-based impact
+        tag_patterns = request.tags or []
         if tag_patterns:
-            # Query keys with metadata
-            keys = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={},
-                order={"created_at": "desc"},
-            )
-            for key in keys:
-                key_alias = key.key_alias or ""
-                key_metadata = key.metadata_json if hasattr(key, "metadata_json") else (key.metadata or {})
-                if isinstance(key_metadata, str):
-                    try:
-                        key_metadata = json.loads(key_metadata)
-                    except (json.JSONDecodeError, TypeError):
-                        key_metadata = {}
-                key_tags = key_metadata.get("tags", []) if isinstance(key_metadata, dict) else []
-                if key_tags and any(
-                    RouteChecks._route_matches_wildcard_pattern(
-                        route=tag, pattern=pattern
-                    )
-                    for tag in key_tags
-                    for pattern in tag_patterns
-                ):
-                    affected_keys.append(key_alias or str(key.token)[:8] + "...")
+            affected_keys = await _find_affected_keys_by_tags(prisma_client, tag_patterns)
+            affected_teams = await _find_affected_teams_by_tags(prisma_client, tag_patterns)
 
-            # Query teams with metadata
-            teams = await prisma_client.db.litellm_teamtable.find_many(
-                where={},
-                order={"created_at": "desc"},
-            )
-            for team in teams:
-                team_alias = team.team_alias or ""
-                team_metadata = team.metadata or {}
-                if isinstance(team_metadata, str):
-                    try:
-                        team_metadata = json.loads(team_metadata)
-                    except (json.JSONDecodeError, TypeError):
-                        team_metadata = {}
-                team_tags = team_metadata.get("tags", []) if isinstance(team_metadata, dict) else []
-                if team_tags and any(
-                    RouteChecks._route_matches_wildcard_pattern(
-                        route=tag, pattern=pattern
-                    )
-                    for tag in team_tags
-                    for pattern in tag_patterns
-                ):
-                    affected_teams.append(team_alias or str(team.team_id)[:8] + "...")
-
-        # Check team-based impact
-        matched_team_ids: list = []
+        # Team-based impact (alias matching + keys belonging to those teams)
+        team_patterns = request.teams or []
         if team_patterns:
-            teams = await prisma_client.db.litellm_teamtable.find_many(
-                where={},
-                order={"created_at": "desc"},
+            new_teams, new_keys = await _find_affected_by_team_patterns(
+                prisma_client, team_patterns, affected_teams, affected_keys,
             )
-            for team in teams:
-                team_alias = team.team_alias or ""
-                if team_alias and any(
-                    RouteChecks._route_matches_wildcard_pattern(
-                        route=team_alias, pattern=pattern
-                    )
-                    for pattern in team_patterns
-                ):
-                    if team_alias not in affected_teams:
-                        affected_teams.append(team_alias)
-                        matched_team_ids.append(str(team.team_id))
+            affected_teams.extend(new_teams)
+            affected_keys.extend(new_keys)
 
-            # Also find keys belonging to matched teams
-            if matched_team_ids:
-                keys = await prisma_client.db.litellm_verificationtoken.find_many(
-                    where={"team_id": {"in": matched_team_ids}},
-                    order={"created_at": "desc"},
-                )
-                for key in keys:
-                    key_alias = key.key_alias or str(key.token)[:8] + "..."
-                    if key_alias not in affected_keys:
-                        affected_keys.append(key_alias)
-
-        # Check key-based impact (direct key alias matching)
+        # Key-based impact (direct alias matching)
         key_patterns = request.keys or []
         if key_patterns:
-            keys = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={},
-                order={"created_at": "desc"},
+            new_keys = await _find_affected_keys_by_alias(
+                prisma_client, key_patterns, affected_keys,
             )
-            for key in keys:
-                key_alias = key.key_alias or ""
-                if key_alias and any(
-                    RouteChecks._route_matches_wildcard_pattern(
-                        route=key_alias, pattern=pattern
-                    )
-                    for pattern in key_patterns
-                ):
-                    if key_alias not in affected_keys:
-                        affected_keys.append(key_alias)
+            affected_keys.extend(new_keys)
 
         return AttachmentImpactResponse(
             affected_keys_count=len(affected_keys),
