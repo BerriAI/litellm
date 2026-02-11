@@ -2081,3 +2081,63 @@ def test_update_kwargs_with_deployment_no_tags():
 
     # No tags key should be added if deployment has no tags
     assert "tags" not in kwargs["metadata"]
+
+
+def test_stale_index_after_deployment_deletion_does_not_crash():
+    """
+    When a deployment is deleted from a model group, stale indices in
+    model_name_to_deployment_indices could cause IndexError in
+    _get_all_deployments. This test verifies that the bounds checking
+    prevents crashes even if indices become temporarily stale.
+
+    Regression test for GitHub issue #15521.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-1",
+                },
+                "model_info": {"id": "deployment-A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-2",
+                },
+                "model_info": {"id": "deployment-B"},
+            },
+        ],
+    )
+
+    # Verify both deployments are initially accessible
+    model_list = router.get_model_list(model_name="test-model")
+    assert model_list is not None
+    assert len(model_list) == 2
+
+    # Delete the first deployment
+    deleted = router.delete_deployment(id="deployment-A")
+    assert deleted is not None
+
+    # After deletion, the remaining deployment should still be accessible
+    model_list = router.get_model_list(model_name="test-model")
+    assert model_list is not None
+    assert len(model_list) == 1
+
+    # Simulate stale indices: manually corrupt the index to point beyond
+    # model_list length. This simulates the race condition window between
+    # pop() and _update_deployment_indices_after_removal().
+    router.model_name_to_deployment_indices["test-model"] = [0, 999]
+
+    # This should NOT raise IndexError, it should skip the stale index
+    model_list = router.get_model_list(model_name="test-model")
+    assert model_list is not None
+    assert len(model_list) == 1  # Only the valid index returns a result
+
+    # Also verify get_deployment handles stale index gracefully
+    router.model_id_to_deployment_index_map["stale-id"] = 999
+    result = router.get_deployment(model_id="stale-id")
+    assert result is None  # Should return None, not crash

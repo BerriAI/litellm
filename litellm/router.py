@@ -6487,6 +6487,8 @@ class Router:
         # Use O(1) lookup via model_id_to_deployment_index_map only
         if model_id in self.model_id_to_deployment_index_map:
             idx = self.model_id_to_deployment_index_map[model_id]
+            if idx >= len(self.model_list):
+                return None
             model = self.model_list[idx]
             if isinstance(model, dict):
                 return Deployment(**model)
@@ -6521,7 +6523,7 @@ class Router:
         # O(1) lookup in model_name index
         if model_group_name in self.model_name_to_deployment_indices:
             indices = self.model_name_to_deployment_indices[model_group_name]
-            if indices:
+            if indices and indices[0] < len(self.model_list):
                 # Return first deployment for this model_name
                 model = self.model_list[indices[0]]
                 if isinstance(model, dict):
@@ -6693,6 +6695,8 @@ class Router:
         # O(1) lookup via model_id_to_deployment_index_map
         if id in self.model_id_to_deployment_index_map:
             idx = self.model_id_to_deployment_index_map[id]
+            if idx >= len(self.model_list):
+                return None
             return self.model_list[idx]
         return None
 
@@ -7238,6 +7242,8 @@ class Router:
             if model_name in self.model_name_to_deployment_indices:
                 indices = self.model_name_to_deployment_indices[model_name]
                 for idx in indices:
+                    if idx >= len(self.model_list):
+                        continue
                     model = self.model_list[idx]
                     if "model_info" in model and "id" in model["model_info"]:
                         if exclude_team_models and model["model_info"].get("team_id"):
@@ -7248,6 +7254,8 @@ class Router:
             # Use the index map keys for O(n) where n = total deployments
             for model_id in self.model_id_to_deployment_index_map.keys():
                 idx = self.model_id_to_deployment_index_map[model_id]
+                if idx >= len(self.model_list):
+                    continue
                 model = self.model_list[idx]
                 if "model_info" in model and "id" in model["model_info"]:
                     if exclude_team_models and model["model_info"].get("team_id"):
@@ -7380,6 +7388,10 @@ class Router:
 
             # O(k) where k = deployments for this model_name (typically 1-10)
             for idx in indices:
+                if idx >= len(self.model_list):
+                    # Guard against stale indices during concurrent deployment
+                    # removal (race between pop + index update). Skip silently.
+                    continue
                 model = self.model_list[idx]
                 if self.should_include_deployment(
                     model_name=model_name, model=model, team_id=team_id
