@@ -822,7 +822,24 @@ def test_responses_api_response_missing_optional_fields():
     resp = ResponsesAPIResponse(**minimal)
     assert resp.id == "resp_abc123"
     assert resp.created_at is None
-    assert resp.output is None
+    # output defaults to empty list (not None) so iteration is safe
+    assert resp.output == []
+
+
+def test_responses_api_response_output_text_with_empty_output():
+    """
+    Verify that output_text property works safely when output is empty
+    (the default when a provider omits it from a streaming event).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20570.
+    Without defaulting output to [], this would crash with:
+      TypeError: 'NoneType' object is not iterable
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    resp = ResponsesAPIResponse(id="resp_abc123", status="in_progress")
+    # output_text iterates self.output — must not crash
+    assert resp.output_text == ""
 
 
 def test_streaming_event_models_missing_index_fields():
@@ -850,7 +867,11 @@ def test_streaming_event_models_missing_index_fields():
     assert evt2.output_index is None
     assert evt2.content_index is None
 
-    # OutputTextDeltaEvent without indices
+    # OutputTextDeltaEvent — delta defaults to "" (not None) so string ops are safe
     evt3 = OutputTextDeltaEvent(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
     assert evt3.output_index is None
     assert evt3.content_index is None
+    assert evt3.delta == ""
+    # Verify string operations work without error
+    assert len(evt3.delta) == 0
+    assert evt3.delta + "suffix" == "suffix"

@@ -1169,19 +1169,17 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     metadata: Optional[Dict] = None
     model: Optional[str] = None
     object: Optional[str] = None
-    output: Optional[
-        Union[
-            List[Union[ResponseOutputItem, Dict]],
-            List[
-                Union[
-                    GenericResponseOutputItem,
-                    OutputFunctionToolCall,
-                    OutputImageGenerationCall,
-                    ResponseFunctionToolCall,
-                ]
-            ],
-        ]
-    ] = None
+    output: Union[
+        List[Union[ResponseOutputItem, Dict]],
+        List[
+            Union[
+                GenericResponseOutputItem,
+                OutputFunctionToolCall,
+                OutputImageGenerationCall,
+                ResponseFunctionToolCall,
+            ]
+        ],
+    ] = []
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
     tool_choice: Optional[ToolChoice] = None
@@ -1442,7 +1440,7 @@ class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: Optional[str] = None
     output_index: Optional[int] = None
     content_index: Optional[int] = None
-    delta: Optional[str] = None
+    delta: str = ""
 
 
 class OutputTextAnnotationAddedEvent(BaseLiteLLMOpenAIResponseObject):
