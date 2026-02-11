@@ -153,7 +153,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             "standard_logging_object", None
         )
         if standard_logging_payload is None:
-            raise ValueError("standard_logging_payload is required")
+            verbose_proxy_logger.debug(
+                "Skipping _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: standard_logging_payload is None"
+            )
+            return
 
         _litellm_params: dict = kwargs.get("litellm_params", {}) or {}
         _metadata: dict = _litellm_params.get("metadata", {}) or {}
