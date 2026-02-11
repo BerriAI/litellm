@@ -632,3 +632,54 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         assert req.headers.get("User-Agent") == "Claude Code"
     finally:
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_timeout_error_message_with_none_timeout():
+    """
+    Verify the Timeout error message does not show 'None seconds' when
+    the timeout parameter is None.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/14635.
+    """
+    handler = AsyncHTTPHandler(timeout=None)
+    try:
+        with patch.object(
+            handler.client,
+            "send",
+            side_effect=httpx.TimeoutException("test timeout"),
+        ):
+            with pytest.raises(litellm.Timeout) as exc_info:
+                await handler.post(url="https://api.example.com/v1/chat", json={})
+
+            # Must NOT contain "None seconds"
+            assert "None" not in str(exc_info.value)
+            assert "timed out" in str(exc_info.value).lower()
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_timeout_error_message_with_specified_timeout():
+    """
+    Verify the Timeout error message includes the actual timeout value
+    when one is configured.
+    """
+    handler = AsyncHTTPHandler(timeout=30.0)
+    try:
+        with patch.object(
+            handler.client,
+            "send",
+            side_effect=httpx.TimeoutException("test timeout"),
+        ):
+            with pytest.raises(litellm.Timeout) as exc_info:
+                await handler.post(
+                    url="https://api.example.com/v1/chat",
+                    json={},
+                    timeout=30.0,
+                )
+
+            assert "30" in str(exc_info.value)
+            assert "seconds" in str(exc_info.value).lower()
+    finally:
+        await handler.close()

@@ -562,7 +562,7 @@ class AsyncHTTPHandler:
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {timeout} seconds." if timeout is not None else "Connection timed out.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
                 headers=headers,
@@ -628,7 +628,7 @@ class AsyncHTTPHandler:
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {timeout} seconds." if timeout is not None else "Connection timed out.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
                 headers=headers,
@@ -1025,7 +1025,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {timeout} seconds." if timeout is not None else "Connection timed out.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1073,7 +1073,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {timeout} seconds." if timeout is not None else "Connection timed out.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1121,7 +1121,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {timeout} seconds." if timeout is not None else "Connection timed out.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1158,7 +1158,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {timeout} seconds." if timeout is not None else "Connection timed out.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
