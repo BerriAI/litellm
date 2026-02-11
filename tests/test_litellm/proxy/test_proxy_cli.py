@@ -481,6 +481,139 @@ class TestProxyInitializationHelpers:
                 mock_uvicorn_run.assert_called_once()
 
 
+class TestPrometheusMultiprocessSetup:
+    """Test cases for auto-configuring PROMETHEUS_MULTIPROC_DIR with multiple workers"""
+
+    @staticmethod
+    def _write_config(tmp_path, callbacks=None):
+        """Write a minimal config yaml and return the path."""
+        import yaml
+
+        config = {
+            "general_settings": {},
+            "litellm_settings": {},
+        }
+        if callbacks is not None:
+            config["litellm_settings"]["callbacks"] = callbacks
+        config_path = os.path.join(str(tmp_path), "config.yaml")
+        with open(config_path, "w") as f:
+            yaml.dump(config, f)
+        return config_path
+
+    @patch("uvicorn.run")
+    def test_prometheus_multiproc_dir_auto_created(self, mock_uvicorn_run, tmp_path):
+        """When num_workers > 1 and prometheus is in callbacks, PROMETHEUS_MULTIPROC_DIR should be auto-set"""
+        import shutil
+
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        config_path = self._write_config(tmp_path, callbacks=["prometheus"])
+
+        # Ensure clean state
+        orig_val = os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+        try:
+            with patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args:
+                mock_get_args.return_value = {
+                    "app": "litellm.proxy.proxy_server:app",
+                    "host": "localhost",
+                    "port": 8000,
+                }
+
+                result = runner.invoke(
+                    run_server,
+                    ["--config", config_path, "--num_workers", "4", "--skip_server_startup"],
+                )
+
+                assert result.exit_code == 0, result.output
+                assert "PROMETHEUS_MULTIPROC_DIR" in os.environ
+                prom_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
+                assert "litellm_prometheus_" in prom_dir
+                assert os.path.isdir(prom_dir)
+        finally:
+            # Cleanup
+            prom_dir = os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            if prom_dir and os.path.exists(prom_dir):
+                shutil.rmtree(prom_dir, ignore_errors=True)
+            if orig_val is not None:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = orig_val
+
+    @patch("uvicorn.run")
+    def test_prometheus_multiproc_dir_not_set_for_single_worker(
+        self, mock_uvicorn_run, tmp_path
+    ):
+        """With num_workers=1, PROMETHEUS_MULTIPROC_DIR should NOT be auto-set"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        config_path = self._write_config(tmp_path, callbacks=["prometheus"])
+
+        orig_val = os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+        try:
+            with patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args:
+                mock_get_args.return_value = {
+                    "app": "litellm.proxy.proxy_server:app",
+                    "host": "localhost",
+                    "port": 8000,
+                }
+
+                result = runner.invoke(
+                    run_server,
+                    ["--config", config_path, "--skip_server_startup"],
+                )
+
+                assert result.exit_code == 0, result.output
+                assert "PROMETHEUS_MULTIPROC_DIR" not in os.environ
+        finally:
+            if orig_val is not None:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = orig_val
+
+    @patch("uvicorn.run")
+    def test_prometheus_multiproc_dir_respects_existing_env(
+        self, mock_uvicorn_run, tmp_path
+    ):
+        """When PROMETHEUS_MULTIPROC_DIR is already set, it should not be overwritten"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        config_path = self._write_config(tmp_path, callbacks=["prometheus"])
+
+        orig_val = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+        os.environ["PROMETHEUS_MULTIPROC_DIR"] = "/custom/prom/dir"
+        try:
+            with patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args:
+                mock_get_args.return_value = {
+                    "app": "litellm.proxy.proxy_server:app",
+                    "host": "localhost",
+                    "port": 8000,
+                }
+
+                result = runner.invoke(
+                    run_server,
+                    ["--config", config_path, "--num_workers", "4", "--skip_server_startup"],
+                )
+
+                assert result.exit_code == 0, result.output
+                assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == "/custom/prom/dir"
+        finally:
+            if orig_val is not None:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = orig_val
+            else:
+                os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+
+
 class TestHealthAppFactory:
     """Test cases for the health app factory module"""
 

@@ -681,6 +681,45 @@ def run_server(  # noqa: PLR0915
                 litellm.json_logs = True
 
                 litellm._turn_on_json()
+
+            ### PROMETHEUS MULTIPROCESS SETUP ###
+            # When running with multiple workers, Prometheus needs a shared
+            # directory so metrics are aggregated across all worker processes.
+            # See https://prometheus.github.io/client_python/multiprocess/
+            _callbacks = (
+                litellm_settings.get("callbacks", [])
+                if litellm_settings
+                else []
+            )
+            if (
+                num_workers > 1
+                and "prometheus" in _callbacks
+                and "PROMETHEUS_MULTIPROC_DIR" not in os.environ
+            ):
+                import atexit
+                import shutil
+                import tempfile
+
+                _prom_dir = tempfile.mkdtemp(prefix="litellm_prometheus_")
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = _prom_dir
+                print(  # noqa
+                    f"\033[1;32mLiteLLM: Auto-configured PROMETHEUS_MULTIPROC_DIR={_prom_dir} for {num_workers} workers\033[0m"  # noqa
+                )
+
+                def _cleanup_prometheus_dir():
+                    if os.path.exists(_prom_dir):
+                        shutil.rmtree(_prom_dir, ignore_errors=True)
+
+                atexit.register(_cleanup_prometheus_dir)
+            elif (
+                num_workers > 1
+                and "prometheus" in _callbacks
+                and "PROMETHEUS_MULTIPROC_DIR" in os.environ
+            ):
+                print(  # noqa
+                    f"\033[1;32mLiteLLM: Using existing PROMETHEUS_MULTIPROC_DIR={os.environ['PROMETHEUS_MULTIPROC_DIR']}\033[0m"  # noqa
+                )
+
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
