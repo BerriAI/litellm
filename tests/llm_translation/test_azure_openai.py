@@ -728,3 +728,15 @@ def test_azure_with_content_safety_error():
     assert e.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
     assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["filtered"] is True
     assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"
+
+
+async def test_azure_openai_with_prompt_cache_key():
+    """
+    E2E test for Azure OpenAI with prompt cache key param on /chat/completions API.
+    """
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="azure/gpt-4o",
+        messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+        prompt_cache_key="test_streaming_azure_openai",
+    )
