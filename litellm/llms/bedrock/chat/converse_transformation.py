@@ -3,6 +3,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 """
 
 import copy
+import json
 import time
 import types
 from typing import List, Literal, Optional, Tuple, Union, cast, overload
@@ -1566,8 +1567,6 @@ class AmazonConverseConfig(BaseConfig):
         2. Mixed json_tool_call + real  -> filter out json_tool_call, return real tools
         3. No json_tool_call / no json_mode -> return tools as-is
         """
-        import json as json_module
-
         if not json_mode or not tools:
             return tools if tools else None
 
@@ -1591,20 +1590,42 @@ class AmazonConverseConfig(BaseConfig):
             )
             if json_mode_content_str is not None:
                 try:
-                    response_data = json_module.loads(json_mode_content_str)
+                    response_data = json.loads(json_mode_content_str)
                     if (
                         isinstance(response_data, dict)
                         and "properties" in response_data
                         and len(response_data) == 1
                     ):
                         response_data = response_data["properties"]
-                        json_mode_content_str = json_module.dumps(response_data)
-                except json_module.JSONDecodeError:
+                        json_mode_content_str = json.dumps(response_data)
+                except json.JSONDecodeError:
                     pass
                 chat_completion_message["content"] = json_mode_content_str
             return None
 
-        # Mixed: filter out json_tool_call, keep real tools
+        # Mixed: filter out json_tool_call, keep real tools.
+        # Preserve the json_tool_call content as message text so the structured
+        # output from response_format is not silently lost.
+        for idx in json_tool_indices:
+            json_mode_args = tools[idx]["function"].get("arguments")
+            if json_mode_args is not None:
+                try:
+                    response_data = json.loads(json_mode_args)
+                    if (
+                        isinstance(response_data, dict)
+                        and "properties" in response_data
+                        and len(response_data) == 1
+                    ):
+                        response_data = response_data["properties"]
+                        json_mode_args = json.dumps(response_data)
+                except json.JSONDecodeError:
+                    pass
+                existing = chat_completion_message.get("content") or ""
+                chat_completion_message["content"] = (
+                    existing + json_mode_args if existing else json_mode_args
+                )
+            break  # only use the first json_tool_call
+
         real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
         return real_tools if real_tools else None
 
