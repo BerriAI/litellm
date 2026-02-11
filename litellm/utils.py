@@ -1678,8 +1678,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (kwargs.get(
+                    "metadata"), {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1724,8 +1724,8 @@ def client(original_function):  # noqa: PLR0915
                     None  # set retries to None to prevent infinite loops
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (kwargs.get(
+                    "metadata"), {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1974,8 +1974,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (kwargs.get(
+                    "metadata"), {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -2008,8 +2008,8 @@ def client(original_function):  # noqa: PLR0915
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
             elif call_type == CallTypes.aresponses.value:
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (kwargs.get(
+                    "metadata"), {}
                 )  # check if call from litellm.router/proxy
 
                 if (
