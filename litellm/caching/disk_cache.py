@@ -63,9 +63,12 @@ class DiskCache(BaseCache):
         with self.disk_cache.transact():
             init_value = self.disk_cache.get(key, default=0)
 
-            try:
-                parsed_value = json.loads(init_value)  # type: ignore[arg-type]
-            except Exception:
+            if isinstance(init_value, (str, bytes, bytearray)):
+                try:
+                    parsed_value = json.loads(init_value)  # type: ignore[arg-type]
+                except Exception:
+                    parsed_value = init_value
+            else:
                 parsed_value = init_value
 
             if parsed_value is None:

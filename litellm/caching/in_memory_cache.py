@@ -229,7 +229,7 @@ class InMemoryCache(BaseCache):
             return_val.append(val)
         return return_val
 
-    def increment_cache(self, key, value: int, **kwargs) -> int:
+    def increment_cache(self, key, value: float, **kwargs) -> float:
         with self._increment_lock:
             # keep read-modify-write atomic
             init_value = self.get_cache(key=key) or 0
