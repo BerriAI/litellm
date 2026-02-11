@@ -708,6 +708,20 @@ class Cache:
             if self.ttl is not None:
                 kwargs["ttl"] = self.ttl
 
+            # Sort result.data by index so that positional access in
+            # add_embedding_response_to_cache correctly maps input[i] to
+            # the embedding for input[i].  Some providers (e.g. vLLM) may
+            # return embeddings out of order.  See #20456.
+            if (
+                isinstance(result, EmbeddingResponse)
+                and result.data
+                and hasattr(result.data[0], "index")
+            ):
+                result.data = sorted(
+                    result.data,
+                    key=lambda e: getattr(e, "index", 0),
+                )
+
             cache_list = []
             if isinstance(kwargs["input"], list):
                 for idx, i in enumerate(kwargs["input"]):
