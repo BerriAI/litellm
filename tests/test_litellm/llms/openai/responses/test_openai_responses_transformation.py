@@ -803,3 +803,54 @@ def test_get_supported_openai_params():
     assert "stream" in params
     assert "background" in params
     assert "stream" in params
+
+
+def test_responses_api_response_missing_optional_fields():
+    """
+    Verify that ResponsesAPIResponse can be constructed when an
+    OpenAI-compatible provider omits created_at and output.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20570.
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    # Minimal payload from an OpenAI-compatible upstream
+    minimal = {
+        "id": "resp_abc123",
+        "status": "in_progress",
+    }
+    resp = ResponsesAPIResponse(**minimal)
+    assert resp.id == "resp_abc123"
+    assert resp.created_at is None
+    assert resp.output is None
+
+
+def test_streaming_event_models_missing_index_fields():
+    """
+    Verify that OutputItemAddedEvent, ContentPartAddedEvent, and
+    OutputTextDeltaEvent can be constructed when the upstream omits
+    output_index and content_index.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20570.
+    """
+    from litellm.types.llms.openai import (
+        ContentPartAddedEvent,
+        OutputItemAddedEvent,
+        OutputTextDeltaEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    # OutputItemAddedEvent without output_index
+    evt1 = OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED)
+    assert evt1.output_index is None
+    assert evt1.item is None
+
+    # ContentPartAddedEvent without indices
+    evt2 = ContentPartAddedEvent(type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED)
+    assert evt2.output_index is None
+    assert evt2.content_index is None
+
+    # OutputTextDeltaEvent without indices
+    evt3 = OutputTextDeltaEvent(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
+    assert evt3.output_index is None
+    assert evt3.content_index is None

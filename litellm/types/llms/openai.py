@@ -1162,24 +1162,26 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
-    created_at: int
+    created_at: Optional[int] = None
     error: Optional[dict] = None
     incomplete_details: Optional[IncompleteDetails] = None
     instructions: Optional[str] = None
     metadata: Optional[Dict] = None
     model: Optional[str] = None
     object: Optional[str] = None
-    output: Union[
-        List[Union[ResponseOutputItem, Dict]],
-        List[
-            Union[
-                GenericResponseOutputItem,
-                OutputFunctionToolCall,
-                OutputImageGenerationCall,
-                ResponseFunctionToolCall,
-            ]
-        ],
-    ]
+    output: Optional[
+        Union[
+            List[Union[ResponseOutputItem, Dict]],
+            List[
+                Union[
+                    GenericResponseOutputItem,
+                    OutputFunctionToolCall,
+                    OutputImageGenerationCall,
+                    ResponseFunctionToolCall,
+                ]
+            ],
+        ]
+    ] = None
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
     tool_choice: Optional[ToolChoice] = None
@@ -1371,8 +1373,8 @@ class ReasoningSummaryPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
 
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
-    output_index: int
-    item: Optional[BaseLiteLLMOpenAIResponseObject]
+    output_index: Optional[int] = None
+    item: Optional[BaseLiteLLMOpenAIResponseObject] = None
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1397,10 +1399,10 @@ class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
 
 class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_ADDED]
-    item_id: str
-    output_index: int
-    content_index: int
-    part: BaseLiteLLMOpenAIResponseObject
+    item_id: Optional[str] = None
+    output_index: Optional[int] = None
+    content_index: Optional[int] = None
+    part: Optional[BaseLiteLLMOpenAIResponseObject] = None
 
 
 class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
@@ -1437,10 +1439,10 @@ class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
 
 class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
-    item_id: str
-    output_index: int
-    content_index: int
-    delta: str
+    item_id: Optional[str] = None
+    output_index: Optional[int] = None
+    content_index: Optional[int] = None
+    delta: Optional[str] = None
 
 
 class OutputTextAnnotationAddedEvent(BaseLiteLLMOpenAIResponseObject):
