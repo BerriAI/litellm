@@ -13,10 +13,13 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache bash gcc git openssl openssl-dev
+RUN apk add --no-cache bash gcc git curl build-base openssl openssl-dev
 
 RUN python -m pip install --upgrade pip setuptools && \
     python -m pip install build wheel cmake setuptools_rust maturin
+
+# Install build dependencies needed for git-based packages
+RUN pip install --no-cache-dir hatchling hatch-vcs
 
 # Configure Rust environment for building Rust-backed Python wheels
 ENV CARGO_HOME=/root/.cargo
@@ -24,10 +27,8 @@ ENV PATH=/root/.cargo/bin:$PATH
 # Allow forward-compatible ABI for PyO3-based packages on Python 3.14
 ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
-RUN apk add --no-cache curl build-base openssl-dev && \
-    curl https://sh.rustup.rs -sSf | sh -s -- -y && \
-    rustup default stable && \
-    python -m pip install maturin
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y && \
+    rustup default stable
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -44,9 +45,6 @@ RUN ls -1 dist/*.whl | head -1
 
 # Install the package
 RUN pip install dist/*.whl
-
-# Install build dependencies needed for git-based packages
-RUN pip install --no-cache-dir hatchling hatch-vcs
 
 # Install dependencies as wheels, force binary for Pillow/tokenizers to avoid build issues
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ --only-binary=Pillow,tokenizers -r requirements.txt

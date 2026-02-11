@@ -7,12 +7,12 @@ metadataTest:
 
 fileExistenceTests:
   - name: "Prisma Folder"
-    path: "/usr/local/lib/python3.13/site-packages/prisma/"
+    path: "/usr/lib/python3.14/site-packages/prisma/"
     shouldExist: true
     uid: 65534
     gid: 65534
   - name: "Prisma Schema"
-    path: "/usr/local/lib/python3.13/site-packages/prisma/schema.prisma"
+    path: "/usr/lib/python3.14/site-packages/prisma/schema.prisma"
     shouldExist: true
     uid: 65534
     gid: 65534

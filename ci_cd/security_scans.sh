@@ -126,8 +126,8 @@ run_grype_scans() {
         "GHSA-4xh5-x5gv-qwph"
         "CVE-2025-8291" # no fix available as of Oct 11, 2025
         "GHSA-5j98-mcp5-4vw2"
-        "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
-        "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
+        "CVE-2025-13836" # Python HTTP response reading OOM/DoS - no fix available in base image
+        "CVE-2025-12084" # Python xml.dom.minidom quadratic algorithm - no fix available in base image
         "CVE-2025-60876" # BusyBox wget HTTP request splitting - no fix available in Chainguard Wolfi base image
         "CVE-2026-0861" # Wolfi glibc still flagged even on 2.42-r5; upstream patched build unavailable yet
         "CVE-2010-4756" # glibc glob DoS - awaiting patched Wolfi glibc build
@@ -156,7 +156,7 @@ run_grype_scans() {
         "CVE-2025-15367" # No fix available yet
         "CVE-2025-12781" # No fix available yet
         "CVE-2025-11468" # No fix available yet
-        "CVE-2026-1299" # Python 3.13 email module header injection - not applicable, LiteLLM doesn't use BytesGenerator for email serialization
+        "CVE-2026-1299" # Python email module header injection - not applicable, LiteLLM doesn't use BytesGenerator for email serialization
         "CVE-2026-0775" # npm cli incorrect permission assignment - no fix available yet, npm is only used at build/prisma-generate time
     )
 

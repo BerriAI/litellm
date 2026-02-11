@@ -2,12 +2,15 @@
 ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 ARG PROXY_EXTRAS_SOURCE=published
+# Python version shipped in the Chainguard base image (update when base image changes)
+ARG PYTHON_VERSION=3.14
 
 # -----------------
 # Builder Stage
 # -----------------
 FROM $LITELLM_BUILD_IMAGE AS builder
 ARG PROXY_EXTRAS_SOURCE
+ARG PYTHON_VERSION
 WORKDIR /app
 USER root
 
@@ -89,7 +92,7 @@ RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
     XDG_CACHE_HOME=/app/.cache \
-    PATH="/usr/lib/python3.14/site-packages/nodejs/bin:${PATH}"
+    PATH="/usr/lib/python${PYTHON_VERSION}/site-packages/nodejs/bin:${PATH}"
 
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.12.0 \
     && mkdir -p /app/.cache/npm
@@ -106,6 +109,7 @@ RUN prisma generate && \
 # -----------------
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 ARG PROXY_EXTRAS_SOURCE
+ARG PYTHON_VERSION
 WORKDIR /app
 USER root
 
@@ -142,11 +146,11 @@ COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 COPY --from=builder /app/.cache /app/.cache
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 COPY --from=builder \
-  /usr/lib/python3.14/site-packages/nodejs* \
-  /usr/lib/python3.14/site-packages/prisma* \
-  /usr/lib/python3.14/site-packages/tomlkit* \
-  /usr/lib/python3.14/site-packages/nodeenv* \
-  /usr/lib/python3.14/site-packages/
+  /usr/lib/python${PYTHON_VERSION}/site-packages/nodejs* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/prisma* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/tomlkit* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/nodeenv* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/
 COPY --from=builder /usr/bin/prisma /usr/bin/prisma
 
 # Final runtime environment configuration
