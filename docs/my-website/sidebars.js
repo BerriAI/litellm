@@ -563,6 +563,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_oauth",
             "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
@@ -1082,6 +1083,17 @@ const sidebars = {
         "troubleshoot/memory_issues",
         "troubleshoot/spend_queue_warnings",
         "troubleshoot/max_callbacks",
+      ],
+    },
+    {
+      type: "category",
+      label: "Blog",
+      items: [
+        {
+          type: "link",
+          label: "Incident: Broken Model Cost Map",
+          href: "/blog/model-cost-map-incident",
+        },
       ],
     },
   ],

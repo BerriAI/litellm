@@ -28,7 +28,10 @@ from fastapi import HTTPException
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream
 
@@ -50,6 +53,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterDetection,
     PatternDetection,
 )
+
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS = 1
@@ -168,9 +172,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[
-            str, Tuple[str, str, ContentFilterAction]
-        ] = {}  # keyword -> (category, severity, action)
+        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
+            {}
+        )  # keyword -> (category, severity, action)
 
         # Load categories if provided
         if categories:
@@ -994,6 +998,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             masked_entity_count=masked_entity_count,
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",

@@ -48,6 +48,14 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
     os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
+
+# Model cost map validation constants
+MODEL_COST_MAP_MIN_MODEL_COUNT = int(
+    os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
+)  # Minimum number of models a fetched cost map must contain to be considered valid
+MODEL_COST_MAP_MAX_SHRINK_RATIO = float(
+    os.getenv("MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5)
+)  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
 DEFAULT_IMAGE_WIDTH = int(os.getenv("DEFAULT_IMAGE_WIDTH", 300))
 DEFAULT_IMAGE_HEIGHT = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
@@ -81,6 +89,20 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
     os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
+# MCP OAuth2 Client Credentials Defaults
+MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200")
+)
+MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600")
+)
+MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
 )
 
 LITELLM_UI_ALLOW_HEADERS = [

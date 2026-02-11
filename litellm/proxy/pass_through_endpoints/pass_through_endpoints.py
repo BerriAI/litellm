@@ -2201,6 +2201,41 @@ async def initialize_pass_through_endpoints(
             InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
 
 
+def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:
+    """
+    Get pass-through endpoints defined in the config file.
+    These are read-only and cannot be edited via the UI.
+    Malformed endpoints are logged and skipped; they do not crash the function.
+    """
+    from pydantic import ValidationError
+
+    from litellm.proxy.proxy_server import config_passthrough_endpoints
+
+    if config_passthrough_endpoints is None or len(config_passthrough_endpoints) == 0:
+        return []
+
+    returned_endpoints: List[PassThroughGenericEndpoint] = []
+    for endpoint in config_passthrough_endpoints:
+        try:
+            if isinstance(endpoint, dict):
+                endpoint_dict = dict(endpoint)
+                endpoint_dict["is_from_config"] = True
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+            elif isinstance(endpoint, PassThroughGenericEndpoint):
+                # Create a copy with is_from_config=True
+                endpoint_dict = endpoint.model_dump()
+                endpoint_dict["is_from_config"] = True
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+        except ValidationError as e:
+            verbose_proxy_logger.warning(
+                "Skipping malformed pass-through endpoint from config: %s",
+                e,
+                exc_info=False,
+            )
+
+    return returned_endpoints
+
+
 async def _get_pass_through_endpoints_from_db(
     endpoint_id: Optional[str] = None,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
@@ -2223,17 +2258,27 @@ async def _get_pass_through_endpoints_from_db(
 
     returned_endpoints: List[PassThroughGenericEndpoint] = []
     if endpoint_id is None:
-        # Return all endpoints
+        # Return all endpoints from DB, mark as not from config
         for endpoint in pass_through_endpoint_data:
             if isinstance(endpoint, dict):
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint))
+                endpoint_dict = dict(endpoint)
+                endpoint_dict["is_from_config"] = False
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
             elif isinstance(endpoint, PassThroughGenericEndpoint):
-                returned_endpoints.append(endpoint)
+                endpoint_dict = endpoint.model_dump()
+                endpoint_dict["is_from_config"] = False
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
     else:
         # Find specific endpoint by ID
         found_endpoint = _find_endpoint_by_id(pass_through_endpoint_data, endpoint_id)
         if found_endpoint is not None:
-            returned_endpoints.append(found_endpoint)
+            endpoint_dict = (
+                found_endpoint.model_dump()
+                if isinstance(found_endpoint, PassThroughGenericEndpoint)
+                else dict(found_endpoint)
+            )
+            endpoint_dict["is_from_config"] = False
+            returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
 
     return returned_endpoints
 
@@ -2312,9 +2357,24 @@ async def get_pass_through_endpoints(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    pass_through_endpoints = await _get_pass_through_endpoints_from_db(
+    # Get endpoints from DB (editable via UI)
+    db_endpoints = await _get_pass_through_endpoints_from_db(
         endpoint_id=endpoint_id, user_api_key_dict=user_api_key_dict
     )
+
+    # Get endpoints from config file (read-only, not editable via UI)
+    config_endpoints = _get_pass_through_endpoints_from_config()
+
+    # Merge: config endpoints not in DB + all DB endpoints (DB overrides config for same path)
+    db_paths = {ep.path for ep in db_endpoints}
+    config_only_endpoints = [
+        ep for ep in config_endpoints if ep.path not in db_paths
+    ]
+    if endpoint_id is not None:
+        # When filtering by endpoint_id, only return if found in DB (config endpoints use generated IDs)
+        pass_through_endpoints = db_endpoints
+    else:
+        pass_through_endpoints = config_only_endpoints + db_endpoints
 
     if team_id is not None:
         pass_through_endpoints = await _filter_endpoints_by_team_allowed_routes(
@@ -2392,7 +2452,8 @@ async def update_pass_through_endpoints(
         )
 
     # Get the update data as dict, excluding None values for partial updates
-    update_data = data.model_dump(exclude_none=True)
+    # Exclude is_from_config as it's a response-only field (computed at read time)
+    update_data = data.model_dump(exclude_none=True, exclude={"is_from_config"})
 
     # Start with existing endpoint data
     endpoint_dict = found_endpoint.model_dump()
@@ -2403,6 +2464,9 @@ async def update_pass_through_endpoints(
     # Preserve existing ID if not provided in update and endpoint has ID
     if "id" not in update_data and found_endpoint.id is not None:
         endpoint_dict["id"] = found_endpoint.id
+
+    # Remove is_from_config before saving - it's a response-only field (computed at read time)
+    endpoint_dict.pop("is_from_config", None)
 
     # Create updated endpoint object
     updated_endpoint = PassThroughGenericEndpoint(**endpoint_dict)
@@ -2490,7 +2554,8 @@ async def create_pass_through_endpoints(
         )
 
     ## Auto-generate ID if not provided
-    data_dict = data.model_dump()
+    # Exclude is_from_config as it's a response-only field (computed at read time)
+    data_dict = data.model_dump(exclude={"is_from_config"})
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 

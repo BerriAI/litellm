@@ -76,7 +76,7 @@ def _route_has_dependency(route, dependency) -> bool:
 class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
     async def test_redacts_stack_trace(self, monkeypatch):
-        def fake_create_client(*args, **kwargs):
+        async def fake_create_client(*args, **kwargs):
             return object()
 
         monkeypatch.setattr(
@@ -114,7 +114,7 @@ class TestExecuteWithMcpClient:
         def fake_build_stdio_env(server, raw_headers):
             return None
 
-        def fake_create_client(*args, **kwargs):
+        async def fake_create_client(*args, **kwargs):
             captured["extra_headers"] = kwargs.get("extra_headers")
             return object()
 
@@ -153,6 +153,160 @@ class TestExecuteWithMcpClient:
             "X-OAuth": "1",
             "Authorization": "STATIC token",
         }
+
+
+    @pytest.mark.asyncio
+    async def test_m2m_credentials_forwarded_to_server_model(self, monkeypatch):
+        """M2M OAuth credentials (client_id, client_secret) from the nested
+        ``credentials`` dict must be forwarded to the MCPServer model so that
+        ``has_client_credentials`` returns True and the proxy auto-fetches tokens."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["server"] = kwargs.get("server")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="m2m-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2,
+            token_url="https://auth.example.com/token",
+            credentials={
+                "client_id": "my-id",
+                "client_secret": "my-secret",
+                "scopes": ["read", "write"],
+            },
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload, ok_operation
+        )
+
+        assert result["status"] == "ok"
+        server = captured["server"]
+        assert server.client_id == "my-id"
+        assert server.client_secret == "my-secret"
+        assert server.token_url == "https://auth.example.com/token"
+        assert server.scopes == ["read", "write"]
+        assert server.has_client_credentials is True
+
+    @pytest.mark.asyncio
+    async def test_m2m_drops_incoming_oauth2_headers(self, monkeypatch):
+        """For M2M OAuth servers the incoming Authorization header (which carries
+        the litellm API key) must NOT be forwarded as extra_headers — otherwise
+        it overwrites the auto-fetched M2M token."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["extra_headers"] = kwargs.get("extra_headers")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="m2m-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2,
+            token_url="https://auth.example.com/token",
+            credentials={
+                "client_id": "my-id",
+                "client_secret": "my-secret",
+            },
+        )
+
+        incoming_oauth2 = {"Authorization": "Bearer sk-litellm-api-key"}
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers=incoming_oauth2,
+        )
+
+        assert result["status"] == "ok"
+        # The incoming Authorization must be dropped — extra_headers should
+        # contain no oauth2 headers (only static_headers, which are None here).
+        assert captured["extra_headers"] is None or "Authorization" not in captured["extra_headers"]
+
+    @pytest.mark.asyncio
+    async def test_catches_exception_group(self, monkeypatch):
+        """MCP SDK's anyio TaskGroup raises BaseExceptionGroup which does not
+        inherit from Exception.  The handler must catch it and return an error
+        dict instead of letting a raw 500 propagate."""
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            raise BaseExceptionGroup(
+                "test group", [RuntimeError("Cancelled via cancel scope")]
+            )
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="bad-server",
+            url="https://example.com",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload, ok_operation
+        )
+
+        assert result["status"] == "error"
+        assert result["error"] is True
+        assert "Failed to connect to MCP server" in result["message"]
+        # Error message must not leak raw exception details
+        assert "cancel scope" not in result["message"]
 
 
 class TestTestConnection:
