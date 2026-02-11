@@ -3,16 +3,20 @@
 import {
   ApiOutlined,
   ArrowUpOutlined,
+  CheckOutlined,
   ClearOutlined,
+  CloseOutlined,
   CodeOutlined,
   DatabaseOutlined,
   DeleteOutlined,
+  EditOutlined,
   FilePdfOutlined,
   InfoCircleOutlined,
   KeyOutlined,
   LinkOutlined,
   LoadingOutlined,
   PictureOutlined,
+  RedoOutlined,
   RobotOutlined,
   SafetyOutlined,
   SettingOutlined,
@@ -229,6 +233,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
+  
+  // Edit message state
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+  const [editingMessageContent, setEditingMessageContent] = useState<string>("");
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -1211,6 +1219,84 @@ const ChatUI: React.FC<ChatUIProps> = ({
     NotificationsManager.success("Chat history cleared.");
   };
 
+  // Edit message handler
+  const handleEditMessage = (index: number) => {
+    const message = chatHistory[index];
+    if (message.role !== "user") return;
+    
+    // Extract plain text content from the message
+    let textContent = "";
+    if (typeof message.content === "string") {
+      textContent = message.content;
+    } else if (Array.isArray(message.content)) {
+      // For multimodal content, extract text parts
+      const textParts = message.content.filter((part: any) => part.type === "text" || part.type === "input_text");
+      textContent = textParts.map((part: any) => part.text).join("\n");
+    }
+    
+    setEditingMessageIndex(index);
+    setEditingMessageContent(textContent);
+  };
+
+  // Save edited message and resend
+  const handleSaveEdit = async () => {
+    if (editingMessageIndex === null) return;
+    
+    // Update the message content
+    const updatedHistory = [...chatHistory];
+    updatedHistory[editingMessageIndex] = {
+      ...updatedHistory[editingMessageIndex],
+      content: editingMessageContent,
+    };
+    
+    // Remove all messages after the edited one (including assistant response)
+    const newHistory = updatedHistory.slice(0, editingMessageIndex + 1);
+    setChatHistory(newHistory);
+    
+    // Clear editing state
+    setEditingMessageIndex(null);
+    setEditingMessageContent("");
+    
+    // Set the input to the edited content and trigger send
+    setInputMessage(editingMessageContent);
+    
+    // Wait for state to update, then send
+    setTimeout(() => {
+      handleSendMessage();
+    }, 100);
+  };
+
+  // Cancel editing
+  const handleCancelEdit = () => {
+    setEditingMessageIndex(null);
+    setEditingMessageContent("");
+  };
+
+  // Retry message handler
+  const handleRetryMessage = (index: number) => {
+    const message = chatHistory[index];
+    if (message.role !== "user") return;
+    
+    // Extract plain text content
+    let textContent = "";
+    if (typeof message.content === "string") {
+      textContent = message.content;
+    } else if (Array.isArray(message.content)) {
+      const textParts = message.content.filter((part: any) => part.type === "text" || part.type === "input_text");
+      textContent = textParts.map((part: any) => part.text).join("\n");
+    }
+    
+    // Remove all messages from this point onwards (including this message and its response)
+    const newHistory = chatHistory.slice(0, index);
+    setChatHistory(newHistory);
+    
+    // Set the input and send
+    setInputMessage(textContent);
+    setTimeout(() => {
+      handleSendMessage();
+    }, 100);
+  };
+
   if (userRole && userRole === "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
@@ -1819,34 +1905,58 @@ const ChatUI: React.FC<ChatUIProps> = ({
               )}
 
               {chatHistory.map((message, index) => (
-                <div key={index}>
+                <div key={index} className="group">
                   <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
                     <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
+                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4 relative"
                       style={{
                         backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
                         border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
                         textAlign: "left",
                       }}
                     >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
-                          }}
-                        >
-                          {message.role === "user" ? (
-                            <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
-                          ) : (
-                            <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+                      <div className="flex items-center gap-2 mb-1.5 justify-between">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
+                            style={{
+                              backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
+                            }}
+                          >
+                            {message.role === "user" ? (
+                              <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
+                            ) : (
+                              <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+                            )}
+                          </div>
+                          <strong className="text-sm capitalize">{message.role}</strong>
+                          {message.role === "assistant" && message.model && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
+                              {message.model}
+                            </span>
                           )}
                         </div>
-                        <strong className="text-sm capitalize">{message.role}</strong>
-                        {message.role === "assistant" && message.model && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                            {message.model}
-                          </span>
+                        
+                        {/* Edit and Retry buttons for user messages */}
+                        {message.role === "user" && !isLoading && editingMessageIndex !== index && (
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Tooltip title="Edit message">
+                              <button
+                                onClick={() => handleEditMessage(index)}
+                                className="p-1 hover:bg-blue-100 rounded text-blue-600 transition-colors"
+                              >
+                                <EditOutlined style={{ fontSize: "14px" }} />
+                              </button>
+                            </Tooltip>
+                            <Tooltip title="Retry">
+                              <button
+                                onClick={() => handleRetryMessage(index)}
+                                className="p-1 hover:bg-blue-100 rounded text-blue-600 transition-colors"
+                              >
+                                <RedoOutlined style={{ fontSize: "14px" }} />
+                              </button>
+                            </Tooltip>
+                          </div>
                         )}
                       </div>
                       {message.reasoningContent && <ReasoningContent reasoningContent={message.reasoningContent} />}
@@ -1888,7 +1998,39 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           hyphens: "auto",
                         }}
                       >
-                        {message.isImage ? (
+                        {/* Show editing textarea for user messages being edited */}
+                        {message.role === "user" && editingMessageIndex === index ? (
+                          <div className="space-y-2">
+                            <TextArea
+                              value={editingMessageContent}
+                              onChange={(e) => setEditingMessageContent(e.target.value)}
+                              autoSize={{ minRows: 2, maxRows: 10 }}
+                              className="w-full"
+                              style={{
+                                fontSize: "14px",
+                                lineHeight: "1.5",
+                              }}
+                            />
+                            <div className="flex items-center gap-2 justify-end">
+                              <Button
+                                size="small"
+                                onClick={handleCancelEdit}
+                                icon={<CloseOutlined />}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                type="primary"
+                                size="small"
+                                onClick={handleSaveEdit}
+                                icon={<CheckOutlined />}
+                                disabled={!editingMessageContent.trim()}
+                              >
+                                Save & Submit
+                              </Button>
+                            </div>
+                          </div>
+                        ) : message.isImage ? (
                           <img
                             src={typeof message.content === "string" ? message.content : ""}
                             alt="Generated image"
