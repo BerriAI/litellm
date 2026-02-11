@@ -238,24 +238,6 @@ class DualCache(BaseCache):
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
-    def get_redis_batch_keys(
-        self,
-        current_time: float,
-        keys: List[str],
-        result: List[Any],
-    ) -> List[str]:
-        sublist_keys = []
-        with self._last_redis_batch_access_time_lock:
-            for key, value in zip(keys, result):
-                if value is None:
-                    if (
-                        key not in self.last_redis_batch_access_time
-                        or current_time - self.last_redis_batch_access_time[key]
-                        >= self.redis_batch_cache_expiry
-                    ):
-                        sublist_keys.append(key)
-        return sublist_keys
-
     def _reserve_redis_batch_keys(
         self,
         current_time: float,
