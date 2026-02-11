@@ -2,14 +2,18 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from .base import GuardrailConfigModel
 
 
-class WonderFenceGuardrailConfigModelOptionalParams(BaseModel):
-    """Optional parameters for the Alice WonderFence guardrail."""
+class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
+    """Configuration parameters for the Alice WonderFence guardrail."""
 
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for Alice WonderFence. Can also be set via WONDERFENCE_API_KEY environment variable.",
+    )
     api_base: Optional[str] = Field(
         default=None,
         description="Override for the WonderFence API base URL. Optional - uses SDK default if not provided.",
@@ -33,17 +37,6 @@ class WonderFenceGuardrailConfigModelOptionalParams(BaseModel):
     retry_base_delay: Optional[float] = Field(
         default=None,
         description="Base delay in seconds for retry backoff. Uses SDK default (1.0) if not provided.",
-    )
-
-
-class WonderFenceGuardrailConfigModel(
-    GuardrailConfigModel[WonderFenceGuardrailConfigModelOptionalParams]
-):
-    """Configuration parameters for the Alice WonderFence guardrail."""
-
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key for Alice WonderFence. Can also be set via WONDERFENCE_API_KEY environment variable.",
     )
 
     @staticmethod
