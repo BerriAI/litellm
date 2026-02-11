@@ -577,7 +577,14 @@ async def get_tag_daily_activity_aggregated(
     Get aggregated daily activity for specific tags or all tags (no pagination).
     Returns the full date range in a single response.
     """
+    from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     # Convert comma-separated tags string to list if provided
     tag_list = tags.split(",") if tags else None
