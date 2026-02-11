@@ -60,11 +60,19 @@ class DiskCache(BaseCache):
         return return_val
 
     def increment_cache(self, key, value: int, **kwargs) -> int:
-        # get the value
-        init_value = self.get_cache(key=key) or 0
-        value = init_value + value  # type: ignore
-        self.set_cache(key, value, **kwargs)
-        return value
+        with self.disk_cache.transact():
+            init_value = self.disk_cache.get(key, default=0)
+            if init_value is None:
+                init_value = 0
+
+            try:
+                parsed_value = json.loads(init_value)  # type: ignore[arg-type]
+            except Exception:
+                parsed_value = init_value
+
+            new_value = parsed_value + value  # type: ignore[operator]
+            self.set_cache(key, new_value, **kwargs)
+            return new_value
 
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
@@ -77,11 +85,7 @@ class DiskCache(BaseCache):
         return return_val
 
     async def async_increment(self, key, value: int, **kwargs) -> int:
-        # get the value
-        init_value = await self.async_get_cache(key=key) or 0
-        value = init_value + value  # type: ignore
-        await self.async_set_cache(key, value, **kwargs)
-        return value
+        return self.increment_cache(key=key, value=value, **kwargs)
 
     def flush_cache(self):
         self.disk_cache.clear()
