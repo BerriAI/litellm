@@ -112,6 +112,24 @@ jobs:
             python -m mypy .
             cd ..
           no_output_timeout: 10m
+
+  semgrep:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Semgrep
+          command: pip install semgrep
+      - run:
+          name: Run Semgrep (custom rules only)
+          command: semgrep scan --config .semgrep/rules . --error
+
   local_testing_part1:
     docker:
       - image: cimg/python:3.12
@@ -4118,6 +4136,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - semgrep:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - local_testing_part1:
           filters:
             branches:
@@ -4510,6 +4534,7 @@ workflows:
       - publish_to_pypi:
           requires:
             - mypy_linting
+            - semgrep
             - local_testing_part1
             - local_testing_part2
             - build_and_test
