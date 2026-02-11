@@ -23,6 +23,7 @@ export interface PolicyAttachment {
   teams: string[];
   keys: string[];
   models: string[];
+  tags: string[];
   created_at?: string;
   updated_at?: string;
   created_by?: string;
@@ -53,6 +54,7 @@ export interface PolicyAttachmentCreateRequest {
   teams?: string[];
   keys?: string[];
   models?: string[];
+  tags?: string[];
 }
 
 export interface PolicyListResponse {

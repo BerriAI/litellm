@@ -5654,6 +5654,68 @@ export const getResolvedGuardrails = async (accessToken: string, policyId: strin
   }
 };
 
+export const resolvePoliciesCall = async (
+  accessToken: string,
+  context: { team_alias?: string; key_alias?: string; model?: string; tags?: string[] }
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/resolve`
+      : `/policies/resolve`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(context),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to resolve policies:", error);
+    throw error;
+  }
+};
+
+export const estimateAttachmentImpactCall = async (
+  accessToken: string,
+  attachmentData: any
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/attachments/estimate-impact`
+      : `/policies/attachments/estimate-impact`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(attachmentData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to estimate attachment impact:", error);
+    throw error;
+  }
+};
+
 export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
