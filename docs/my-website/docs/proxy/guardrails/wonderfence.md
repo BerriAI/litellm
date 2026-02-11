@@ -116,7 +116,7 @@ When `mode` includes `post_call`, WonderFence evaluates LLM responses before ret
 | `mode` | string or list | Guardrail stages (`pre_call`, `post_call`, or both). |
 | `optional_params.app_name` | string | Application name for WonderFence. Defaults to `"litellm"` or `WONDERFENCE_APP_NAME`. |
 | `optional_params.api_base` | string | Optional override for the WonderFence API base URL. |
-| `optional_params.api_timeout` | number | Timeout in seconds for WonderFence API calls. Defaults to `30.0`. |
+| `optional_params.api_timeout` | number | Timeout in seconds for WonderFence API calls. Defaults to `10.0`. |
 | `default_on` | boolean | Run the guardrail on every request by default. Set to `false` to enable per-request only. |
 
 ---

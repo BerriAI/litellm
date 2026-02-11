@@ -84,12 +84,6 @@ class WonderFenceGuardrail(CustomGuardrail):
         self.api_timeout = api_timeout
         self.platform = platform
 
-        # Set retry settings via environment variables (SDK reads these at init time)
-        if retry_max is not None:
-            os.environ["WONDERFENCE_RETRY_MAX"] = str(retry_max)
-        if retry_base_delay is not None:
-            os.environ["WONDERFENCE_RETRY_BASE_DELAY"] = str(retry_base_delay)
-
         # Initialize WonderFence client
         client_kwargs = {
             "api_key": self.api_key,
@@ -100,6 +94,10 @@ class WonderFenceGuardrail(CustomGuardrail):
             client_kwargs["base_url"] = self.api_base
         if self.platform:
             client_kwargs["platform"] = self.platform
+        if retry_max is not None:
+            client_kwargs["retry_max"] = retry_max
+        if retry_base_delay is not None:
+            client_kwargs["retry_base_delay"] = retry_base_delay
 
         self.client = WonderFenceClient(**client_kwargs)
 

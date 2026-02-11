@@ -41,7 +41,8 @@ class WonderFenceGuardrailConfigModel(
 ):
     """Configuration parameters for the Alice WonderFence guardrail."""
 
-    api_key: str = Field(
+    api_key: Optional[str] = Field(
+        default=None,
         description="API key for Alice WonderFence. Can also be set via WONDERFENCE_API_KEY environment variable.",
     )
 
