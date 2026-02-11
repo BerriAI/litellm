@@ -1679,7 +1679,7 @@ def client(original_function):  # noqa: PLR0915
                 )
 
                 _is_litellm_router_call = "model_group" in (kwargs.get(
-                    "metadata"), {}
+                    "metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1725,7 +1725,7 @@ def client(original_function):  # noqa: PLR0915
                 )
 
                 _is_litellm_router_call = "model_group" in (kwargs.get(
-                    "metadata"), {}
+                    "metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1975,7 +1975,7 @@ def client(original_function):  # noqa: PLR0915
                 )
 
                 _is_litellm_router_call = "model_group" in (kwargs.get(
-                    "metadata"), {}
+                    "metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -2009,7 +2009,7 @@ def client(original_function):  # noqa: PLR0915
                     return await original_function(*args, **kwargs)
             elif call_type == CallTypes.aresponses.value:
                 _is_litellm_router_call = "model_group" in (kwargs.get(
-                    "metadata"), {}
+                    "metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
