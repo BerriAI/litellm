@@ -1862,12 +1862,9 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
         )
         
-        print( "🔥headers before filtering", headers )
-        print( "🔥custom_llm_provider", custom_llm_provider )
         headers = update_headers_with_filtered_beta(
             headers=headers, provider=custom_llm_provider
         )
-        print( "🔥headers after filtering", headers )
 
         logging_obj.update_environment_variables(
             model=model,
