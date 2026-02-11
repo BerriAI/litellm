@@ -203,8 +203,15 @@ function LoginPageContent() {
               )}
             </Form.Item>
           </Form>
-
         </Space>
+        {uiConfig?.sso_configured && (
+          <Alert
+            type="info"
+            showIcon
+            closable
+            message={<Text>Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon loading this page. To re-enable auto-redirect-to-SSO, set <Text code>AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</Text> in your environment configuration.</Text>}
+          />
+        )}
       </Card>
     </div>
   );
