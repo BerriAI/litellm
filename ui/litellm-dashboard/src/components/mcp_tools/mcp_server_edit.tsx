@@ -545,7 +545,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
               <Select onChange={handleTransportChange}>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
-                <Select.Option value="http">HTTP</Select.Option>
+                <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
                 <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
               </Select>
             </Form.Item>
