@@ -730,7 +730,7 @@ def test_azure_with_content_safety_error():
     assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"
 
 
-async def test_azure_openai_with_prompt_cache_key():
+def test_azure_openai_with_prompt_cache_key():
     """
     E2E test for Azure OpenAI with prompt cache key param on /chat/completions API.
     """
