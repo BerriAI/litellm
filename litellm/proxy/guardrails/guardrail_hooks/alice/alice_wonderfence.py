@@ -233,21 +233,27 @@ class WonderFenceGuardrail(CustomGuardrail):
         # Build context
         context = self._build_analysis_context(user_api_key_dict, data)
 
-        # Evaluate each user message
+        # Evaluate only the last user message
         try:
-            for message in messages:
+            # Find the last user message (iterate backwards)
+            last_user_message = None
+            for message in reversed(messages):
                 if message.get("role") == "user":
-                    content = message.get("content")
-                    if isinstance(content, str) and content:
-                        verbose_proxy_logger.debug(
-                            f"WonderFence (async_pre_call_hook): Evaluating prompt for {self.guardrail_name}"
-                        )
-                        result = await self.client.evaluate_prompt(
-                            prompt=content, context=context
-                        )
-                        data = self._handle_evaluation_result(
-                            result, data, message, "pre_call"
-                        )
+                    last_user_message = message
+                    break
+
+            if last_user_message:
+                content = last_user_message.get("content")
+                if isinstance(content, str) and content:
+                    verbose_proxy_logger.debug(
+                        f"WonderFence (async_pre_call_hook): Evaluating prompt for {self.guardrail_name}"
+                    )
+                    result = await self.client.evaluate_prompt(
+                        prompt=content, context=context
+                    )
+                    data = self._handle_evaluation_result(
+                        result, data, last_user_message, "pre_call"
+                    )
         except HTTPException:
             raise
         except Exception as e:
@@ -301,9 +307,10 @@ class WonderFenceGuardrail(CustomGuardrail):
         # Build context
         context = self._build_analysis_context(user_api_key_dict, data)
 
-        # Evaluate each choice
+        # Evaluate only the last choice
         try:
-            for choice in response.choices:
+            if response.choices:
+                choice = response.choices[-1]  # Get the last choice
                 if hasattr(choice, "message") and choice.message:
                     content = choice.message.content
                     if isinstance(content, str) and content:
@@ -342,7 +349,7 @@ class WonderFenceGuardrail(CustomGuardrail):
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         """Return the config model for UI rendering."""
-        from litellm.types.proxy.guardrails.guardrail_hooks.wonderfence import (
+        from litellm.types.proxy.guardrails.guardrail_hooks.alice import (
             WonderFenceGuardrailConfigModel,
         )
 

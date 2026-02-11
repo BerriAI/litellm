@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
-from .wonderfence import (
+from .alice_wonderfence import (
     WonderFenceGuardrail,
     WonderFenceMissingSecrets,
 )
@@ -29,8 +29,6 @@ def initialize_guardrail(
         app_name=getattr(litellm_params, "app_name", None),
         api_timeout=getattr(litellm_params, "api_timeout", None) or 10.0,
         platform=getattr(litellm_params, "platform", None),
-        retry_max=getattr(litellm_params, "retry_max", None),
-        retry_base_delay=getattr(litellm_params, "retry_base_delay", None),
         event_hook=litellm_params.mode,  # type: ignore[arg-type]
         default_on=litellm_params.default_on if litellm_params.default_on is not None else True,
     )
