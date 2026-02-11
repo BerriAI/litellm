@@ -62,13 +62,14 @@ class DiskCache(BaseCache):
     def increment_cache(self, key, value: int, **kwargs) -> int:
         with self.disk_cache.transact():
             init_value = self.disk_cache.get(key, default=0)
-            if init_value is None:
-                init_value = 0
 
             try:
                 parsed_value = json.loads(init_value)  # type: ignore[arg-type]
             except Exception:
                 parsed_value = init_value
+
+            if parsed_value is None:
+                parsed_value = 0
 
             new_value = parsed_value + value  # type: ignore[operator]
             self.set_cache(key, new_value, **kwargs)

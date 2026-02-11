@@ -49,7 +49,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
-        self._cache_lock = threading.RLock()
+        self._increment_lock = threading.RLock()
 
     def check_value_size(self, value: Any):
         """
@@ -159,25 +159,24 @@ class InMemoryCache(BaseCache):
             return False
 
     def set_cache(self, key, value, **kwargs):
-        with self._cache_lock:
-            # Handle the edge case where max_size_in_memory is 0
-            if self.max_size_in_memory == 0:
-                return  # Don't cache anything if max size is 0
+        # Handle the edge case where max_size_in_memory is 0
+        if self.max_size_in_memory == 0:
+            return  # Don't cache anything if max size is 0
 
-            if len(self.cache_dict) >= self.max_size_in_memory:
-                # only evict when cache is full
-                self.evict_cache()
-            if not self.check_value_size(value):
-                return
+        if len(self.cache_dict) >= self.max_size_in_memory:
+            # only evict when cache is full
+            self.evict_cache()
+        if not self.check_value_size(value):
+            return
 
-            self.cache_dict[key] = value
-            if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
-                if "ttl" in kwargs and kwargs["ttl"] is not None:
-                    self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
-                    heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
-                else:
-                    self.ttl_dict[key] = time.time() + self.default_ttl
-                    heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
+        self.cache_dict[key] = value
+        if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+            if "ttl" in kwargs and kwargs["ttl"] is not None:
+                self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
+                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
+            else:
+                self.ttl_dict[key] = time.time() + self.default_ttl
+                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -212,17 +211,16 @@ class InMemoryCache(BaseCache):
         return False
 
     def get_cache(self, key, **kwargs):
-        with self._cache_lock:
-            if key in self.cache_dict:
-                if self.evict_element_if_expired(key):
-                    return None
-                original_cached_response = self.cache_dict[key]
-                try:
-                    cached_response = json.loads(original_cached_response)
-                except Exception:
-                    cached_response = original_cached_response
-                return cached_response
-            return None
+        if key in self.cache_dict:
+            if self.evict_element_if_expired(key):
+                return None
+            original_cached_response = self.cache_dict[key]
+            try:
+                cached_response = json.loads(original_cached_response)
+            except Exception:
+                cached_response = original_cached_response
+            return cached_response
+        return None
 
     def batch_get_cache(self, keys: list, **kwargs):
         return_val = []
@@ -232,7 +230,7 @@ class InMemoryCache(BaseCache):
         return return_val
 
     def increment_cache(self, key, value: int, **kwargs) -> int:
-        with self._cache_lock:
+        with self._increment_lock:
             # keep read-modify-write atomic
             init_value = self.get_cache(key=key) or 0
             value = init_value + value
