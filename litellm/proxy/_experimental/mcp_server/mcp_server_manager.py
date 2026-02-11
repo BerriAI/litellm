@@ -341,7 +341,7 @@ class MCPServerManager:
                 verbose_logger.info(
                     f"Loading OpenAPI spec from {spec_path} for server {server_name}"
                 )
-                self._register_openapi_tools(
+                await self._register_openapi_tools(
                     spec_path=spec_path,
                     server=new_server,
                     base_url=server_config.get("url", ""),
@@ -353,7 +353,9 @@ class MCPServerManager:
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
 
-    def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
+    async def _register_openapi_tools(
+        self, spec_path: str, server: MCPServer, base_url: str
+    ):
         """
         Register tools from an OpenAPI specification for a given server.
 
@@ -375,15 +377,15 @@ class MCPServerManager:
             get_base_url as get_openapi_base_url,
         )
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-            load_openapi_spec,
+            load_openapi_spec_async,
         )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
 
         try:
-            # Load OpenAPI spec
-            spec = load_openapi_spec(spec_path)
+            # Load OpenAPI spec (async to avoid "called from within a running event loop")
+            spec = await load_openapi_spec_async(spec_path)
 
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
