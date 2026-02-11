@@ -248,26 +248,28 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Only pass ssl kwarg when explicitly configured, to avoid
         # overriding the session/connector defaults with None (which is
         # not a valid value for aiohttp's ssl parameter).
-        ssl_kwargs: Dict[str, Union[bool, ssl.SSLContext]] = {}
-        if ssl_verify is not None:
-            ssl_kwargs["ssl"] = ssl_verify
-
-        response = await client_session.request(
-            method=request.method,
-            url=YarlURL(str(request.url), encoded=True),
-            headers=request.headers,
-            data=data,
-            allow_redirects=False,
-            auto_decompress=False,
-            timeout=ClientTimeout(
+        common_kwargs = {
+            "method": request.method,
+            "url": YarlURL(str(request.url), encoded=True),
+            "headers": request.headers,
+            "data": data,
+            "allow_redirects": False,
+            "auto_decompress": False,
+            "timeout": ClientTimeout(
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),
             ),
-            proxy=proxy,
-            server_hostname=sni_hostname,
-            **ssl_kwargs,
-        ).__aenter__()
+            "proxy": proxy,
+            "server_hostname": sni_hostname,
+        }
+
+        if ssl_verify is not None:
+            response = await client_session.request(
+                **common_kwargs, ssl=ssl_verify  # type: ignore[arg-type]
+            ).__aenter__()
+        else:
+            response = await client_session.request(**common_kwargs).__aenter__()
 
         return response
 
