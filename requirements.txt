@@ -22,8 +22,8 @@ prisma==0.11.0 # for db
 nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.6.2 # for encrypting keys
-# google-cloud-aiplatform==1.133.0 # for vertex ai calls - disabled for Python 3.14 (pip resolver "resolution-too-deep" error)
-# google-cloud-iam==2.19.1 # for GCP IAM Redis authentication - disabled for Python 3.14 (pip resolver "resolution-too-deep" error)
+google-cloud-aiplatform==1.133.0 ; python_version < "3.14" # for vertex ai calls (no Python 3.14 support yet)
+google-cloud-iam==2.19.1 ; python_version < "3.14" # for GCP IAM Redis authentication (no Python 3.14 support yet)
 google-genai==1.37.0
 anthropic[vertex]==0.54.0
 mcp==1.25.0 ; python_version >= "3.10"    # for MCP server

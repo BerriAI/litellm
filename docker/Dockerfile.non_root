@@ -47,7 +47,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir hatchling hatch-vcs
 
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ --only-binary=Pillow,tokenizers -r requirements.txt \
-  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.9.0"
+  && PYTHON_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)") \
+  && if [ "$PYTHON_MINOR" -lt 14 ]; then \
+       pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19"; \
+     else \
+       echo "Skipping semantic_router/aurelio-sdk: not supported on Python 3.14+"; \
+     fi \
+  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "PyJWT==2.9.0"
 
 # Copy source after dependency layers
 COPY . .
@@ -163,8 +169,13 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
 # Install packages from wheels and optional extras without network
 RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
     pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
-    pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11 && \
-    pip install --no-index --find-links=/wheels/ aurelio-sdk==0.0.19 && \
+    PYTHON_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)") && \
+    if [ "$PYTHON_MINOR" -lt 14 ]; then \
+      pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11; \
+      pip install --no-index --find-links=/wheels/ aurelio-sdk==0.0.19; \
+    else \
+      echo "Skipping semantic_router/aurelio-sdk: not supported on Python 3.14+"; \
+    fi && \
     if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
       if ls /wheels/litellm_proxy_extras-*.whl >/dev/null 2>&1; then \
         pip install --no-index --find-links=/wheels/ /wheels/litellm_proxy_extras-*.whl; \
