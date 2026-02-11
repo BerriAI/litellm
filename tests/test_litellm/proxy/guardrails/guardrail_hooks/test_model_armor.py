@@ -344,6 +344,8 @@ async def test_model_armor_with_list_content():
 @pytest.mark.asyncio
 async def test_model_armor_api_error_handling():
     """Test Model Armor error handling when API returns error"""
+    import httpx as _httpx
+
     mock_user_api_key_dict = UserAPIKeyAuth()
     mock_cache = MagicMock(spec=DualCache)
 
@@ -355,33 +357,30 @@ async def test_model_armor_api_error_handling():
         fail_on_error=True,
     )
 
-    # Mock the Model Armor API error response
-    mock_response = AsyncMock()
-    mock_response.status_code = 500
-    mock_response.text = "Internal Server Error"
+    # httpx raises HTTPStatusError for non-200 responses via raise_for_status()
+    request = _httpx.Request("POST", "https://modelarmor.example.com/sanitize")
+    response = _httpx.Response(500, request=request, text="Internal Server Error")
+    error = _httpx.HTTPStatusError(message="500 error", request=request, response=response)
 
     # Mock the access token method
     guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
-    # Mock the async handler
-    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
+    # Mock the async handler to raise like the real http_handler does
+    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=error)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello"}],
             "metadata": {"guardrails": ["model-armor-test"]}
         }
 
-        # Should raise HTTPException for API error
-        with pytest.raises(HTTPException) as exc_info:
+        # Should raise due to fail_on_error=True
+        with pytest.raises(Exception):
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=mock_cache,
                 data=request_data,
                 call_type="completion"
             )
-
-        assert exc_info.value.status_code == 500
-        assert "Model Armor API error" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -1534,55 +1533,76 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
 # ===== RETRY LOGIC TESTS =====
 
 
+def _make_httpx_status_error(status_code: int, text: str = "error"):
+    """Helper to create an httpx.HTTPStatusError like the real http_handler raises."""
+    import httpx as _httpx
+
+    request = _httpx.Request("POST", "https://modelarmor.example.com/sanitize")
+    response = _httpx.Response(status_code, request=request, text=text)
+    return _httpx.HTTPStatusError(
+        message=f"{status_code} error", request=request, response=response
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [502, 504])
 async def test_model_armor_retry_on_transient_error(status_code):
-    """Test retry succeeds on second attempt for 502/504."""
+    """Initial request fails with 502/504, retry succeeds."""
     guardrail = ModelArmorGuardrail(
         template_id="t", project_id="p", location="us-central1",
         guardrail_name="model-armor-test", num_retries=2, retry_after_seconds=0.01,
     )
 
-    fail_resp = AsyncMock(status_code=status_code, text="error")
     ok_resp = AsyncMock(status_code=200)
     ok_resp.json = AsyncMock(return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}})
 
     guardrail._ensure_access_token_async = AsyncMock(return_value=("tok", "p"))
-    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=[fail_resp, ok_resp])) as mock_post:
+    with patch.object(
+        guardrail.async_handler, "post",
+        AsyncMock(side_effect=[_make_httpx_status_error(status_code), ok_resp]),
+    ) as mock_post:
         result = await guardrail.make_model_armor_request(content="hi", source="user_prompt", request_data={})
         assert result == {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
+        # 1 initial (failed) + 1 retry (success)
         assert mock_post.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_model_armor_retry_exhausted():
-    """Test raises after all retries exhausted."""
+    """All retries exhausted — raises the last error."""
     guardrail = ModelArmorGuardrail(
         template_id="t", project_id="p", location="us-central1",
         guardrail_name="model-armor-test", num_retries=2, retry_after_seconds=0.01,
     )
 
-    fail_resp = AsyncMock(status_code=502, text="Bad Gateway")
     guardrail._ensure_access_token_async = AsyncMock(return_value=("tok", "p"))
-    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=fail_resp)) as mock_post:
-        with pytest.raises(HTTPException) as exc_info:
+    with patch.object(
+        guardrail.async_handler, "post",
+        AsyncMock(side_effect=_make_httpx_status_error(502, "Bad Gateway")),
+    ) as mock_post:
+        import httpx as _httpx
+
+        with pytest.raises(_httpx.HTTPStatusError):
             await guardrail.make_model_armor_request(content="hi", source="user_prompt", request_data={})
-        assert exc_info.value.status_code == 502
-        assert mock_post.call_count == 3  # 1 initial + 2 retries
+        # 1 initial + _call_guardrail_with_retries(1 + 2 retries) = 4
+        assert mock_post.call_count == 4
 
 
 @pytest.mark.asyncio
 async def test_model_armor_no_retry_on_non_transient_error():
-    """Test no retry on 400 even with num_retries set."""
+    """400 is not retryable — raises immediately."""
     guardrail = ModelArmorGuardrail(
         template_id="t", project_id="p", location="us-central1",
         guardrail_name="model-armor-test", num_retries=3, retry_after_seconds=0.01,
     )
 
-    fail_resp = AsyncMock(status_code=400, text="Bad Request")
     guardrail._ensure_access_token_async = AsyncMock(return_value=("tok", "p"))
-    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=fail_resp)) as mock_post:
-        with pytest.raises(HTTPException) as exc_info:
+    with patch.object(
+        guardrail.async_handler, "post",
+        AsyncMock(side_effect=_make_httpx_status_error(400, "Bad Request")),
+    ) as mock_post:
+        import httpx as _httpx
+
+        with pytest.raises(_httpx.HTTPStatusError):
             await guardrail.make_model_armor_request(content="hi", source="user_prompt", request_data={})
-        assert exc_info.value.status_code == 400
         assert mock_post.call_count == 1

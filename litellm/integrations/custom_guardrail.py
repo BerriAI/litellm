@@ -12,7 +12,7 @@ from typing import (
     get_args,
 )
 
-from fastapi import HTTPException
+import httpx
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -33,7 +33,6 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-# HTTP status codes that are considered transient and eligible for retry
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 DEFAULT_RETRY_AFTER_SECONDS = 1.0
@@ -140,17 +139,19 @@ class CustomGuardrail(CustomLogger):
         """
         Determine if an exception is a transient error eligible for retry.
 
-        Returns True for HTTPException with status codes 408, 429, 500, 502, 503, 504.
+        Returns True for httpx.HTTPStatusError with status codes 408, 429, 500, 502, 503, 504.
         """
-        if isinstance(exc, HTTPException):
-            return exc.status_code in RETRYABLE_STATUS_CODES
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in RETRYABLE_STATUS_CODES
         return False
 
     async def _call_guardrail_with_retries(self, func, *args, **kwargs):
         """
         Call an async guardrail function with retry logic for transient failures.
 
-        Uses exponential backoff: delay = retry_after_seconds * (2 ** attempt)
+        flow:
+	if retry attempts not reached num_retries param;
+	add a delay = retry_after_seconds * (2 ** attempt)
 
         Args:
             func: The async function to call
