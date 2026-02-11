@@ -8,7 +8,7 @@ import { getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Alert, Button, Card, Form, Input, Space, Typography } from "antd";
+import { Alert, Button, Card, Form, Input, Popover, Space, Typography } from "antd";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -179,7 +179,31 @@ function LoginPageContent() {
                 {isLoginLoading ? "Logging in..." : "Login"}
               </Button>
             </Form.Item>
+            <Form.Item>
+              {!uiConfig?.sso_configured ? (
+                <Popover
+                  content="Please configure SSO to log in with SSO."
+                  trigger="hover"
+                >
+                  <Button disabled block size="large">
+                    Login with SSO
+                  </Button>
+                </Popover>
+              ) : (
+                <Button
+                  disabled={isLoginLoading}
+                  onClick={() =>
+                    router.push(`${getProxyBaseUrl()}/sso/key/generate`)
+                  }
+                  block
+                  size="large"
+                >
+                  Login with SSO
+                </Button>
+              )}
+            </Form.Item>
           </Form>
+
         </Space>
       </Card>
     </div>
