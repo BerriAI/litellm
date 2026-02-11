@@ -127,3 +127,89 @@ def test_usage_completion_tokens_details_text_tokens():
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
+
+def test_streaming_choices_logprobs_model_dump_json():
+    """
+    Verify that StreamingChoices with logprobs can be serialized via
+    model_dump_json() without PydanticSerializationError.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/18801.
+    vLLM streaming responses with logprobs=True crashed the proxy with:
+      TypeError: 'MockValSer' object cannot be converted to 'SchemaSerializer'
+    because logprobs was not declared as a Pydantic field.
+    """
+    from litellm.types.utils import (
+        ChatCompletionTokenLogprob,
+        ChoiceLogprobs,
+        Delta,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    logprobs_data = ChoiceLogprobs(
+        content=[
+            ChatCompletionTokenLogprob(
+                token="Hello",
+                logprob=-0.5,
+                bytes=[72, 101, 108, 108, 111],
+            )
+        ]
+    )
+
+    choice = StreamingChoices(
+        delta=Delta(content="Hello", role="assistant"),
+        finish_reason=None,
+        logprobs=logprobs_data,
+    )
+    chunk = ModelResponseStream(
+        choices=[choice],
+    )
+
+    # This used to raise PydanticSerializationError with MockValSer
+    json_str = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    assert "Hello" in json_str
+    assert "logprob" in json_str
+
+
+def test_streaming_choices_logprobs_from_dict():
+    """
+    Verify that StreamingChoices correctly converts a logprobs dict
+    into a ChoiceLogprobs instance.
+    """
+    from litellm.types.utils import ChoiceLogprobs, Delta, StreamingChoices
+
+    logprobs_dict = {
+        "content": [
+            {
+                "token": "test",
+                "logprob": -1.0,
+                "bytes": [116, 101, 115, 116],
+            }
+        ]
+    }
+
+    choice = StreamingChoices(
+        delta=Delta(content="test"),
+        logprobs=logprobs_dict,
+    )
+
+    assert isinstance(choice.logprobs, ChoiceLogprobs)
+    assert choice.logprobs.content[0].token == "test"
+
+
+def test_streaming_choices_logprobs_none():
+    """
+    Verify that StreamingChoices handles logprobs=None correctly
+    (the common case when logprobs is not requested).
+    """
+    from litellm.types.utils import Delta, StreamingChoices
+
+    choice = StreamingChoices(
+        delta=Delta(content="hello"),
+    )
+    assert choice.logprobs is None
+
+    # Should serialize without error
+    chunk_dict = choice.model_dump(exclude_none=True)
+    assert "logprobs" not in chunk_dict
+
