@@ -2268,7 +2268,7 @@ class Router:
         item = FlowItem(
             priority=priority,  # 👈 SET PRIORITY FOR REQUEST
             request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name="gpt-3.5-turbo",  # 👈 SAME as 'Router'
+            model_name=model,  # 👈 SAME as 'Router'
         )
         ### [fin] ###
 
