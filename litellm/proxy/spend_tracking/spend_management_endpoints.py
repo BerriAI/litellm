@@ -1687,6 +1687,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     error_message: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by error message (partial string match)"
     ),
+    sort_by: str = fastapi.Query(
+        default="startTime",
+        description="Sort logs by field: spend, total_tokens, startTime, or endTime",
+    ),
+    sort_order: Optional[str] = fastapi.Query(
+        default="desc",
+        description="Sort order: asc or desc",
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -1715,6 +1723,23 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             message="Start date and end date are required",
             type="bad_request",
             param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Validate sort_by and sort_order
+    valid_sort_fields = {"spend", "total_tokens", "startTime", "endTime"}
+    if sort_by not in valid_sort_fields:
+        raise ProxyException(
+            message=f"Invalid sort_by: {sort_by}. Must be one of: {', '.join(sorted(valid_sort_fields))}",
+            type="bad_request",
+            param="sort_by",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if sort_order is not None and sort_order.lower() not in {"asc", "desc"}:
+        raise ProxyException(
+            message=f"Invalid sort_order: {sort_order}. Must be one of: asc, desc",
+            type="bad_request",
+            param="sort_order",
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1830,6 +1855,11 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 
+        # Build order clause from sort_by and sort_order
+        order_column = sort_by
+        order_direction = (sort_order or "desc").lower()
+        order_clause = {order_column: order_direction}
+
         # Get total count of records
         total_records = await prisma_client.db.litellm_spendlogs.count(
             where=where_conditions,
@@ -1838,9 +1868,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Get paginated data
         data = await prisma_client.db.litellm_spendlogs.find_many(
             where=where_conditions,
-            order={
-                "startTime": "desc",
-            },
+            order=order_clause,
             skip=skip,
             take=page_size,
         )
