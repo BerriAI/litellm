@@ -136,6 +136,80 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         return None
 
+    def _handle_success(self, kwargs, response_obj, start_time, end_time):
+        """
+        Override to prevent creating duplicate litellm_request spans when a proxy parent span exists.
+        
+        ArizePhoenixLogger should reuse the proxy parent span instead of creating a new litellm_request span,
+        to maintain a shallow span hierarchy as expected by Arize Phoenix.
+        """
+        from opentelemetry.trace import Status, StatusCode
+        from litellm.secret_managers.main import get_secret_bool
+        from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME
+        
+        verbose_logger.debug(
+            "ArizePhoenixLogger: Logging kwargs: %s, OTEL config settings=%s",
+            kwargs,
+            self.config,
+        )
+        ctx, parent_span = self._get_span_context(kwargs)
+
+        # ArizePhoenixLogger NEVER creates a litellm_request span when a proxy parent span exists
+        # This is different from the base OpenTelemetry behavior which respects USE_OTEL_LITELLM_REQUEST_SPAN
+        should_create_primary_span = parent_span is None or (
+            parent_span.name != LITELLM_PROXY_REQUEST_SPAN_NAME
+            and get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
+        )
+
+        if should_create_primary_span:
+            # Create a new litellm_request span
+            span = self._start_primary_span(
+                kwargs, response_obj, start_time, end_time, ctx
+            )
+            # Raw-request sub-span (if enabled) - child of litellm_request span
+            self._maybe_log_raw_request(
+                kwargs, response_obj, start_time, end_time, span
+            )
+            # Ensure proxy-request parent span is annotated with the actual operation kind
+            if (
+                parent_span is not None
+                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+            ):
+                self.set_attributes(parent_span, kwargs, response_obj)
+        else:
+            # Do not create primary span (keep hierarchy shallow when parent exists)
+            span = None
+            # Only set attributes if the span is still recording (not closed)
+            # Note: parent_span is guaranteed to be not None here
+            if parent_span.is_recording():
+                parent_span.set_status(Status(StatusCode.OK))
+                self.set_attributes(parent_span, kwargs, response_obj)
+            # Raw-request as direct child of parent_span
+            self._maybe_log_raw_request(
+                kwargs, response_obj, start_time, end_time, parent_span
+            )
+
+        # 3. Guardrail span
+        self._create_guardrail_span(kwargs=kwargs, context=ctx)
+
+        # 4. Metrics & cost recording
+        self._record_metrics(kwargs, response_obj, start_time, end_time)
+
+        # 5. Semantic logs.
+        if self.config.enable_events:
+            log_span = span if span is not None else parent_span
+            if log_span is not None:
+                self._emit_semantic_logs(kwargs, response_obj, log_span)
+
+        # 6. Do NOT end parent span - it should be managed by its creator
+        # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
+        # However, proxy-created spans should be closed here
+        if (
+            parent_span is not None
+            and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+        ):
+            parent_span.end(end_time=self._to_ns(end_time))
+
     @staticmethod
     def get_arize_phoenix_config() -> ArizePhoenixConfig:
         """
