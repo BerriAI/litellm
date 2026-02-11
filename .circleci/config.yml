@@ -3380,7 +3380,7 @@ jobs:
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langchain_openai==0.2.1"
             pip install "langgraph==0.3.18"
-            pip install "fastuuid==0.13.5"
+            pip install "fastuuid==0.14.0"
             pip install -r requirements.txt
       - run:
           name: Install dockerize
