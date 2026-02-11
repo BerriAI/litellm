@@ -26,7 +26,8 @@
     "text_editor_20241022": "text_editor_20241022",
     "text_editor_20250124": "text_editor_20250124",
     "token-efficient-tools-2025-02-19": "token-efficient-tools-2025-02-19",
-    "web-fetch-2025-09-10": "web-fetch-2025-09-10"
+    "web-fetch-2025-09-10": "web-fetch-2025-09-10",
+    "web-search-2025-03-05": "web-search-2025-03-05"
   },
   "azure_ai": {
     "advanced-tool-use-2025-11-20": "advanced-tool-use-2025-11-20",
@@ -54,7 +55,8 @@
     "text_editor_20241022": null,
     "text_editor_20250124": null,
     "token-efficient-tools-2025-02-19": null,
-    "web-fetch-2025-09-10": "web-fetch-2025-09-10"
+    "web-fetch-2025-09-10": "web-fetch-2025-09-10",
+    "web-search-2025-03-05": "web-search-2025-03-05"
   },
   "bedrock_converse": {
     "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
@@ -83,7 +85,8 @@
     "text_editor_20250124": null,
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
-    "web-fetch-2025-09-10": null
+    "web-fetch-2025-09-10": null,
+    "web-search-2025-03-05": null
   },
   "bedrock": {
     "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
@@ -112,7 +115,8 @@
     "text_editor_20250124": null,
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
-    "web-fetch-2025-09-10": null
+    "web-fetch-2025-09-10": null,
+    "web-search-2025-03-05": null
   },
   "vertex_ai": {
     "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
@@ -141,6 +145,7 @@
     "text_editor_20250124": null,
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
-    "web-fetch-2025-09-10": null
+    "web-fetch-2025-09-10": null,
+    "web-search-2025-03-05": "web-search-2025-03-05"
   }
 }
