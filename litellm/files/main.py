@@ -7,11 +7,10 @@ https://platform.openai.com/docs/api-reference/files
 
 import asyncio
 import contextvars
-import os
 import time
 import uuid as uuid_module
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, NamedTuple, Optional, Union, cast
+from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 
@@ -20,10 +19,12 @@ from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.files.handler import AnthropicFilesHandler
+from litellm.llms.azure.common_utils import get_azure_credentials
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.types.llms.openai import (
@@ -55,68 +56,6 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 bedrock_files_instance = BedrockFilesHandler()
 anthropic_files_instance = AnthropicFilesHandler()
 #################################################
-
-
-class OpenAICredentials(NamedTuple):
-    api_base: Optional[str]
-    api_key: Optional[str]
-    organization: Optional[str]
-
-
-class AzureCredentials(NamedTuple):
-    api_base: Optional[str]
-    api_key: Optional[str]
-    api_version: Optional[str]
-
-
-def _get_openai_credentials(
-    optional_params: GenericLiteLLMParams,
-) -> OpenAICredentials:
-    """Resolve OpenAI credentials from optional_params, litellm globals, and env vars."""
-    api_base = (
-        optional_params.api_base
-        or litellm.api_base
-        or os.getenv("OPENAI_BASE_URL")
-        or os.getenv("OPENAI_API_BASE")
-        or "https://api.openai.com/v1"
-    )
-    organization = (
-        optional_params.organization
-        or litellm.organization
-        or os.getenv("OPENAI_ORGANIZATION", None)
-        or None
-    )
-    api_key = (
-        optional_params.api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or os.getenv("OPENAI_API_KEY")
-    )
-    return OpenAICredentials(api_base=api_base, api_key=api_key, organization=organization)
-
-
-def _get_azure_credentials(
-    optional_params: GenericLiteLLMParams,
-) -> AzureCredentials:
-    """Resolve Azure credentials from optional_params, litellm globals, and env vars."""
-    api_base = (
-        optional_params.api_base
-        or litellm.api_base
-        or get_secret_str("AZURE_API_BASE")
-    )
-    api_version = (
-        optional_params.api_version
-        or litellm.api_version
-        or get_secret_str("AZURE_API_VERSION")
-    )
-    api_key = (
-        optional_params.api_key
-        or litellm.api_key
-        or litellm.azure_key
-        or get_secret_str("AZURE_OPENAI_API_KEY")
-        or get_secret_str("AZURE_API_KEY")
-    )
-    return AzureCredentials(api_base=api_base, api_key=api_key, api_version=api_version)
 
 
 @client
@@ -247,7 +186,11 @@ def create_file(
                 timeout=timeout,
             )
         elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            openai_creds = _get_openai_credentials(optional_params)
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+            )
             response = openai_files_instance.create_file(
                 _is_async=_is_async,
                 api_base=openai_creds.api_base,
@@ -258,7 +201,11 @@ def create_file(
                 create_file_data=_create_file_request,
             )
         elif custom_llm_provider == "azure":
-            azure_creds = _get_azure_credentials(optional_params)
+            azure_creds = get_azure_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                api_version=optional_params.api_version,
+            )
             response = azure_files_instance.create_file(
                 _is_async=_is_async,
                 api_base=azure_creds.api_base,
@@ -362,7 +309,11 @@ def file_retrieve(
         _is_async = kwargs.pop("is_async", False) is True
 
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            openai_creds = _get_openai_credentials(optional_params)
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+            )
             response = openai_files_instance.retrieve_file(
                 file_id=file_id,
                 _is_async=_is_async,
@@ -373,7 +324,11 @@ def file_retrieve(
                 organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            azure_creds = _get_azure_credentials(optional_params)
+            azure_creds = get_azure_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                api_version=optional_params.api_version,
+            )
             response = azure_files_instance.retrieve_file(
                 _is_async=_is_async,
                 api_base=azure_creds.api_base,
@@ -530,7 +485,11 @@ def file_delete(
             timeout = 600.0
         _is_async = kwargs.pop("is_async", False) is True
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            openai_creds = _get_openai_credentials(optional_params)
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+            )
             response = openai_files_instance.delete_file(
                 file_id=file_id,
                 _is_async=_is_async,
@@ -541,7 +500,11 @@ def file_delete(
                 organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            azure_creds = _get_azure_credentials(optional_params)
+            azure_creds = get_azure_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                api_version=optional_params.api_version,
+            )
             response = azure_files_instance.delete_file(
                 _is_async=_is_async,
                 api_base=azure_creds.api_base,
@@ -729,7 +692,11 @@ def file_list(
             )
             return response
         elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            openai_creds = _get_openai_credentials(optional_params)
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+            )
             response = openai_files_instance.list_files(
                 purpose=purpose,
                 _is_async=_is_async,
@@ -740,7 +707,11 @@ def file_list(
                 organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            azure_creds = _get_azure_credentials(optional_params)
+            azure_creds = get_azure_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                api_version=optional_params.api_version,
+            )
             response = azure_files_instance.list_files(
                 _is_async=_is_async,
                 api_base=azure_creds.api_base,
@@ -876,7 +847,11 @@ def file_content(
             return response
 
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            openai_creds = _get_openai_credentials(optional_params)
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+            )
             response = openai_files_instance.file_content(
                 _is_async=_is_async,
                 file_content_request=_file_content_request,
@@ -887,7 +862,11 @@ def file_content(
                 organization=openai_creds.organization,
             )
         elif custom_llm_provider == "azure":
-            azure_creds = _get_azure_credentials(optional_params)
+            azure_creds = get_azure_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                api_version=optional_params.api_version,
+            )
             response = azure_files_instance.file_content(
                 _is_async=_is_async,
                 api_base=azure_creds.api_base,
