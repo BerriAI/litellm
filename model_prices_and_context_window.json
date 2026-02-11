@@ -6104,6 +6104,18 @@
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true
     },
+    "bedrock/ap-northeast-1/deepseek.v3.2": {
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 2.22e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 7.3e-07,
         "litellm_provider": "bedrock",
@@ -6155,6 +6167,18 @@
         "mode": "chat",
         "output_cost_per_token": 7.2e-07
     },
+    "bedrock/ap-south-1/deepseek.v3.2": {
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 2.22e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "bedrock/ap-south-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 7.1e-07,
         "litellm_provider": "bedrock",
@@ -6165,6 +6189,18 @@
         "output_cost_per_token": 2.94e-06,
         "supports_function_calling": true,
         "supports_reasoning": true
+    },
+    "bedrock/ap-southeast-3/deepseek.v3.2": {
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 2.22e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
     },
     "bedrock/ca-central-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 3.05e-06,
@@ -6183,6 +6219,18 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 6.9e-07
+    },
+    "bedrock/eu-north-1/deepseek.v3.2": {
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 2.22e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/1-month-commitment/anthropic.claude-instant-v1": {
         "input_cost_per_second": 0.01635,
@@ -6371,6 +6419,18 @@
         "mode": "chat",
         "output_cost_per_token": 1.01e-06
     },
+    "bedrock/sa-east-1/deepseek.v3.2": {
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 2.22e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "bedrock/sa-east-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 7.3e-07,
         "litellm_provider": "bedrock",
@@ -6518,6 +6578,18 @@
         "output_cost_per_token": 7e-07,
         "supports_tool_choice": true
     },
+    "bedrock/us-east-1/deepseek.v3.2": {
+        "input_cost_per_token": 6.2e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 1.85e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "bedrock/us-east-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
@@ -6528,6 +6600,18 @@
         "output_cost_per_token": 2.5e-06,
         "supports_function_calling": true,
         "supports_reasoning": true
+    },
+    "bedrock/us-east-2/deepseek.v3.2": {
+        "input_cost_per_token": 6.2e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 1.85e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
     },
     "bedrock/us-east-2/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -6944,6 +7028,18 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 7e-07,
+        "supports_tool_choice": true
+    },
+    "bedrock/us-west-2/deepseek.v3.2": {
+        "input_cost_per_token": 6.2e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 1.85e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "bedrock/us-west-2/moonshotai.kimi-k2-thinking": {
@@ -10866,6 +10962,18 @@
         "max_tokens": 81920,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "deepseek.v3.2": {
+        "input_cost_per_token": 6.2e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 1.85e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -28372,6 +28480,30 @@
         "supports_function_calling": false,
         "supports_reasoning": true,
         "supports_tool_choice": false
+    },
+    "us.deepseek.v3.2": {
+        "input_cost_per_token": 6.2e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "eu.deepseek.v3.2": {
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 2.22e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
     },
     "us.meta.llama3-1-405b-instruct-v1:0": {
         "input_cost_per_token": 5.32e-06,
