@@ -10,5 +10,8 @@ rules:
       - pattern: asyncio.Queue()
       - pattern: asyncio.Queue(maxsize=0)
     metadata:
-      category: correctness
+      category: reliability
       cwe: "CWE-400: Uncontrolled Resource Consumption"
+      tags: [python, reliability]
+      confidence: HIGH
+      source: https://docs.python.org/3/library/asyncio-queue.html
