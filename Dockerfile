@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -13,9 +13,21 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
+RUN apk add --no-cache bash gcc openssl openssl-dev
 
-RUN python -m pip install build
+RUN python -m pip install --upgrade pip setuptools && \
+    python -m pip install build wheel cmake setuptools_rust maturin
+
+# Configure Rust environment for building Rust-backed Python wheels
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:$PATH
+# Allow forward-compatible ABI for PyO3-based packages on Python 3.14
+ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
+RUN apk add --no-cache curl build-base openssl-dev && \
+    curl https://sh.rustup.rs -sSf | sh -s -- -y && \
+    rustup default stable && \
+    python -m pip install maturin
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -33,9 +45,11 @@ RUN ls -1 dist/*.whl | head -1
 # Install the package
 RUN pip install dist/*.whl
 
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+# Install build dependencies needed for git-based packages
+RUN pip install --no-cache-dir hatchling hatch-vcs
 
+# Install dependencies as wheels, force binary for Pillow/tokenizers to avoid build issues
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ --only-binary=Pillow,tokenizers -r requirements.txt
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
@@ -48,7 +62,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies (libsndfile needed for audio processing on ARM64)
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+RUN apk add --no-cache bash openssl tzdata nodejs npm libsndfile && \
     npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
     # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
     # levels inside its dependency tree. `npm install -g <pkg>` only creates a
