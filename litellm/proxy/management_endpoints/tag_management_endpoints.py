@@ -23,6 +23,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     compute_tag_metadata_totals,
     get_daily_activity,
+    get_daily_activity_aggregated,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.types.tag_management import (
@@ -555,4 +556,41 @@ async def get_tag_daily_activity(
         page=page,
         page_size=page_size,
         metadata_metrics_func=compute_tag_metadata_totals,
+    )
+
+
+@router.get(
+    "/tag/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["tag management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_tag_daily_activity_aggregated(
+    tags: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    timezone: Optional[int] = None,
+):
+    """
+    Get aggregated daily activity for specific tags or all tags (no pagination).
+    Returns the full date range in a single response.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Convert comma-separated tags string to list if provided
+    tag_list = tags.split(",") if tags else None
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=tag_list,
+        entity_metadata_field=None,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        timezone_offset_minutes=timezone,
     )

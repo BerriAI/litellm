@@ -1841,6 +1841,92 @@ export const agentDailyActivityCall = async (
   });
 };
 
+export const tagDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  tags: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/tag/daily/activity/aggregated",
+    startTime,
+    endTime,
+    extraQueryParams: {
+      tags,
+    },
+  });
+};
+
+export const teamDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/team/daily/activity/aggregated",
+    startTime,
+    endTime,
+    extraQueryParams: {
+      team_ids: teamIds,
+      exclude_team_ids: "litellm-dashboard",
+    },
+  });
+};
+
+export const organizationDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  organizationIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/organization/daily/activity/aggregated",
+    startTime,
+    endTime,
+    extraQueryParams: {
+      organization_ids: organizationIds,
+    },
+  });
+};
+
+export const customerDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  customerIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/customer/daily/activity/aggregated",
+    startTime,
+    endTime,
+    extraQueryParams: {
+      end_user_ids: customerIds,
+    },
+  });
+};
+
+export const agentDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  agentIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/agent/daily/activity/aggregated",
+    startTime,
+    endTime,
+    extraQueryParams: {
+      agent_ids: agentIds,
+    },
+  });
+};
+
 export const getTotalSpendCall = async (accessToken: string) => {
   /**
    * Get all models on proxy

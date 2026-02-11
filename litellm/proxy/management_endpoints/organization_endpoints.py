@@ -25,7 +25,10 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
@@ -364,6 +367,96 @@ async def get_organization_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get(
+    "/organization/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["organization management"],
+)
+async def get_organization_daily_activity_aggregated(
+    organization_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    exclude_organization_ids: Optional[str] = None,
+    timezone: Optional[int] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get aggregated daily activity for specific organizations or all accessible organizations (no pagination).
+    Returns the full date range in a single response.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Parse comma-separated ids
+    org_ids_list = organization_ids.split(",") if organization_ids else None
+    exclude_org_ids_list: Optional[List[str]] = None
+    if exclude_organization_ids:
+        exclude_org_ids_list = (
+            exclude_organization_ids.split(",")
+            if exclude_organization_ids
+            else None
+        )
+
+    # Restrict non-proxy-admins to only organizations where they are org_admin
+    if not _user_has_admin_view(user_api_key_dict):
+        memberships = await prisma_client.db.litellm_organizationmembership.find_many(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        admin_org_ids = [
+            m.organization_id
+            for m in memberships
+            if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ]
+        if org_ids_list is None:
+            # Default to orgs where user is org_admin
+            org_ids_list = admin_org_ids
+        else:
+            # Ensure user is org_admin for all requested orgs
+            for org_id in org_ids_list:
+                if org_id not in admin_org_ids:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "User is not org_admin for Organization= {}.".format(
+                                org_id
+                            )
+                        },
+                    )
+
+    # Fetch organization aliases for metadata
+    where_condition = {}
+    if org_ids_list:
+        where_condition["organization_id"] = {"in": list(org_ids_list)}
+    org_aliases = await prisma_client.db.litellm_organizationtable.find_many(
+        where=where_condition
+    )
+    org_alias_metadata = {
+        o.organization_id: {"organization_alias": o.organization_alias}
+        for o in org_aliases
+    }
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=org_ids_list,
+        entity_metadata_field=org_alias_metadata,
+        exclude_entity_ids=exclude_org_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        timezone_offset_minutes=timezone,
     )
 
 

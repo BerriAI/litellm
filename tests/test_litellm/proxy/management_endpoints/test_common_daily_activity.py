@@ -208,3 +208,82 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     assert chat_endpoint.api_key_breakdown["key-1"].metrics.spend == 15.0
     assert "key-2" in embeddings_endpoint.api_key_breakdown
     assert embeddings_endpoint.api_key_breakdown["key-2"].metrics.spend == 3.0
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_returns_all_days():
+    """
+    Test that get_daily_activity_aggregated returns data for all days in the range,
+    even when there are many records per day (which would cause pagination issues
+    with the non-aggregated endpoint).
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    class MockRecord:
+        def __init__(self, date, team_id, model, spend):
+            self.date = date
+            self.team_id = team_id
+            self.endpoint = "/v1/chat/completions"
+            self.api_key = "key-1"
+            self.model = model
+            self.model_group = None
+            self.custom_llm_provider = "openai"
+            self.mcp_namespaced_tool_name = None
+            self.spend = spend
+            self.prompt_tokens = 100
+            self.completion_tokens = 50
+            self.total_tokens = 150
+            self.cache_read_input_tokens = 0
+            self.cache_creation_input_tokens = 0
+            self.api_requests = 1
+            self.successful_requests = 1
+            self.failed_requests = 0
+
+    # Simulate many records spread across 30 days (e.g., 10 records per day)
+    mock_records = []
+    for day in range(1, 31):
+        date_str = f"2024-01-{day:02d}"
+        for i in range(10):
+            mock_records.append(
+                MockRecord(date_str, "team-1", f"gpt-4-{i}", 1.0)
+            )
+
+    # 300 records total - with page_size=1000, the paginated endpoint
+    # would return them all on page 1, but with the default page_size
+    # of 10 or 50, many days would be cut off.
+
+    mock_table = MagicMock()
+    mock_table.find_many = AsyncMock(return_value=mock_records)
+    mock_prisma.db.litellm_dailyteamspend = mock_table
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=["team-1"],
+        entity_metadata_field={"team-1": {"team_alias": "Test Team"}},
+        start_date="2024-01-01",
+        end_date="2024-01-30",
+        model=None,
+        api_key=None,
+    )
+
+    # All 30 days should be present
+    assert len(result.results) == 30
+
+    # Metadata should indicate single page (no pagination)
+    assert result.metadata.page == 1
+    assert result.metadata.total_pages == 1
+    assert result.metadata.has_more is False
+
+    # Total spend should be 300 records * 1.0 = 300.0
+    assert result.metadata.total_spend == 300.0
+    assert result.metadata.total_api_requests == 300
+
+    # Each day should have spend = 10.0 (10 records * 1.0)
+    for daily_data in result.results:
+        assert daily_data.metrics.spend == 10.0
+        assert daily_data.metrics.api_requests == 10
