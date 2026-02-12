@@ -45,7 +45,7 @@ LiteLLM supports the following MiniMax models:
 ## Docker Image
 
 ```bash
-docker pull litellm/litellm:v1.81.3-stable```
+docker pull litellm/litellm:v1.81.3-stable
 
 ## Usage - OpenAI Compatible API (/v1/chat/completions)
 
