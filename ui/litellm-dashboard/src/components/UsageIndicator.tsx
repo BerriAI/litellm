@@ -1,7 +1,8 @@
+import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { Badge } from "@tremor/react";
-import { AlertTriangle, ChevronDown, ChevronUp, Loader2, Minus, TrendingUp, UserCheck, Users } from "lucide-react";
+import { AlertTriangle, Calendar, ChevronDown, ChevronUp, Loader2, Minus, TrendingUp, UserCheck, Users } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getRemainingUsers } from "./networking";
+import { getRemainingUsers, getLicenseInfo, LicenseInfo } from "./networking";
 
 // Simple utility function to combine class names
 const cn = (...classes: (string | boolean | undefined)[]) => {
@@ -22,11 +23,35 @@ interface UsageData {
   total_teams_remaining: number | null;
 }
 
+// Calculate days until expiration
+const getDaysUntilExpiration = (expirationDate: string | null): number | null => {
+  if (!expirationDate) return null;
+  const expDate = new Date(expirationDate + 'T00:00:00Z'); // Force UTC midnight
+  const now = new Date();
+  now.setHours(0, 0, 0, 0); // Normalize to local midnight
+  const diffTime = expDate.getTime() - now.getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays;
+};
+
+// Format expiration for display
+const formatExpirationDisplay = (daysRemaining: number | null): string => {
+  if (daysRemaining === null) return "No expiration";
+  if (daysRemaining < 0) return "Expired";
+  if (daysRemaining === 0) return "Expires today";
+  if (daysRemaining === 1) return "1 day remaining";
+  if (daysRemaining < 30) return `${daysRemaining} days remaining`;
+  if (daysRemaining < 60) return "1 month remaining";
+  const months = Math.floor(daysRemaining / 30);
+  return `${months} months remaining`;
+};
+
 export default function UsageIndicator({ accessToken, width = 220 }: UsageIndicatorProps) {
-  const position = "bottom-left";
+  const disableUsageIndicator = useDisableUsageIndicator();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [data, setData] = useState<UsageData | null>(null);
+  const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,8 +63,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
       setError(null);
 
       try {
-        const result = await getRemainingUsers(accessToken);
-        setData(result);
+        const [usageResult, licenseResult] = await Promise.all([
+          getRemainingUsers(accessToken),
+          getLicenseInfo(accessToken).catch(() => null), // Don't fail if license endpoint unavailable
+        ]);
+        setData(usageResult);
+        setLicenseInfo(licenseResult);
       } catch (err) {
         console.error("Failed to fetch usage data:", err);
         setError("Failed to load usage data");
@@ -50,6 +79,13 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
 
     fetchData();
   }, [accessToken]);
+
+  // Calculate license expiration metrics
+  const daysUntilExpiration = licenseInfo?.expiration_date
+    ? getDaysUntilExpiration(licenseInfo.expiration_date)
+    : null;
+  const isLicenseExpired = daysUntilExpiration !== null && daysUntilExpiration < 0;
+  const isLicenseExpiringSoon = daysUntilExpiration !== null && daysUntilExpiration >= 0 && daysUntilExpiration < 30;
 
   // Calculate derived values from data
   const getUsageMetrics = (data: UsageData | null) => {
@@ -105,35 +141,38 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
 
   const { isOverLimit, isNearLimit, usagePercentage, userMetrics, teamMetrics } = getUsageMetrics(data);
 
+  // Include license status in overall status
+  const hasAnyIssue = isOverLimit || isNearLimit || isLicenseExpired || isLicenseExpiringSoon;
+  const hasError = isOverLimit || isLicenseExpired;
+  const hasWarning = (isNearLimit || isLicenseExpiringSoon) && !hasError;
+
   const getStatusColor = () => {
-    if (isOverLimit) return "red";
-    if (isNearLimit) return "yellow";
+    if (hasError) return "red";
+    if (hasWarning) return "yellow";
     return "green";
   };
 
   const getStatusIcon = () => {
-    if (isOverLimit) return <AlertTriangle className="h-3 w-3" />;
-    if (isNearLimit) return <TrendingUp className="h-3 w-3" />;
+    if (hasError) return <AlertTriangle className="h-3 w-3" />;
+    if (hasWarning) return <TrendingUp className="h-3 w-3" />;
     return null;
   };
 
   // Minimized view - just a small restore button
   const MinimizedView = () => {
-    const hasIssues = isOverLimit || isNearLimit;
-
     return (
       <div className="px-3 py-1" style={{ maxWidth: `${width}px` }}>
         <button
           onClick={() => setIsMinimized(false)}
           className={cn(
             "flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors p-1 rounded w-full",
-            hasIssues && isOverLimit && "text-red-400 hover:text-red-600",
-            hasIssues && isNearLimit && "text-yellow-500 hover:text-yellow-700",
+            hasError && "text-red-400 hover:text-red-600",
+            hasWarning && "text-yellow-500 hover:text-yellow-700",
           )}
           title="Show usage details"
         >
           <Users className="h-3 w-3 flex-shrink-0" />
-          {hasIssues && <span className="flex-shrink-0">{getStatusIcon()}</span>}
+          {hasAnyIssue && <span className="flex-shrink-0">{getStatusIcon()}</span>}
           <div className="flex items-center gap-1 truncate">
             {data && data.total_users !== null && (
               <span className="flex-shrink-0">
@@ -145,8 +184,17 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 T:{data.total_teams_used}/{data.total_teams}
               </span>
             )}
+            {licenseInfo?.expiration_date && daysUntilExpiration !== null && (
+              <span className={cn(
+                "flex-shrink-0",
+                isLicenseExpired && "text-red-500",
+                isLicenseExpiringSoon && "text-yellow-500",
+              )}>
+                {daysUntilExpiration < 0 ? "Exp!" : `${daysUntilExpiration}d`}
+              </span>
+            )}
             {!data ||
-              (data.total_users === null && data.total_teams === null && <span className="truncate">Usage</span>)}
+              (data.total_users === null && data.total_teams === null && !licenseInfo && <span className="truncate">Usage</span>)}
           </div>
         </button>
       </div>
@@ -197,13 +245,13 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             onClick={() => setIsExpanded(!isExpanded)}
             className={cn(
               "flex items-center gap-3 text-left hover:bg-gray-50 rounded-md px-0 py-1 transition-colors flex-1 min-w-0",
-              isOverLimit && "text-red-600",
-              isNearLimit && "text-yellow-600",
+              hasError && "text-red-600",
+              hasWarning && "text-yellow-600",
             )}
           >
             <Users className="h-4 w-4 flex-shrink-0" />
             <span className="text-sm font-medium truncate">Usage Status</span>
-            {(isOverLimit || isNearLimit) && (
+            {hasAnyIssue && (
               <Badge color={getStatusColor()} className="text-xs px-1.5 py-0.5 flex-shrink-0">
                 {getStatusIcon()}
               </Badge>
@@ -228,6 +276,28 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         {/* Expanded details - simple and compact */}
         {isExpanded && (
           <div className="mt-2 pl-7 text-xs text-gray-600 space-y-3">
+            {/* License expiration section */}
+            {licenseInfo?.has_license && licenseInfo.expiration_date && (
+              <div>
+                <div className="mb-1 flex items-center gap-1">
+                  <Calendar className="h-3 w-3" />
+                  <span className="font-medium">License</span>
+                </div>
+                <div className={cn(
+                  "flex items-center gap-1 text-xs",
+                  isLicenseExpired && "text-red-600",
+                  isLicenseExpiringSoon && "text-yellow-600",
+                )}>
+                  {isLicenseExpired ? (
+                    <AlertTriangle className="h-3 w-3" />
+                  ) : isLicenseExpiringSoon ? (
+                    <TrendingUp className="h-3 w-3" />
+                  ) : null}
+                  <span className="truncate">{formatExpirationDisplay(daysUntilExpiration)}</span>
+                </div>
+              </div>
+            )}
+
             {/* Users section */}
             {data.total_users !== null && (
               <div>
@@ -322,7 +392,6 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   // Optimized CardStyleView for 220px width
   const CardStyleView = () => {
     if (isMinimized) {
-      const hasIssues = isOverLimit || isNearLimit;
       return (
         <button
           onClick={() => setIsMinimized(false)}
@@ -333,7 +402,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         >
           <div className="flex items-center gap-2">
             <Users className="h-4 w-4 flex-shrink-0" />
-            {hasIssues && <span className="flex-shrink-0">{getStatusIcon()}</span>}
+            {hasAnyIssue && <span className="flex-shrink-0">{getStatusIcon()}</span>}
             <div className="flex items-center gap-2 text-sm font-medium truncate">
               {data && data.total_users !== null && (
                 <span
@@ -359,8 +428,20 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   T: {data.total_teams_used}/{data.total_teams}
                 </span>
               )}
+              {licenseInfo?.expiration_date && daysUntilExpiration !== null && (
+                <span
+                  className={cn(
+                    "flex-shrink-0 px-1.5 py-0.5 rounded text-xs border",
+                    isLicenseExpired && "bg-red-50 text-red-700 border-red-200",
+                    isLicenseExpiringSoon && "bg-yellow-50 text-yellow-700 border-yellow-200",
+                    !isLicenseExpired && !isLicenseExpiringSoon && "bg-gray-50 text-gray-700 border-gray-200",
+                  )}
+                >
+                  {daysUntilExpiration < 0 ? "Exp!" : `${daysUntilExpiration}d`}
+                </span>
+              )}
               {!data ||
-                (data.total_users === null && data.total_teams === null && <span className="truncate">Usage</span>)}
+                (data.total_users === null && data.total_teams === null && !licenseInfo && <span className="truncate">Usage</span>)}
             </div>
           </div>
         </button>
@@ -415,6 +496,50 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
 
         {/* Compact stats optimized for 220px */}
         <div className="space-y-3 text-sm">
+          {/* License expiration section */}
+          {licenseInfo?.has_license && licenseInfo.expiration_date && (
+            <div
+              className={cn(
+                "space-y-1 border rounded-md p-2",
+                isLicenseExpired && "border-red-200 bg-red-50",
+                isLicenseExpiringSoon && "border-yellow-200 bg-yellow-50",
+              )}
+            >
+              <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
+                <Calendar className="h-3 w-3" />
+                <span className="font-medium">License</span>
+                <span
+                  className={cn(
+                    "ml-1 px-1.5 py-0.5 rounded border",
+                    isLicenseExpired && "bg-red-50 text-red-700 border-red-200",
+                    isLicenseExpiringSoon && "bg-yellow-50 text-yellow-700 border-yellow-200",
+                    !isLicenseExpired && !isLicenseExpiringSoon && "bg-gray-50 text-gray-600 border-gray-200",
+                  )}
+                >
+                  {isLicenseExpired ? "Expired" : isLicenseExpiringSoon ? "Expiring soon" : "OK"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-600 text-xs">Status:</span>
+                <span
+                  className={cn(
+                    "font-medium text-right",
+                    isLicenseExpired && "text-red-600",
+                    isLicenseExpiringSoon && "text-yellow-600",
+                  )}
+                >
+                  {formatExpirationDisplay(daysUntilExpiration)}
+                </span>
+              </div>
+              {licenseInfo.license_type && (
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600 text-xs">Type:</span>
+                  <span className="font-medium text-right capitalize">{licenseInfo.license_type}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Users section */}
           {data.total_users !== null && (
             <div
@@ -541,8 +666,8 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     );
   };
 
-  // Don't render anything if no access token or if both total_users and total_teams are null
-  if (!accessToken || (data?.total_users === null && data?.total_teams === null)) {
+  // Don't render anything if disabled, no access token, or if both total_users and total_teams are null
+  if (disableUsageIndicator || !accessToken || (data?.total_users === null && data?.total_teams === null)) {
     return null;
   }
 

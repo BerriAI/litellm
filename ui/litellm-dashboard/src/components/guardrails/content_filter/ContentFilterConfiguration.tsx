@@ -1,7 +1,6 @@
 import React, { useState } from "react";
-import { Typography, Space, Upload, Card } from "antd";
+import { Typography, Space, Upload, Card, Button } from "antd";
 import { PlusOutlined, UploadOutlined } from "@ant-design/icons";
-import { Button } from "@tremor/react";
 import { validateBlockedWordsFile } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import PatternModal from "./PatternModal";
@@ -221,10 +220,10 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         >
           <div style={{ marginBottom: 16 }}>
             <Space>
-              <Button type="button" onClick={() => setPatternModalVisible(true)} icon={PlusOutlined}>
+              <Button type="primary" onClick={() => setPatternModalVisible(true)} icon={<PlusOutlined />}>
                 Add prebuilt pattern
               </Button>
-              <Button type="button" onClick={() => setCustomPatternModalVisible(true)} variant="secondary" icon={PlusOutlined}>
+              <Button onClick={() => setCustomPatternModalVisible(true)} icon={<PlusOutlined />}>
                 Add custom regex
               </Button>
             </Space>
@@ -253,11 +252,11 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         >
           <div style={{ marginBottom: 16 }}>
             <Space>
-              <Button type="button" onClick={() => setKeywordModalVisible(true)} icon={PlusOutlined}>
+              <Button type="primary" onClick={() => setKeywordModalVisible(true)} icon={<PlusOutlined />}>
                 Add keyword
               </Button>
               <Upload beforeUpload={handleFileUpload} accept=".yaml,.yml" showUploadList={false}>
-                <Button type="button" variant="secondary" icon={UploadOutlined} loading={uploadValidating}>
+                <Button icon={<UploadOutlined />} loading={uploadValidating}>
                   Upload YAML file
                 </Button>
               </Upload>
