@@ -1,7 +1,9 @@
 import pytest
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import BudgetConfig
 
 
@@ -142,3 +144,41 @@ async def test_async_filter_deployments_does_not_recompute_provider_when_resolve
 
     assert len(filtered_deployments) == len(healthy_deployments)
     assert provider_resolution_calls == len(healthy_deployments)
+
+
+def _legacy_provider_resolution(deployment):
+    """
+    Reference implementation used before hot-path optimization.
+    """
+    try:
+        _litellm_params = LiteLLM_Params(**deployment.get("litellm_params", {"model": ""}))
+        _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=_litellm_params.model,
+            litellm_params=_litellm_params,
+        )
+    except Exception:
+        return None
+    return custom_llm_provider
+
+
+@pytest.mark.parametrize(
+    "deployment",
+    [
+        {"litellm_params": {"model": "openai/gpt-4o-mini"}},
+        {"litellm_params": {"model": "gpt-4o-mini", "custom_llm_provider": "openai"}},
+        {"litellm_params": {"model": "unknown-provider/model"}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
+    disable_budget_sync, deployment
+):
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={},
+    )
+
+    current_provider = provider_budget._get_llm_provider_for_deployment(deployment)
+    legacy_provider = _legacy_provider_resolution(deployment)
+
+    assert current_provider == legacy_provider

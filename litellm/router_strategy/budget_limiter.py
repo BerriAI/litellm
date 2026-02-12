@@ -41,6 +41,23 @@ from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
 
+class _LiteLLMParamsDictView:
+    """
+    Lightweight attribute view over `litellm_params` dict.
+
+    This avoids pydantic construction in request hot-path while preserving
+    attribute-style access used by `litellm.get_llm_provider(...)`.
+    """
+
+    __slots__ = ("_params",)
+
+    def __init__(self, params: Dict[str, Any]):
+        self._params = params
+
+    def __getattr__(self, key: str) -> Any:
+        return self._params.get(key)
+
+
 class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
@@ -617,37 +634,22 @@ class RouterBudgetLimiting(CustomLogger):
     def _get_llm_provider_for_deployment(self, deployment: Dict) -> Optional[str]:
         try:
             deployment_litellm_params = deployment.get("litellm_params") or {}
-            model: str = ""
-            custom_llm_provider: Optional[str] = None
-            api_base: Optional[str] = None
-            api_key: Optional[str] = None
-            use_litellm_proxy = False
 
             if isinstance(deployment_litellm_params, LiteLLM_Params):
                 model = deployment_litellm_params.model or ""
-                custom_llm_provider = deployment_litellm_params.custom_llm_provider
-                api_base = deployment_litellm_params.api_base
-                api_key = deployment_litellm_params.api_key
-                use_litellm_proxy = bool(deployment_litellm_params.use_litellm_proxy)
+                provider_resolution_params: Any = deployment_litellm_params
             elif isinstance(deployment_litellm_params, dict):
                 model = deployment_litellm_params.get("model") or ""
-                custom_llm_provider = deployment_litellm_params.get(
-                    "custom_llm_provider"
+                provider_resolution_params = _LiteLLMParamsDictView(
+                    deployment_litellm_params
                 )
-                api_base = deployment_litellm_params.get("api_base")
-                api_key = deployment_litellm_params.get("api_key")
-                use_litellm_proxy = bool(
-                    deployment_litellm_params.get("use_litellm_proxy", False)
-                )
-
-            if use_litellm_proxy:
-                return "litellm_proxy"
+            else:
+                model = ""
+                provider_resolution_params = _LiteLLMParamsDictView({})
 
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=str(model),
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
+                litellm_params=provider_resolution_params,
             )
         except Exception:
             verbose_router_logger.error(
