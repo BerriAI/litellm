@@ -101,3 +101,5 @@ STABILIZATION_TODO.md
 **/*.storageState.json
 **/coverage
 litellm/proxy/proxy_config.yaml
+litellm/proxy/_experimental/out
+litellm/proxy/_experimental/out/*
