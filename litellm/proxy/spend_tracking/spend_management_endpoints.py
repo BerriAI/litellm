@@ -1834,15 +1834,87 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             where=where_conditions,
         )
 
-        # Get paginated data
-        data = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={
-                "startTime": "desc",
-            },
-            skip=skip,
-            take=page_size,
-        )
+        # Build raw SQL to fetch paginated data WITHOUT heavy columns
+        # (messages, response, proxy_server_request can be hundreds of KB per row).
+        # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
+        sql_conditions: List[str] = []
+        sql_params: List[Any] = []
+        p = 1  # parameter index counter
+
+        # Date range (always present)
+        sql_conditions.append(f'"startTime" >= ${p}::timestamptz')
+        sql_params.append(start_date_obj)
+        p += 1
+        sql_conditions.append(f'"startTime" <= ${p}::timestamptz')
+        sql_params.append(end_date_obj)
+        p += 1
+
+        # Equality filters - read effective values from where_conditions (post-authorization)
+        for sql_col, wc_key in [
+            ("team_id", "team_id"),
+            ('"user"', "user"),
+            ("api_key", "api_key"),
+            ("request_id", "request_id"),
+            ("model", "model"),
+            ("model_id", "model_id"),
+            ("end_user", "end_user"),
+        ]:
+            val = where_conditions.get(wc_key)
+            if val is not None and isinstance(val, str):
+                sql_conditions.append(f"{sql_col} = ${p}")
+                sql_params.append(val)
+                p += 1
+
+        # Status filter
+        if status_filter is not None:
+            if status_filter == "success":
+                sql_conditions.append("(status = 'success' OR status IS NULL)")
+            else:
+                sql_conditions.append(f"status = ${p}")
+                sql_params.append(status_filter)
+                p += 1
+
+        # Spend range
+        if min_spend is not None:
+            sql_conditions.append(f"spend >= ${p}")
+            sql_params.append(min_spend)
+            p += 1
+        if max_spend is not None:
+            sql_conditions.append(f"spend <= ${p}")
+            sql_params.append(max_spend)
+            p += 1
+
+        # Metadata JSON filters (PostgreSQL JSONB operators)
+        if key_alias is not None:
+            sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
+            sql_params.append(f"%{key_alias}%")
+            p += 1
+        if error_code is not None:
+            sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
+            sql_params.append(error_code)
+            p += 1
+        if error_message is not None:
+            sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
+            sql_params.append(f"%{error_message}%")
+            p += 1
+
+        sql_query = f"""
+            SELECT
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                "completionStartTime", model, model_id, model_group,
+                custom_llm_provider, api_base, "user", metadata,
+                cache_hit, cache_key, request_tags, team_id,
+                organization_id, end_user, requester_ip_address,
+                session_id, status, mcp_namespaced_tool_name, agent_id
+            FROM "LiteLLM_SpendLogs"
+            WHERE {" AND ".join(sql_conditions)}
+            ORDER BY "startTime" DESC
+            LIMIT ${p} OFFSET ${p + 1}
+        """
+        sql_params.extend([page_size, skip])
+
+        data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
@@ -1906,6 +1978,29 @@ async def ui_view_request_response_for_request_id(
         )
         if payload is not None:
             return payload
+
+    # Fallback: fetch heavy columns directly from the database.
+    # The list endpoint (/spend/logs/ui) intentionally excludes messages,
+    # response, and proxy_server_request for performance. When no custom
+    # logger (S3, GCS, etc.) is configured, we still need to serve these
+    # fields from the DB for the detail/drawer view.
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is not None:
+        sql_query = """
+            SELECT messages, response, proxy_server_request
+            FROM "LiteLLM_SpendLogs"
+            WHERE request_id = $1
+            LIMIT 1
+        """
+        db_result = await prisma_client.db.query_raw(sql_query, request_id)
+        if db_result and len(db_result) > 0:
+            row = db_result[0]
+            return {
+                "messages": row.get("messages"),
+                "response": row.get("response"),
+                "proxy_server_request": row.get("proxy_server_request"),
+            }
 
     return None
 
@@ -3072,13 +3167,22 @@ async def ui_view_session_spend_logs(
             where=where_conditions
         )
 
-        # Query the database with pagination
-        result = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={"startTime": "asc"},
-            skip=skip,
-            take=page_size,
-        )
+        # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
+        sql_query = """
+            SELECT
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                "completionStartTime", model, model_id, model_group,
+                custom_llm_provider, api_base, "user", metadata,
+                cache_hit, cache_key, request_tags, team_id,
+                organization_id, end_user, requester_ip_address,
+                session_id, status, mcp_namespaced_tool_name, agent_id
+            FROM "LiteLLM_SpendLogs"
+            WHERE session_id = $1
+            ORDER BY "startTime" ASC
+            LIMIT $2 OFFSET $3
+        """
+        result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip)
 
         total_pages = (total_records + page_size - 1) // page_size
 

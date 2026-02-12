@@ -90,6 +90,7 @@ export function LogDetailsDrawer({
   const detailsData = logDetails.data as any;
   const effectiveMessages = detailsData?.messages || logEntry.messages;
   const effectiveResponse = detailsData?.response || logEntry.response;
+  const effectiveProxyServerRequest = detailsData?.proxy_server_request || logEntry.proxy_server_request;
   const isLoadingDetails = logDetails.isLoading;
 
   const metadata = logEntry.metadata || {};
@@ -117,7 +118,7 @@ export function LogDetailsDrawer({
   const environment = metadata?.user_api_key_team_alias || "default";
 
   const getRawRequest = () => {
-    return formatData(logEntry.proxy_server_request || effectiveMessages);
+    return formatData(effectiveProxyServerRequest || effectiveMessages);
   };
 
   const getFormattedResponse = () => {
