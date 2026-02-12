@@ -1058,7 +1058,20 @@ class ComputerToolParam(TypedDict, total=False):
     type: Required[Union[Literal["computer_use_preview"], str]]
 
 
-ALL_RESPONSES_API_TOOL_PARAMS = Union[ToolParam, ComputerToolParam]
+class ShellToolParam(TypedDict, total=False):
+    """
+    Shell tool for Responses API: run commands in hosted containers or local runtime.
+    See https://developers.openai.com/api/docs/guides/tools-shell.
+    """
+
+    type: str
+    """The type of tool. Use ``\"shell\"``."""
+
+    environment: Dict[str, Any]
+    """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
+
+
+ALL_RESPONSES_API_TOOL_PARAMS = Union[ToolParam, ComputerToolParam, ShellToolParam]
 
 
 class PromptObject(TypedDict, total=False):

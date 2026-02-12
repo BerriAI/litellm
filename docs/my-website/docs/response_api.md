@@ -1093,6 +1093,64 @@ curl -X POST "http://localhost:4000/v1/responses" \
   }'
 ```
 
+## Shell tool
+
+The **Shell tool** lets the model run commands in a hosted container or local runtime (OpenAI Responses API). You pass `tools=[{"type": "shell", "environment": {...}}]`; the `environment` object configures the runtime (e.g. `type: "container_auto"` for auto-provisioned containers). See [OpenAI Shell tool guide](https://developers.openai.com/api/docs/guides/tools-shell) for full options.
+
+Supported when using the `openai` or `azure` provider with a model that supports the Shell tool.
+
+### Python SDK
+
+```python showLineNumbers title="Shell tool with LiteLLM Python SDK"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="List files in /mnt/data and run python --version.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `tools` (including `type: "shell"`) to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Shell tool via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-4o",
+    input="List files in /mnt/data.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+**curl:**
+
+```bash title="Shell tool via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "input": "List files in /mnt/data.",
+    "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
+    "tool_choice": "auto",
+    "max_output_tokens": 1024
+  }'
+```
+
 ## Session Management
 
 LiteLLM Proxy supports session management for all supported models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
