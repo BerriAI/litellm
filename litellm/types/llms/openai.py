@@ -1335,6 +1335,11 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Image generation events
     IMAGE_GENERATION_PARTIAL_IMAGE = "image_generation.partial_image"
 
+    # Shell tool events (Responses API; passthrough via GenericEvent)
+    SHELL_CALL_IN_PROGRESS = "response.shell_call.in_progress"
+    SHELL_CALL_COMPLETED = "response.shell_call.completed"
+    SHELL_CALL_OUTPUT = "response.shell_call_output.done"
+
     # Error event
     ERROR = "error"
 
