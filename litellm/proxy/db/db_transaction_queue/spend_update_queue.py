@@ -2,7 +2,6 @@ import asyncio
 from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
 from litellm.proxy._types import (
     DBSpendUpdateTransactions,
     Litellm_EntityType,
@@ -22,9 +21,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
     def __init__(self):
         super().__init__()
-        self.update_queue: asyncio.Queue[SpendUpdateQueueItem] = asyncio.Queue(
-            maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
-        )
+        self.update_queue: asyncio.Queue[SpendUpdateQueueItem] = asyncio.Queue()
 
     async def flush_and_get_aggregated_db_spend_update_transactions(
         self,

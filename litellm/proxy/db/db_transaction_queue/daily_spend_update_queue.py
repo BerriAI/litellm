@@ -3,7 +3,6 @@ from copy import deepcopy
 from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
 from litellm.proxy._types import BaseDailySpendTransaction
 from litellm.proxy.db.db_transaction_queue.base_update_queue import (
     BaseUpdateQueue,
@@ -55,7 +54,7 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
     def __init__(self):
         super().__init__()
         self.update_queue: asyncio.Queue[Dict[str, BaseDailySpendTransaction]] = (
-            asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
+            asyncio.Queue()
         )
 
     async def add_update(self, update: Dict[str, BaseDailySpendTransaction]):
