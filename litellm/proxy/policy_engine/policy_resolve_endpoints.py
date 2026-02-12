@@ -6,8 +6,26 @@ Policy resolve and attachment impact estimation endpoints.
 """
 
 import json
+from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+# FastAPI imports - may not be available in all environments (e.g. during testing)
+try:
+    from fastapi import APIRouter, Depends, HTTPException, Query
+except ImportError:
+    # Provide stubs for type checking only
+    if TYPE_CHECKING:
+        from fastapi import APIRouter, Depends, HTTPException, Query
+    else:
+        # Create mock classes that won't be used
+        class APIRouter:  # type: ignore[no-redef]
+            def post(self, *args, **kwargs):
+                def decorator(func):
+                    return func
+                return decorator
+
+        def Depends(func): return func  # type: ignore[misc]
+        HTTPException = Exception  # type: ignore[misc,assignment]
+        def Query(*args, **kwargs): return None  # type: ignore[misc]
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_POLICY_ESTIMATE_IMPACT_ROWS
