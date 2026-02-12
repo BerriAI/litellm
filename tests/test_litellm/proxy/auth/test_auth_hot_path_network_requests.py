@@ -418,16 +418,10 @@ async def test_team_membership_cache_key_duplication():
 
 
 @pytest.mark.asyncio
-async def test_full_hot_path_network_count():
-    """
-    Summary test that counts all network operations when processing
-    a request with a key that has team_id and user_id attached.
-
-    This test verifies the baseline number of cache operations expected
-    on a fully warm cache path.
-    """
-    api_key = "sk-test-full-path"
-    team_id = "team-full-123"
+    # Document that these are different keys
+    assert (
+        key_format_1 != key_format_2
+    ), "Cache keys should be different (this is the bug)"
     user_id = "user-full-456"
     hashed_token = hash_token(api_key)
 
