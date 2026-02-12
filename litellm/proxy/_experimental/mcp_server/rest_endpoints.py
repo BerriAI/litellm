@@ -49,7 +49,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
         mcp_auth_header: Optional[str],
     ) -> Optional[Union[Dict[str, str], str]]:
-        """Helper function to get server-specific auth header with case-insensitive matching."""
+        """Auth from request headers first; otherwise use stored credentials"""
         if mcp_server_auth_headers and server.alias:
             normalized_server_alias = server.alias.lower()
             normalized_headers = {
@@ -66,7 +66,9 @@ if MCP_AVAILABLE:
             server_auth = normalized_headers.get(normalized_server_name)
             if server_auth is not None:
                 return server_auth
-        return mcp_auth_header
+        if mcp_auth_header:
+            return mcp_auth_header
+        return server.authentication_token
 
     def _create_tool_response_objects(tools, server_mcp_info):
         """Helper function to create tool response objects."""
