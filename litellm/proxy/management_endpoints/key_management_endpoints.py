@@ -2669,9 +2669,19 @@ async def generate_key_helper_fn(  # noqa: PLR0915
 
             ## CREATE KEY
             verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
-            create_key_response = await prisma_client.insert_data(
-                data=key_data, table_name="key"
-            )
+            try:
+                create_key_response = await prisma_client.insert_data(
+                    data=key_data, table_name="key", ignore_duplicates=False
+                )
+            except Exception as e:
+                if "Unique constraint failed" in str(e):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "Key already exists. Use /key/update to modify an existing key."
+                        },
+                    )
+                raise e
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
             key_data["litellm_budget_table"] = getattr(
