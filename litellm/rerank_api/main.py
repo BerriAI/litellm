@@ -492,6 +492,39 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
+        elif _custom_llm_provider == litellm.LlmProviders.WATSONX:
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or get_secret_str("WATSONX_APIKEY")
+                or get_secret_str("WATSONX_API_KEY")
+                or get_secret_str("WX_API_KEY")
+                or get_secret_str("WATSONX_ZENAPIKEY")
+            )
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or get_secret_str("WATSONX_API_BASE")
+                or get_secret_str("WATSONX_URL")
+                or get_secret_str("WX_URL")
+                or get_secret_str("WML_URL")
+            )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
         else:
             # Generic handler for all providers that use base_llm_http_handler
             # Provider-specific logic (API key validation, URL generation, etc.)
