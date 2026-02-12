@@ -774,6 +774,7 @@ class BaseResponsesAPITest(ABC):
             stream=True,
         )
 
+
         event_types_seen = []
         output_items_with_shell = []
 
