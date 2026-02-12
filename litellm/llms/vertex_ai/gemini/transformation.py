@@ -500,7 +500,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):
                 if len(tool_call_responses) > 0:
-                    contents.append(ContentType(role="user", parts=tool_call_responses))
+                    contents.append(ContentType(parts=tool_call_responses))
                     tool_call_responses = []
 
             if msg_i == init_msg_i:  # prevent infinite loops
@@ -510,7 +510,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     )
                 )
         if len(tool_call_responses) > 0:
-            contents.append(ContentType(role="user", parts=tool_call_responses))
+            contents.append(ContentType(parts=tool_call_responses))
 
         if len(contents) == 0:
             verbose_logger.warning(
