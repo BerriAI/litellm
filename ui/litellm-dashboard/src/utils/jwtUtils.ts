@@ -12,3 +12,18 @@ export function isJwtExpired(token: string): boolean {
     return true;
   }
 }
+
+export function decodeToken(token: string | null): Record<string, any> | null {
+  if (!token) return null;
+  try {
+    return jwtDecode(token) as Record<string, any>;
+  } catch {
+    return null;
+  }
+}
+
+export function checkTokenValidity(token: string | null): boolean {
+  if (!token) return false;
+  const decoded = decodeToken(token);
+  return decoded !== null && !isJwtExpired(token);
+}

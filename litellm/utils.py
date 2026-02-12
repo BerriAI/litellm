@@ -2081,6 +2081,14 @@ def _is_async_request(
     return False
 
 
+_STREAMING_CALL_TYPES = frozenset({
+    CallTypes.generate_content_stream,
+    CallTypes.agenerate_content_stream,
+    CallTypes.generate_content_stream.value,
+    CallTypes.agenerate_content_stream.value,
+})
+
+
 def _is_streaming_request(
     kwargs: Dict[str, Any],
     call_type: Union[CallTypes, str],
@@ -2093,23 +2101,7 @@ def _is_streaming_request(
     """
     if "stream" in kwargs and kwargs["stream"] is True:
         return True
-
-    #########################################################
-    # Check if it's a google genai streaming request
-    if isinstance(call_type, str):
-        # check if it can be casted to CallTypes
-        try:
-            call_type = CallTypes(call_type)
-        except ValueError:
-            return False
-
-    if (
-        call_type == CallTypes.generate_content_stream
-        or call_type == CallTypes.agenerate_content_stream
-    ):
-        return True
-    #########################################################
-    return False
+    return call_type in _STREAMING_CALL_TYPES
 
 
 def _select_tokenizer(
@@ -2514,6 +2506,16 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         if model_info.get(key, False) is True:
             return True
         elif model_info.get(key) is None:  # don't check if 'False' explicitly set
+            # Fallback: when the provider-prefixed entry (e.g.
+            # "deepseek/deepseek-chat") exists but is missing a capability
+            # field, check the bare model-name entry (e.g. "deepseek-chat")
+            # which may carry the complete metadata.  See #20885.
+            bare_model_key = _get_model_cost_key(model)
+            if bare_model_key is not None:
+                bare_entry = litellm.model_cost.get(bare_model_key) or {}
+                if bare_entry.get(key, False) is True:
+                    return True
+
             supported_by_provider = _supports_provider_info_factory(
                 model, custom_llm_provider, key
             )
@@ -5809,7 +5811,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             if value is not None:
                 _model_info[key] = value  # type: ignore
 
-    verbose_logger.debug(f"model_info: {_model_info}")
+    if verbose_logger.isEnabledFor(logging.DEBUG):
+        verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params
@@ -6147,6 +6150,13 @@ def validate_environment(  # noqa: PLR0915
             if (
                 "AWS_ACCESS_KEY_ID" in os.environ
                 and "AWS_SECRET_ACCESS_KEY" in os.environ
+            ) or (
+                # IAM role, profile, or web identity auth don't require access keys
+                "AWS_ROLE_ARN" in os.environ
+                or "AWS_PROFILE" in os.environ
+                or "AWS_WEB_IDENTITY_TOKEN_FILE" in os.environ
+                or "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" in os.environ  # ECS task role
+                or "AWS_CONTAINER_CREDENTIALS_FULL_URI" in os.environ  # ECS/Fargate full URI credential delivery
             ):
                 keys_in_environment = True
             else:
@@ -8250,6 +8260,8 @@ class ProviderConfigManager:
             return litellm.VolcEngineResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
+        elif litellm.LlmProviders.PERPLEXITY == provider:
+            return litellm.PerplexityResponsesConfig()
         return None
 
     @staticmethod

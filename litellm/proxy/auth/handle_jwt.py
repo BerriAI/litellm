@@ -659,7 +659,7 @@ class JWTHandler:
                     token,
                     public_key_obj,  # type: ignore
                     algorithms=algorithms,
-                    options=decode_options,
+                    options=decode_options,  # type: ignore[arg-type]
                     audience=audience,
                     leeway=self.leeway,  # allow testing of expired tokens
                 )

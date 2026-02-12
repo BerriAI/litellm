@@ -1,0 +1,220 @@
+---
+slug: fastapi-middleware-performance
+title: "Your Middleware Could Be a Bottleneck"
+date: 2026-02-07T10:00:00
+authors:
+  - name: Krrish Dholakia
+    title: "CEO, LiteLLM"
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - name: Ishaan Jaff
+    title: "CTO, LiteLLM"
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - name: Ryan Crabbe
+    title: "Performance Engineer, LiteLLM"
+    url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
+    image_url: https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M
+description: "How we improved LiteLLM proxy latency and throughput by replacing a single middleware base class"
+tags: [performance, fastapi, middleware]
+hide_table_of_contents: false
+---
+
+import { BaseHTTPMiddlewareAnimation, PureASGIAnimation, BenchmarkVisualization } from '@site/src/components/MiddlewareDiagrams';
+
+> How we improved LiteLLM proxy latency and throughput by replacing a single, simple middleware base class
+
+---
+
+## Our Setup
+
+The LiteLLM proxy server has two middleware layers. The first is Starlette's `CORSMiddleware` (re-exported by FastAPI), which is a pure ASGI middleware. Then we have a simple BaseHTTPMiddleware called PrometheusAuthMiddleware.
+
+The job of `PrometheusAuthMiddleware` is to authenticate requests to the `/metrics` endpoint. It's not on by default, you enable it with a flag in your proxy config:
+
+<details>
+<summary>Proxy config flag</summary>
+
+```yaml
+litellm_settings:
+    require_auth_for_metrics_endpoint: true
+```
+
+</details>
+
+The middleware checks two things: is the request hitting `/metrics`, and is auth even enabled? If both checks fail, which they do for the vast majority of requests, it just passes the request through unchanged.
+
+<details>
+<summary>PrometheusAuthMiddleware source</summary>
+
+```python
+class PrometheusAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if self._is_prometheus_metrics_endpoint(request):
+            if self._should_run_auth_on_metrics_endpoint() is True:
+                try:
+                    await user_api_key_auth(request=request, api_key=...)
+                except Exception as e:
+                    return JSONResponse(status_code=401, content=...)
+        response = await call_next(request)
+        return response
+
+    @staticmethod
+    def _is_prometheus_metrics_endpoint(request: Request):
+        if "/metrics" in request.url.path:
+            return True
+        return False
+```
+
+</details>
+
+Looks harmless. Subclass `BaseHTTPMiddleware`, implement `dispatch()`, done. This is what you will see in Starlette's documentation<sup>[1](#footnote-1)</sup>.
+
+{/* truncate */}
+
+---
+
+## What BaseHTTPMiddleware Actually Does
+
+When you write a `dispatch()` method, you'd expect the request to flow straight through your function and out the other side. What actually happens is much more involved. 
+
+On every request, even a pure passthrough (meaning nothing happens), `BaseHTTPMiddleware` creates **7 intermediate objects and tasks**:
+
+<BaseHTTPMiddlewareAnimation />
+
+It wraps the request in a new object to track body state, creates a synchronization event, allocates an in-memory channel to pass messages between your middleware and the inner app, sets up a task group to manage the lifecycle, and then runs your actual route handler in a *separate background task* when you call `call_next()`. The response body then flows back through that in-memory channel, gets re-wrapped in a streaming response object, and finally reaches the caller. That's a lot.
+
+For a middleware that for us, does nothing on 99.9% of requests, paying this cost doesn't make sense.
+
+Compare that to a pure ASGI middleware, which we can have just check the request path and continue along. 
+
+<PureASGIAnimation />
+
+Our middleware is doing something really simple. For the vast majority of requests it doesn't need to do anything at all but just let the request pass through. It doesn't need task groups, memory streams, or cancel scopes. It needs a function call.
+
+---
+
+## Comparing Both
+
+We replaced the `BaseHTTPMiddleware` subclass with a pure ASGI middleware. To benchmark the difference, we used Apache Bench<sup>[2](#footnote-2)</sup> to compare both configurations of LiteLLM's middleware stack: the old setup (1 pure ASGI + 1 `BaseHTTPMiddleware`) against the new setup (2 pure ASGI).
+
+A minimal FastAPI app serves `GET /health` → `PlainTextResponse("ok")`. The endpoint does zero work to isolate the middleware overhead: any difference between configs is purely the cost of the middleware plumbing itself. Both middlewares are just calling the next layer. Same work, different base class.
+
+Apache Bench (`ab`) fires requests at the server with 1,000 concurrent connections and a single uvicorn worker. One worker means one event loop, so the benchmark directly measures how each middleware design handles concurrent load on a single thread.
+
+<BenchmarkVisualization />
+
+<details>
+<summary>Try it yourself</summary>
+
+Save the script below as `benchmark_middleware.py`, then run:
+
+```bash
+# Terminal 1 — start the "before" server (1 ASGI + 1 BaseHTTPMiddleware)
+python benchmark_middleware.py --middleware mixed
+
+# Terminal 2 — benchmark it
+ab -n 50000 -c 1000 http://localhost:8000/health
+
+# Stop the server, then start the "after" server (2x pure ASGI)
+python benchmark_middleware.py --middleware asgi
+
+# Terminal 2 — benchmark again
+ab -n 50000 -c 1000 http://localhost:8000/health
+```
+
+```python
+import argparse
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+
+class NoOpBaseHTTPMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        return await call_next(request)
+
+
+class NoOpPureASGIMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.app(scope, receive, send)
+
+
+def create_app(middleware_type: str | None = None, layers: int = 2) -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/health")
+    async def health():
+        return PlainTextResponse("ok")
+
+    if middleware_type == "mixed":
+        app.add_middleware(NoOpBaseHTTPMiddleware)
+        app.add_middleware(NoOpPureASGIMiddleware)
+    elif middleware_type == "asgi":
+        for _ in range(layers):
+            app.add_middleware(NoOpPureASGIMiddleware)
+
+    return app
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--middleware", choices=["asgi", "mixed"], default=None)
+    parser.add_argument("--layers", type=int, default=2)
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+
+    app = create_app(middleware_type=args.middleware, layers=args.layers)
+    uvicorn.run(app, host="0.0.0.0", port=args.port, workers=1, log_level="warning")
+```
+
+</details>
+
+---
+
+## Our Change
+
+Here's what we replaced it with:
+
+```python
+class PrometheusAuthMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or "/metrics" not in scope.get("path", ""):
+            await self.app(scope, receive, send)
+            return
+
+        if litellm.require_auth_for_metrics_endpoint is True:
+            request = Request(scope, receive)
+            api_key = request.headers.get("Authorization") or ""
+            try:
+                await user_api_key_auth(request=request, api_key=api_key)
+            except Exception as e:
+                # send 401 directly via ASGI protocol
+                ...
+                return
+
+        await self.app(scope, receive, send)
+```
+
+For the 99.9% of requests that aren't hitting `/metrics`, the middleware is now one dict lookup, one string check, and one function call. No objects allocated, no tasks spawned. 
+
+It's important to evaluate if the tools you're using are the right fit for the job as your software grows and handles more responsiblity. We're now putting in a static analysis check to prevent this from happening again with any newly introduced middlewares. If we find the use case is necessary then that's okay and we'll reevalute but for everything LiteLLM needs to do at the moment it's not. 
+
+This middleware change was one part of a broader optimization effort on the LiteLLM proxy. Across all optimizations combined, we've measured about a **30% reduction in proxy overhead** over the past two weeks. 
+
+---
+
+<a id="footnote-1"></a>
+<sup>1</sup> [Starlette Middleware — BaseHTTPMiddleware](https://starlette.dev/middleware/#basehttpmiddleware)
+
+<a id="footnote-2"></a>
+<sup>2</sup> [Apache HTTP server benchmarking tool (`ab`)](https://httpd.apache.org/docs/2.4/programs/ab.html)

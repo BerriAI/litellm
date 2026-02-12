@@ -16,9 +16,13 @@ Usage:
 import asyncio
 import base64
 import json
+import os
 import pyaudio
 import websockets
 from typing import Optional
+
+# Bounded queue size for audio chunks (configurable via env to avoid unbounded memory)
+AUDIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 10_000))
 
 # Audio configuration (matching Nova Sonic requirements)
 INPUT_SAMPLE_RATE = 16000  # Nova Sonic expects 16kHz input
@@ -40,7 +44,7 @@ class RealtimeClient:
         self.api_key = api_key
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_active = False
-        self.audio_queue = asyncio.Queue()
+        self.audio_queue = asyncio.Queue(maxsize=AUDIO_QUEUE_MAXSIZE)
         self.pyaudio = pyaudio.PyAudio()
         self.input_stream = None
         self.output_stream = None

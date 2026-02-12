@@ -1,6 +1,7 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
+import asyncio
 import os
 import sys
 from datetime import datetime, timedelta
@@ -28,7 +29,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.integrations.prometheus import *
-from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
+from litellm.types.integrations.prometheus import (
+    _sanitize_prometheus_label_name,
+    _sanitize_prometheus_label_value,
+)
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -1188,28 +1192,34 @@ class PrometheusLogger(CustomLogger):
         _user_spend = _metadata.get("user_api_key_user_spend", None)
         _user_max_budget = _metadata.get("user_api_key_user_max_budget", None)
 
-        await self._set_api_key_budget_metrics_after_api_request(
-            user_api_key=user_api_key,
-            user_api_key_alias=user_api_key_alias,
-            response_cost=response_cost,
-            key_max_budget=_api_key_max_budget,
-            key_spend=_api_key_spend,
+        results = await asyncio.gather(
+            self._set_api_key_budget_metrics_after_api_request(
+                user_api_key=user_api_key,
+                user_api_key_alias=user_api_key_alias,
+                response_cost=response_cost,
+                key_max_budget=_api_key_max_budget,
+                key_spend=_api_key_spend,
+            ),
+            self._set_team_budget_metrics_after_api_request(
+                user_api_team=user_api_team,
+                user_api_team_alias=user_api_team_alias,
+                team_spend=_team_spend,
+                team_max_budget=_team_max_budget,
+                response_cost=response_cost,
+            ),
+            self._set_user_budget_metrics_after_api_request(
+                user_id=user_id,
+                user_spend=_user_spend,
+                user_max_budget=_user_max_budget,
+                response_cost=response_cost,
+            ),
+            return_exceptions=True,
         )
-
-        await self._set_team_budget_metrics_after_api_request(
-            user_api_team=user_api_team,
-            user_api_team_alias=user_api_team_alias,
-            team_spend=_team_spend,
-            team_max_budget=_team_max_budget,
-            response_cost=response_cost,
-        )
-
-        await self._set_user_budget_metrics_after_api_request(
-            user_id=user_id,
-            user_spend=_user_spend,
-            user_max_budget=_user_max_budget,
-            response_cost=response_cost,
-        )
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                verbose_logger.debug(
+                    f"[Non-Blocking] Prometheus: Budget metric lookup {['key', 'team', 'user'][i]} failed: {r}"
+                )
 
     def _increment_top_level_request_and_spend_metrics(
         self,
@@ -1269,11 +1279,17 @@ class PrometheusLogger(CustomLogger):
         )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
-            user_api_key, user_api_key_alias, model_group, model_id
+            _sanitize_prometheus_label_value(user_api_key),
+            _sanitize_prometheus_label_value(user_api_key_alias),
+            _sanitize_prometheus_label_value(model_group),
+            _sanitize_prometheus_label_value(model_id),
         ).set(remaining_requests)
 
         self.litellm_remaining_api_key_tokens_for_model.labels(
-            user_api_key, user_api_key_alias, model_group, model_id
+            _sanitize_prometheus_label_value(user_api_key),
+            _sanitize_prometheus_label_value(user_api_key_alias),
+            _sanitize_prometheus_label_value(model_group),
+            _sanitize_prometheus_label_value(model_id),
         ).set(remaining_tokens)
 
     def _set_latency_metrics(
@@ -1394,14 +1410,14 @@ class PrometheusLogger(CustomLogger):
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
-                end_user_id,
-                user_api_key,
-                user_api_key_alias,
-                model,
-                user_api_team,
-                user_api_team_alias,
-                user_id,
-                standard_logging_payload.get("model_id", ""),
+                _sanitize_prometheus_label_value(end_user_id),
+                _sanitize_prometheus_label_value(user_api_key),
+                _sanitize_prometheus_label_value(user_api_key_alias),
+                _sanitize_prometheus_label_value(model),
+                _sanitize_prometheus_label_value(user_api_team),
+                _sanitize_prometheus_label_value(user_api_team_alias),
+                _sanitize_prometheus_label_value(user_id),
+                _sanitize_prometheus_label_value(standard_logging_payload.get("model_id", "")),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
@@ -2347,7 +2363,11 @@ class PrometheusLogger(CustomLogger):
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
         self.litellm_deployment_cooled_down.labels(
-            litellm_model_name, model_id, api_base, api_provider, exception_status
+            _sanitize_prometheus_label_value(litellm_model_name),
+            _sanitize_prometheus_label_value(model_id),
+            _sanitize_prometheus_label_value(api_base),
+            _sanitize_prometheus_label_value(api_provider),
+            _sanitize_prometheus_label_value(exception_status),
         ).inc()
 
     def increment_callback_logging_failure(
@@ -2898,12 +2918,14 @@ class PrometheusLogger(CustomLogger):
             max_budget=max_budget,
         )
         try:
+            # Note: Setting check_db_only=True bypasses cache and hits DB on every request,
+            # causing huge latency increase and CPU spikes. Keep check_db_only=False.
             user_info = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
-                check_db_only=True,
+                check_db_only=False,
             )
         except Exception as e:
             verbose_logger.debug(
@@ -3065,9 +3087,10 @@ def prometheus_label_factory(
     # Extract dictionary from Pydantic object
     enum_dict = enum_values.model_dump()
 
-    # Filter supported labels
+    # Filter supported labels and sanitize values to prevent breaking
+    # the Prometheus text format (e.g. U+2028 Line Separator in label values)
     filtered_labels = {
-        label: value
+        label: _sanitize_prometheus_label_value(value)
         for label, value in enum_dict.items()
         if label in supported_enum_labels
     }
@@ -3085,14 +3108,14 @@ def prometheus_label_factory(
             # check sanitized key
             sanitized_key = _sanitize_prometheus_label_name(key)
             if sanitized_key in supported_enum_labels:
-                filtered_labels[sanitized_key] = value
+                filtered_labels[sanitized_key] = _sanitize_prometheus_label_value(value)
 
     # Add custom tags if configured
     if enum_values.tags is not None:
         custom_tag_labels = get_custom_labels_from_tags(enum_values.tags)
         for key, value in custom_tag_labels.items():
             if key in supported_enum_labels:
-                filtered_labels[key] = value
+                filtered_labels[key] = _sanitize_prometheus_label_value(value)
 
     for label in supported_enum_labels:
         if label not in filtered_labels:

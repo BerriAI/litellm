@@ -211,25 +211,13 @@ class BaseAWSLLM:
                 aws_external_id=aws_external_id,
             )
         elif aws_role_name is not None:
-            # Check if we're in IRSA and trying to assume the same role we already have
-            current_role_arn = os.getenv("AWS_ROLE_ARN")
-            web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
-
-            # In IRSA environments, we should skip role assumption if we're already running as the target role
-            # This is true when:
-            # 1. We have AWS_ROLE_ARN set (current role)
-            # 2. We have AWS_WEB_IDENTITY_TOKEN_FILE set (IRSA environment)
-            # 3. The current role matches the requested role
-            if (
-                current_role_arn
-                and web_identity_token_file
-                and current_role_arn == aws_role_name
-            ):
+            # Check if we're already running as the target role and can skip assumption
+            # This handles IRSA (EKS), ECS task roles, and EC2 instance profiles
+            if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
                 verbose_logger.debug(
-                    "Using IRSA same-role optimization: calling _auth_with_env_vars"
+                    "Already running as target role %s, using ambient credentials",
+                    aws_role_name,
                 )
-                # We're already running as this role via IRSA, no need to assume it again
-                # Use the default boto3 credentials (which will use the IRSA credentials)
                 credentials, _cache_ttl = self._auth_with_env_vars()
             else:
                 verbose_logger.debug(
@@ -553,6 +541,107 @@ class BaseAWSLLM:
                 aws_region_name = "us-west-2"
         return aws_region_name
 
+    @staticmethod
+    def _parse_arn_account_and_role_name(
+        arn: str,
+    ) -> Optional[Tuple[str, str, str]]:
+        """
+        Parse an ARN and return (partition, account_id, role_name).
+
+        Handles:
+        - arn:aws:iam::123456789012:role/MyRole
+        - arn:aws:iam::123456789012:role/path/to/MyRole
+        - arn:aws:sts::123456789012:assumed-role/MyRole/session-name
+
+        Returns None if the ARN cannot be parsed.
+        """
+        # ARN format: arn:PARTITION:SERVICE:REGION:ACCOUNT:RESOURCE
+        parts = arn.split(":")
+        if len(parts) < 6 or parts[0] != "arn":
+            return None
+
+        partition = parts[1]  # e.g. "aws", "aws-cn", "aws-us-gov"
+        account_id = parts[4]
+        resource = ":".join(parts[5:])  # rejoin in case resource contains colons
+
+        if resource.startswith("role/"):
+            # arn:aws:iam::ACCOUNT:role/[path/]ROLE_NAME
+            role_name = resource.split("/")[-1]
+        elif resource.startswith("assumed-role/"):
+            # arn:aws:sts::ACCOUNT:assumed-role/ROLE_NAME/SESSION
+            role_parts = resource.split("/")
+            if len(role_parts) >= 2:
+                role_name = role_parts[1]
+            else:
+                return None
+        else:
+            return None
+
+        return partition, account_id, role_name
+
+    def _is_already_running_as_role(
+        self,
+        aws_role_name: str,
+        ssl_verify: Optional[Union[bool, str]] = None,
+    ) -> bool:
+        """
+        Check if the current environment is already running as the target IAM role.
+
+        This handles multiple AWS environments:
+        - IRSA (EKS): AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE are set
+        - ECS task roles: Uses sts:GetCallerIdentity to check current role ARN
+        - EC2 instance profiles: Uses sts:GetCallerIdentity to check current role ARN
+
+        Compares partition, account ID, and role name to avoid cross-account
+        false matches.
+
+        Returns True if the current identity matches the target role, meaning
+        we can skip sts:AssumeRole and use ambient credentials directly.
+        """
+        target_parsed = self._parse_arn_account_and_role_name(aws_role_name)
+        if target_parsed is None:
+            return False
+
+        target_partition, target_account, target_role = target_parsed
+
+        # Fast path: IRSA environment check (no API call needed)
+        current_role_arn = os.getenv("AWS_ROLE_ARN")
+        web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+        if current_role_arn and web_identity_token_file:
+            return current_role_arn == aws_role_name
+
+        # For ECS/EC2: call sts:GetCallerIdentity to check if already running as the role
+        try:
+            import boto3
+
+            with tracer.trace("boto3.client(sts).get_caller_identity"):
+                sts_client = boto3.client(
+                    "sts", verify=self._get_ssl_verify(ssl_verify)
+                )
+                identity = sts_client.get_caller_identity()
+                caller_arn = identity.get("Arn", "")
+
+            caller_parsed = self._parse_arn_account_and_role_name(caller_arn)
+            if caller_parsed is not None:
+                caller_partition, caller_account, caller_role = caller_parsed
+                if (
+                    caller_partition == target_partition
+                    and caller_account == target_account
+                    and caller_role == target_role
+                ):
+                    verbose_logger.debug(
+                        "Current identity already matches target role: %s",
+                        aws_role_name,
+                    )
+                    return True
+
+        except Exception as e:
+            verbose_logger.debug(
+                "Could not determine current role identity: %s", str(e)
+            )
+
+        return False
+
     @tracer.wrap()
     def _auth_with_web_identity_token(
         self,
@@ -867,7 +956,35 @@ class BaseAWSLLM:
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
 
-        sts_response = sts_client.assume_role(**assume_role_params)
+        try:
+            sts_response = sts_client.assume_role(**assume_role_params)
+        except Exception as e:
+            error_str = str(e)
+            if "AccessDenied" in error_str:
+                # Only fall back to ambient credentials if we can positively
+                # confirm the caller is already the target role (same account,
+                # partition, and role name).  This avoids silently using the
+                # wrong identity when there is a genuine trust-policy or
+                # permission misconfiguration.
+                if self._is_already_running_as_role(
+                    aws_role_name, ssl_verify=ssl_verify
+                ):
+                    verbose_logger.warning(
+                        "AssumeRole failed for %s (%s). "
+                        "Caller is already running as this role; "
+                        "falling back to ambient credentials.",
+                        aws_role_name,
+                        error_str,
+                    )
+                    return self._auth_with_env_vars()
+                # Genuine permission error — re-raise
+                verbose_logger.error(
+                    "AssumeRole AccessDenied for %s and caller is NOT "
+                    "the same role. Re-raising. Error: %s",
+                    aws_role_name,
+                    error_str,
+                )
+            raise
 
         # Extract the credentials from the response and convert to Session Credentials
         sts_credentials = sts_response["Credentials"]

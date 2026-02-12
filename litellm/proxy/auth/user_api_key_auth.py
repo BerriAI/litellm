@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
@@ -115,6 +116,18 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
 
     return api_key
 
@@ -128,6 +141,20 @@ def _get_bearer_token(
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
+            else:
+                api_key = ""
     else:
         api_key = ""
     return api_key
@@ -1149,6 +1176,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
                     team_id=valid_token.team_id,
                     max_budget=valid_token.team_max_budget,
+                    soft_budget=valid_token.team_soft_budget,
                     spend=valid_token.team_spend,
                     tpm_limit=valid_token.team_tpm_limit,
                     rpm_limit=valid_token.team_rpm_limit,

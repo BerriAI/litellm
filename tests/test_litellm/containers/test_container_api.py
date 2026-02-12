@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -335,7 +335,14 @@ class TestContainerAPI:
             name="Test Container"
         )
 
-        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
+        # Mock async_container_create_handler since router.acreate_container
+        # uses _is_async=True which calls the async handler
+        with patch.object(
+            base_llm_http_handler,
+            'async_container_create_handler',
+            new_callable=AsyncMock,
+            return_value=mock_response
+        ):
             result = await router.acreate_container(
                 name="Test Container",
                 custom_llm_provider="openai"

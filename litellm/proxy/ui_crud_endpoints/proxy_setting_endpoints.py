@@ -83,6 +83,11 @@ class UISettings(BaseModel):
         description="List of page keys that internal users (non-admins) can see in the UI sidebar. If not set, all pages are visible based on role permissions.",
     )
 
+    require_auth_for_public_ai_hub: bool = Field(
+        default=False,
+        description="If true, requires authentication for accessing the public AI Hub."
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -95,6 +100,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
+    "require_auth_for_public_ai_hub",
 }
 
 

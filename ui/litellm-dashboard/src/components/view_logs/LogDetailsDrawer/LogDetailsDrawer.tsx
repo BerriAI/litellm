@@ -85,7 +85,7 @@ export function LogDetailsDrawer({
   // Check if request/response data is present
   const hasMessages = checkHasMessages(logEntry.messages);
   const hasResponse = checkHasResponse(logEntry.response);
-  const missingData = !hasMessages && !hasResponse;
+  const missingData = !hasMessages && !hasResponse && !hasError;
 
   // Guardrail data
   const guardrailInfo = metadata?.guardrail_information;
@@ -206,6 +206,7 @@ export function LogDetailsDrawer({
         {/* Request/Response JSON - Collapsible */}
         <RequestResponseSection
           hasResponse={hasResponse}
+          hasError={hasError}
           getRawRequest={getRawRequest}
           getFormattedResponse={getFormattedResponse}
           logEntry={logEntry}
@@ -339,6 +340,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
 
 interface RequestResponseSectionProps {
   hasResponse: boolean;
+  hasError: boolean;
   getRawRequest: () => any;
   getFormattedResponse: () => any;
   logEntry: LogEntry;
@@ -346,6 +348,7 @@ interface RequestResponseSectionProps {
 
 function RequestResponseSection({
   hasResponse,
+  hasError,
   getRawRequest,
   getFormattedResponse,
   logEntry,
@@ -423,7 +426,7 @@ function RequestResponseSection({
                           text: getCopyText(),
                           tooltips: ["Copy JSON", "Copied!"]
                         }}
-                        disabled={activeTab === TAB_RESPONSE && !hasResponse}
+                        disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
                       />
                     }
                     items={[
@@ -441,7 +444,7 @@ function RequestResponseSection({
                         label: "Response",
                         children: (
                           <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            {hasResponse ? (
+                            {hasResponse || hasError ? (
                               <JsonViewer data={getFormattedResponse()} mode="formatted" />
                             ) : (
                               <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
