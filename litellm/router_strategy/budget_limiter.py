@@ -98,6 +98,7 @@ class RouterBudgetLimiting(CustomLogger):
             cache_keys,
             provider_configs,
             deployment_configs,
+            deployment_provider_map,
         ) = await self._async_get_cache_keys_for_router_budget_limiting(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
@@ -123,6 +124,7 @@ class RouterBudgetLimiting(CustomLogger):
                 healthy_deployments=healthy_deployments,
                 provider_configs=provider_configs,
                 deployment_configs=deployment_configs,
+                deployment_provider_map=deployment_provider_map,
                 spend_map=spend_map,
                 potential_deployments=potential_deployments,
                 request_tags=_get_tags_from_request_kwargs(
@@ -145,6 +147,7 @@ class RouterBudgetLimiting(CustomLogger):
         healthy_deployments: List[Dict[str, Any]],
         provider_configs: Dict[str, GenericBudgetInfo],
         deployment_configs: Dict[str, GenericBudgetInfo],
+        deployment_provider_map: Dict[int, Optional[str]],
         spend_map: Dict[str, float],
         request_tags: List[str],
     ) -> Tuple[List[Dict[str, Any]], str]:
@@ -166,7 +169,9 @@ class RouterBudgetLimiting(CustomLogger):
 
             # Check provider budget
             if self.provider_budget_config:
-                provider = self._get_llm_provider_for_deployment(deployment)
+                provider = deployment_provider_map.get(id(deployment))
+                if provider is None:
+                    provider = self._get_llm_provider_for_deployment(deployment)
                 if provider in provider_configs:
                     config = provider_configs[provider]
                     if config.max_budget is None:
@@ -230,24 +235,32 @@ class RouterBudgetLimiting(CustomLogger):
         self,
         healthy_deployments: List[Dict[str, Any]],
         request_kwargs: Optional[Dict] = None,
-    ) -> Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo]]:
+    ) -> Tuple[
+        List[str],
+        Dict[str, GenericBudgetInfo],
+        Dict[str, GenericBudgetInfo],
+        Dict[int, Optional[str]],
+    ]:
         """
         Returns list of cache keys to fetch from router cache for budget limiting and provider and deployment configs
 
         Returns:
-            Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo]]:
+            Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo], Dict[int, Optional[str]]]:
                 - List of cache keys to fetch from router cache for budget limiting
                 - Dict of provider budget configs `provider_configs`
                 - Dict of deployment budget configs `deployment_configs`
+                - Dict of deployment id to resolved provider `deployment_provider_map`
         """
         cache_keys: List[str] = []
         provider_configs: Dict[str, GenericBudgetInfo] = {}
         deployment_configs: Dict[str, GenericBudgetInfo] = {}
+        deployment_provider_map: Dict[int, Optional[str]] = {}
 
         for deployment in healthy_deployments:
             # Check provider budgets
             if self.provider_budget_config:
                 provider = self._get_llm_provider_for_deployment(deployment)
+                deployment_provider_map[id(deployment)] = provider
                 if provider is not None:
                     budget_config = self._get_budget_config_for_provider(provider)
                     if (
@@ -280,7 +293,12 @@ class RouterBudgetLimiting(CustomLogger):
                         cache_keys.append(
                             f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
                         )
-        return cache_keys, provider_configs, deployment_configs
+        return (
+            cache_keys,
+            provider_configs,
+            deployment_configs,
+            deployment_provider_map,
+        )
 
     async def _get_or_set_budget_start_time(
         self, start_time_key: str, current_time: float, ttl_seconds: int
@@ -597,12 +615,38 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _get_llm_provider_for_deployment(self, deployment: Dict) -> Optional[str]:
         try:
-            _litellm_params: LiteLLM_Params = LiteLLM_Params(
-                **deployment.get("litellm_params", {"model": ""})
-            )
+            deployment_litellm_params = deployment.get("litellm_params") or {}
+            model: str = ""
+            custom_llm_provider: Optional[str] = None
+            api_base: Optional[str] = None
+            api_key: Optional[str] = None
+            use_litellm_proxy = False
+
+            if isinstance(deployment_litellm_params, LiteLLM_Params):
+                model = deployment_litellm_params.model or ""
+                custom_llm_provider = deployment_litellm_params.custom_llm_provider
+                api_base = deployment_litellm_params.api_base
+                api_key = deployment_litellm_params.api_key
+                use_litellm_proxy = bool(deployment_litellm_params.use_litellm_proxy)
+            elif isinstance(deployment_litellm_params, dict):
+                model = deployment_litellm_params.get("model") or ""
+                custom_llm_provider = deployment_litellm_params.get(
+                    "custom_llm_provider"
+                )
+                api_base = deployment_litellm_params.get("api_base")
+                api_key = deployment_litellm_params.get("api_key")
+                use_litellm_proxy = bool(
+                    deployment_litellm_params.get("use_litellm_proxy")
+                )
+
+            if use_litellm_proxy:
+                return "litellm_proxy"
+
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=_litellm_params.model,
-                litellm_params=_litellm_params,
+                model=str(model),
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
             )
         except Exception:
             verbose_router_logger.error(
