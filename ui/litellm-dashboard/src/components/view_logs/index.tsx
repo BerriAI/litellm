@@ -72,7 +72,7 @@ export default function SpendLogsTable({
   const quickSelectRef = useRef<HTMLDivElement>(null);
 
   // New state variables for Start and End Time
-  const [startTime, setStartTime] = useState<string>(moment().subtract(4, "hours").format("YYYY-MM-DDTHH:mm"));
+  const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
   const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
 
   const [isCustomDate, setIsCustomDate] = useState(false);
@@ -107,7 +107,7 @@ export default function SpendLogsTable({
   }, [isLiveTail]);
 
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({
-    value: 4,
+    value: 24,
     unit: "hours",
   });
 
@@ -764,7 +764,6 @@ export default function SpendLogsTable({
         onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
         allLogs={filteredData}
         onSelectLog={handleSelectLog}
-        accessToken={accessToken}
         startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
       />
     </div>

@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Drawer, Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin } from "antd";
 import moment from "moment";
 import { LogEntry } from "../columns";
-import { uiSpendLogDetailsCall } from "../../networking";
+import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
@@ -47,7 +46,6 @@ export interface LogDetailsDrawerProps {
   onOpenSettings?: () => void;
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
-  accessToken?: string;
   startTime?: string;
 }
 
@@ -68,7 +66,6 @@ export function LogDetailsDrawer({
   onOpenSettings,
   allLogs = [],
   onSelectLog,
-  accessToken,
   startTime,
 }: LogDetailsDrawerProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
@@ -83,24 +80,14 @@ export function LogDetailsDrawer({
   });
 
   // Lazy-load log details (messages/response) only when drawer is open
-  // This fetches data for a single log on-demand instead of prefetching all 50
-  const logDetails = useQuery({
-    queryKey: ["logDetails", logEntry?.request_id, startTime, accessToken],
-    queryFn: async () => {
-      if (!accessToken || !logEntry?.request_id || !startTime) return null;
-      return await uiSpendLogDetailsCall(accessToken, logEntry.request_id, startTime);
-    },
-    enabled: open && !!accessToken && !!logEntry?.request_id && !!startTime,
-    staleTime: 10 * 60 * 1000, // 10 minutes
-    gcTime: 10 * 60 * 1000, // 10 minutes
-  });
+  const logDetails = useLogDetails(logEntry?.request_id, startTime, open && !!logEntry?.request_id);
 
   if (!logEntry) return null;
 
-  // Merge lazy-loaded details into the log entry
+  // Use lazy-loaded details data directly
   const detailsData = logDetails.data as any;
-  const effectiveMessages = detailsData?.messages || logEntry.messages;
-  const effectiveResponse = detailsData?.response || logEntry.response;
+  const effectiveMessages = detailsData?.messages;
+  const effectiveResponse = detailsData?.response;
   const isLoadingDetails = logDetails.isLoading;
 
   const metadata = logEntry.metadata || {};
