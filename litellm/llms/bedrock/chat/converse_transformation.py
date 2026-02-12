@@ -1606,25 +1606,24 @@ class AmazonConverseConfig(BaseConfig):
         # Mixed: filter out json_tool_call, keep real tools.
         # Preserve the json_tool_call content as message text so the structured
         # output from response_format is not silently lost.
-        for idx in json_tool_indices:
-            json_mode_args = tools[idx]["function"].get("arguments")
-            if json_mode_args is not None:
-                try:
-                    response_data = json.loads(json_mode_args)
-                    if (
-                        isinstance(response_data, dict)
-                        and "properties" in response_data
-                        and len(response_data) == 1
-                    ):
-                        response_data = response_data["properties"]
-                        json_mode_args = json.dumps(response_data)
-                except json.JSONDecodeError:
-                    pass
-                existing = chat_completion_message.get("content") or ""
-                chat_completion_message["content"] = (
-                    existing + json_mode_args if existing else json_mode_args
-                )
-            break  # only use the first json_tool_call
+        first_idx = json_tool_indices[0]
+        json_mode_args = tools[first_idx]["function"].get("arguments")
+        if json_mode_args is not None:
+            try:
+                response_data = json.loads(json_mode_args)
+                if (
+                    isinstance(response_data, dict)
+                    and "properties" in response_data
+                    and len(response_data) == 1
+                ):
+                    response_data = response_data["properties"]
+                    json_mode_args = json.dumps(response_data)
+            except json.JSONDecodeError:
+                pass
+            existing = chat_completion_message.get("content") or ""
+            chat_completion_message["content"] = (
+                existing + json_mode_args if existing else json_mode_args
+            )
 
         real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
         return real_tools if real_tools else None
