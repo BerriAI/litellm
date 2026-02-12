@@ -234,7 +234,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       // Pre-fill the add policy form with template data
       setEditingPolicy(selectedTemplate.templateData as Policy);
       setIsAddPolicyModalVisible(true);
-      setActiveTab(0); // Switch to Policies tab
+      setActiveTab(1); // Switch to Policies tab (now at index 1)
 
       // Show success message
       if (createdGuardrails.length > 0) {
@@ -266,13 +266,46 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <TabGroup index={activeTab} onIndexChange={setActiveTab}>
         <TabList className="mb-4">
+          <Tab>Templates</Tab>
           <Tab>Policies</Tab>
           <Tab>Attachments</Tab>
           <Tab>Policy Simulator</Tab>
-          <Tab>Templates</Tab>
         </TabList>
 
         <TabPanels>
+          <TabPanel>
+          <Alert
+              message="About Policies"
+              description={
+                <div>
+                  <p className="mb-3">
+                    Use policies to group guardrails and control which ones run for specific teams, keys, or models.
+                  </p>
+                  <p className="mb-2 font-semibold">Why use policies?</p>
+                  <ul className="list-disc list-inside mb-3 space-y-1 ml-2">
+                    <li>Enable/disable specific guardrails for teams, keys, or models</li>
+                    <li>Group guardrails into a single policy</li>
+                    <li>Inherit from existing policies and override what you need</li>
+                  </ul>
+                  <a
+                    href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:text-blue-800 underline inline-block mt-1"
+                  >
+                    Learn more in the documentation →
+                  </a>
+                </div>
+              }
+              type="info"
+              icon={<InfoCircleOutlined />}
+              showIcon
+              closable
+              className="mb-6"
+            />
+            <PolicyTemplates onUseTemplate={handleUseTemplate} accessToken={accessToken} />
+          </TabPanel>
+
           <TabPanel>
             <Alert
               message="About Policies"
@@ -437,10 +470,6 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
           <TabPanel>
             <PolicyTestPanel accessToken={accessToken} />
-          </TabPanel>
-
-          <TabPanel>
-            <PolicyTemplates onUseTemplate={handleUseTemplate} accessToken={accessToken} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

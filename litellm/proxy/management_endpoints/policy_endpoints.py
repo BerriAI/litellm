@@ -11,8 +11,10 @@ All /policy management endpoints
 
 import json
 import os
+from importlib.resources import files
 from typing import Any, List
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from litellm._logging import verbose_proxy_logger
@@ -32,6 +34,87 @@ from litellm.types.proxy.policy_engine import (
 )
 
 router = APIRouter()
+
+
+# Policy Templates GitHub URL
+POLICY_TEMPLATES_GITHUB_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
+)
+
+
+def load_local_policy_templates() -> List[Any]:
+    """Load the local backup policy templates bundled with the package."""
+    try:
+        content = json.loads(
+            files("litellm")
+            .joinpath("policy_templates_backup.json")
+            .read_text(encoding="utf-8")
+        )
+        return content
+    except Exception as e:
+        verbose_proxy_logger.error(f"Failed to load local policy templates backup: {e}")
+        return []
+
+
+def fetch_remote_policy_templates(url: str, timeout: int = 5) -> List[Any]:
+    """
+    Fetch policy templates from a remote URL.
+
+    Returns the parsed JSON list. Raises on network/parse errors.
+    """
+    response = httpx.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_policy_templates_list() -> List[Any]:
+    """
+    Get policy templates with GitHub fallback to local backup.
+
+    1. Try to fetch from GitHub URL (https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json)
+    2. On any failure, fall back to local backup (litellm/policy_templates_backup.json)
+    3. Validate that result is a non-empty list
+
+    Set LITELLM_LOCAL_POLICY_TEMPLATES=true to always use local backup.
+    """
+    # Check if we should use local only (LITELLM_LOCAL_POLICY_TEMPLATES=true)
+    use_local_only = os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").lower() == "true"
+
+    if use_local_only:
+        verbose_proxy_logger.info(
+            "Using local policy templates (LITELLM_LOCAL_POLICY_TEMPLATES=true)"
+        )
+        return load_local_policy_templates()
+
+    # Try to fetch from GitHub
+    try:
+        templates = fetch_remote_policy_templates(POLICY_TEMPLATES_GITHUB_URL)
+
+        # Validate it's a non-empty list
+        if not isinstance(templates, list):
+            verbose_proxy_logger.warning(
+                f"Fetched policy templates is not a list (type={type(templates).__name__}). "
+                "Falling back to local backup."
+            )
+            return load_local_policy_templates()
+
+        if len(templates) == 0:
+            verbose_proxy_logger.warning(
+                "Fetched policy templates is empty. Falling back to local backup."
+            )
+            return load_local_policy_templates()
+
+        verbose_proxy_logger.debug(
+            f"Successfully fetched {len(templates)} policy templates from GitHub"
+        )
+        return templates
+
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to fetch policy templates from {POLICY_TEMPLATES_GITHUB_URL}: {e}. "
+            "Falling back to local backup."
+        )
+        return load_local_policy_templates()
 
 
 @router.post(
@@ -279,32 +362,15 @@ async def get_policy_templates(
 
     Returns a list of pre-configured policy templates that users can use
     as a starting point for creating their own policies.
+
+    Templates are fetched from GitHub by default, with fallback to local backup.
+    Set LITELLM_LOCAL_POLICY_TEMPLATES=true to always use local backup.
     """
     try:
-        # Get the path to the policy_templates.json file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        templates_path = os.path.join(
-            os.path.dirname(current_dir), "policy_templates.json"
-        )
-
-        # Read and return the templates
-        with open(templates_path, "r") as f:
-            templates = json.load(f)
-
+        templates = get_policy_templates_list()
         verbose_proxy_logger.debug(f"Loaded {len(templates)} policy templates")
         return templates
 
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail="Policy templates file not found",
-        )
-    except json.JSONDecodeError as e:
-        verbose_proxy_logger.error(f"Error parsing policy templates JSON: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Error parsing policy templates file",
-        )
     except Exception as e:
         verbose_proxy_logger.error(f"Error loading policy templates: {e}")
         raise HTTPException(
