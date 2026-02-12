@@ -420,7 +420,8 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools",
         "/mcp/tools/list",
         "/mcp/tools/call",
-        # Read-only MCP discovery endpoint (virtual keys may be allowed here)
+        "/mcp-rest/tools/list",
+        "/mcp-rest/tools/call",
         "/v1/mcp/server",
     ]
 
