@@ -22611,6 +22611,19 @@
         "output_cost_per_token": 2.3e-07,
         "supports_system_messages": true
     },
+    "nvidia.nemotron-nano-3-30b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-07,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "o1": {
         "cache_read_input_token_cost": 7.5e-06,
         "input_cost_per_token": 1.5e-05,
