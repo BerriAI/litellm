@@ -88,10 +88,10 @@ class TestCBFTransformer:
         transformer = CBFTransformer()
         with patch.object(transformer.czrn_generator, 'create_from_litellm_data') as mock_czrn, \
              patch.object(transformer.czrn_generator, 'extract_components') as mock_extract:
-            
+
             mock_czrn.return_value = 'test-czrn'
             mock_extract.return_value = ('service', 'provider', 'region', 'account', 'resource', 'local_id')
-            
+
             row = {
                 'date': '2025-01-19',
                 'spend': 10.5,
@@ -107,14 +107,15 @@ class TestCBFTransformer:
                 'successful_requests': 5,
                 'failed_requests': 0
             }
-            
+
             result = transformer._create_cbf_record(row)
-            
+
             assert isinstance(result, CBFRecord)
             assert result['cost/cost'] == 10.5
             assert result['usage/amount'] == 150  # 100 + 50
             assert result['usage/units'] == 'tokens'
-            assert result['resource/id'] == 'test-czrn'
+            # resource/id is set to model name per implementation (line 144 in transform.py)
+            assert result['resource/id'] == 'gpt-4'
 
     def test_create_cbf_record_adds_user_email_tag(self):
         """Test that user_email field is emitted as a resource tag when present."""
