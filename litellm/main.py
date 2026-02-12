@@ -5170,6 +5170,7 @@ def embedding(  # noqa: PLR0915
                     aembedding=aembedding,
                     print_verbose=print_verbose,
                     api_key=api_key,
+                    extra_headers=headers,
                     api_base=api_base,
                     client=client,
                 )
