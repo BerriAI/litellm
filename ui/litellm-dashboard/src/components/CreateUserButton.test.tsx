@@ -19,6 +19,13 @@ vi.mock("./networking", () => ({
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost"),
 }));
 
+vi.mock("./onboarding_link", () => ({
+  __esModule: true,
+  default: ({ isInvitationLinkModalVisible }: { isInvitationLinkModalVisible: boolean }) =>
+    isInvitationLinkModalVisible ? <div data-testid="onboarding-modal">Onboarding Modal</div> : null,
+  InvitationLink: {},
+}));
+
 vi.mock("./bulk_create_users_button", () => ({
   default: () => <div data-testid="bulk-create-users">Bulk Create Users</div>,
 }));
