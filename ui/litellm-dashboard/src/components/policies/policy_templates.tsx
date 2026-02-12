@@ -170,7 +170,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, access
             guardrails={template.guardrails}
             inherits={template.inherits}
             complexity={template.complexity}
-            onUseTemplate={() => onUseTemplate(template.templateData)}
+            onUseTemplate={() => onUseTemplate(template)}
           />
         ))}
       </div>
