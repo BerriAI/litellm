@@ -10,10 +10,10 @@ tiers:
     model: "gemini/gemini-2.5-flash-lite"
     max_cost_per_m_tokens: 1.0
   mid:
-    model: "anthropic/claude-haiku-4-5-20251001"
+    model: "gemini/gemini-3-flash-preview"
     max_cost_per_m_tokens: 5.0
   top:
-    model: "anthropic/claude-sonnet-4-5-20250929"
+    model: "gemini/gemini-3-pro-preview"
     max_cost_per_m_tokens: 30.0
 
 # Category -> tier routing: which tier handles each task category

@@ -1,4 +1,26 @@
-model_list: []
+model_list:
+
+  - model_name: google/gemini-2.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+
+  - model_name: google/gemini-3-flash-preview
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: os.environ/GOOGLE_API_KEY
+
+  - model_name: google/gemini-3-pro-preview
+    litellm_params:
+      model: gemini/gemini-3-pro-preview
+      api_key: os.environ/GOOGLE_API_KEY
+
+
+  - model_name: auto
+    litellm_params:
+      model: "auto_router/auto_router_1"
+      auto_router_config_path: "/home/zazer/persistz/cw/clawrouter/litellm/router_strategy/auto_router/routing_rules.yaml"
+      auto_router_default_model: "gemini/gemini-3-flash-preview"
 
 # General Settings
 general_settings:
