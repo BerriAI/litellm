@@ -47,7 +47,15 @@ export const validateMCPServerUrl = (value: string) => {
 };
 
 export const validateMCPServerName = (value: string) => {
-  return value && value.includes("-")
-    ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-    : Promise.resolve();
+  if (!value) return Promise.resolve();
+  
+  if (value.includes("-")) {
+    return Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.");
+  }
+  
+  if (value.includes(" ")) {
+    return Promise.reject("Server name cannot contain spaces. Please use '_' (underscore) instead.");
+  }
+  
+  return Promise.resolve();
 };
