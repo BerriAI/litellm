@@ -7,6 +7,7 @@ import httpx
 import jsonschema
 
 import litellm
+from litellm.exceptions import BadRequestError
 from litellm.constants import (
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
@@ -81,10 +82,6 @@ else:
     LoggingClass = Any
 
 
-# Store original schemas for validation (module-level to avoid serialization)
-_ANTHROPIC_ORIGINAL_SCHEMAS: Dict[str, Dict[str, Any]] = {}
-
-
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -115,6 +112,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
+        # preserving user's original schemas (for response validation before sending to client)
+        self._original_schemas: Dict[str, Dict[str, Any]] = {}
         self._current_schema_hash: Optional[str] = None
 
     @property
@@ -245,12 +244,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             constraints.append(f"Must be greater than {result['exclusiveMinimum']}")
         if "exclusiveMaximum" in result:
             constraints.append(f"Must be less than {result['exclusiveMaximum']}")
+        if "multipleOf" in result:
+            constraints.append(f"Must be multiple of {result['multipleOf']}")
         if "minLength" in result:
             constraints.append(f"Minimum length: {result['minLength']}")
         if "maxLength" in result:
             constraints.append(f"Maximum length: {result['maxLength']}")
+        if "pattern" in result:
+            constraints.append(f"Pattern: {result['pattern']}")
         if "minItems" in result and isinstance(result.get("minItems"), int) and result["minItems"] > 1:
             constraints.append(f"Minimum items: {result['minItems']}")
+        if "maxItems" in result:
+            constraints.append(f"Maximum items: {result['maxItems']}")
 
         if constraints:
             constraint_text = ". ".join(constraints)
@@ -291,27 +296,64 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else:
                 result[key] = value
 
+        # Add additionalProperties: false to all objects (matches Anthropic python SDK behavior)
+        # Ref: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs#how-sdk-transformation-works
         if result.get("type") == "object" and "additionalProperties" not in result:
             result["additionalProperties"] = False
 
         return result
 
     @staticmethod
-    def _validate_response_against_schema(response_json: Dict[str, Any], original_schema: Dict[str, Any], model: str) -> None:
-        """Validate response against original schema with constraints."""
+    def _validate_response_against_schema(
+        response_json: Dict[str, Any],
+        original_schema: Dict[str, Any],
+        model: str,
+        strict: bool = False
+    ) -> None:
+        """
+        Validate response against original schema with constraints.
+
+        Args:
+            response_json: Response to validate
+            original_schema: Original schema with constraints
+            model: Model name for error messages
+            strict: If True, raise error on violation. If False, log warning (matches Anthropic SDK)
+        """
         try:
             jsonschema.validate(instance=response_json, schema=original_schema)
         except jsonschema.ValidationError as e:
             error_path = ".".join(str(p) for p in e.path) if e.path else "root"
             error_msg = getattr(e, 'message', getattr(e, 'msg', str(e)))
-            raise ValueError(
+            violation_msg = (
                 f"Response from {model} violates the original schema constraints.\n"
                 f"Field: {error_path}\nError: {error_msg}\nValue: {e.instance}"
             )
 
-    def validate_structured_output_response(self, response_content: str, model: str) -> None:
-        """Validate Claude's response against original schema (with constraints)."""
-        if not self._current_schema_hash or self._current_schema_hash not in _ANTHROPIC_ORIGINAL_SCHEMAS:
+            if strict:
+                raise BadRequestError(
+                    message=violation_msg,
+                    model=model,
+                    llm_provider="anthropic"
+                )
+            else:
+                # Match Anthropic SDK behavior: warn but don't block response
+                litellm.verbose_logger.warning(f"Schema validation warning: {violation_msg}")
+
+    def validate_structured_output_response(
+        self,
+        response_content: str,
+        model: str,
+        strict_validation: bool = False
+    ) -> None:
+        """
+        Validate Claude's response against original schema (with constraints).
+
+        Args:
+            response_content: JSON response from Claude
+            model: Model name
+            strict_validation: If True, raise error on violations. If False, log warning (default, matches SDK)
+        """
+        if not self._current_schema_hash or self._current_schema_hash not in self._original_schemas:
             return
 
         try:
@@ -319,8 +361,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except json.JSONDecodeError:
             return
 
-        original_schema = _ANTHROPIC_ORIGINAL_SCHEMAS[self._current_schema_hash]
-        self._validate_response_against_schema(response_json, original_schema, model)
+        original_schema = self._original_schemas[self._current_schema_hash]
+        self._validate_response_against_schema(response_json, original_schema, model, strict_validation)
 
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
@@ -777,7 +819,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Store original for validation (deep copy to avoid mutation)
         original_schema = json.loads(json.dumps(json_schema))
         schema_hash = str(hash(json.dumps(original_schema, sort_keys=True)))
-        _ANTHROPIC_ORIGINAL_SCHEMAS[schema_hash] = original_schema
+        self._original_schemas[schema_hash] = original_schema
         self._current_schema_hash = schema_hash
 
         # Add constraints to descriptions, then filter out unsupported fields
@@ -1717,14 +1759,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             speed=speed,
         )
 
-        # Validate structured output against original schema if applicable
-        if model_response.choices and len(model_response.choices) > 0:
-            message = model_response.choices[0].message
-            if message and message.content:
-                self.validate_structured_output_response(
-                    response_content=message.content,
-                    model=model
-                )
+        try:
+            # Validate structured output against original schema if applicable
+            if model_response.choices and len(model_response.choices) > 0:
+                message = model_response.choices[0].message
+                if message and message.content:
+                    self.validate_structured_output_response(
+                        response_content=message.content,
+                        model=model
+                    )
+        finally:
+            # Always cleanup schema to prevent memory leak
+            # (even on refusals, empty responses, errors, etc.)
+            if self._current_schema_hash and self._current_schema_hash in self._original_schemas:
+                del self._original_schemas[self._current_schema_hash]
+                self._current_schema_hash = None
 
         return model_response
 

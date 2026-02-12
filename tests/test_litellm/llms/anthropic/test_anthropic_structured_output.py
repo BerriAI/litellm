@@ -290,8 +290,9 @@ class TestAnthropicStructuredOutput:
         assert filtered["additionalProperties"] is False
 
     def test_validation_error_message(self):
-        """Test response validation error messages."""
+        """Test response validation with strict mode."""
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.exceptions import BadRequestError
 
         schema = {
             "type": "object",
@@ -302,9 +303,189 @@ class TestAnthropicStructuredOutput:
 
         response = {"age": 200}
 
-        with pytest.raises(ValueError) as exc_info:
-            AnthropicConfig._validate_response_against_schema(response, schema, "claude-sonnet-4-5")
+        # Default (strict=False): Should warn, not raise
+        AnthropicConfig._validate_response_against_schema(response, schema, "claude-sonnet-4-5", strict=False)
+
+        # strict=True: Should raise BadRequestError
+        with pytest.raises(BadRequestError) as exc_info:
+            AnthropicConfig._validate_response_against_schema(response, schema, "claude-sonnet-4-5", strict=True)
 
         error_msg = str(exc_info.value)
         assert "violates the original schema constraints" in error_msg
         assert "age" in error_msg or "200" in error_msg
+
+    def test_comprehensive_pydantic_model_with_existing_descriptions(self):
+        """
+        Comprehensive test: Big Pydantic model with existing descriptions.
+        Verifies that constraint info is APPENDED to existing descriptions, not replaced.
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        import re
+
+        # Complex Pydantic model with ALL constraint types and existing descriptions
+        class Address(BaseModel):
+            street: str = Field(min_length=5, max_length=100, description="Street address")
+            zipcode: str = Field(pattern=r"^\d{5}$", description="US ZIP code")
+
+        class UserProfile(BaseModel):
+            # String constraints with existing description
+            username: str = Field(
+                min_length=3,
+                max_length=20,
+                description="User's unique identifier"
+            )
+            email: str = Field(
+                pattern=r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
+                description="User's email address"
+            )
+
+            # Numerical constraints with existing description
+            age: int = Field(ge=18, le=120, description="User's age in years")
+            score: float = Field(ge=0.0, le=100.0, description="Performance score")
+            rating: int = Field(multiple_of=5, description="Star rating (multiples of 5)")
+
+            # Array constraints with existing description
+            tags: List[str] = Field(
+                max_length=10,
+                min_length=1,
+                description="User interest tags"
+            )
+            friends: List[str] = Field(
+                max_length=50,
+                description="List of friend usernames"
+            )
+
+            # Nested object with description
+            address: Address = Field(description="User's residential address")
+
+            # Field WITHOUT existing description (constraint info should become description)
+            follower_count: int = Field(ge=0, le=1000000)
+
+        config = AnthropicConfig()
+        json_schema = config.get_json_schema_from_pydantic_object(UserProfile)
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": json_schema["json_schema"]
+        }
+
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
+
+        assert output_format is not None
+        transformed_schema = output_format["schema"]
+        props = transformed_schema["properties"]
+
+        # ===== Test 1: String constraints with existing descriptions =====
+        username = props["username"]
+        assert "minLength" not in username  # Filtered out
+        assert "maxLength" not in username  # Filtered out
+        desc = username["description"]
+        assert "User's unique identifier" in desc  # Original description preserved
+        assert "Minimum length: 3" in desc  # Constraint added
+        assert "Maximum length: 20" in desc  # Constraint added
+
+        # ===== Test 2: Pattern constraints with existing descriptions =====
+        email = props["email"]
+        assert "pattern" not in email  # Filtered out
+        desc = email["description"]
+        assert "User's email address" in desc  # Original preserved
+        assert "Pattern:" in desc  # Pattern constraint added to description
+
+        # ===== Test 3: Numerical constraints with existing descriptions =====
+        age = props["age"]
+        assert "minimum" not in age
+        assert "maximum" not in age
+        desc = age["description"]
+        assert "User's age in years" in desc  # Original preserved
+        assert "Must be at least 18" in desc  # minimum constraint
+        assert "Must be at most 120" in desc  # maximum constraint
+
+        score = props["score"]
+        assert "minimum" not in score
+        assert "maximum" not in score
+        desc = score["description"]
+        assert "Performance score" in desc
+        assert "Must be at least 0" in desc or "Must be at least 0.0" in desc
+        assert "Must be at most 100" in desc or "Must be at most 100.0" in desc
+
+        # ===== Test 4: multipleOf constraint =====
+        rating = props["rating"]
+        assert "multipleOf" not in rating  # Filtered out
+        desc = rating["description"]
+        assert "Star rating" in desc  # Original preserved
+        assert "Must be multiple of 5" in desc  # Constraint added
+
+        # ===== Test 5: Array constraints with existing descriptions =====
+        tags = props["tags"]
+        assert "maxItems" not in tags  # Filtered out
+        assert "minItems" not in tags or tags.get("minItems") == 1  # minItems=1 might be preserved
+        desc = tags["description"]
+        assert "User interest tags" in desc  # Original preserved
+        assert "Maximum items: 10" in desc  # maxItems constraint added
+        # minItems>1 should be in description
+        if "minItems" not in tags:  # If minItems was filtered (>1)
+            assert "Minimum items: 1" in desc
+
+        friends = props["friends"]
+        assert "maxItems" not in friends
+        desc = friends["description"]
+        assert "List of friend usernames" in desc
+        assert "Maximum items: 50" in desc
+
+        # ===== Test 6: Nested object descriptions =====
+        address = props["address"]
+        desc = address.get("description", "")
+        assert "User's residential address" in desc  # Original preserved
+
+        # Check nested Address fields in $defs
+        if "$defs" in transformed_schema:
+            address_def = transformed_schema["$defs"].get("Address", {})
+            if "properties" in address_def:
+                street = address_def["properties"].get("street", {})
+                assert "minLength" not in street
+                assert "maxLength" not in street
+                street_desc = street.get("description", "")
+                assert "Street address" in street_desc  # Original preserved
+                assert "Minimum length: 5" in street_desc
+                assert "Maximum length: 100" in street_desc
+
+                zipcode = address_def["properties"].get("zipcode", {})
+                assert "pattern" not in zipcode
+                zipcode_desc = zipcode.get("description", "")
+                assert "US ZIP code" in zipcode_desc
+                assert "Pattern:" in zipcode_desc
+
+        # ===== Test 7: Field WITHOUT existing description =====
+        follower_count = props["follower_count"]
+        assert "minimum" not in follower_count
+        assert "maximum" not in follower_count
+        desc = follower_count.get("description", "")
+        # Should have constraint info as the description
+        assert "Must be at least 0" in desc
+        assert "Must be at most 1000000" in desc
+
+        # ===== Test 8: Verify additionalProperties added =====
+        assert transformed_schema.get("additionalProperties") is False
+
+        # ===== Test 9: Verify all constraint types are removed =====
+        # Recursively check no unsupported constraints remain
+        def check_no_unsupported_constraints(obj, path=""):
+            if isinstance(obj, dict):
+                unsupported = {
+                    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+                    "multipleOf", "minLength", "maxLength", "pattern", "maxItems"
+                }
+                for key in unsupported:
+                    assert key not in obj, f"Found {key} at {path}"
+
+                # minItems is OK only if value is 0 or 1
+                if "minItems" in obj:
+                    assert obj["minItems"] in [0, 1], f"Found minItems={obj['minItems']} at {path}"
+
+                for key, value in obj.items():
+                    check_no_unsupported_constraints(value, f"{path}.{key}")
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    check_no_unsupported_constraints(item, f"{path}[{i}]")
+
+        check_no_unsupported_constraints(transformed_schema)
