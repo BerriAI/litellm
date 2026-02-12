@@ -5,6 +5,7 @@ import {
   guardrail_provider_map,
   shouldRenderPIIConfigSettings,
   shouldRenderContentFilterConfigSettings,
+  getAvailableModesForProvider,
   guardrailLogoMap,
   populateGuardrailProviders,
   populateGuardrailProviderMap,
@@ -125,6 +126,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     return (providerValue || "").toLowerCase() === "tool_permission";
   }, [selectedProvider]);
 
+  const availableModes = useMemo(
+    () => getAvailableModesForProvider(selectedProvider, guardrailSettings?.supported_modes),
+    [selectedProvider, guardrailSettings?.supported_modes],
+  );
+
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
     if (!accessToken) return;
@@ -155,11 +161,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
-    form.setFieldsValue({
+    const updates: { config?: undefined; presidio_analyzer_api_base?: undefined; presidio_anonymizer_api_base?: undefined; mode?: string[] } = {
       config: undefined,
       presidio_analyzer_api_base: undefined,
       presidio_anonymizer_api_base: undefined,
-    });
+    };
+    // Content Filter cannot use during_call (MASK must run first); clear it if user switches to Content Filter
+    if (shouldRenderContentFilterConfigSettings(value)) {
+      const currentMode = form.getFieldValue("mode");
+      if (Array.isArray(currentMode) && currentMode.includes("during_call")) {
+        updates.mode = currentMode.filter((m: string) => m !== "during_call");
+      }
+    }
+    form.setFieldsValue(updates);
 
     // Reset PII selections when changing provider
     setSelectedEntities([]);
@@ -530,7 +544,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           rules={[{ required: true, message: "Please select a mode" }]}
         >
           <Select optionLabelProp="label" mode="multiple">
-            {guardrailSettings?.supported_modes?.map((mode) => (
+            {availableModes.map((mode) => (
               <Option key={mode} value={mode} label={mode}>
                 <div>
                   <div>
@@ -546,42 +560,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                   </div>
                 </div>
               </Option>
-            )) || (
-              <>
-                <Option value="pre_call" label="pre_call">
-                  <div>
-                    <div>
-                      <strong>pre_call</strong> <Tag color="green">Recommended</Tag>
-                    </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.pre_call}</div>
-                  </div>
-                </Option>
-                <Option value="during_call" label="during_call">
-                  <div>
-                    <div>
-                      <strong>during_call</strong>
-                    </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.during_call}</div>
-                  </div>
-                </Option>
-                <Option value="post_call" label="post_call">
-                  <div>
-                    <div>
-                      <strong>post_call</strong>
-                    </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.post_call}</div>
-                  </div>
-                </Option>
-                <Option value="logging_only" label="logging_only">
-                  <div>
-                    <div>
-                      <strong>logging_only</strong>
-                    </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.logging_only}</div>
-                  </div>
-                </Option>
-              </>
-            )}
+            ))}
           </Select>
         </Form.Item>
 
