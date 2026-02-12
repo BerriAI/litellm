@@ -12,6 +12,21 @@ else:
     LitellmRouter = Any
 
 
+def _route_user_config_request(data: dict, route_type: str):
+    """Route a request using the user-provided router config."""
+    router_config = data.pop("user_config")
+
+    # Filter router_config to only include valid Router.__init__ arguments
+    # This prevents TypeError when invalid parameters are stored in the database
+    valid_args = litellm.Router.get_valid_args()
+    filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+
+    user_router = litellm.Router(**filtered_config)
+    ret_val = getattr(user_router, f"{route_type}")(**data)
+    user_router.discard()
+    return ret_val
+
+
 def _is_a2a_agent_model(model_name: Any) -> bool:
     """Check if the model name is for an A2A agent (a2a/ prefix)."""
     return isinstance(model_name, str) and model_name.startswith("a2a/")
@@ -97,10 +112,18 @@ def add_shared_session_to_data(data: dict) -> None:
         data: Dictionary to add the shared session to
     """
     try:
+        from litellm._logging import verbose_proxy_logger
         from litellm.proxy.proxy_server import shared_aiohttp_session
 
         if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
             data["shared_session"] = shared_aiohttp_session
+            verbose_proxy_logger.info(
+                f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(shared_aiohttp_session)})"
+            )
+        else:
+            verbose_proxy_logger.info(
+                "SESSION REUSE: No shared session available for this request"
+            )
     except Exception:
         # Silently continue without session reuse if import fails or session unavailable
         pass
@@ -203,17 +226,35 @@ async def route_request(
             return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
-        router_config = data.pop("user_config")
+        return _route_user_config_request(data, route_type)
 
-        # Filter router_config to only include valid Router.__init__ arguments
-        # This prevents TypeError when invalid parameters are stored in the database
-        valid_args = litellm.Router.get_valid_args()
-        filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+    elif "router_settings_override" in data:
+        # Apply per-request router settings overrides from key/team config
+        # Instead of creating a new Router (expensive), merge settings into kwargs
+        # The Router already supports per-request overrides for these settings
+        override_settings = data.pop("router_settings_override")
 
-        user_router = litellm.Router(**filtered_config)
-        ret_val = getattr(user_router, f"{route_type}")(**data)
-        user_router.discard()
-        return ret_val
+        # Settings that the Router accepts as per-request kwargs
+        # These override the global router settings for this specific request
+        per_request_settings = [
+            "fallbacks",
+            "context_window_fallbacks",
+            "content_policy_fallbacks",
+            "num_retries",
+            "timeout",
+            "model_group_retry_policy",
+        ]
+
+        # Merge override settings into data (only if not already set in request)
+        for key in per_request_settings:
+            if key in override_settings and key not in data:
+                data[key] = override_settings[key]
+
+        # Use main router with overridden kwargs
+        if llm_router is not None:
+            return getattr(llm_router, f"{route_type}")(**data)
+        else:
+            return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
         # Skip model-based routing for container operations
         if route_type in [

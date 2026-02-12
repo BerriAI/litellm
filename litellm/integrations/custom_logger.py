@@ -664,6 +664,37 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return final_response
         """
         pass
+    
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict,
+    ) -> Tuple[bool, Dict]:
+        """
+        Hook to determine if chat completion agentic loop should be executed.
+        """
+        return False, {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        optional_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: Dict,
+    ) -> Any:
+        """
+        Hook to execute chat completion agentic loop based on context from should_run hook.
+        """
+        pass
 
     # Useful helpers for custom logger classes
 

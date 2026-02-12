@@ -112,6 +112,24 @@ jobs:
             python -m mypy .
             cd ..
           no_output_timeout: 10m
+
+  semgrep:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Semgrep
+          command: pip install semgrep
+      - run:
+          name: Run Semgrep (custom rules only)
+          command: semgrep scan --config .semgrep/rules . --error
+
   local_testing_part1:
     docker:
       - image: cimg/python:3.12
@@ -1372,6 +1390,51 @@ jobs:
           paths:
             - mcp_coverage.xml
             - mcp_coverage
+  agent_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "pydantic==2.11.0"
+            pip install "a2a-sdk"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml agent_coverage.xml
+            mv .coverage agent_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - agent_coverage.xml
+            - agent_coverage
   guardrails_testing:
     docker:
       - image: cimg/python:3.11
@@ -2232,6 +2295,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
+      - run: python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
       - run: python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
@@ -3756,7 +3820,6 @@ jobs:
       - run:
           name: Get new version
           command: |
-            cd litellm-proxy-extras
             NEW_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "export NEW_VERSION=$NEW_VERSION" >> $BASH_ENV
 
@@ -3781,7 +3844,6 @@ jobs:
       - run:
           name: Publish to PyPI
           command: |
-            cd litellm-proxy-extras
             echo -e "[pypi]\nusername = $PYPI_PUBLISH_USERNAME\npassword = $PYPI_PUBLISH_PASSWORD" > ~/.pypirc
             python -m pip install --upgrade pip build twine setuptools wheel
             rm -rf build dist
@@ -3888,6 +3950,9 @@ jobs:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
     working_directory: ~/project
+    parameters:
+      browser:
+        type: string
     steps:
       - checkout
       - setup_google_dns
@@ -3917,7 +3982,7 @@ jobs:
             echo "Expires at: $EXPIRES_AT"
             neon branches create \
               --project-id $NEON_PROJECT_ID \
-              --name preview/commit-${CIRCLE_SHA1:0:7} \
+              --name preview/commit-${CIRCLE_SHA1:0:7}-<< parameters.browser >> \
               --expires-at $EXPIRES_AT \
               --parent br-fancy-paper-ad1olsb3 \
               --api-key $NEON_API_KEY || true
@@ -3927,7 +3992,7 @@ jobs:
             E2E_UI_TEST_DATABASE_URL=$(neon connection-string \
               --project-id $NEON_PROJECT_ID \
               --api-key $NEON_API_KEY \
-              --branch preview/commit-${CIRCLE_SHA1:0:7} \
+              --branch preview/commit-${CIRCLE_SHA1:0:7}-<< parameters.browser >> \
               --database-name yuneng-trial-db \
               --role neondb_owner)
             echo $E2E_UI_TEST_DATABASE_URL
@@ -3939,7 +4004,7 @@ jobs:
               -e UI_USERNAME="admin" \
               -e UI_PASSWORD="gm" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              --name litellm-docker-database \
+              --name litellm-docker-database-<< parameters.browser >> \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
@@ -3955,7 +4020,7 @@ jobs:
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
           name: Start outputting logs
-          command: docker logs -f litellm-docker-database
+          command: docker logs -f litellm-docker-database-<< parameters.browser >>
           background: true
       - run:
           name: Wait for app to be ready
@@ -3964,6 +4029,7 @@ jobs:
           name: Run Playwright Tests
           command: |
             npx playwright test \
+              --project << parameters.browser >> \
               --config ui/litellm-dashboard/e2e_tests/playwright.config.ts \
               --reporter=html \
               --output=test-results
@@ -4070,6 +4136,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - semgrep:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - local_testing_part1:
           filters:
             branches:
@@ -4169,6 +4241,20 @@ workflows:
                 - main
                 - /litellm_.*/
       - e2e_ui_testing:
+          name: e2e_ui_testing_chromium
+          browser: chromium
+          context: e2e_ui_tests
+          requires:
+            - ui_build
+            - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - e2e_ui_testing:
+          name: e2e_ui_testing_firefox
+          browser: firefox
           context: e2e_ui_tests
           requires:
             - ui_build
@@ -4259,6 +4345,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - mcp_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - agent_testing:
           filters:
             branches:
               only:
@@ -4371,6 +4463,7 @@ workflows:
             - llm_translation_testing
             - realtime_translation_testing
             - mcp_testing
+            - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
             - llm_responses_api_testing
@@ -4441,6 +4534,7 @@ workflows:
       - publish_to_pypi:
           requires:
             - mypy_linting
+            - semgrep
             - local_testing_part1
             - local_testing_part2
             - build_and_test
@@ -4449,6 +4543,7 @@ workflows:
             - llm_translation_testing
             - realtime_translation_testing
             - mcp_testing
+            - agent_testing
             - google_generate_content_endpoint_testing
             - llm_responses_api_testing
             - ocr_testing
@@ -4472,7 +4567,8 @@ workflows:
             - litellm_assistants_api_testing
             - auth_ui_unit_tests
             - db_migration_disable_update_check
-            - e2e_ui_testing
+            - e2e_ui_testing_chromium
+            - e2e_ui_testing_firefox
             - litellm_proxy_unit_testing_key_generation
             - litellm_proxy_unit_testing_part1
             - litellm_proxy_unit_testing_part2

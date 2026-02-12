@@ -798,7 +798,7 @@ def test_openai_transform_video_content_request_empty_params():
 def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
     from litellm.types.router import GenericLiteLLMParams
-    
+
     handler = BaseLLMHTTPHandler()
     config = OpenAIVideoConfig()
 
@@ -807,7 +807,12 @@ def test_video_content_handler_uses_get_for_openai():
     mock_response.content = b"mp4-bytes"
     mock_client.get.return_value = mock_response
 
+    # Patch both where _get_httpx_client is used and where it is defined so the mock
+    # is used regardless of import order / CI environment
     with patch(
+        "litellm.llms.custom_httpx.http_handler._get_httpx_client",
+        return_value=mock_client,
+    ), patch(
         "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
         return_value=mock_client,
     ):
@@ -916,6 +921,181 @@ def test_encode_video_id_with_provider_handles_azure_video_prefix():
     )
     assert encoded_twice == encoded_id  # Should return the same encoded ID
     
+class TestVideoListTransformation:
+    """Tests for video list request/response transformation with provider ID encoding."""
+
+    def test_transform_video_list_response_encodes_first_id_and_last_id(self):
+        """Verify that first_id and last_id are encoded with provider metadata."""
+        config = OpenAIVideoConfig()
+
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "object": "list",
+            "data": [
+                {
+                    "id": "video_aaa",
+                    "object": "video",
+                    "model": "sora-2",
+                    "status": "completed",
+                },
+                {
+                    "id": "video_bbb",
+                    "object": "video",
+                    "model": "sora-2",
+                    "status": "completed",
+                },
+            ],
+            "first_id": "video_aaa",
+            "last_id": "video_bbb",
+            "has_more": False,
+        }
+
+        result = config.transform_video_list_response(
+            raw_response=mock_http_response,
+            logging_obj=MagicMock(),
+            custom_llm_provider="azure",
+        )
+
+        from litellm.types.videos.utils import decode_video_id_with_provider
+
+        # data[].id should be encoded
+        for item in result["data"]:
+            decoded = decode_video_id_with_provider(item["id"])
+            assert decoded["custom_llm_provider"] == "azure"
+
+        # first_id and last_id should also be encoded
+        first_decoded = decode_video_id_with_provider(result["first_id"])
+        assert first_decoded["custom_llm_provider"] == "azure"
+        assert first_decoded["video_id"] == "video_aaa"
+        assert first_decoded["model_id"] == "sora-2"
+
+        last_decoded = decode_video_id_with_provider(result["last_id"])
+        assert last_decoded["custom_llm_provider"] == "azure"
+        assert last_decoded["video_id"] == "video_bbb"
+        assert last_decoded["model_id"] == "sora-2"
+
+    def test_transform_video_list_response_no_provider_leaves_ids_unchanged(self):
+        """When custom_llm_provider is None, all IDs should remain unchanged."""
+        config = OpenAIVideoConfig()
+
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "object": "list",
+            "data": [
+                {"id": "video_aaa", "object": "video", "model": "sora-2", "status": "completed"},
+            ],
+            "first_id": "video_aaa",
+            "last_id": "video_aaa",
+            "has_more": False,
+        }
+
+        result = config.transform_video_list_response(
+            raw_response=mock_http_response,
+            logging_obj=MagicMock(),
+            custom_llm_provider=None,
+        )
+
+        assert result["data"][0]["id"] == "video_aaa"
+        assert result["first_id"] == "video_aaa"
+        assert result["last_id"] == "video_aaa"
+
+    def test_transform_video_list_response_missing_pagination_fields(self):
+        """first_id / last_id may be absent or null; should not raise."""
+        config = OpenAIVideoConfig()
+
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "object": "list",
+            "data": [
+                {"id": "video_aaa", "object": "video", "model": "sora-2", "status": "completed"},
+            ],
+            "has_more": False,
+        }
+
+        result = config.transform_video_list_response(
+            raw_response=mock_http_response,
+            logging_obj=MagicMock(),
+            custom_llm_provider="azure",
+        )
+
+        # data[].id should still be encoded
+        from litellm.types.videos.utils import decode_video_id_with_provider
+
+        decoded = decode_video_id_with_provider(result["data"][0]["id"])
+        assert decoded["custom_llm_provider"] == "azure"
+
+        # first_id / last_id should not be present
+        assert "first_id" not in result
+        assert "last_id" not in result
+
+    def test_transform_video_list_request_decodes_after_parameter(self):
+        """Encoded 'after' cursor should be decoded back to the raw provider ID."""
+        from litellm.types.videos.utils import encode_video_id_with_provider
+
+        config = OpenAIVideoConfig()
+
+        raw_id = "video_69888baee890819086dd3366bfc372fe"
+        encoded_id = encode_video_id_with_provider(raw_id, "azure", "sora-2")
+
+        url, params = config.transform_video_list_request(
+            api_base="https://my-resource.openai.azure.com/openai/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+            after=encoded_id,
+            limit=10,
+        )
+
+        assert params["after"] == raw_id
+        assert params["limit"] == "10"
+
+    def test_transform_video_list_request_passes_through_plain_after(self):
+        """A plain (non-encoded) 'after' value should pass through unchanged."""
+        config = OpenAIVideoConfig()
+
+        url, params = config.transform_video_list_request(
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+            after="video_plain_id",
+        )
+
+        assert params["after"] == "video_plain_id"
+
+    def test_transform_video_list_roundtrip(self):
+        """first_id from list response should decode correctly when used as after parameter."""
+        config = OpenAIVideoConfig()
+
+        # Simulate a list response
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "object": "list",
+            "data": [
+                {"id": "video_aaa", "object": "video", "model": "sora-2", "status": "completed"},
+                {"id": "video_bbb", "object": "video", "model": "sora-2", "status": "completed"},
+            ],
+            "first_id": "video_aaa",
+            "last_id": "video_bbb",
+            "has_more": True,
+        }
+
+        list_result = config.transform_video_list_response(
+            raw_response=mock_http_response,
+            logging_obj=MagicMock(),
+            custom_llm_provider="azure",
+        )
+
+        # Use the encoded last_id as the 'after' cursor for the next page
+        _, params = config.transform_video_list_request(
+            api_base="https://my-resource.openai.azure.com/openai/v1/videos",
+            litellm_params=MagicMock(),
+            headers={},
+            after=list_result["last_id"],
+        )
+
+        # The after param sent to the upstream API should be the raw video ID
+        assert params["after"] == "video_bbb"
+
+
 class TestVideoEndpointsProxyLitellmParams:
     """Test that video proxy endpoints (status, content, remix) respect litellm_params from proxy config."""
 

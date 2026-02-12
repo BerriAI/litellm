@@ -8,6 +8,7 @@ import PolicyInfoView from "./policy_info";
 import AddPolicyForm from "./add_policy_form";
 import AttachmentTable from "./attachment_table";
 import AddAttachmentForm from "./add_attachment_form";
+import PolicyTestPanel from "./policy_test_panel";
 import {
   getPoliciesList,
   deletePolicyCall,
@@ -177,6 +178,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         <TabList className="mb-4">
           <Tab>Policies</Tab>
           <Tab>Attachments</Tab>
+          <Tab>Policy Simulator</Tab>
         </TabList>
 
         <TabPanels>
@@ -279,7 +281,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               description={
                 <div>
                   <p className="mb-3">
-                    Policy attachments control where your policies apply. Policies don&apos;t do anything until you attach them to specific teams, keys, models, or globally.
+                    Policy attachments control where your policies apply. Policies don&apos;t do anything until you attach them to specific teams, keys, models, tags, or globally.
                   </p>
                   <p className="mb-2 font-semibold">Attachment Scopes:</p>
                   <ul className="list-disc list-inside mb-3 space-y-1 ml-2">
@@ -287,6 +289,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                     <li><strong>Teams</strong> - Applies only to specific teams</li>
                     <li><strong>Keys</strong> - Applies only to specific API keys (supports wildcards like dev-*)</li>
                     <li><strong>Models</strong> - Applies only when specific models are used</li>
+                    <li><strong>Tags</strong> - Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request body (<code>metadata.tags</code>). Use this to enforce policies across groups, e.g. &quot;all keys tagged <code>healthcare</code> get HIPAA guardrails.&quot; Supports wildcards (<code>prod-*</code>).</li>
                   </ul>
                   <a
                     href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies#attachments"
@@ -319,6 +322,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               isLoading={isAttachmentsLoading}
               onDeleteClick={handleDeleteAttachment}
               isAdmin={isAdmin}
+              accessToken={accessToken}
             />
 
             <AddAttachmentForm
@@ -329,6 +333,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               policies={policiesList}
               createAttachment={createPolicyAttachmentCall}
             />
+          </TabPanel>
+
+          <TabPanel>
+            <PolicyTestPanel accessToken={accessToken} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
