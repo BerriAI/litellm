@@ -17,13 +17,12 @@ import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
-import { allEndUsersCall, keyInfoV1Call, keyListCall, sessionSpendLogsCall, uiSpendLogsCall } from "../networking";
+import { allEndUsersCall, keyInfoV1Call, keyListCall, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
-import { columns, expanderColumn, LogEntry } from "./columns";
-import { SessionChildRows } from "./McpChildRows";
+import { columns, LogEntry } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { ERROR_CODE_OPTIONS, QUICK_SELECT_OPTIONS } from "./constants";
+import { ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -31,7 +30,6 @@ import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./RequestResponsePanel";
-import { SessionView } from "./SessionView";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
 import { DataTable } from "./table";
 import { VectorStoreViewer } from "./VectorStoreViewer";
@@ -305,62 +303,64 @@ export default function SpendLogsTable({
     }
   }, [filters, accessToken, fetchKeyHashForAlias]);
 
-  // Fetch logs for a session if selected
-  const sessionLogs = useQuery<PaginatedResponse>({
-    queryKey: ["sessionLogs", selectedSessionId],
-    queryFn: async () => {
-      if (!accessToken || !selectedSessionId) return { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 };
-      const response = await sessionSpendLogsCall(accessToken, selectedSessionId);
-      // If the API returns an array, wrap it in the same shape as PaginatedResponse
-      return {
-        data: response.data || response || [],
-        total: (response.data || response || []).length,
-        page: 1,
-        page_size: 1000,
-        total_pages: 1,
-      };
-    },
-    enabled: !!accessToken && !!selectedSessionId,
-  });
-
-
   if (!accessToken || !token || !userRole || !userID) {
     return null;
   }
 
-  const filteredData =
-    filteredLogs.data
-      .filter((log) => {
-        const matchesSearch =
-          !searchTerm ||
-          log.request_id.includes(searchTerm) ||
-          log.model.includes(searchTerm) ||
-          (log.user && log.user.includes(searchTerm));
+  const searchedLogs = filteredLogs.data.filter((log) => {
+    const matchesSearch =
+      !searchTerm ||
+      log.request_id.includes(searchTerm) ||
+      log.model.includes(searchTerm) ||
+      (log.user && log.user.includes(searchTerm));
 
-        // No need for additional filtering since we're now handling this in the API call
-        return matchesSearch;
+    // No need for additional filtering since we're now handling this in the API call
+    return matchesSearch;
+  });
+
+  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; mcp: number }>>((acc, log) => {
+    if (!log.session_id) return acc;
+    if (!acc[log.session_id]) {
+      acc[log.session_id] = { llm: 0, mcp: 0 };
+    }
+    if (MCP_CALL_TYPES.includes(log.call_type)) {
+      acc[log.session_id].mcp += 1;
+    } else {
+      acc[log.session_id].llm += 1;
+    }
+    return acc;
+  }, {});
+
+  const filteredData =
+    searchedLogs
+      .map((log) => {
+        const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
+        return {
+          ...log,
+          duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
+          session_llm_count: sessionComposition?.llm ?? undefined,
+          session_mcp_count: sessionComposition?.mcp ?? undefined,
+          onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
+          onSessionClick: (sessionId: string) => {
+            if (sessionId) {
+              setSelectedSessionId(sessionId);
+              setSelectedLog(log);
+              setIsDrawerOpen(true);
+            }
+          },
+        };
       })
-      .map((log) => ({
-        ...log,
-        duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
-        onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-        onSessionClick: (sessionId: string) => {
-          if (sessionId) setSelectedSessionId(sessionId);
-        },
-      }))
-      // Deduplicate multi-call sessions: show only the first row per session_id
+      // Deduplicate multi-call sessions:
+      // Prefer showing an LLM row as the root representative when available.
       .filter((log, _index, arr) => {
         if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-        return arr.findIndex((l) => l.session_id === log.session_id) === _index;
+        const rowsForSession = arr.filter((l) => l.session_id === log.session_id);
+        const llmRepresentative = rowsForSession.find(
+          (l) => !MCP_CALL_TYPES.includes(l.call_type),
+        );
+        const representative = llmRepresentative || rowsForSession[0];
+        return representative.request_id === log.request_id;
       }) || [];
-
-  // For session logs, add onKeyHashClick/onSessionClick as well
-  const sessionData =
-    sessionLogs.data?.data?.map((log) => ({
-      ...log,
-      onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-      onSessionClick: (sessionId: string) => { },
-    })) || [];
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
@@ -368,13 +368,22 @@ export default function SpendLogsTable({
   };
 
   const handleRowClick = (log: LogEntry) => {
+    // Multi-call session row: open in the same right-side drawer (session mode)
+    if (log.session_id && (log.session_total_count || 1) > 1) {
+      setSelectedSessionId(log.session_id);
+      setSelectedLog(log);
+      setIsDrawerOpen(true);
+      return;
+    }
+    // Single-call row: open the detail drawer
+    setSelectedSessionId(null);
     setSelectedLog(log);
     setIsDrawerOpen(true);
   };
 
   const handleCloseDrawer = () => {
     setIsDrawerOpen(false);
-    // Optionally keep selectedLog for animation purposes
+    setSelectedSessionId(null);
   };
 
   const handleSelectLog = (log: LogEntry) => {
@@ -468,19 +477,6 @@ export default function SpendLogsTable({
     },
   ];
 
-  // When a session is selected, render the SessionView component
-  if (selectedSessionId && sessionLogs.data) {
-    return (
-      <div className="w-full p-6">
-        <SessionView
-          sessionId={selectedSessionId}
-          logs={sessionLogs.data.data}
-          onBack={() => setSelectedSessionId(null)}
-        />
-      </div>
-    );
-  }
-
   const formatTimeUnit = (value: number, unit: string) => {
     if (value === 1) {
       if (unit === "minutes") return "minute";
@@ -508,29 +504,12 @@ export default function SpendLogsTable({
         <TabPanels>
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
-              <h1 className="text-xl font-semibold">
-                {selectedSessionId ? (
-                  <>
-                    Session: <span className="font-mono">{selectedSessionId}</span>
-                    <button
-                      className="ml-4 px-3 py-1 text-sm border rounded hover:bg-gray-50"
-                      onClick={() => setSelectedSessionId(null)}
-                    >
-                      ← Back to All Logs
-                    </button>
-                  </>
-                ) : (
-                  "Request Logs"
-                )}
-              </h1>
-              {!selectedSessionId && (
-                <NewBadge dot><Button
-                  icon={<SettingOutlined />}
-                  onClick={() => setIsSpendLogsSettingsModalVisible(true)}
-                  title="Spend Logs Settings"
-                /></NewBadge>
-
-              )}
+              <h1 className="text-xl font-semibold">Request Logs</h1>
+              <NewBadge dot><Button
+                icon={<SettingOutlined />}
+                onClick={() => setIsSpendLogsSettingsModalVisible(true)}
+                title="Spend Logs Settings"
+              /></NewBadge>
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
@@ -540,14 +519,6 @@ export default function SpendLogsTable({
                 onClose={() => setSelectedKeyIdInfoView(null)}
                 backButtonText="Back to Logs"
               />
-            ) : selectedSessionId ? (
-              <div className="bg-white rounded-lg shadow">
-                <DataTable
-                  columns={columns}
-                  data={sessionData}
-                  onRowClick={handleRowClick}
-                />
-              </div>
             ) : (
               <>
                 <FilterComponent
@@ -740,13 +711,9 @@ export default function SpendLogsTable({
                     </div>
                   )}
                   <DataTable
-                    columns={[expanderColumn, ...columns]}
+                    columns={columns}
                     data={filteredData}
                     onRowClick={handleRowClick}
-                    getRowCanExpand={(row) => (row.original.session_total_count || 1) > 1}
-                    renderChildRows={({ row }) => (
-                      <SessionChildRows row={row} accessToken={accessToken!} onChildClick={handleRowClick} />
-                    )}
                   />
                 </div>
               </>
@@ -773,6 +740,8 @@ export default function SpendLogsTable({
         open={isDrawerOpen}
         onClose={handleCloseDrawer}
         logEntry={selectedLog}
+        sessionId={selectedSessionId}
+        accessToken={accessToken}
         onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
         allLogs={filteredData}
         onSelectLog={handleSelectLog}
