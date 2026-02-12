@@ -307,7 +307,12 @@ class ProxyInitializationHelpers:
         """Helper function to determine the event loop type based on platform"""
         if sys.platform in ("win32", "cygwin", "cli"):
             return None  # Let uvicorn choose the default loop on Windows
-        return "uvloop"
+        try:
+            import uvloop  # noqa: F401
+
+            return "uvloop"
+        except ImportError:
+            return None  # Fall back to default asyncio loop (e.g. Python 3.14 where uvloop is unavailable)
 
 
 @click.command()

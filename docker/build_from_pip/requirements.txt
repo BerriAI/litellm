@@ -3,4 +3,5 @@ prometheus_client
 langfuse
 prisma
 openai==1.99.9
-ddtrace==2.19.0 # for advanced DD tracing / profiling
+ddtrace==2.19.0 ; python_version < "3.14"  # for advanced DD tracing / profiling
+ddtrace>=2.20.0 ; python_version >= "3.14"  # for advanced DD tracing / profiling - Python 3.14 support

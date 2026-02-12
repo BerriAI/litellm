@@ -1,3 +1,4 @@
+import inspect
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -863,7 +864,7 @@ def log_guardrail_information(func):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 

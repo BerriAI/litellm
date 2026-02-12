@@ -13,17 +13,17 @@ backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.31.1 # server dep
 gunicorn==23.0.0 # server dep
-fastuuid==0.13.5 # for uuid4
-uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
+fastuuid==0.14.0 # for uuid4 (0.14.0 has Python 3.14 wheels)
+uvloop==0.21.0 ; python_version < "3.14" # uvicorn dep - no Python 3.14 wheels, falls back to asyncio
 boto3==1.40.53 # aws bedrock/sagemaker calls (has bedrock-agentcore-control, compatible with aioboto3)
 redis==5.2.1 # redis caching
-redisvl==0.4.1 ## redis semantic caching
+redisvl @ git+https://github.com/redis/redis-vl-python@e571e7506cce27048444de9b489baee5d257b3d3 # redis semantic caching - Python 3.14 support via PR #468 (temporary until official release)
 prisma==0.11.0 # for db
 nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.6.2 # for encrypting keys
-google-cloud-aiplatform==1.133.0 # for vertex ai calls
-google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
+google-cloud-aiplatform==1.133.0 ; python_version < "3.14" # for vertex ai calls (no Python 3.14 support yet)
+google-cloud-iam==2.19.1 ; python_version < "3.14" # for GCP IAM Redis authentication (no Python 3.14 support yet)
 google-genai==1.37.0
 anthropic[vertex]==0.54.0
 mcp==1.25.0 ; python_version >= "3.10"    # for MCP server
@@ -31,14 +31,16 @@ mcp==1.25.0 ; python_version >= "3.10"    # for MCP server
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
-ddtrace==2.19.0      # for advanced DD tracing / profiling
-orjson==3.11.7 # fast /embedding responses
+ddtrace==2.19.0 ; python_version < "3.14"  # for advanced DD tracing / profiling
+ddtrace>=2.20.0 ; python_version >= "3.14"  # for advanced DD tracing / profiling - Python 3.14 support
+orjson==3.11.2 # fast /embedding responses
 polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.19.0 # admin UI, SSO
 pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
 python-multipart==0.0.22 # admin UI
-Pillow==11.0.0
+Pillow==11.3.0 ; python_version >= "3.14"
+Pillow==11.0.0 ; python_version < "3.14"
 jaraco.context>=6.1.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 ; python_version >= "3.9" # for azure content safety
@@ -61,7 +63,8 @@ llm-sandbox==0.3.31 # for skill execution in sandbox
 python-dotenv==1.0.1 # for env
 tiktoken==0.8.0 # for calculating usage
 importlib-metadata==6.8.0 # for random utils
-tokenizers==0.20.2 # for calculating usage
+tokenizers==0.21.0 ; python_version >= "3.14" # for calculating usage - Python 3.14 support
+tokenizers==0.20.2 ; python_version < "3.14" # for calculating usage
 click==8.1.7 # for proxy cli
 rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates

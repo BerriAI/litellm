@@ -1,38 +1,59 @@
 # Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 ARG PROXY_EXTRAS_SOURCE=published
+# Python version shipped in the Chainguard base image (update when base image changes)
+ARG PYTHON_VERSION=3.14
 
 # -----------------
 # Builder Stage
 # -----------------
 FROM $LITELLM_BUILD_IMAGE AS builder
 ARG PROXY_EXTRAS_SOURCE
+ARG PYTHON_VERSION
 WORKDIR /app
 USER root
 
 # Install build dependencies with retry logic (includes node for UI build)
 RUN for i in 1 2 3; do \
     apk add --no-cache \
-    python3 \
-    python3-dev \
-    py3-pip \
     clang \
     llvm \
     lld \
     gcc \
+    git \
+    curl \
     linux-headers \
     build-base \
     bash \
     nodejs \
     npm && break || sleep 5; \
     done \
-  && pip install --no-cache-dir --upgrade pip build
+  && python -m pip install --no-cache-dir --upgrade pip setuptools build wheel cmake setuptools_rust maturin
+
+# Configure Rust environment for building Rust-backed Python wheels (tiktoken, etc.)
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:$PATH
+# Allow forward-compatible ABI for PyO3-based packages on Python 3.14
+ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y && \
+    rustup default stable
 
 # Cache Python dependencies
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
-  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.9.0"
+
+# Install build dependencies needed for git-based packages
+RUN pip install --no-cache-dir hatchling hatch-vcs
+
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ --only-binary=Pillow,tokenizers -r requirements.txt \
+  && PYTHON_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)") \
+  && if [ "$PYTHON_MINOR" -lt 14 ]; then \
+       pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19"; \
+     else \
+       echo "Skipping semantic_router/aurelio-sdk: not supported on Python 3.14+"; \
+     fi \
+  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "PyJWT==2.9.0"
 
 # Copy source after dependency layers
 COPY . .
@@ -41,8 +62,10 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
+# NOTE: Do NOT run `npm install -g npm@latest` here — the upgraded binary can
+# contain ARM-specific instructions that crash under QEMU when cross-building
+# for linux/arm64.  The system npm from apk is sufficient for building the UI.
 RUN mkdir -p /var/lib/litellm/ui && \
-    npm install -g npm@latest && npm cache clean --force && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
@@ -77,7 +100,7 @@ RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
     XDG_CACHE_HOME=/app/.cache \
-    PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
+    PATH="/usr/lib/python${PYTHON_VERSION}/site-packages/nodejs/bin:${PATH}"
 
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.12.0 \
     && mkdir -p /app/.cache/npm
@@ -94,6 +117,7 @@ RUN prisma generate && \
 # -----------------
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 ARG PROXY_EXTRAS_SOURCE
+ARG PYTHON_VERSION
 WORKDIR /app
 USER root
 
@@ -102,7 +126,7 @@ RUN for i in 1 2 3; do \
     apk upgrade --no-cache && break || sleep 5; \
     done \
   && for i in 1 2 3; do \
-    apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
+    apk add --no-cache bash openssl ca-certificates-bundle tzdata nodejs npm supervisor && break || sleep 5; \
     done \
   && npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 \
   && GLOBAL="$(npm root -g)" \
@@ -130,11 +154,11 @@ COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 COPY --from=builder /app/.cache /app/.cache
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 COPY --from=builder \
-  /usr/lib/python3.13/site-packages/nodejs* \
-  /usr/lib/python3.13/site-packages/prisma* \
-  /usr/lib/python3.13/site-packages/tomlkit* \
-  /usr/lib/python3.13/site-packages/nodeenv* \
-  /usr/lib/python3.13/site-packages/
+  /usr/lib/python${PYTHON_VERSION}/site-packages/nodejs* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/prisma* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/tomlkit* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/nodeenv* \
+  /usr/lib/python${PYTHON_VERSION}/site-packages/
 COPY --from=builder /usr/bin/prisma /usr/bin/prisma
 
 # Final runtime environment configuration
@@ -144,18 +168,29 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     LITELLM_NON_ROOT=true \
     XDG_CACHE_HOME=/app/.cache
 
-# Install packages from wheels and optional extras without network
-RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
-    pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
-    pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11 && \
-    pip install --no-index --find-links=/wheels/ aurelio-sdk==0.0.19 && \
-    if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
-      if ls /wheels/litellm_proxy_extras-*.whl >/dev/null 2>&1; then \
-        pip install --no-index --find-links=/wheels/ /wheels/litellm_proxy_extras-*.whl; \
-      else \
-        echo "litellm_proxy_extras wheel not found; skipping local install"; \
-      fi; \
-    fi
+# Install all pre-built wheels (avoids re-cloning git URLs from requirements.txt
+# in a runtime stage that lacks git/gcc/hatchling).
+# First deduplicate: the builder may produce multiple versions of the same package
+# (e.g. PyJWT 2.9.0 + 2.10.1) which causes a pip conflict when installing all at once.
+RUN printf '%s\n' \
+      'import os, re' \
+      'd = {}' \
+      'for f in os.listdir("/wheels/"):' \
+      '    if not f.endswith(".whl"): continue' \
+      '    m = re.match(r"([^-]+)-([^-]+)", f)' \
+      '    if not m: continue' \
+      '    n = m.group(1).lower()' \
+      '    v = tuple(int(x) if x.isdigit() else x for x in m.group(2).split("."))' \
+      '    if n not in d or v > d[n][1]:' \
+      '        old = d.get(n)' \
+      '        if old: os.remove("/wheels/" + old[0]); print("Removed", old[0])' \
+      '        d[n] = (f, v)' \
+      '    else:' \
+      '        os.remove("/wheels/" + f); print("Removed", f)' \
+      > /tmp/_dedup.py && \
+    python3 /tmp/_dedup.py && \
+    rm /tmp/_dedup.py && \
+    pip install --no-index --find-links=/wheels/ /wheels/*.whl
 
 # SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
