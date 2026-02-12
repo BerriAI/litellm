@@ -12,6 +12,9 @@ export const ERROR_CODE_OPTIONS: { label: string; value: string }[] = [
   { label: "529 - Overloaded", value: "529" },
 ];
 
+/** Call types that represent MCP tool invocations (shared across columns, index, drawer). */
+export const MCP_CALL_TYPES = ["call_mcp_tool", "list_mcp_tools"];
+
 export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [
   { label: "Last 15 Minutes", value: 15, unit: "minutes" },
   { label: "Last Hour", value: 1, unit: "hours" },
