@@ -637,7 +637,7 @@ class RouterBudgetLimiting(CustomLogger):
                 api_base = deployment_litellm_params.get("api_base")
                 api_key = deployment_litellm_params.get("api_key")
                 use_litellm_proxy = bool(
-                    deployment_litellm_params.get("use_litellm_proxy")
+                    deployment_litellm_params.get("use_litellm_proxy", False)
                 )
 
             if use_litellm_proxy:
