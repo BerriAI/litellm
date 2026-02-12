@@ -227,45 +227,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return input_items, instructions
 
-    def transform_request(
+    def _map_optional_params(
         self,
-        model: str,
-        messages: List["AllMessageValues"],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-        litellm_logging_obj: "LiteLLMLoggingObj",
-        client: Optional[Any] = None,
-    ) -> dict:
-        (
-            input_items,
-            instructions,
-        ) = self.convert_chat_completion_messages_to_responses_api(messages)
-
-        optional_params = self._extract_extra_body_params(optional_params)
-
-        # Build responses API request using the reverse transformation logic
-        responses_api_request = ResponsesAPIOptionalRequestParams()
-
-        # Set instructions if we found a system message
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+        instructions: Optional[str],
+    ) -> None:
+        """Map chat completion optional parameters to responses API format."""
         if instructions:
             responses_api_request["instructions"] = instructions
 
-        # Map optional parameters
         for key, value in optional_params.items():
             if value is None:
                 continue
             if key in ("max_tokens", "max_completion_tokens"):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
-                # Convert chat completion tools to responses API tools format
                 responses_api_request["tools"] = (
                     self._convert_tools_to_responses_format(
                         cast(List[Dict[str, Any]], value)
                     )
                 )
             elif key == "response_format":
-                # Convert response_format to text.format
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
                     responses_api_request["text"] = text_format  # type: ignore
@@ -278,34 +261,33 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
-        # Get stream parameter from litellm_params if not in optional_params
+    def _handle_stream_parameter(
+        self,
+        optional_params: dict,
+        litellm_params: dict,
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+    ) -> None:
+        """Handle stream parameter and session management."""
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug(f"Chat provider: Stream parameter: {stream}")
 
-        # Ensure stream is properly set in the request
         if stream:
             responses_api_request["stream"] = True
 
-        # Handle session management if previous_response_id is provided
         previous_response_id = optional_params.get("previous_response_id")
         if previous_response_id:
-            # Use the existing session handler for responses API
             verbose_logger.debug(
                 f"Chat provider: Warning ignoring previous response ID: {previous_response_id}"
             )
 
-        # Convert back to responses API format for the actual request
-
-        api_model = model
-
-        from litellm.types.utils import CallTypes
-
-        setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
-
+    def _prepare_litellm_params(
+        self, litellm_params: dict
+    ) -> Dict[str, Any]:
+        """Sanitize and prepare litellm params with merged metadata."""
         responses_optional_param_keys = set(
             ResponsesAPIOptionalRequestParams.__annotations__.keys()
         )
-        sanitized_litellm_params: Dict[str, Any] = {
+        sanitized_params: Dict[str, Any] = {
             key: value
             for key, value in litellm_params.items()
             if key not in responses_optional_param_keys
@@ -313,18 +295,34 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         legacy_metadata = litellm_params.get("metadata")
         existing_litellm_metadata = litellm_params.get("litellm_metadata")
-        merged_litellm_metadata: Dict[str, Any] = {}
-        if isinstance(legacy_metadata, dict):
-            merged_litellm_metadata.update(legacy_metadata)
-        if isinstance(existing_litellm_metadata, dict):
-            merged_litellm_metadata.update(existing_litellm_metadata)
-        if merged_litellm_metadata:
-            sanitized_litellm_params["litellm_metadata"] = merged_litellm_metadata
-        else:
-            sanitized_litellm_params.pop("litellm_metadata", None)
+        merged_metadata: Dict[str, Any] = {}
 
+        if isinstance(legacy_metadata, dict):
+            merged_metadata.update(legacy_metadata)
+        if isinstance(existing_litellm_metadata, dict):
+            merged_metadata.update(existing_litellm_metadata)
+
+        if merged_metadata:
+            sanitized_params["litellm_metadata"] = merged_metadata
+        else:
+            sanitized_params.pop("litellm_metadata", None)
+
+        return sanitized_params
+
+    def _build_final_request_data(
+        self,
+        model: str,
+        input_items: List[Any],
+        instructions: Optional[str],
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+        sanitized_litellm_params: Dict[str, Any],
+        litellm_logging_obj: "LiteLLMLoggingObj",
+        headers: dict,
+        client: Optional[Any],
+    ) -> dict:
+        """Build the final request data dictionary."""
         request_data = {
-            "model": api_model,
+            "model": model,
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
@@ -332,7 +330,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         }
 
         verbose_logger.debug(
-            f"Chat provider: Final request model={api_model}, input_items={len(input_items)}"
+            f"Chat provider: Final request model={model}, input_items={len(input_items)}"
         )
 
         # Add non-None values from responses_api_request
@@ -352,6 +350,55 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             request_data["extra_headers"] = headers
 
         return request_data
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+        litellm_logging_obj: "LiteLLMLoggingObj",
+        client: Optional[Any] = None,
+    ) -> dict:
+        # Convert messages to responses API format
+        (
+            input_items,
+            instructions,
+        ) = self.convert_chat_completion_messages_to_responses_api(messages)
+
+        optional_params = self._extract_extra_body_params(optional_params)
+
+        # Build responses API request
+        responses_api_request = ResponsesAPIOptionalRequestParams()
+
+        # Map optional parameters
+        self._map_optional_params(optional_params, responses_api_request, instructions)
+
+        # Handle stream and session
+        self._handle_stream_parameter(
+            optional_params, litellm_params, responses_api_request
+        )
+
+        # Set call type for logging
+        from litellm.types.utils import CallTypes
+
+        setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
+
+        # Prepare litellm params
+        sanitized_litellm_params = self._prepare_litellm_params(litellm_params)
+
+        # Build and return final request data
+        return self._build_final_request_data(
+            model,
+            input_items,
+            instructions,
+            responses_api_request,
+            sanitized_litellm_params,
+            litellm_logging_obj,
+            headers,
+            client,
+        )
 
     @staticmethod
     def _convert_response_output_to_choices(
