@@ -105,7 +105,7 @@ class TestAutoPromptCaching:
 
     def test_claude_code_client_detection(self):
         """Test that Claude Code is detected from User-Agent header."""
-        from litellm.proxy.anthropic_endpoints.endpoints import _is_claude_code_client
+        from litellm.proxy.anthropic_endpoints.utils import _is_claude_code_client
 
         mock_request = self._make_mock_request("claude-code/1.0.0")
         assert _is_claude_code_client(mock_request) is True
@@ -121,7 +121,7 @@ class TestAutoPromptCaching:
 
     def test_cache_control_injected_for_claude_code_list_content(self):
         """Test that cache_control is injected into last content block for Claude Code."""
-        from litellm.proxy.anthropic_endpoints.endpoints import (
+        from litellm.proxy.anthropic_endpoints.utils import (
             maybe_inject_auto_prompt_caching,
         )
 
@@ -148,7 +148,7 @@ class TestAutoPromptCaching:
 
     def test_cache_control_injected_for_string_content(self):
         """Test that string content is converted to list format with cache_control."""
-        from litellm.proxy.anthropic_endpoints.endpoints import (
+        from litellm.proxy.anthropic_endpoints.utils import (
             maybe_inject_auto_prompt_caching,
         )
 
@@ -171,7 +171,7 @@ class TestAutoPromptCaching:
 
     def test_cache_control_not_double_injected(self):
         """Test that cache_control is NOT injected when already present in messages."""
-        from litellm.proxy.anthropic_endpoints.endpoints import (
+        from litellm.proxy.anthropic_endpoints.utils import (
             maybe_inject_auto_prompt_caching,
         )
 
@@ -205,7 +205,7 @@ class TestAutoPromptCaching:
 
     def test_cache_control_not_injected_for_non_claude_code(self):
         """Test that cache_control is NOT injected for non-Claude Code clients."""
-        from litellm.proxy.anthropic_endpoints.endpoints import (
+        from litellm.proxy.anthropic_endpoints.utils import (
             maybe_inject_auto_prompt_caching,
         )
 
@@ -226,7 +226,7 @@ class TestAutoPromptCaching:
 
     def test_cache_control_disabled_by_config(self):
         """Test that auto_prompt_caching can be disabled via general_settings."""
-        from litellm.proxy.anthropic_endpoints.endpoints import (
+        from litellm.proxy.anthropic_endpoints.utils import (
             maybe_inject_auto_prompt_caching,
         )
 
@@ -249,7 +249,7 @@ class TestAutoPromptCaching:
 
     def test_cache_control_with_empty_messages(self):
         """Test that empty messages list doesn't cause errors."""
-        from litellm.proxy.anthropic_endpoints.endpoints import (
+        from litellm.proxy.anthropic_endpoints.utils import (
             maybe_inject_auto_prompt_caching,
         )
 
@@ -260,9 +260,27 @@ class TestAutoPromptCaching:
         )
         assert result["messages"] == []
 
+    def test_cache_control_with_none_content(self):
+        """Test that None content is handled gracefully without injection."""
+        from litellm.proxy.anthropic_endpoints.utils import (
+            maybe_inject_auto_prompt_caching,
+        )
+
+        mock_request = self._make_mock_request("claude-code/1.0.0")
+        data = {
+            "messages": [
+                {"role": "assistant", "content": None},
+            ],
+        }
+        result = maybe_inject_auto_prompt_caching(
+            request=mock_request, data=data, general_settings={}
+        )
+        # Content should remain None - no injection, no error
+        assert result["messages"][-1]["content"] is None
+
     def test_cache_control_with_multi_turn_claude_code_messages(self):
         """Test cache_control injection with typical Claude Code multi-turn messages."""
-        from litellm.proxy.anthropic_endpoints.endpoints import (
+        from litellm.proxy.anthropic_endpoints.utils import (
             maybe_inject_auto_prompt_caching,
         )
 
