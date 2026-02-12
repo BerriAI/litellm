@@ -112,7 +112,44 @@ class TestMCPServerManager:
         assert client.stdio_config is not None
         assert client.stdio_config["command"] == "node"
         assert client.stdio_config["args"] == ["server.js"]
-        assert client.stdio_config["env"] == {"NODE_ENV": "test"}
+        # NPM_CONFIG_CACHE is injected automatically for container compatibility
+        from litellm.constants import MCP_NPM_CACHE_DIR
+
+        assert client.stdio_config["env"]["NODE_ENV"] == "test"
+        assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
+
+    async def test_create_mcp_client_stdio_injects_npm_config_cache(self):
+        """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
+        and preserves user-provided NPM_CONFIG_CACHE when present."""
+        from litellm.constants import MCP_NPM_CACHE_DIR
+
+        manager = MCPServerManager()
+
+        # Case 1: NPM_CONFIG_CACHE not set -> should be injected
+        server_no_cache = MCPServer(
+            server_id="stdio-npm-1",
+            name="test_npm_server",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-everything"],
+            env={},
+        )
+        client = await manager._create_mcp_client(server_no_cache)
+        assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
+
+        # Case 2: NPM_CONFIG_CACHE already set -> should NOT be overwritten
+        server_with_cache = MCPServer(
+            server_id="stdio-npm-2",
+            name="test_npm_server_custom",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-everything"],
+            env={"NPM_CONFIG_CACHE": "/custom/cache"},
+        )
+        client2 = await manager._create_mcp_client(server_with_cache)
+        assert client2.stdio_config["env"]["NPM_CONFIG_CACHE"] == "/custom/cache"
 
     def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
         """Ensure only ${X-*} placeholders are substituted from headers."""

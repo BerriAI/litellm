@@ -15,7 +15,6 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Uni
 from urllib.parse import urlparse
 
 import anyio
-
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -32,6 +31,7 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_NPM_CACHE_DIR
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -72,7 +72,9 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import SEP_986_URL
+    from mcp.shared.tool_name_validation import (
+        SEP_986_URL,
+    )
 except ImportError:
     from pydantic import BaseModel
 
@@ -889,8 +891,15 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
-            # For stdio, we need to get the stdio config from the server
-            resolved_env = stdio_env if stdio_env is not None else server.env or {}
+            resolved_env = stdio_env if stdio_env is not None else dict(server.env or {})
+
+            # Ensure npm-based STDIO MCP servers have a writable cache dir.
+            # In containers the default (~/.npm or /app/.npm) may not exist
+            # or be read-only, causing npx to fail with ENOENT.
+            if "NPM_CONFIG_CACHE" not in resolved_env:
+                from litellm.constants import MCP_NPM_CACHE_DIR
+
+                resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
