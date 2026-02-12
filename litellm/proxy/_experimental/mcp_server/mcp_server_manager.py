@@ -70,9 +70,7 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import (
-        SEP_986_URL,
-    )
+    from mcp.shared.tool_name_validation import SEP_986_URL
 except ImportError:
     from pydantic import BaseModel
 
@@ -673,24 +671,47 @@ class MCPServerManager:
         return [
             server.server_id
             for server in self.get_registry().values()
-            if server.allow_all_keys
+            if server.allow_all_keys is True
         ]
 
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
     ) -> List[str]:
         """
-        Get the allowed MCP Servers for the user
+        Get the allowed MCP Servers for the user.
+
+        Priority:
+        1. If object_permission.mcp_servers is explicitly set, use it (even for admins)
+        2. If admin and no object_permission, return all servers
+        3. Otherwise, use standard permission checks
         """
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-
-        # If admin, get all servers
-        if user_api_key_auth and _user_has_admin_view(user_api_key_auth):
-            return list(self.get_registry().keys())
 
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
 
         try:
+            # Check if object_permission.mcp_servers is explicitly set
+            has_explicit_object_permission = False
+            if user_api_key_auth and user_api_key_auth.object_permission:
+                # Check if mcp_servers is explicitly set (not None, empty list is valid)
+                if user_api_key_auth.object_permission.mcp_servers is not None:
+                    has_explicit_object_permission = True
+                    verbose_logger.debug(
+                        f"Object permission mcp_servers explicitly set: {user_api_key_auth.object_permission.mcp_servers}"
+                    )
+
+            # If admin but NO explicit object permission, get all servers
+            if (
+                user_api_key_auth
+                and _user_has_admin_view(user_api_key_auth)
+                and not has_explicit_object_permission
+            ):
+                verbose_logger.debug(
+                    "Admin user without explicit object_permission - returning all servers"
+                )
+                return list(self.get_registry().keys())
+
+            # Get allowed servers from object permissions (respects object_permission even for admins)
             allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
                 user_api_key_auth
             )
@@ -2246,6 +2267,7 @@ class MCPServerManager:
             from litellm.proxy.proxy_server import (
                 general_settings as proxy_general_settings,
             )
+
             return proxy_general_settings
         except ImportError:
             # Fallback if proxy_server not available
