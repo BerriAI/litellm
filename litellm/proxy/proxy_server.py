@@ -393,6 +393,9 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
+from litellm.proxy.management_endpoints.access_group_endpoints import (
+    router as access_group_router,
+)
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team,
@@ -11998,6 +12001,7 @@ app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_endpoints_router)
 app.include_router(a2a_router)
+app.include_router(access_group_router)
 ########################################################
 # MCP Server
 ########################################################
