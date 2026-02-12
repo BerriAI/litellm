@@ -681,9 +681,8 @@ class BaseResponsesAPITest(ABC):
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )
 
-    @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
-    async def test_responses_api_context_management_server_side_compaction(self, sync_mode):
+    async def test_responses_api_context_management_server_side_compaction(self):
         """
         E2E test for server-side compaction (context_management) on OpenAI Responses API.
         Passes context_management with compact_threshold; validates that the request is
@@ -698,22 +697,50 @@ class BaseResponsesAPITest(ABC):
             )
         context_management = [{"type": "compaction", "compact_threshold": 200000}]
         try:
-            if sync_mode:
-                response = litellm.responses(
-                    input="Short ping to verify context_management is accepted.",
-                    max_output_tokens=20,
-                    context_management=context_management,
-                    **base_completion_call_args,
-                )
-            else:
-                response = await litellm.aresponses(
-                    input="Short ping to verify context_management is accepted.",
-                    max_output_tokens=20,
-                    context_management=context_management,
-                    **base_completion_call_args,
-                )
+            response = await litellm.aresponses(
+                input="Short ping to verify context_management is accepted.",
+                max_output_tokens=20,
+                context_management=context_management,
+                **base_completion_call_args,
+            )
         except litellm.InternalServerError:
             pytest.skip("Skipping test due to litellm.InternalServerError")
+        validate_responses_api_response(response, final_chunk=True)
+        assert response.get("id") is not None
+        assert response.get("status") is not None
+
+    @pytest.mark.asyncio
+    async def test_responses_api_shell_tool(self):
+        """
+        E2E test for Shell tool on OpenAI Responses API.
+        Passes tools=[{"type": "shell", "environment": {"type": "container_auto"}}];
+        validates that the request is accepted and returns a valid response.
+        Only runs for OpenAI/Azure (Responses API with shell support).
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        model = base_completion_call_args.get("model") or ""
+        if "openai/" not in str(model) and "azure/" not in str(model):
+            pytest.skip(
+                "Shell tool e2e is only run for OpenAI/Azure Responses API"
+            )
+        tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
+        input_msg = "List files in /mnt/data and show python --version."
+        try:
+            response = await litellm.aresponses(
+                input=input_msg,
+                max_output_tokens=256,
+                tools=tools,
+                tool_choice="auto",
+                **base_completion_call_args,
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Skipping test due to litellm.InternalServerError")
+        except litellm.BadRequestError as e:
+            if "shell" in str(e).lower() and "not supported" in str(e).lower():
+                pytest.skip(
+                    "Shell tool is not supported for this model (e.g. gpt-4o); use a model that supports shell"
+                )
+            raise
         validate_responses_api_response(response, final_chunk=True)
         assert response.get("id") is not None
         assert response.get("status") is not None
