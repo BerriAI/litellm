@@ -100,6 +100,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         # Declare supported hooks
         supported_event_hooks = [
             GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
 
