@@ -3221,10 +3221,10 @@ class TestPKCEFunctionality:
             def __init__(self):
                 self._store = {}
 
-            def set_cache(self, key, value, **kwargs):
+            async def async_set_cache(self, key, value, **kwargs):
                 self._store[key] = value
 
-            def get_cache(self, key, **kwargs):
+            async def async_get_cache(self, key, **kwargs):
                 val = self._store.get(key)
                 if val is None:
                     return None
@@ -3236,7 +3236,7 @@ class TestPKCEFunctionality:
                         return val
                 return val
 
-            def delete_cache(self, key):
+            async def async_delete_cache(self, key):
                 self._store.pop(key, None)
 
         mock_redis = MockRedisCache()
@@ -3262,7 +3262,7 @@ class TestPKCEFunctionality:
                         state="multi_pod_state_xyz",
                         generic_authorization_endpoint="https://auth.example.com/authorize",
                     )
-                    mock_in_memory.set_cache.assert_not_called()
+                    mock_in_memory.async_set_cache.assert_not_called()
                     # MockRedisCache is a real class; assert on state, not .assert_called_*
                     stored_key = "pkce_verifier:multi_pod_state_xyz"
                     assert stored_key in mock_redis._store
@@ -3279,7 +3279,7 @@ class TestPKCEFunctionality:
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == json.loads(stored_value)
-                    mock_in_memory.get_cache.assert_not_called()
+                    mock_in_memory.async_get_cache.assert_not_called()
                     # delete_cache called; key removed (asserted below)
 
         # Verifier consumed (single-use); key removed from "Redis"
@@ -3298,19 +3298,19 @@ class TestPKCEFunctionality:
         # In-memory store (simulates user_api_key_cache on one pod)
         in_memory_store = {}
 
-        def set_cache(key, value, **kwargs):
+        async def async_set_cache(key, value, **kwargs):
             in_memory_store[key] = value
 
-        def get_cache(key, **kwargs):
+        async def async_get_cache(key, **kwargs):
             return in_memory_store.get(key)
 
-        def delete_cache(key):
+        async def async_delete_cache(key):
             in_memory_store.pop(key, None)
 
         mock_in_memory = MagicMock()
-        mock_in_memory.set_cache.side_effect = set_cache
-        mock_in_memory.get_cache.side_effect = get_cache
-        mock_in_memory.delete_cache.side_effect = delete_cache
+        mock_in_memory.async_set_cache = AsyncMock(side_effect=async_set_cache)
+        mock_in_memory.async_get_cache = AsyncMock(side_effect=async_get_cache)
+        mock_in_memory.async_delete_cache = AsyncMock(side_effect=async_delete_cache)
 
         mock_sso = MagicMock()
         mock_redirect_response = MagicMock()
@@ -3332,9 +3332,11 @@ class TestPKCEFunctionality:
                         state="fallback_state_xyz",
                         generic_authorization_endpoint="https://auth.example.com/authorize",
                     )
-                    mock_in_memory.set_cache.assert_called_once()
-                    stored_key = mock_in_memory.set_cache.call_args.kwargs["key"]
-                    stored_value = mock_in_memory.set_cache.call_args.kwargs["value"]
+                    mock_in_memory.async_set_cache.assert_called_once()
+                    stored_key = mock_in_memory.async_set_cache.call_args.kwargs["key"]
+                    stored_value = mock_in_memory.async_set_cache.call_args.kwargs[
+                        "value"
+                    ]
                     assert stored_key == "pkce_verifier:fallback_state_xyz"
                     assert isinstance(stored_value, str) and len(stored_value) == 43
 
@@ -3346,8 +3348,12 @@ class TestPKCEFunctionality:
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == stored_value
-                    mock_in_memory.get_cache.assert_called_once_with(key=stored_key)
-                    mock_in_memory.delete_cache.assert_called_once_with(key=stored_key)
+                    mock_in_memory.async_get_cache.assert_called_once_with(
+                        key=stored_key
+                    )
+                    mock_in_memory.async_delete_cache.assert_called_once_with(
+                        key=stored_key
+                    )
 
         # Verifier consumed; key removed from in-memory
         assert "pkce_verifier:fallback_state_xyz" not in in_memory_store
@@ -3373,8 +3379,8 @@ class TestPKCEFunctionality:
                     )
                 )
                 assert "code_verifier" not in token_params
-                mock_redis.get_cache.assert_not_called()
-                mock_in_memory.get_cache.assert_not_called()
+                mock_redis.async_get_cache.assert_not_called()
+                mock_in_memory.async_get_cache.assert_not_called()
 
 
 # Tests for SSO user team assignment bug (Issue: SSO Users Not Added to Entra-Synced Teams on First Login)
