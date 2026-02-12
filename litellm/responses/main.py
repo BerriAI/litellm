@@ -681,6 +681,7 @@ def responses(
                 _is_async=_is_async,
                 stream=stream,
                 extra_headers=extra_headers,
+                extra_body=extra_body,
                 **kwargs,
             )
 

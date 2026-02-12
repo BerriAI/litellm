@@ -161,6 +161,7 @@ class LiteLLMCompletionResponsesConfig:
         custom_llm_provider: Optional[str] = None,
         stream: Optional[bool] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> dict:
         """
@@ -215,6 +216,7 @@ class LiteLLMCompletionResponsesConfig:
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
+            "extra_body": extra_body,
         }
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
