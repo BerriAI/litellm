@@ -1031,8 +1031,7 @@ Supported on the OpenAI Responses API when using the `openai` or `azure` provide
 
 For explicit control over when compaction runs, use the standalone compact endpoint (`POST /v1/responses/compact`) instead.
 
-<Tabs>
-<TabItem value="python-sdk" label="Python SDK">
+### Python SDK
 
 ```python showLineNumbers title="Server-side compaction with LiteLLM Python SDK"
 import litellm
@@ -1057,8 +1056,7 @@ for event in stream:
     print(event)
 ```
 
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy (AI Gateway)">
+### LiteLLM Proxy (AI Gateway)
 
 Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `context_management` to the provider.
 
@@ -1094,9 +1092,6 @@ curl -X POST "http://localhost:4000/v1/responses" \
     "max_output_tokens": 1024
   }'
 ```
-
-</TabItem>
-</Tabs>
 
 ## Session Management
 
