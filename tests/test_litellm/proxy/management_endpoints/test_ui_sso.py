@@ -3081,8 +3081,10 @@ class TestPKCEFunctionality:
 
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
             # Act
-            token_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                request=mock_request, generic_include_client_id=False
+            token_params = (
+                await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                    request=mock_request, generic_include_client_id=False
+                )
             )
 
             # Assert
@@ -3208,10 +3210,8 @@ class TestPKCEFunctionality:
                     # Pod B: callback with same state, retrieve from "Redis"
                     mock_request = MagicMock(spec=Request)
                     mock_request.query_params = {"state": "multi_pod_state_xyz"}
-                    token_params = (
-                        SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                            request=mock_request, generic_include_client_id=False
-                        )
+                    token_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                        request=mock_request, generic_include_client_id=False
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == json.loads(stored_value)
@@ -3277,10 +3277,8 @@ class TestPKCEFunctionality:
                     # Same pod: callback retrieves from in-memory cache
                     mock_request = MagicMock(spec=Request)
                     mock_request.query_params = {"state": "fallback_state_xyz"}
-                    token_params = (
-                        SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                            request=mock_request, generic_include_client_id=False
-                        )
+                    token_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                        request=mock_request, generic_include_client_id=False
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == stored_value
@@ -3306,7 +3304,7 @@ class TestPKCEFunctionality:
                 mock_request = MagicMock(spec=Request)
                 mock_request.query_params = {}
                 token_params = (
-                    SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                    await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                         request=mock_request, generic_include_client_id=False
                     )
                 )
