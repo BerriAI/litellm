@@ -201,9 +201,11 @@ export function LogDetailsDrawer({
 
   const handleCopyLeftPanelId = async () => {
     if (!leftPanelId) return;
-    await navigator.clipboard.writeText(leftPanelId);
-    setCopiedLeftPanelId(true);
-    setTimeout(() => setCopiedLeftPanelId(false), 1200);
+    try {
+      await navigator.clipboard.writeText(leftPanelId);
+      setCopiedLeftPanelId(true);
+      setTimeout(() => setCopiedLeftPanelId(false), 1200);
+    } catch { /* clipboard unavailable in non-secure contexts */ }
   };
 
   if (!currentLog) return null;
