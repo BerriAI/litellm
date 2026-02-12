@@ -20,7 +20,8 @@ import FilterComponent, { FilterOption } from "../molecules/filter";
 import { allEndUsersCall, keyInfoV1Call, keyListCall, sessionSpendLogsCall, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
-import { columns, LogEntry } from "./columns";
+import { columns, expanderColumn, LogEntry } from "./columns";
+import { SessionChildRows } from "./McpChildRows";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
 import { ERROR_CODE_OPTIONS, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
@@ -346,7 +347,12 @@ export default function SpendLogsTable({
         onSessionClick: (sessionId: string) => {
           if (sessionId) setSelectedSessionId(sessionId);
         },
-      })) || [];
+      }))
+      // Deduplicate multi-call sessions: show only the first row per session_id
+      .filter((log, _index, arr) => {
+        if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
+        return arr.findIndex((l) => l.session_id === log.session_id) === _index;
+      }) || [];
 
   // For session logs, add onKeyHashClick/onSessionClick as well
   const sessionData =
@@ -734,9 +740,13 @@ export default function SpendLogsTable({
                     </div>
                   )}
                   <DataTable
-                    columns={columns}
+                    columns={[expanderColumn, ...columns]}
                     data={filteredData}
                     onRowClick={handleRowClick}
+                    getRowCanExpand={(row) => (row.original.session_total_count || 1) > 1}
+                    renderChildRows={({ row }) => (
+                      <SessionChildRows row={row} accessToken={accessToken!} onChildClick={handleRowClick} />
+                    )}
                   />
                 </div>
               </>
