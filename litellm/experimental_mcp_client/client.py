@@ -14,7 +14,10 @@ from mcp.client.stdio import stdio_client
 streamable_http_client: Optional[Any] = None
 try:
     import mcp.client.streamable_http as streamable_http_module  # type: ignore
-    streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
+
+    streamable_http_client = getattr(
+        streamable_http_module, "streamable_http_client", None
+    )
 except ImportError:
     pass
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
@@ -32,6 +35,7 @@ from pydantic import AnyUrl
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
+from contextvars import ContextVar
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
@@ -39,6 +43,38 @@ from litellm.types.mcp import (
     MCPTransport,
     MCPTransportType,
 )
+
+disable_mcp_get_stream: ContextVar[bool] = ContextVar(
+    "disable_mcp_get_stream", default=False
+)
+
+
+async def patched_handle_get_stream(*args, **kwargs):
+    """
+    Handle GET stream for server-initiated messages with auto-reconnect.
+
+    Patched to be a no-op to prevent anyio TaskGroup cancellation with external MCP backends.
+    LiteLLM proxy only needs request/response (initialize -> list_tools -> call_tool).
+    """
+    if disable_mcp_get_stream.get():
+        verbose_logger.debug("MCP GET stream disabled via ContextVar")
+        return
+    return await _old_handle_get_stream(*args, **kwargs)
+
+
+if streamable_http_client is not None:
+    _old_handle_get_stream = getattr(streamable_http_module, "handle_get_stream", None)
+
+    async def dummy_handle_get_stream(*args, **kwargs):
+        pass
+
+    if _old_handle_get_stream is None:
+        _old_handle_get_stream = dummy_handle_get_stream
+
+    verbose_logger.debug(
+        "Applying scoped monkeypatch for mcp.client.streamable_http.handle_get_stream"
+    )
+    streamable_http_module.handle_get_stream = patched_handle_get_stream
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -67,6 +103,7 @@ class MCPClient:
         stdio_config: Optional[MCPStdioConfig] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
+        disable_get_stream: bool = True,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -76,6 +113,7 @@ class MCPClient:
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
+        self.disable_get_stream: bool = disable_get_stream
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -105,12 +143,15 @@ class MCPClient:
         if self.transport_type == MCPTransport.sse:
             headers = self._get_auth_headers()
             httpx_client_factory = self._create_httpx_client_factory()
-            return sse_client(
-                url=self.server_url,
-                timeout=self.timeout,
-                headers=headers,
-                httpx_client_factory=httpx_client_factory,
-            ), None
+            return (
+                sse_client(
+                    url=self.server_url,
+                    timeout=self.timeout,
+                    headers=headers,
+                    httpx_client_factory=httpx_client_factory,
+                ),
+                None,
+            )
 
         # HTTP transport (default)
         if streamable_http_client is None:
@@ -118,12 +159,10 @@ class MCPClient:
                 "streamable_http_client is not available. "
                 "Please install mcp with HTTP support."
             )
-        
+
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
-        verbose_logger.debug(
-            "litellm headers for streamable_http_client: %s", headers
-        )
+        verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
         http_client = httpx_client_factory(
             headers=headers,
             timeout=httpx.Timeout(self.timeout),
@@ -167,6 +206,7 @@ class MCPClient:
         self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up."""
+        token = disable_mcp_get_stream.set(self.disable_get_stream)
         http_client: Optional[httpx.AsyncClient] = None
         try:
             transport_ctx, http_client = self._create_transport_context()
@@ -177,6 +217,7 @@ class MCPClient:
             )
             raise
         finally:
+            disable_mcp_get_stream.reset(token)
             if http_client is not None:
                 try:
                     await http_client.aclose()
@@ -298,7 +339,7 @@ class MCPClient:
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
-        host_progress_callback: Optional[Callable] = None
+        host_progress_callback: Optional[Callable] = None,
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
@@ -307,13 +348,15 @@ class MCPClient:
             f"MCP client calling tool '{call_tool_request_params.name}' with arguments: {call_tool_request_params.arguments}"
         )
 
-        async def on_progress(progress: float, total: float | None, message: str | None):
+        async def on_progress(
+            progress: float, total: float | None, message: str | None
+        ):
             percentage = (progress / total * 100) if total else 0
             verbose_logger.info(
                 f"MCP Tool '{call_tool_request_params.name}' progress: "
                 f"{progress}/{total} ({percentage:.0f}%) - {message or ''}"
             )
-            
+
             # Forward to Host if callback provided
             if host_progress_callback:
                 try:
@@ -327,8 +370,8 @@ class MCPClient:
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
                 progress_callback=on_progress,
-
             )
+
         try:
             tool_result = await self.run_with_session(_call_tool_operation)
             verbose_logger.info(
