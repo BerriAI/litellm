@@ -331,6 +331,18 @@ export default function SpendLogsTable({
     return acc;
   }, {});
 
+  // Build a single-pass map of session_id → representative request_id.
+  // Prefers an LLM row over an MCP row as the representative.
+  const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
+  for (const log of searchedLogs) {
+    if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
+    const isMcp = MCP_CALL_TYPES.includes(log.call_type);
+    const existing = sessionRepresentativeMap.get(log.session_id);
+    if (!existing || (existing.isMcp && !isMcp)) {
+      sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
+    }
+  }
+
   const filteredData =
     searchedLogs
       .map((log) => {
@@ -350,16 +362,10 @@ export default function SpendLogsTable({
           },
         };
       })
-      // Deduplicate multi-call sessions:
-      // Prefer showing an LLM row as the root representative when available.
-      .filter((log, _index, arr) => {
+      // Deduplicate multi-call sessions using the pre-built map (O(1) per row).
+      .filter((log) => {
         if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-        const rowsForSession = arr.filter((l) => l.session_id === log.session_id);
-        const llmRepresentative = rowsForSession.find(
-          (l) => !MCP_CALL_TYPES.includes(l.call_type),
-        );
-        const representative = llmRepresentative || rowsForSession[0];
-        return representative.request_id === log.request_id;
+        return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
       }) || [];
 
   // Add this function to handle manual refresh

@@ -3146,6 +3146,10 @@ async def _build_ui_spend_logs_response(
             {row.session_id for row in data if getattr(row, "session_id", None)}
         )
         if session_ids:
+            # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
+            # is bounded by page_size (typically 25-50 distinct session IDs).
+            # If performance degrades at scale, consider short-lived caching or
+            # folding the count into the main query via a window function.
             counts = await prisma_client.db.litellm_spendlogs.group_by(
                 by=["session_id"],
                 where={"session_id": {"in": session_ids}},
