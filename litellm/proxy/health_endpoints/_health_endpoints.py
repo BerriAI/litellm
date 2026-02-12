@@ -1324,7 +1324,6 @@ async def health_readiness():
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
-                **db_health_status,
             }
         else:
             return {
