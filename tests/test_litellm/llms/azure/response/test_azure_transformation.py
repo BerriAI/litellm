@@ -517,11 +517,11 @@ class TestAzureResponsesAPIConfig:
 
         assert "context_management" in result
         assert result["context_management"] == {
-            "strategies": [{"type": "compaction", "compact_threshold": 200000}]
+            "strategies": [{"type": "compaction", "token_threshold": 200000}]
         }
 
     def test_azure_responses_api_context_management_already_object(self):
-        """Test that context_management already in object format is passed through."""
+        """Test that context_management in object format has compact_threshold mapped to token_threshold."""
         from litellm.types.router import GenericLiteLLMParams
 
         context_management = {"strategies": [{"type": "compaction", "compact_threshold": 200000}]}
@@ -536,4 +536,6 @@ class TestAzureResponsesAPIConfig:
             headers={},
         )
 
-        assert result["context_management"] == context_management
+        assert result["context_management"] == {
+            "strategies": [{"type": "compaction", "token_threshold": 200000}]
+        }

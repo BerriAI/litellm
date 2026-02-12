@@ -133,14 +133,32 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             response_api_optional_request_params["tools"] = new_tools
 
         # Azure Responses API expects context_management as an object with "strategies" key,
-        # but OpenAI/litellm uses array format [{"type": "compaction", "compact_threshold": N}].
-        # See: "Invalid type for 'context_management': expected an object, but got an array instead."
-        # See: "Missing required parameter: 'context_management.strategies'."
+        # and strategy items use "token_threshold" (not OpenAI's "compact_threshold").
+        # Inferred from Azure error messages; OpenAI uses array + compact_threshold.
+        # Ref: https://learn.microsoft.com/azure/ai-foundry/openai/reference
         if "context_management" in response_api_optional_request_params:
             cm = response_api_optional_request_params["context_management"]
+
+            def _normalize_strategy(item: Any) -> Dict[str, Any]:
+                if isinstance(item, dict):
+                    strategy = dict(item)
+                    if "compact_threshold" in strategy:
+                        strategy["token_threshold"] = strategy.pop(
+                            "compact_threshold"
+                        )
+                    return strategy
+                return item  # type: ignore
+
             if isinstance(cm, list):
+                strategies = [_normalize_strategy(item) for item in cm]
                 response_api_optional_request_params["context_management"] = {
-                    "strategies": cm
+                    "strategies": strategies
+                }
+            elif isinstance(cm, dict) and "strategies" in cm:
+                strategies = [_normalize_strategy(s) for s in cm["strategies"]]
+                response_api_optional_request_params["context_management"] = {
+                    **cm,
+                    "strategies": strategies,
                 }
 
         return super().transform_responses_api_request(
