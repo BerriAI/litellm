@@ -1,0 +1,109 @@
+name: LiteLLM Unit Tests (Matrix)
+
+on:
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          # tests/test_litellm split by subdirectory (~560 files total)
+          - name: "llms"
+            path: "tests/test_litellm/llms"
+            workers: 4
+          # tests/test_litellm/proxy split by subdirectory (~180 files total)
+          - name: "proxy-guardrails"
+            path: "tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers"
+            workers: 4
+          - name: "proxy-core"
+            path: "tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine"
+            workers: 4
+          - name: "proxy-misc"
+            path: "tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py"
+            workers: 4
+          - name: "integrations"
+            path: "tests/test_litellm/integrations"
+            workers: 4
+          - name: "core-utils"
+            path: "tests/test_litellm/litellm_core_utils"
+            workers: 2
+          - name: "other"
+            path: "tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types"
+            workers: 4
+          - name: "root"
+            path: "tests/test_litellm/test_*.py"
+            workers: 4
+          # tests/proxy_unit_tests split alphabetically (~48 files total)
+          - name: "proxy-unit-a"
+            path: "tests/proxy_unit_tests/test_[a-o]*.py"
+            workers: 2
+          - name: "proxy-unit-b"
+            path: "tests/proxy_unit_tests/test_[p-z]*.py"
+            workers: 2
+
+    name: test (${{ matrix.test-group.name }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
+          poetry run pip install pytest-retry==1.6.3 pytest-xdist google-genai==1.22.0 \
+            google-cloud-aiplatform>=1.38 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core
+
+      - name: Setup litellm-enterprise
+        run: |
+          cd enterprise && poetry run pip install -e . && cd ..
+
+      - name: Run tests - ${{ matrix.test-group.name }}
+        run: |
+          poetry run pytest ${{ matrix.test-group.path }} \
+            --tb=short -vv \
+            --maxfail=10 \
+            -n ${{ matrix.test-group.workers }} \
+            --durations=20
+
+  # Aggregate job to require all matrix jobs pass
+  test-complete:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "Some test groups failed"
+            exit 1
+          fi
+          echo "All test groups passed!"
