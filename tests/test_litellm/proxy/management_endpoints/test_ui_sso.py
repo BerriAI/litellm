@@ -3267,7 +3267,7 @@ class TestPKCEFunctionality:
                     stored_key = "pkce_verifier:multi_pod_state_xyz"
                     assert stored_key in mock_redis._store
                     stored_value = mock_redis._store[stored_key]
-                    assert json.loads(stored_value)  # valid verifier string
+                    assert isinstance(stored_value, str) and len(stored_value) == 43
 
                     # Pod B: callback with same state, retrieve from "Redis"
                     mock_request = MagicMock(spec=Request)
