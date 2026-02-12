@@ -903,3 +903,191 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                 if isinstance(item, dict) and "cachePoint" in item
             )
             assert cache_control_count == 1, f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
+
+
+class TestRoleOnlyTargeting:
+    """Bug fix: role-only targeting should apply cache_control to the LAST matching message only."""
+
+    def test_role_only_targets_last_matching_message(self):
+        """When no index is specified, cache_control should only be applied to the last message
+        with the matching role, not all of them."""
+        messages = [
+            {"role": "user", "content": "first user message"},
+            {"role": "assistant", "content": "assistant response"},
+            {"role": "user", "content": "second user message"},
+            {"role": "assistant", "content": "another response"},
+            {"role": "user", "content": "third user message"},
+        ]
+        point = {"location": "message", "role": "user"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        # Only the LAST user message (index 4) should have cache_control
+        assert "cache_control" not in result[0], "First user message should not have cache_control"
+        assert "cache_control" not in result[2], "Second user message should not have cache_control"
+        assert "cache_control" in result[4], "Last user message should have cache_control"
+
+    def test_role_only_no_matching_role(self):
+        """When no messages match the specified role, nothing should be modified."""
+        messages = [
+            {"role": "user", "content": "user message"},
+            {"role": "assistant", "content": "response"},
+        ]
+        point = {"location": "message", "role": "system"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        for msg in result:
+            assert "cache_control" not in msg
+
+    def test_role_only_single_matching_message(self):
+        """When only one message matches the role, it should get cache_control."""
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "user message"},
+        ]
+        point = {"location": "message", "role": "system"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        assert "cache_control" in result[0], "System message should have cache_control"
+        assert "cache_control" not in result[1], "User message should not have cache_control"
+
+    def test_role_only_list_content_targets_last_block(self):
+        """When content is a list, cache_control should be on the last content block."""
+        messages = [
+            {"role": "user", "content": [
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"},
+            ]},
+        ]
+        point = {"location": "message", "role": "user"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        assert "cache_control" not in result[0]["content"][0], "First block should not have cache_control"
+        assert "cache_control" in result[0]["content"][1], "Last block should have cache_control"
+
+
+class TestIndexRoleValidation:
+    """Bug fix: when both index and role are specified, the role should be validated."""
+
+    def test_index_and_role_match(self):
+        """When index and role both match, cache_control should be applied."""
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "user message"},
+        ]
+        point = {"location": "message", "index": 1, "role": "user"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        assert "cache_control" in result[1], "User message at index 1 should have cache_control"
+        assert "cache_control" not in result[0], "System message should not have cache_control"
+
+    def test_index_and_role_mismatch(self):
+        """When index points to a message with a different role, injection should be skipped."""
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "user message"},
+        ]
+        point = {"location": "message", "index": 0, "role": "user"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        # Index 0 is "system" but role filter says "user" -- should NOT inject
+        assert "cache_control" not in result[0], "System message should not get cache_control when role filter is 'user'"
+        assert "cache_control" not in result[1], "User message should not get cache_control (not targeted by index)"
+
+    def test_index_and_role_mismatch_logs_warning(self):
+        """When index and role mismatch, a warning should be logged."""
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "user message"},
+        ]
+        point = {"location": "message", "index": 0, "role": "user"}
+        with patch("litellm.integrations.anthropic_cache_control_hook.verbose_logger") as mock_logger:
+            AnthropicCacheControlHook._process_message_injection(point, messages)
+            mock_logger.warning.assert_called_once()
+            warning_msg = mock_logger.warning.call_args[0][0]
+            assert "role" in warning_msg.lower()
+            assert "system" in warning_msg
+            assert "user" in warning_msg
+
+    def test_negative_index_and_role_match(self):
+        """Negative index with matching role should work correctly."""
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "response"},
+            {"role": "user", "content": "last user message"},
+        ]
+        point = {"location": "message", "index": -1, "role": "user"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        assert "cache_control" in result[2], "Last message should have cache_control"
+
+    def test_negative_index_and_role_mismatch(self):
+        """Negative index with non-matching role should skip injection."""
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "response"},
+            {"role": "user", "content": "last user message"},
+        ]
+        point = {"location": "message", "index": -1, "role": "assistant"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        # Index -1 is "user" but role filter says "assistant" -- should NOT inject
+        for msg in result:
+            assert "cache_control" not in msg
+
+
+class TestNegativeStringIndex:
+    """Bug fix: negative string indices like '-1' should be parsed correctly."""
+
+    def test_negative_string_index_works(self):
+        """String '-1' should correctly target the last message."""
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+            {"role": "user", "content": "third"},
+        ]
+        point = {"location": "message", "index": "-1"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        assert "cache_control" not in result[0]
+        assert "cache_control" not in result[1]
+        assert "cache_control" in result[2], "Last message should have cache_control with string index '-1'"
+
+    def test_negative_string_index_minus_two(self):
+        """String '-2' should correctly target the second-to-last message."""
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+            {"role": "user", "content": "third"},
+        ]
+        point = {"location": "message", "index": "-2"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        assert "cache_control" not in result[0]
+        assert "cache_control" in result[1], "Second-to-last message should have cache_control with string index '-2'"
+        assert "cache_control" not in result[2]
+
+    def test_positive_string_index_still_works(self):
+        """String '0' should still work correctly."""
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        ]
+        point = {"location": "message", "index": "0"}
+        result = AnthropicCacheControlHook._process_message_injection(point, messages)
+
+        assert "cache_control" in result[0], "First message should have cache_control with string index '0'"
+        assert "cache_control" not in result[1]
+
+    def test_invalid_string_index_logs_warning(self):
+        """Invalid string index like 'abc' should log a warning and not crash."""
+        messages = [
+            {"role": "user", "content": "first"},
+        ]
+        point = {"location": "message", "index": "abc"}
+        with patch("litellm.integrations.anthropic_cache_control_hook.verbose_logger") as mock_logger:
+            result = AnthropicCacheControlHook._process_message_injection(point, messages)
+            mock_logger.warning.assert_called_once()
+            warning_msg = mock_logger.warning.call_args[0][0]
+            assert "abc" in warning_msg
+            # No cache_control should be applied
+            assert "cache_control" not in result[0]

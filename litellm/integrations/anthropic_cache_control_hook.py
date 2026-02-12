@@ -82,8 +82,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         _targetted_index: Optional[Union[int, str]] = point.get("index", None)
         targetted_index: Optional[int] = None
         if isinstance(_targetted_index, str):
-            if _targetted_index.isdigit():
+            try:
                 targetted_index = int(_targetted_index)
+            except ValueError:
+                verbose_logger.warning(
+                    f"AnthropicCacheControlHook: Invalid index value '{_targetted_index}'. "
+                    "Skipping cache control injection for this point."
+                )
         else:
             targetted_index = _targetted_index
 
@@ -97,25 +102,36 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 targetted_index += len(messages)
 
             if 0 <= targetted_index < len(messages):
-                messages[targetted_index] = (
-                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                        messages[targetted_index], control
+                # If a role filter is also specified, validate it matches
+                if targetted_role is not None and messages[targetted_index].get("role") != targetted_role:
+                    verbose_logger.warning(
+                        f"AnthropicCacheControlHook: Message at index {original_index} has role "
+                        f"'{messages[targetted_index].get('role')}', expected '{targetted_role}'. "
+                        "Skipping cache control injection for this point."
                     )
-                )
+                else:
+                    messages[targetted_index] = (
+                        AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                            messages[targetted_index], control
+                        )
+                    )
             else:
                 verbose_logger.warning(
                     f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
                     f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
                 )
-        # Case 2: Target by role
+        # Case 2: Target by role (apply only to the LAST matching message)
         elif targetted_role is not None:
-            for msg in messages:
+            last_matching_index = None
+            for i, msg in enumerate(messages):
                 if msg.get("role") == targetted_role:
-                    msg = (
-                        AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                            message=msg, control=control
-                        )
+                    last_matching_index = i
+            if last_matching_index is not None:
+                messages[last_matching_index] = (
+                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                        message=messages[last_matching_index], control=control
                     )
+                )
         return messages
 
     @staticmethod
