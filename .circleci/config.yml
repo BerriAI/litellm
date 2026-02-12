@@ -4555,5 +4555,4 @@ workflows:
             - proxy_build_from_pip_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
-            - publish_proxy_extras
             - guardrails_testing
