@@ -14,6 +14,8 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
+import anyio
+
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -1437,6 +1439,9 @@ class MCPServerManager:
         """
         Fetch tools from MCP client with timeout and error handling.
 
+        Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
+        with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
@@ -1444,24 +1449,12 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
-
-        async def _list_tools_task():
-            try:
+        try:
+            with anyio.fail_after(30.0):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Client operation failed for {server_name}: {str(e)}"
-                )
-                return []
-
-        try:
-            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
         except asyncio.CancelledError:

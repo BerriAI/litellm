@@ -4862,8 +4862,10 @@ async def async_assistants_data_generator(
         if isinstance(e, HTTPException):
             raise e
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Only include the error message, not the traceback.
+            # The traceback is already logged above via verbose_proxy_logger.exception().
+            # Including it in the SSE response leaks internal details to clients.
+            error_msg = str(e)
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),
@@ -5013,8 +5015,10 @@ async def async_data_generator(
         elif isinstance(e, StreamingCallbackError):
             error_msg = str(e)
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Only include the error message, not the traceback.
+            # The traceback is already logged above via verbose_proxy_logger.exception().
+            # Including it in the SSE response leaks internal details to clients.
+            error_msg = str(e)
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),
