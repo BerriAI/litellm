@@ -1,11 +1,15 @@
 """
-Test Anthropic structured output with Pydantic models.
+Anthropic structured outputs don't support these constraints:
+- Numerical: minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf
+- String: minLength, maxLength, pattern
+- Array: maxItems, minItems (except 0/1)
 
-This test file verifies that Pydantic models with various constraints
-are properly converted to Anthropic-compatible JSON schemas.
+We filter them out, add constraint info to descriptions, and validate responses.
+Ref: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations
 """
 
 import pytest
+import json
 from pydantic import BaseModel, Field
 from typing import List
 
@@ -128,42 +132,179 @@ class TestAnthropicStructuredOutput:
             if "properties" in nested_item_schema and "tags" in nested_item_schema["properties"]:
                 assert "maxItems" not in nested_item_schema["properties"]["tags"]
 
-    def test_other_constraints_preserved(self):
+    def test_string_and_number_constraints_filtered(self):
         """
-        Test that other valid constraints are preserved.
+        Test that string/number constraints are filtered (not supported by Anthropic).
+        Ref: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-        
+
         class ResponseModel(BaseModel):
             name: str = Field(max_length=100, min_length=1, description="Name")
             age: int = Field(ge=0, le=150, description="Age")
             items: List[str] = Field(description="Items list")
-        
+
         config = AnthropicConfig()
         json_schema = config.get_json_schema_from_pydantic_object(ResponseModel)
-        
+
         response_format = {
             "type": "json_schema",
             "json_schema": json_schema["json_schema"]
         }
-        
+
         output_format = config.map_response_format_to_anthropic_output_format(
             response_format
         )
-        
+
         assert output_format is not None
         transformed_schema = output_format["schema"]
-        
-        # String constraints should be preserved
+
+        # String constraints should be FILTERED OUT
         name_schema = transformed_schema["properties"]["name"]
-        assert "maxLength" in name_schema
-        assert "minLength" in name_schema
-        assert name_schema["maxLength"] == 100
-        assert name_schema["minLength"] == 1
-        
-        # Number constraints should be preserved
+        assert "maxLength" not in name_schema
+        assert "minLength" not in name_schema
+        # But constraint info should be in description
+        assert "Minimum length: 1" in name_schema.get("description", "")
+        assert "Maximum length: 100" in name_schema.get("description", "")
+
+        # Number constraints should be FILTERED OUT
         age_schema = transformed_schema["properties"]["age"]
-        assert "minimum" in age_schema
-        assert "maximum" in age_schema
-        assert age_schema["minimum"] == 0
-        assert age_schema["maximum"] == 150
+        assert "minimum" not in age_schema
+        assert "maximum" not in age_schema
+        # But constraint info should be in description
+        assert "Must be at least 0" in age_schema.get("description", "")
+        assert "Must be at most 150" in age_schema.get("description", "")
+
+    def test_pattern_filtered(self):
+        """Test that pattern constraints are filtered (not supported by Anthropic)."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "pattern": r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+                }
+            }
+        }
+
+        filtered = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert "pattern" not in filtered["properties"]["email"]
+
+    def test_definitions_recursion(self):
+        """Test that 'definitions' (not just $defs) are recursively filtered."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "definitions": {
+                "User": {
+                    "type": "object",
+                    "properties": {
+                        "age": {"type": "integer", "minimum": 0, "maximum": 150}
+                    }
+                }
+            },
+            "properties": {
+                "user": {"$ref": "#/definitions/User"}
+            }
+        }
+
+        filtered = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert "minimum" not in filtered["definitions"]["User"]["properties"]["age"]
+        assert "maximum" not in filtered["definitions"]["User"]["properties"]["age"]
+
+    def test_oneof_filtering(self):
+        """Test oneOf schemas are recursively filtered."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "oneOf": [
+                        {"type": "integer", "minimum": 0, "maximum": 100},
+                        {"type": "string", "minLength": 1, "maxLength": 50}
+                    ]
+                }
+            }
+        }
+
+        filtered = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert "minimum" not in filtered["properties"]["value"]["oneOf"][0]
+        assert "maximum" not in filtered["properties"]["value"]["oneOf"][0]
+        assert "minLength" not in filtered["properties"]["value"]["oneOf"][1]
+        assert "maxLength" not in filtered["properties"]["value"]["oneOf"][1]
+
+    def test_allof_filtering(self):
+        """Test allOf schemas are recursively filtered."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "allOf": [
+                        {"type": "integer"},
+                        {"minimum": 0, "maximum": 100}
+                    ]
+                }
+            }
+        }
+
+        filtered = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert "minimum" not in filtered["properties"]["value"]["allOf"][1]
+        assert "maximum" not in filtered["properties"]["value"]["allOf"][1]
+
+    def test_minitems_edge_cases(self):
+        """Test minItems: 0 and 1 preserved, >1 removed."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "optional": {"type": "array", "items": {"type": "string"}, "minItems": 0},
+                "required": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "many": {"type": "array", "items": {"type": "string"}, "minItems": 5}
+            }
+        }
+
+        filtered = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert filtered["properties"]["optional"]["minItems"] == 0  # Preserved
+        assert filtered["properties"]["required"]["minItems"] == 1  # Preserved
+        assert "minItems" not in filtered["properties"]["many"]  # Removed
+
+    def test_additional_properties_added(self):
+        """Test additionalProperties: false is added to objects."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            }
+        }
+
+        filtered = AnthropicConfig.filter_anthropic_output_schema(schema)
+        assert filtered["additionalProperties"] is False
+
+    def test_validation_error_message(self):
+        """Test response validation error messages."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "age": {"type": "integer", "minimum": 0, "maximum": 150}
+            }
+        }
+
+        response = {"age": 200}
+
+        with pytest.raises(ValueError) as exc_info:
+            AnthropicConfig._validate_response_against_schema(response, schema, "claude-sonnet-4-5")
+
+        error_msg = str(exc_info.value)
+        assert "violates the original schema constraints" in error_msg
+        assert "age" in error_msg or "200" in error_msg
