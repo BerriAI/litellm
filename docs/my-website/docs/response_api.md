@@ -1105,7 +1105,7 @@ Supported when using the `openai` or `azure` provider with a model that supports
 import litellm
 
 response = litellm.responses(
-    model="openai/gpt-4o",
+    model="openai/gpt-5.2",
     input="List files in /mnt/data and run python --version.",
     tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
     tool_choice="auto",
@@ -1128,7 +1128,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="openai/gpt-4o",
+    model="openai/gpt-5.2",
     input="List files in /mnt/data.",
     tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
     tool_choice="auto",
@@ -1143,7 +1143,7 @@ curl -X POST "http://localhost:4000/v1/responses" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "openai/gpt-4o",
+    "model": "openai/gpt-5.2",
     "input": "List files in /mnt/data.",
     "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
     "tool_choice": "auto",

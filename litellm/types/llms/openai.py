@@ -1064,10 +1064,10 @@ class ShellToolParam(TypedDict, total=False):
     See https://developers.openai.com/api/docs/guides/tools-shell.
     """
 
-    type: str
+    type: Required[Union[Literal["shell"], str]]
     """The type of tool. Use ``\"shell\"``."""
 
-    environment: Dict[str, Any]
+    environment: Required[Dict[str, Any]]
     """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
 
 
@@ -1177,24 +1177,6 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     """The cost of the request."""
 
     model_config = {"extra": "allow"}
-
-
-# Optional typing for reasoning fields; API may add new values. Prefer Dict[str, Any]
-# for response parsing so new effort/summary values and new fields are accepted.
-ResponsesAPIReasoningEffort = str  # known: "none", "minimal", "low", "medium", "high", "xhigh"
-
-
-class ResponsesAPIReasoning(BaseLiteLLMOpenAIResponseObject):
-    """
-    Reasoning info on a Responses API response. All fields are optional str to accept
-    current API values and any new values OpenAI adds. Extra fields are allowed.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    effort: Optional[str] = None
-    generate_summary: Optional[str] = None
-    summary: Optional[str] = None
 
 
 ResponsesAPIStatus = Literal[

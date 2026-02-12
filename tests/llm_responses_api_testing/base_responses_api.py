@@ -763,7 +763,7 @@ class BaseResponsesAPITest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
             "model"
-        ) or "gpt-5.2"
+        ) or "openai/gpt-5.2"
         tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
         input_msg = "List files in /mnt/data and run python --version."
 
