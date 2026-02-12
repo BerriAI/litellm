@@ -106,11 +106,16 @@ def client_and_mocks(monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", ps.prisma_client)
 
 
+# Paths for primary and alias endpoints (alias: /v1/unified_access_group)
+ACCESS_GROUP_PATHS = ["/v1/access_group", "/v1/unified_access_group"]
+
+
 # ---------------------------------------------------------------------------
 # CREATE
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
 @pytest.mark.parametrize(
     "payload",
     [
@@ -124,11 +129,11 @@ def client_and_mocks(monkeypatch):
         },
     ],
 )
-def test_create_access_group_success(client_and_mocks, payload):
+def test_create_access_group_success(client_and_mocks, base_path, payload):
     """Create access group with various payloads returns 201."""
     client, _, mock_table = client_and_mocks
 
-    resp = client.post("/v1/access_group", json=payload)
+    resp = client.post(base_path, json=payload)
     assert resp.status_code == 201
     body = resp.json()
     assert body["access_group_name"] == payload["access_group_name"]
@@ -168,17 +173,19 @@ def test_create_access_group_forbidden_non_admin(client_and_mocks, user_role):
 # ---------------------------------------------------------------------------
 
 
-def test_list_access_groups_success_empty(client_and_mocks):
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_list_access_groups_success_empty(client_and_mocks, base_path):
     """List access groups returns empty list when none exist."""
     client, _, mock_table = client_and_mocks
 
-    resp = client.get("/v1/access_group")
+    resp = client.get(base_path)
     assert resp.status_code == 200
     assert resp.json() == []
     mock_table.find_many.assert_awaited_once()
 
 
-def test_list_access_groups_success_with_items(client_and_mocks):
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_list_access_groups_success_with_items(client_and_mocks, base_path):
     """List access groups returns items when they exist."""
     client, _, mock_table = client_and_mocks
 
@@ -188,7 +195,7 @@ def test_list_access_groups_success_with_items(client_and_mocks):
     ]
     mock_table.find_many = AsyncMock(return_value=records)
 
-    resp = client.get("/v1/access_group")
+    resp = client.get(base_path)
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 2
@@ -216,15 +223,16 @@ def test_list_access_groups_forbidden_non_admin(client_and_mocks, user_role):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
 @pytest.mark.parametrize("access_group_id", ["ag-123", "ag-other-id"])
-def test_get_access_group_success(client_and_mocks, access_group_id):
+def test_get_access_group_success(client_and_mocks, base_path, access_group_id):
     """Get access group by id returns record when found."""
     client, _, mock_table = client_and_mocks
 
     record = _make_access_group_record(access_group_id=access_group_id)
     mock_table.find_unique = AsyncMock(return_value=record)
 
-    resp = client.get(f"/v1/access_group/{access_group_id}")
+    resp = client.get(f"{base_path}/{access_group_id}")
     assert resp.status_code == 200
     assert resp.json()["access_group_id"] == access_group_id
 
@@ -260,6 +268,7 @@ def test_get_access_group_forbidden_non_admin(client_and_mocks, user_role):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
 @pytest.mark.parametrize(
     "update_payload",
     [
@@ -268,14 +277,14 @@ def test_get_access_group_forbidden_non_admin(client_and_mocks, user_role):
         {"assigned_team_ids": [], "assigned_key_ids": ["key-1"]},
     ],
 )
-def test_update_access_group_success(client_and_mocks, update_payload):
+def test_update_access_group_success(client_and_mocks, base_path, update_payload):
     """Update access group with various payloads returns 200."""
     client, _, mock_table = client_and_mocks
 
     existing = _make_access_group_record(access_group_id="ag-update")
     mock_table.find_unique = AsyncMock(return_value=existing)
 
-    resp = client.put("/v1/access_group/ag-update", json=update_payload)
+    resp = client.put(f"{base_path}/ag-update", json=update_payload)
     assert resp.status_code == 200
     mock_table.update.assert_awaited_once()
 
@@ -315,15 +324,16 @@ def test_update_access_group_forbidden_non_admin(client_and_mocks, user_role):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
 @pytest.mark.parametrize("access_group_id", ["ag-123", "ag-delete-me"])
-def test_delete_access_group_success(client_and_mocks, access_group_id):
+def test_delete_access_group_success(client_and_mocks, base_path, access_group_id):
     """Delete access group returns 204 when found."""
     client, _, mock_table = client_and_mocks
 
     existing = _make_access_group_record(access_group_id=access_group_id)
     mock_table.find_unique = AsyncMock(return_value=existing)
 
-    resp = client.delete(f"/v1/access_group/{access_group_id}")
+    resp = client.delete(f"{base_path}/{access_group_id}")
     assert resp.status_code == 204
     mock_table.delete.assert_awaited_once()
 
@@ -368,6 +378,12 @@ def test_delete_access_group_forbidden_non_admin(client_and_mocks, user_role):
         ("get", "/v1/access_group/ag-123", lambda: {}),
         ("put", "/v1/access_group/ag-123", lambda: {"json": {"description": "x"}}),
         ("delete", "/v1/access_group/ag-123", lambda: {}),
+        # Alias: /v1/unified_access_group
+        ("post", "/v1/unified_access_group", lambda: {"json": {"access_group_name": "test"}}),
+        ("get", "/v1/unified_access_group", lambda: {}),
+        ("get", "/v1/unified_access_group/ag-123", lambda: {}),
+        ("put", "/v1/unified_access_group/ag-123", lambda: {"json": {"description": "x"}}),
+        ("delete", "/v1/unified_access_group/ag-123", lambda: {}),
     ],
 )
 def test_access_group_endpoints_db_not_connected(client_and_mocks, monkeypatch, method, url, factory):
