@@ -31,6 +31,58 @@ ANTHROPIC_ADAPTER = AnthropicAdapter()
 
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
+    def _route_openai_thinking_to_responses_api_if_needed(
+        completion_kwargs: Dict[str, Any],
+        *,
+        thinking: Optional[Dict[str, Any]],
+    ) -> None:
+        """
+        When users call `litellm.anthropic.messages.*` with a non-Anthropic model and
+        `thinking={"type": "enabled", ...}`, LiteLLM converts this into OpenAI
+        `reasoning_effort`.
+
+        For OpenAI models, Chat Completions typically does not return reasoning text
+        (only token accounting). To return a thinking-like content block in the
+        Anthropic response format, we route the request through OpenAI's Responses API
+        and request a reasoning summary.
+        """
+        custom_llm_provider = completion_kwargs.get("custom_llm_provider")
+        if custom_llm_provider is None:
+            try:
+                _, inferred_provider, _, _ = litellm.utils.get_llm_provider(
+                    model=cast(str, completion_kwargs.get("model"))
+                )
+                custom_llm_provider = inferred_provider
+            except Exception:
+                custom_llm_provider = None
+
+        if custom_llm_provider != "openai":
+            return
+
+        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+            return
+
+        model = completion_kwargs.get("model")
+        if isinstance(model, str) and model and not model.startswith("responses/"):
+            # Prefix model with "responses/" to route to OpenAI Responses API
+            completion_kwargs["model"] = f"responses/{model}"
+            
+        reasoning_effort = completion_kwargs.get("reasoning_effort")
+        if isinstance(reasoning_effort, str) and reasoning_effort:
+            completion_kwargs["reasoning_effort"] = {
+                "effort": reasoning_effort,
+                "summary": "detailed",
+            }
+        elif isinstance(reasoning_effort, dict):
+            if (
+                "summary" not in reasoning_effort
+                and "generate_summary" not in reasoning_effort
+            ):
+                updated_reasoning_effort = dict(reasoning_effort)
+                updated_reasoning_effort["summary"] = "detailed"
+                completion_kwargs["reasoning_effort"] = updated_reasoning_effort
+
+    @staticmethod
     def _prepare_completion_kwargs(
         *,
         max_tokens: int,
@@ -122,6 +174,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 and value is not None
             ):
                 completion_kwargs[key] = value
+
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs,
+            thinking=thinking,
+        )
 
         return completion_kwargs, tool_name_mapping
 

@@ -117,3 +117,130 @@ def test_extract_blocking_info():
 
     assert blocking_info["transactionId"] == "12345"
     assert blocking_info["blockingDetectors"] == ["detector1"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_apply_guardrail_text_concatenation(mock_api_call):
+    """
+    Test that `apply_guardrail` correctly concatenates texts.
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["Hello", "world"]}
+    request_data = {}
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    mock_api_call.assert_called_once()
+    call_args = mock_api_call.call_args
+    assert call_args.kwargs["content"] == "Hello world"
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_policy_id_from_request_metadata(mock_api_call):
+    """
+    Test policy_id is picked from request metadata (highest precedence).
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test"]}
+    request_data = {
+        "metadata": {
+            "zguard_policy_id": 1,
+            "user_api_key_metadata": {"zguard_policy_id": 2},
+            "team_metadata": {"zguard_policy_id": 3},
+        }
+    }
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["policy_id"] == 1
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_policy_id_from_user_api_key_metadata(mock_api_call):
+    """
+    Test policy_id is picked from user_api_key_metadata (2nd precedence).
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test"]}
+    request_data = {
+        "metadata": {
+            "user_api_key_metadata": {"zguard_policy_id": 2},
+            "team_metadata": {"zguard_policy_id": 3},
+        }
+    }
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["policy_id"] == 2
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_policy_id_from_team_metadata(mock_api_call):
+    """
+    Test policy_id is picked from team_metadata (3rd precedence).
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test"]}
+    request_data = {"metadata": {"team_metadata": {"zguard_policy_id": 3}}}
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["policy_id"] == 3
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_policy_id_from_init(mock_api_call):
+    """
+    Test policy_id is picked from guardrail initialization (lowest precedence).
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test"]}
+    request_data = {"metadata": {}}
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["policy_id"] == 100
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_policy_id_zero_from_request_metadata(mock_api_call):
+    """
+    Test policy_id=0 is correctly picked. Make sure pick exact policy_id which users set
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test"]}
+    request_data = {
+        "metadata": {
+            "zguard_policy_id": 0,
+        }
+    }
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["policy_id"] == 0

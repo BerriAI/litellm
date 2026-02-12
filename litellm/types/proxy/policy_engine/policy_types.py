@@ -73,13 +73,15 @@ class PolicyScope(BaseModel):
     Used internally by PolicyAttachment to define WHERE a policy applies.
 
     Scope Fields:
-    | Field  | What it matches | Wildcard support      |
-    |--------|-----------------|----------------------|
-    | teams  | Team aliases    | *, healthcare-*      |
-    | keys   | Key aliases     | *, dev-key-*         |
-    | models | Model names     | *, bedrock/*, gpt-*  |
+    | Field  | What it matches | Wildcard support      | Default behavior    |
+    |--------|-----------------|----------------------|---------------------|
+    | teams  | Team aliases    | *, healthcare-*      | None → matches all  |
+    | keys   | Key aliases     | *, dev-key-*         | None → matches all  |
+    | models | Model names     | *, bedrock/*, gpt-*  | None → matches all  |
+    | tags   | Key/team tags   | *, health-*, prod-*  | None → not checked  |
 
-    If a field is None or empty, it defaults to matching everything (["*"]).
+    If teams/keys/models is None or empty, it defaults to matching everything (["*"]).
+    If tags is None or empty, the tag dimension is NOT checked (matches all).
     A request must match ALL specified scope fields for the attachment to apply.
     """
 
@@ -95,6 +97,10 @@ class PolicyScope(BaseModel):
         default=None,
         description="Model names or wildcard patterns. Use '*' for all models.",
     )
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description="Tag patterns to match against key/team tags. Supports wildcards (e.g., health-*).",
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -109,6 +115,14 @@ class PolicyScope(BaseModel):
     def get_models(self) -> List[str]:
         """Returns models list, defaulting to ['*'] if not specified."""
         return self.models if self.models else ["*"]
+
+    def get_tags(self) -> List[str]:
+        """Returns tags list, defaulting to empty list if not specified.
+
+        Unlike teams/keys/models, empty tags means 'do not check tags'
+        rather than 'match all'. This is because tags are opt-in scoping.
+        """
+        return self.tags if self.tags else []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,6 +280,10 @@ class PolicyAttachment(BaseModel):
         default=None,
         description="Model names or patterns this attachment applies to.",
     )
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description="Tag patterns this attachment applies to. Supports wildcards (e.g., health-*).",
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -281,6 +299,7 @@ class PolicyAttachment(BaseModel):
             teams=self.teams,
             keys=self.keys,
             models=self.models,
+            tags=self.tags,
         )
 
 

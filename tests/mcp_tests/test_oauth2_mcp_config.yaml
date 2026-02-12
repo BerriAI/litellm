@@ -1,0 +1,14 @@
+model_list:
+  - model_name: fake-model
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+
+mcp_servers:
+  test_oauth2_server:
+    url: "http://localhost:8765/mcp"
+    transport: "http"
+    auth_type: "oauth2"
+    client_id: "test-client"
+    client_secret: "test-secret"
+    token_url: "http://localhost:8765/oauth/token"

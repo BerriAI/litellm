@@ -174,6 +174,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 },
             )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
