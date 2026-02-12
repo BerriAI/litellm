@@ -3764,7 +3764,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.opentelemetry import OpenTelemetry
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, OpenTelemetry):
+                if type(callback) is OpenTelemetry:
                     return callback  # type: ignore
             otel_logger = OpenTelemetry(
                 **_get_custom_logger_settings_from_proxy_server(

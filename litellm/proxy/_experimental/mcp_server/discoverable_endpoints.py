@@ -1,6 +1,6 @@
 import json
 from typing import Optional
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -194,7 +194,13 @@ async def authorize_with_server(
     if code_challenge_method:
         params["code_challenge_method"] = code_challenge_method
 
-    return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
+    parsed_auth_url = urlparse(mcp_server.authorization_url)
+    existing_params = dict(parse_qsl(parsed_auth_url.query))
+    existing_params.update(params)
+    final_url = urlunparse(
+        parsed_auth_url._replace(query=urlencode(existing_params))
+    )
+    return RedirectResponse(final_url)
 
 
 async def exchange_token_with_server(

@@ -920,3 +920,69 @@ class TestContentFilterGuardrail:
                     assert (
                         "matched_text" not in detection
                     ), "Sensitive content should not be logged"
+
+    @pytest.mark.asyncio
+    async def test_harm_toxic_abuse_blocks_abusive_input(self):
+        """
+        Test that harm_toxic_abuse content category blocks abusive/toxic input
+        including censored profanity, misspellings, and harmful phrases.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-toxic-abuse",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        toxic_input = (
+            "You stupid f**ing piece of sht AI, why are you so useless? "
+            "Go kill yourself you worthless bot."
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [toxic_input]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 403
+        detail = exc_info.value.detail
+        if isinstance(detail, dict):
+            assert detail.get("category") == "harm_toxic_abuse"
+        else:
+            assert "harm_toxic_abuse" in str(detail)
+
+    @pytest.mark.asyncio
+    async def test_harm_toxic_abuse_blocks_sht_ai(self):
+        """Test that harm_toxic_abuse blocks input containing 'sht AI' (phrase or word sht)."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-toxic-abuse-sht",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["sht AI"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 403
+        detail = exc_info.value.detail
+        if isinstance(detail, dict):
+            assert detail.get("category") == "harm_toxic_abuse"
+        else:
+            assert "harm_toxic_abuse" in str(detail)

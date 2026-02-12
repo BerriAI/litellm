@@ -89,6 +89,70 @@ async def test_authorize_endpoint_includes_response_type():
 
 
 @pytest.mark.asyncio
+async def test_authorize_endpoint_preserves_existing_query_params():
+    """Test that authorize endpoint merges OAuth params with existing query params in authorization_url"""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.proxy._types import MCPTransport
+        from fastapi import Request
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    # Authorization URL already has query params (e.g. multi-tenant OAuth)
+    oauth2_server = MCPServer(
+        server_id="test_oauth_server",
+        name="test_oauth",
+        server_name="test_oauth",
+        alias="test_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="test_client_id",
+        client_secret="test_client_secret",
+        authorization_url="https://provider.com/oauth/authorize?tenant=system",
+        token_url="https://provider.com/oauth/token",
+        scopes=["read", "write"],
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.return_value = "mocked_encrypted_state"
+
+        response = await authorize(
+            request=mock_request,
+            client_id="test_client_id",
+            mcp_server_name="test_oauth",
+            redirect_uri="https://client.example.com/callback",
+            state="test_state",
+        )
+
+    location = response.headers["location"]
+
+    # Must NOT have double '?' — existing params must be merged correctly
+    assert location.count("?") == 1, (
+        f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
+    )
+    assert "tenant=system" in location
+    assert "client_id=test_client_id" in location
+    assert "response_type=code" in location
+    assert "scope=read+write" in location
+
+
+@pytest.mark.asyncio
 async def test_authorize_endpoint_forwards_pkce_parameters():
     """Test that authorize endpoint forwards PKCE parameters (code_challenge and code_challenge_method)"""
     try:

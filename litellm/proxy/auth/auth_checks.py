@@ -1368,6 +1368,22 @@ async def _get_team_object_from_user_api_key_cache(
         raise Exception
 
     _response = LiteLLM_TeamTableCachedObj(**response.dict())
+    
+    # Load object_permission if object_permission_id exists but object_permission is not loaded
+    if _response.object_permission_id and not _response.object_permission:
+        try:
+            _response.object_permission = await get_object_permission(
+                object_permission_id=_response.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to load object_permission for team {team_id} with object_permission_id={_response.object_permission_id}: {e}"
+            )
+    
     # save the team object to cache
     await _cache_team_object(
         team_id=team_id,
@@ -1549,6 +1565,21 @@ async def get_team_object_by_alias(
 
         team = teams[0]
         team_obj = LiteLLM_TeamTableCachedObj(**team.model_dump())
+
+        # Load object_permission if object_permission_id exists but object_permission is not loaded
+        if team_obj.object_permission_id and not team_obj.object_permission:
+            try:
+                team_obj.object_permission = await get_object_permission(
+                    object_permission_id=team_obj.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Failed to load object_permission for team {team_obj.team_id} with object_permission_id={team_obj.object_permission_id}: {e}"
+                )
 
         # Cache the result by both alias and team_id
         await user_api_key_cache.async_set_cache(
@@ -1837,6 +1868,21 @@ async def get_key_object(
         )
 
     _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+
+    # Load object_permission if object_permission_id exists but object_permission is not loaded
+    if _response.object_permission_id and not _response.object_permission:
+        try:
+            _response.object_permission = await get_object_permission(
+                object_permission_id=_response.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to load object_permission for key with object_permission_id={_response.object_permission_id}: {e}"
+            )
 
     # save the key object to cache
     await _cache_key_object(

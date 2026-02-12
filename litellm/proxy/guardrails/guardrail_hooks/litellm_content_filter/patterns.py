@@ -139,6 +139,9 @@ def get_available_content_categories() -> List[Dict[str, str]]:
     """
     Return available content categories for UI display.
 
+    Includes categories defined in .yaml/.yml files and in .json files
+    (e.g. harm_toxic_abuse.json).
+
     Returns:
         List of dictionaries containing category name, display_name, and description
     """
@@ -176,6 +179,28 @@ def get_available_content_categories() -> List[Dict[str, str]]:
                     )
             except Exception:
                 # Skip files that can't be loaded
+                continue
+        elif filename.endswith(".json"):
+            # JSON category files (e.g. harm_toxic_abuse.json) - no YAML header, use filename
+            category_name = os.path.splitext(filename)[0]
+            try:
+                if category_name == "harm_toxic_abuse":
+                    display_name = "Harmful Toxic Abuse"
+                    description = (
+                        "Detects harmful, toxic, or abusive language and content"
+                    )
+                else:
+                    display_name = category_name.replace("_", " ").title()
+                    description = f"Content category: {display_name}"
+                available_categories.append(
+                    {
+                        "name": category_name,
+                        "display_name": display_name,
+                        "description": description,
+                        "default_action": "BLOCK",
+                    }
+                )
+            except Exception:
                 continue
 
     # Sort by name for consistent ordering
