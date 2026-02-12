@@ -492,3 +492,48 @@ class TestAzureResponsesAPIConfig:
         )
 
         assert "tools" not in response_api_params
+
+    def test_azure_responses_api_context_management_array_to_object(self):
+        """Test that context_management array is converted to object format for Azure.
+
+        Azure Responses API expects context_management as an object with 'edits' key,
+        but litellm/OpenAI uses array format [{"type": "compaction", "compact_threshold": N}].
+        """
+        from litellm.types.router import GenericLiteLLMParams
+
+        context_management = [
+            {"type": "compaction", "compact_threshold": 200000}
+        ]
+        response_api_params = {"context_management": context_management}
+        litellm_params = GenericLiteLLMParams()
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="test input",
+            response_api_optional_request_params=response_api_params,
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+        assert "context_management" in result
+        assert result["context_management"] == {
+            "edits": [{"type": "compaction", "compact_threshold": 200000}]
+        }
+
+    def test_azure_responses_api_context_management_already_object(self):
+        """Test that context_management already in object format is passed through."""
+        from litellm.types.router import GenericLiteLLMParams
+
+        context_management = {"edits": [{"type": "compaction", "compact_threshold": 200000}]}
+        response_api_params = {"context_management": context_management}
+        litellm_params = GenericLiteLLMParams()
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="test input",
+            response_api_optional_request_params=response_api_params,
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+        assert result["context_management"] == context_management

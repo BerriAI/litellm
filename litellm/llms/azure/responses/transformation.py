@@ -132,6 +132,16 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     new_tools.append(tool)
             response_api_optional_request_params["tools"] = new_tools
 
+        # Azure Responses API expects context_management as an object with "edits" key,
+        # but OpenAI/litellm uses array format [{"type": "compaction", "compact_threshold": N}].
+        # See: "Invalid type for 'context_management': expected an object, but got an array instead."
+        if "context_management" in response_api_optional_request_params:
+            cm = response_api_optional_request_params["context_management"]
+            if isinstance(cm, list):
+                response_api_optional_request_params["context_management"] = {
+                    "edits": cm
+                }
+
         return super().transform_responses_api_request(
             model=stripped_model_name,
             input=input,
