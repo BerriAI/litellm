@@ -38,6 +38,8 @@ from .models import (
     ResponseFormatJSONSchema,
     ResponseFormat,
     SAPUserMessage,
+    GroundingModuleConfig,
+    OrchestrationRequest
 )
 from .handler import (
     GenAIHubOrchestrationError,
@@ -227,23 +229,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             excluded_params.add("strict")
 
         model_params = {
-            k: v for k, v in optional_params.items() if k not in excluded_params
+            k: v for k, v in optional_params.items() if k not in {"tools", "model_version", "deployment_url", "grounding", "placeholder_values"}
         }
 
         model_version = optional_params.pop("model_version", "latest")
-        template = []
-        for message in messages:
-            if message["role"] == "user":
-                template.append(validate_dict(message, SAPUserMessage))
-            elif message["role"] == "assistant":
-                template.append(validate_dict(message, SAPAssistantMessage))
-            elif message["role"] == "tool":
-                template.append(validate_dict(message, SAPToolChatMessage))
-            else:
-                template.append(validate_dict(message, SAPMessage))
+        template = messages
 
         tools_ = optional_params.pop("tools", [])
-        tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
         if tools_ != []:
             tools = {"tools": tools_}
         else:
@@ -269,7 +261,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 stream_config["delimiters"] = stream_options.get("delimiters")
         # else:
         #     stream_config["enabled"] = False
-        config = {
+        request_body = {
             "config": {
                 "modules": {
                     "prompt_templating": {
@@ -285,7 +277,21 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             }
         }
 
-        return config
+        placeholder_defaults = optional_params.pop("placeholder_defaults", {})
+        if placeholder_defaults:
+            request_body["config"]["modules"]["prompt_templating"]["prompt"]["defaults"] = placeholder_defaults
+
+        placeholder_values = optional_params.pop("placeholder_values", {})
+        if placeholder_values:
+            request_body["placeholder_values"] = placeholder_values
+
+        grounding_config = optional_params.pop("grounding", {})
+        if grounding_config:
+            request_body["config"]["modules"]["grounding"] = grounding_config
+
+        validate_dict(request_body, OrchestrationRequest)
+
+        return request_body
 
     def transform_response(
         self,
