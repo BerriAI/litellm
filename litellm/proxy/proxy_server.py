@@ -10288,8 +10288,13 @@ def get_logo_url():
 @app.get("/get_image", include_in_schema=False)
 async def get_image():
     """Get logo to show on admin UI"""
+    logo_path = os.getenv("UI_LOGO_PATH", "")
 
-    # get current_dir
+    # Check if the logo path is an HTTP/HTTPS URL first to avoid stale cache bugs
+    if logo_path.startswith(("http://", "https://")):
+        return RedirectResponse(url=logo_path)
+
+    # Local file handling logic
     current_dir = os.path.dirname(os.path.abspath(__file__))
     default_site_logo = os.path.join(current_dir, "logo.jpg")
 
@@ -10308,19 +10313,15 @@ async def get_image():
     cache_dir = assets_dir if is_non_root else current_dir
     cache_path = os.path.join(cache_dir, "cached_logo.jpg")
 
-    # [OPTIMIZATION] Check if the cached image exists first
+    # Optimization: Check if the cached image exists for local files
     if os.path.exists(cache_path):
         return FileResponse(cache_path, media_type="image/jpeg")
 
-    logo_path = os.getenv("UI_LOGO_PATH", default_logo)
-    verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
+    if not logo_path:
+        logo_path = default_logo
 
-    # Check if the logo path is an HTTP/HTTPS URL
-    if logo_path.startswith(("http://", "https://")):
-        return RedirectResponse(url=logo_path)
-    else:
-        # Return the local image file if the logo path is not an HTTP/HTTPS URL
-        return FileResponse(logo_path, media_type="image/jpeg")
+    verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
+    return FileResponse(logo_path, media_type="image/jpeg")
 
 
 #### INVITATION MANAGEMENT ####
