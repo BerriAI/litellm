@@ -189,6 +189,17 @@ def _team_key_operation_team_member_check(
         )
 
         if key_assigned_user_in_team is None:
+            verbose_proxy_logger.error(
+                "Key %s check failed: assigned_user_id=%s not found in team=%s. "
+                "Team members: %s. Requesting user_id=%s, user_role=%s, route=%s",
+                route,
+                assigned_user_id,
+                team_table.team_id,
+                [m.user_id for m in (team_table.members_with_roles or [])],
+                user_api_key_dict.user_id,
+                user_api_key_dict.user_role,
+                route,
+            )
             raise HTTPException(
                 status_code=400,
                 detail=f"User={assigned_user_id} not assigned to team={team_table.team_id}",
@@ -206,6 +217,15 @@ def _team_key_operation_team_member_check(
     if is_admin:
         return True
     elif team_member_object is None:
+        verbose_proxy_logger.error(
+            "Key %s check failed: requesting user_id=%s (role=%s) not a member of team=%s. "
+            "Team members: %s",
+            route,
+            user_api_key_dict.user_id,
+            user_api_key_dict.user_role,
+            team_table.team_id,
+            [m.user_id for m in (team_table.members_with_roles or [])],
+        )
         raise HTTPException(
             status_code=400,
             detail=f"User={user_api_key_dict.user_id} not assigned to team={team_table.team_id}",
@@ -215,6 +235,15 @@ def _team_key_operation_team_member_check(
         and team_member_object.role
         not in team_key_generation["allowed_team_member_roles"]
     ):
+        verbose_proxy_logger.error(
+            "Key %s check failed: user_id=%s has role=%s in team=%s, "
+            "but allowed_team_member_roles=%s",
+            route,
+            user_api_key_dict.user_id,
+            team_member_object.role,
+            team_table.team_id,
+            team_key_generation["allowed_team_member_roles"],
+        )
         raise HTTPException(
             status_code=400,
             detail=f"Team member role {team_member_object.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
@@ -250,6 +279,17 @@ def _team_key_generation_check(
     data: GenerateKeyRequest,
     route: KeyManagementRoutes,
 ):
+    verbose_proxy_logger.debug(
+        "_team_key_generation_check: team_id=%s, requesting_user_id=%s, "
+        "requesting_user_role=%s, assigned_user_id=%s, route=%s, "
+        "key_generation_settings=%s",
+        team_table.team_id,
+        user_api_key_dict.user_id,
+        user_api_key_dict.user_role,
+        data.user_id,
+        route,
+        litellm.key_generation_settings,
+    )
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
     if (
@@ -332,8 +372,26 @@ def key_generation_check(
 
     ## check if key is for team or individual
     is_team_key = _is_team_key(data=data)
+    verbose_proxy_logger.debug(
+        "key_generation_check: is_team_key=%s, team_id=%s, user_id=%s, "
+        "requesting_user_id=%s, requesting_user_role=%s, route=%s, "
+        "team_table_present=%s",
+        is_team_key,
+        data.team_id,
+        data.user_id,
+        user_api_key_dict.user_id,
+        user_api_key_dict.user_role,
+        route,
+        team_table is not None,
+    )
     if is_team_key:
         if team_table is None and litellm.key_generation_settings is not None:
+            verbose_proxy_logger.error(
+                "key_generation_check: team_table is None but key_generation_settings is set. "
+                "team_id=%s, key_generation_settings=%s",
+                data.team_id,
+                litellm.key_generation_settings,
+            )
             raise HTTPException(
                 status_code=400,
                 detail=f"Unable to find team object in database. Team ID: {data.team_id}",
@@ -621,8 +679,16 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         prisma_client=prisma_client,
     )
 
+    _key_alias_for_check = data_json.get("key_alias", None)
+    verbose_proxy_logger.debug(
+        "_common_key_generation_helper: enforcing unique key_alias=%s, "
+        "team_id=%s, user_id=%s",
+        _key_alias_for_check,
+        data.team_id,
+        data.user_id,
+    )
     await _enforce_unique_key_alias(
-        key_alias=data_json.get("key_alias", None),
+        key_alias=_key_alias_for_check,
         prisma_client=prisma_client,
     )
 
@@ -1077,10 +1143,37 @@ async def generate_key_fn(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        verbose_proxy_logger.debug("entered /key/generate")
+        verbose_proxy_logger.debug(
+            "generate_key_fn: entered /key/generate. Request data: "
+            "team_id=%s, user_id=%s, key_alias=%s, models=%s, max_budget=%s, "
+            "soft_budget=%s, duration=%s, budget_duration=%s, "
+            "max_parallel_requests=%s, tpm_limit=%s, rpm_limit=%s, "
+            "tags=%s, organization_id=%s, key_type=%s. "
+            "Requesting user: user_id=%s, user_role=%s",
+            data.team_id,
+            data.user_id,
+            data.key_alias,
+            data.models,
+            data.max_budget,
+            data.soft_budget,
+            data.duration,
+            getattr(data, "budget_duration", None),
+            getattr(data, "max_parallel_requests", None),
+            getattr(data, "tpm_limit", None),
+            getattr(data, "rpm_limit", None),
+            getattr(data, "tags", None),
+            getattr(data, "organization_id", None),
+            getattr(data, "key_type", None),
+            user_api_key_dict.user_id,
+            user_api_key_dict.user_role,
+        )
 
         # Validate budget values are not negative
         if data.max_budget is not None and data.max_budget < 0:
+            verbose_proxy_logger.error(
+                "generate_key_fn: max_budget cannot be negative. Received: %s",
+                data.max_budget,
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1088,6 +1181,10 @@ async def generate_key_fn(
                 },
             )
         if data.soft_budget is not None and data.soft_budget < 0:
+            verbose_proxy_logger.error(
+                "generate_key_fn: soft_budget cannot be negative. Received: %s",
+                data.soft_budget,
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1096,6 +1193,9 @@ async def generate_key_fn(
             )
 
         if user_custom_key_generate is not None:
+            verbose_proxy_logger.debug(
+                "generate_key_fn: running user_custom_key_generate hook"
+            )
             if asyncio.iscoroutinefunction(user_custom_key_generate):
                 result = await user_custom_key_generate(data)  # type: ignore
             else:
@@ -1103,11 +1203,22 @@ async def generate_key_fn(
             decision = result.get("decision", True)
             message = result.get("message", "Authentication Failed - Custom Auth Rule")
             if not decision:
+                verbose_proxy_logger.error(
+                    "generate_key_fn: user_custom_key_generate rejected request. "
+                    "message=%s, user_id=%s, team_id=%s",
+                    message,
+                    data.user_id,
+                    data.team_id,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
         team_table: Optional[LiteLLM_TeamTableCachedObj] = None
         if data.team_id is not None:
+            verbose_proxy_logger.debug(
+                "generate_key_fn: fetching team object for team_id=%s",
+                data.team_id,
+            )
             try:
                 team_table = await get_team_object(
                     team_id=data.team_id,
@@ -1116,25 +1227,60 @@ async def generate_key_fn(
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                     check_db_only=True,
                 )
-            except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Error getting team object in `/key/generate`: {e}"
+                    "generate_key_fn: successfully fetched team object for team_id=%s. "
+                    "team_alias=%s, members_count=%s",
+                    data.team_id,
+                    getattr(team_table, "team_alias", None),
+                    len(team_table.members_with_roles) if team_table and team_table.members_with_roles else 0,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "generate_key_fn: failed to get team object for team_id=%s. "
+                    "Error: %s. Proceeding with team_table=None",
+                    data.team_id,
+                    str(e),
                 )
 
+        verbose_proxy_logger.debug(
+            "generate_key_fn: running key_generation_check. "
+            "team_table_present=%s, team_id=%s, user_id=%s",
+            team_table is not None,
+            data.team_id,
+            data.user_id,
+        )
         key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
             data=data,
             route=KeyManagementRoutes.KEY_GENERATE,
         )
+        verbose_proxy_logger.debug(
+            "generate_key_fn: key_generation_check passed"
+        )
 
         if team_table is not None:
+            verbose_proxy_logger.debug(
+                "generate_key_fn: checking team key limits for team_id=%s",
+                data.team_id,
+            )
             await _check_team_key_limits(
                 team_table=team_table,
                 data=data,
                 prisma_client=prisma_client,
             )
+            verbose_proxy_logger.debug(
+                "generate_key_fn: team key limits check passed for team_id=%s",
+                data.team_id,
+            )
 
+        verbose_proxy_logger.debug(
+            "generate_key_fn: calling _common_key_generation_helper. "
+            "team_id=%s, user_id=%s, key_alias=%s",
+            data.team_id,
+            data.user_id,
+            data.key_alias,
+        )
         return await _common_key_generation_helper(
             data=data,
             user_api_key_dict=user_api_key_dict,
@@ -1144,9 +1290,19 @@ async def generate_key_fn(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - %s. "
+            "Request context: team_id=%s, user_id=%s, key_alias=%s, "
+            "requesting_user_id=%s, requesting_user_role=%s, max_budget=%s, "
+            "models=%s, duration=%s",
+            str(e),
+            getattr(data, "team_id", None),
+            getattr(data, "user_id", None),
+            getattr(data, "key_alias", None),
+            getattr(user_api_key_dict, "user_id", None),
+            getattr(user_api_key_dict, "user_role", None),
+            getattr(data, "max_budget", None),
+            getattr(data, "models", None),
+            getattr(data, "duration", None),
         )
         raise handle_exception_on_proxy(e)
 
@@ -4614,6 +4770,13 @@ async def _enforce_unique_key_alias(
             where=where_clause
         )
         if existing_key is not None:
+            verbose_proxy_logger.error(
+                "_enforce_unique_key_alias: duplicate key_alias='%s' found. "
+                "Existing key token (hashed)=%s, existing_key_token_to_exclude=%s",
+                key_alias,
+                getattr(existing_key, "token", None),
+                existing_key_token,
+            )
             raise ProxyException(
                 message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
                 type=ProxyErrorTypes.bad_request_error,
