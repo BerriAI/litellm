@@ -84,10 +84,12 @@ export function LogDetailsDrawer({
 
   if (!logEntry) return null;
 
-  // Use lazy-loaded details data directly
+  // Use lazy-loaded details if available, fall back to list endpoint data.
+  // The list endpoint may already include messages/response when store_prompts_in_spend_logs is enabled,
+  // while the detail endpoint fetches from custom loggers (S3, GCS, etc.).
   const detailsData = logDetails.data as any;
-  const effectiveMessages = detailsData?.messages;
-  const effectiveResponse = detailsData?.response;
+  const effectiveMessages = detailsData?.messages || logEntry.messages;
+  const effectiveResponse = detailsData?.response || logEntry.response;
   const isLoadingDetails = logDetails.isLoading;
 
   const metadata = logEntry.metadata || {};
