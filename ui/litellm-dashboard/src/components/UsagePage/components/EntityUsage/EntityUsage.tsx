@@ -27,11 +27,11 @@ import { ActivityMetrics, processActivityData } from "../../../activity_metrics"
 import { UsageExportHeader } from "../../../EntityUsageExport";
 import type { EntityType } from "../../../EntityUsageExport/types";
 import {
-  agentDailyActivityCall,
-  customerDailyActivityCall,
-  organizationDailyActivityCall,
-  tagDailyActivityCall,
-  teamDailyActivityCall,
+  agentDailyActivityAggregatedCall,
+  customerDailyActivityAggregatedCall,
+  organizationDailyActivityAggregatedCall,
+  tagDailyActivityAggregatedCall,
+  teamDailyActivityAggregatedCall,
 } from "../../../networking";
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
 import { BreakdownMetrics, DailyData, EntityMetricWithMetadata, KeyMetricWithMetadata, TagUsage } from "../../types";
@@ -112,47 +112,42 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     const endTime = new Date(dateValue.to);
 
     if (entityType === "tag") {
-      const data = await tagDailyActivityCall(
+      const data = await tagDailyActivityAggregatedCall(
         accessToken,
         startTime,
         endTime,
-        1,
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
     } else if (entityType === "team") {
-      const data = await teamDailyActivityCall(
+      const data = await teamDailyActivityAggregatedCall(
         accessToken,
         startTime,
         endTime,
-        1,
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
     } else if (entityType === "organization") {
-      const data = await organizationDailyActivityCall(
+      const data = await organizationDailyActivityAggregatedCall(
         accessToken,
         startTime,
         endTime,
-        1,
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
     } else if (entityType === "customer") {
-      const data = await customerDailyActivityCall(
+      const data = await customerDailyActivityAggregatedCall(
         accessToken,
         startTime,
         endTime,
-        1,
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
     } else if (entityType === "agent") {
-      const data = await agentDailyActivityCall(
+      const data = await agentDailyActivityAggregatedCall(
         accessToken,
         startTime,
         endTime,
-        1,
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);

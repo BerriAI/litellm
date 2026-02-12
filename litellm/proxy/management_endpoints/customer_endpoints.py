@@ -23,7 +23,10 @@ from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
 
 router = APIRouter()
 
@@ -751,4 +754,73 @@ async def get_customer_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get(
+    "/customer/daily/activity/aggregated",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+@router.get(
+    "/end_user/daily/activity/aggregated",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_customer_daily_activity_aggregated(
+    end_user_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    exclude_end_user_ids: Optional[str] = None,
+    timezone: Optional[int] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get aggregated daily activity for specific customers or all customers (no pagination).
+    Returns the full date range in a single response.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Parse comma-separated ids
+    end_user_ids_list = end_user_ids.split(",") if end_user_ids else None
+    exclude_end_user_ids_list: Optional[List[str]] = None
+    if exclude_end_user_ids:
+        exclude_end_user_ids_list = (
+            exclude_end_user_ids.split(",") if exclude_end_user_ids else None
+        )
+
+    # Fetch end user aliases for metadata
+    where_condition = {}
+    if end_user_ids_list:
+        where_condition["user_id"] = {"in": list(end_user_ids_list)}
+    end_user_aliases = await prisma_client.db.litellm_endusertable.find_many(
+        where=where_condition
+    )
+    end_user_alias_metadata = {
+        e.user_id: {"alias": e.alias}
+        for e in end_user_aliases
+    }
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyenduserspend",
+        entity_id_field="end_user_id",
+        entity_id=end_user_ids_list,
+        entity_metadata_field=end_user_alias_metadata,
+        exclude_entity_ids=exclude_end_user_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        timezone_offset_minutes=timezone,
     )
