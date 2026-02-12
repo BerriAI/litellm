@@ -23,7 +23,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.alice import (
+from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
     WonderFenceGuardrailConfigModel,
 )
 
