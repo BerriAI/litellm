@@ -3209,7 +3209,7 @@ class TestPKCEFunctionality:
                     mock_request = MagicMock(spec=Request)
                     mock_request.query_params = {"state": "multi_pod_state_xyz"}
                     token_params = (
-                        SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                        await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                             request=mock_request, generic_include_client_id=False
                         )
                     )
