@@ -6,7 +6,12 @@ All /policy management endpoints
 /policy/validate - Validate a policy configuration
 /policy/list - List all loaded policies
 /policy/info - Get information about a specific policy
+/policy/templates - Get available policy templates
 """
+
+import json
+import os
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -257,3 +262,52 @@ async def test_policy_matching(
         matching_policies=matching_policy_names,
         resolved_guardrails=resolved_guardrails,
     )
+
+
+@router.get(
+    "/policy/templates",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def get_policy_templates(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> List[Any]:
+    """
+    Get available policy templates for quick policy setup.
+
+    Returns a list of pre-configured policy templates that users can use
+    as a starting point for creating their own policies.
+    """
+    try:
+        # Get the path to the policy_templates.json file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        templates_path = os.path.join(
+            os.path.dirname(current_dir), "policy_templates.json"
+        )
+
+        # Read and return the templates
+        with open(templates_path, "r") as f:
+            templates = json.load(f)
+
+        verbose_proxy_logger.debug(f"Loaded {len(templates)} policy templates")
+        return templates
+
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Policy templates file not found",
+        )
+    except json.JSONDecodeError as e:
+        verbose_proxy_logger.error(f"Error parsing policy templates JSON: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Error parsing policy templates file",
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error loading policy templates: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading policy templates: {str(e)}",
+        )

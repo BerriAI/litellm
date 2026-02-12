@@ -9,6 +9,7 @@ import AddPolicyForm from "./add_policy_form";
 import AttachmentTable from "./attachment_table";
 import AddAttachmentForm from "./add_attachment_form";
 import PolicyTestPanel from "./policy_test_panel";
+import PolicyTemplates from "./policy_templates";
 import {
   getPoliciesList,
   deletePolicyCall,
@@ -172,6 +173,13 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     fetchAttachments();
   };
 
+  const handleUseTemplate = (templateData: any) => {
+    // Pre-fill the add policy form with template data
+    setEditingPolicy(templateData as Policy);
+    setIsAddPolicyModalVisible(true);
+    setActiveTab(0); // Switch to Policies tab
+  };
+
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <TabGroup index={activeTab} onIndexChange={setActiveTab}>
@@ -179,6 +187,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           <Tab>Policies</Tab>
           <Tab>Attachments</Tab>
           <Tab>Policy Simulator</Tab>
+          <Tab>Templates</Tab>
         </TabList>
 
         <TabPanels>
@@ -337,6 +346,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
           <TabPanel>
             <PolicyTestPanel accessToken={accessToken} />
+          </TabPanel>
+
+          <TabPanel>
+            <PolicyTemplates onUseTemplate={handleUseTemplate} accessToken={accessToken} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

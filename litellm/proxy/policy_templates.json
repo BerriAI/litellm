@@ -1,0 +1,140 @@
+[
+  {
+    "id": "advanced-pii-protection",
+    "title": "Advanced PII Protection (Australia)",
+    "description": "Comprehensive PII detection and masking policy. Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-purple-500",
+    "iconBg": "bg-purple-50",
+    "guardrails": [
+      "au-pii-tax-identifiers",
+      "au-pii-passports",
+      "international-pii-identifiers",
+      "contact-information-pii",
+      "financial-pii",
+      "credentials-api-keys",
+      "network-infrastructure-pii",
+      "protected-class-information",
+      "mining-industry-custom-pii"
+    ],
+    "complexity": "High",
+    "templateData": {
+      "policy_name": "fortescue-pii-protection",
+      "description": "Comprehensive PII detection and masking policy for Fortescue. Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and mining industry-specific sensitive data.",
+      "guardrails": {
+        "add": [
+          "au-pii-tax-identifiers",
+          "au-pii-passports",
+          "international-pii-identifiers",
+          "contact-information-pii",
+          "financial-pii",
+          "credentials-api-keys",
+          "network-infrastructure-pii",
+          "protected-class-information",
+          "mining-industry-custom-pii"
+        ]
+      }
+    }
+  },
+  {
+    "id": "baseline-pii-protection",
+    "title": "Baseline PII Protection",
+    "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only. Suitable for non-sensitive internal use.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-blue-500",
+    "iconBg": "bg-blue-50",
+    "guardrails": [
+      "au-pii-tax-identifiers",
+      "credentials-api-keys",
+      "financial-pii"
+    ],
+    "complexity": "Low",
+    "templateData": {
+      "policy_name": "baseline-pii-protection",
+      "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only.",
+      "guardrails": {
+        "add": [
+          "au-pii-tax-identifiers",
+          "credentials-api-keys",
+          "financial-pii"
+        ]
+      }
+    }
+  },
+  {
+    "id": "hr-recruiting-policy",
+    "title": "HR & Recruiting Policy",
+    "description": "Strict PII protection for HR, recruiting, and workforce management. Emphasizes protected class information to ensure compliance with anti-discrimination laws and workplace regulations.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-indigo-500",
+    "iconBg": "bg-indigo-50",
+    "guardrails": [
+      "au-pii-tax-identifiers",
+      "au-pii-passports",
+      "international-pii-identifiers",
+      "contact-information-pii",
+      "financial-pii",
+      "credentials-api-keys",
+      "network-infrastructure-pii",
+      "protected-class-information"
+    ],
+    "inherits": "Fortescue PII Protection",
+    "complexity": "High",
+    "templateData": {
+      "policy_name": "hr-recruiting-policy",
+      "description": "Strict PII protection for HR, recruiting, and workforce management. Emphasizes protected class information to ensure compliance with anti-discrimination laws and workplace regulations.",
+      "inherit": "fortescue-pii-protection",
+      "guardrails": {
+        "add": []
+      }
+    }
+  },
+  {
+    "id": "cost-control-policy",
+    "title": "Cost Control Policy",
+    "description": "Budget-focused guardrails to prevent unexpected spend. Routes expensive queries to cheaper models and enforces rate limiting.",
+    "icon": "CurrencyDollarIcon",
+    "iconColor": "text-green-500",
+    "iconBg": "bg-green-50",
+    "guardrails": [
+      "budget-limit",
+      "model-routing",
+      "rate-limit"
+    ],
+    "complexity": "Medium",
+    "templateData": {
+      "policy_name": "cost-control-policy",
+      "description": "Budget-focused guardrails to prevent unexpected spend. Routes expensive queries to cheaper models.",
+      "guardrails": {
+        "add": [
+          "budget-limit",
+          "model-routing",
+          "rate-limit"
+        ]
+      }
+    }
+  },
+  {
+    "id": "development-testing-policy",
+    "title": "Development / Testing",
+    "description": "Relaxed guardrails for development environments. Enables full logging for debugging purposes with minimal restrictions.",
+    "icon": "BeakerIcon",
+    "iconColor": "text-orange-500",
+    "iconBg": "bg-orange-50",
+    "guardrails": [
+      "debug-logging",
+      "latency-monitoring"
+    ],
+    "complexity": "Low",
+    "templateData": {
+      "policy_name": "development-testing-policy",
+      "description": "Relaxed guardrails for development environments. Enables full logging for debugging purposes.",
+      "guardrails": {
+        "add": [
+          "debug-logging",
+          "latency-monitoring"
+        ]
+      }
+    }
+  }
+]
