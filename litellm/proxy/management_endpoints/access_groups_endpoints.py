@@ -54,7 +54,7 @@ async def create_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    existing = await prisma_client.db.litellm_unifiedaccessgroup.find_unique(
+    existing = await prisma_client.db.litellm_accessgrouptable.find_unique(
         where={"access_group_name": data.access_group_name}
     )
     if existing is not None:
@@ -63,7 +63,7 @@ async def create_access_group(
             detail=f"Access group '{data.access_group_name}' already exists",
         )
 
-    record = await prisma_client.db.litellm_unifiedaccessgroup.create(
+    record = await prisma_client.db.litellm_accessgrouptable.create(
         data={
             "access_group_name": data.access_group_name,
             "description": data.description,
@@ -89,7 +89,7 @@ async def list_access_groups(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    records = await prisma_client.db.litellm_unifiedaccessgroup.find_many(
+    records = await prisma_client.db.litellm_accessgrouptable.find_many(
         order={"created_at": "desc"}
     )
     return [_record_to_response(r) for r in records]
@@ -106,7 +106,7 @@ async def get_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    record = await prisma_client.db.litellm_unifiedaccessgroup.find_unique(
+    record = await prisma_client.db.litellm_accessgrouptable.find_unique(
         where={"access_group_id": access_group_id}
     )
     if record is None:
@@ -129,7 +129,7 @@ async def update_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    existing = await prisma_client.db.litellm_unifiedaccessgroup.find_unique(
+    existing = await prisma_client.db.litellm_accessgrouptable.find_unique(
         where={"access_group_id": access_group_id}
     )
     if existing is None:
@@ -142,7 +142,7 @@ async def update_access_group(
     for field, value in data.model_dump(exclude_unset=True).items():
         update_data[field] = value
 
-    record = await prisma_client.db.litellm_unifiedaccessgroup.update(
+    record = await prisma_client.db.litellm_accessgrouptable.update(
         where={"access_group_id": access_group_id},
         data=update_data,
     )
@@ -160,7 +160,7 @@ async def delete_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    existing = await prisma_client.db.litellm_unifiedaccessgroup.find_unique(
+    existing = await prisma_client.db.litellm_accessgrouptable.find_unique(
         where={"access_group_id": access_group_id}
     )
     if existing is None:
@@ -169,6 +169,6 @@ async def delete_access_group(
             detail=f"Access group '{access_group_id}' not found",
         )
 
-    await prisma_client.db.litellm_unifiedaccessgroup.delete(
+    await prisma_client.db.litellm_accessgrouptable.delete(
         where={"access_group_id": access_group_id}
     )
