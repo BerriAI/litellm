@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
+    _perform_health_check_and_save,
     _save_background_health_checks_to_db,
     _save_health_check_results_if_changed,
     _save_health_check_to_db,
@@ -464,6 +465,44 @@ async def test_get_all_latest_health_checks_without_model_id(mock_prisma):
     assert len(result) == 1
     assert result[0].model_name == "gpt-3.5-turbo"
     assert result[0].checked_at == mock_check2.checked_at  # Latest
+
+
+@pytest.mark.asyncio
+async def test_perform_health_check_and_save_passes_model_id_to_perform_health_check():
+    """Test that _perform_health_check_and_save passes model_id to perform_health_check so health checks run by model id."""
+    model_list = [
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "deployment-abc"},
+            "litellm_params": {"model": "gpt-4"},
+        },
+    ]
+    healthy = [{"model": "gpt-4"}]
+    unhealthy = []
+
+    async def mock_perform_health_check(model_list, model=None, cli_model=None, details=True, model_id=None):
+        return healthy, unhealthy
+
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.perform_health_check",
+        side_effect=mock_perform_health_check,
+    ) as mock_perform:
+        result = await _perform_health_check_and_save(
+            model_list=model_list,
+            target_model=None,
+            cli_model=None,
+            details=True,
+            prisma_client=None,
+            start_time=0.0,
+            user_id="user-1",
+            model_id="deployment-abc",
+        )
+
+    mock_perform.assert_called_once()
+    call_kwargs = mock_perform.call_args[1]
+    assert call_kwargs["model_id"] == "deployment-abc"
+    assert result["healthy_count"] == 1
+    assert result["unhealthy_count"] == 0
 
 
 if __name__ == "__main__":

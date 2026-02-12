@@ -5001,14 +5001,14 @@ export const healthCheckCall = async (accessToken: string) => {
   }
 };
 
-export const individualModelHealthCheckCall = async (accessToken: string, modelName: string) => {
+export const individualModelHealthCheckCall = async (accessToken: string, modelId: string) => {
   /**
-   * Run health check for a specific model using model name
+   * Run health check for a specific model using model ID (so each deployment is checked separately).
    */
   try {
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/health?model=${encodeURIComponent(modelName)}`
-      : `/health?model=${encodeURIComponent(modelName)}`;
+      ? `${proxyBaseUrl}/health?model_id=${encodeURIComponent(modelId)}`
+      : `/health?model_id=${encodeURIComponent(modelId)}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -5028,7 +5028,7 @@ export const individualModelHealthCheckCall = async (accessToken: string, modelN
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error(`Failed to call /health for model ${modelName}:`, error);
+    console.error(`Failed to call /health for model id ${modelId}:`, error);
     throw error;
   }
 };
