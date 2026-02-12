@@ -13,7 +13,6 @@ from litellm.types.access_group import (
 
 router = APIRouter(
     tags=["access group management"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 
 
@@ -172,3 +171,37 @@ async def delete_access_group(
     await prisma_client.db.litellm_accessgrouptable.delete(
         where={"access_group_id": access_group_id}
     )
+
+
+# Alias routes for /v1/unified_access_group
+router.add_api_route(
+    "/v1/unified_access_group",
+    create_access_group,
+    methods=["POST"],
+    response_model=AccessGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+router.add_api_route(
+    "/v1/unified_access_group",
+    list_access_groups,
+    methods=["GET"],
+    response_model=List[AccessGroupResponse],
+)
+router.add_api_route(
+    "/v1/unified_access_group/{access_group_id}",
+    get_access_group,
+    methods=["GET"],
+    response_model=AccessGroupResponse,
+)
+router.add_api_route(
+    "/v1/unified_access_group/{access_group_id}",
+    update_access_group,
+    methods=["PUT"],
+    response_model=AccessGroupResponse,
+)
+router.add_api_route(
+    "/v1/unified_access_group/{access_group_id}",
+    delete_access_group,
+    methods=["DELETE"],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
