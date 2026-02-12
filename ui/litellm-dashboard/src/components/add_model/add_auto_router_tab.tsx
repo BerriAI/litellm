@@ -7,7 +7,7 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
-import RouterConfigBuilder from "./router_config_builder";
+import RouterConfigBuilder from "./RouterConfigBuilder";
 import NotificationManager from "../molecules/notifications_manager";
 
 interface AddAutoRouterTabProps {
