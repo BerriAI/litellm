@@ -1156,6 +1156,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     BadGatewayError,
