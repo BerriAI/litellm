@@ -164,7 +164,7 @@ class Template(BaseModel):
     template: list[ChatMessage]
     defaults: dict = None
     response_format: ResponseFormat | ResponseFormatJSONSchema = None
-    tools: list[FunctionTool] = None
+    tools: list[ChatCompletionTool] = None
 
 
 class LLMModelDetails(BaseModel):
