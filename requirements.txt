@@ -1,4 +1,9 @@
 # LITELLM PROXY DEPENDENCIES #
+# Security: explicit pins for transitive deps (CVE fixes)
+urllib3>=2.6.0  # CVE-2025-66471, CVE-2025-66418, CVE-2026-21441
+tornado>=6.5.3  # CVE-2025-67725, CVE-2025-67726, CVE-2025-67724
+filelock>=3.20.1  # CVE-2025-68146
+
 anyio==4.8.0 # openai + http req.
 httpx==0.28.1
 openai==2.9.0  # openai req.
@@ -27,7 +32,7 @@ async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 ddtrace==2.19.0      # for advanced DD tracing / profiling
-orjson==3.11.2 # fast /embedding responses
+orjson==3.11.7 # fast /embedding responses
 polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.19.0 # admin UI, SSO
@@ -50,7 +55,7 @@ sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.33 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.34 # for proxy extras - e.g. prisma migrations
 llm-sandbox==0.3.31 # for skill execution in sandbox
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env

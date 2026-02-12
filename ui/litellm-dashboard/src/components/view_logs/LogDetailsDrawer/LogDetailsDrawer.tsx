@@ -358,6 +358,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
 
 interface RequestResponseSectionProps {
   hasResponse: boolean;
+  hasError: boolean;
   getRawRequest: () => any;
   getFormattedResponse: () => any;
   logEntry: LogEntry;
@@ -365,6 +366,7 @@ interface RequestResponseSectionProps {
 
 function RequestResponseSection({
   hasResponse,
+  hasError,
   getRawRequest,
   getFormattedResponse,
   logEntry,
@@ -442,7 +444,7 @@ function RequestResponseSection({
                           text: getCopyText(),
                           tooltips: ["Copy JSON", "Copied!"]
                         }}
-                        disabled={activeTab === TAB_RESPONSE && !hasResponse}
+                        disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
                       />
                     }
                     items={[
@@ -460,7 +462,7 @@ function RequestResponseSection({
                         label: "Response",
                         children: (
                           <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            {hasResponse ? (
+                            {hasResponse || hasError ? (
                               <JsonViewer data={getFormattedResponse()} mode="formatted" />
                             ) : (
                               <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>

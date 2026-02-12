@@ -97,6 +97,11 @@ const sidebars = {
       ]
     },
     {
+      type: "doc",
+      id: "integrations/websearch_interception",
+      label: "Web Search Integration"
+    },
+    {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
@@ -125,6 +130,7 @@ const sidebars = {
             "tutorials/claude_responses_api",
             "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_prompt_cache_routing",
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
@@ -223,6 +229,7 @@ const sidebars = {
           label: "Configuration",
           items: [
             "set_keys",
+            "proxy_auth",
             "caching/all_caches",
           ],
         },
@@ -556,6 +563,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_oauth",
             "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
@@ -1074,6 +1082,18 @@ const sidebars = {
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
         "troubleshoot/spend_queue_warnings",
+        "troubleshoot/max_callbacks",
+      ],
+    },
+    {
+      type: "category",
+      label: "Blog",
+      items: [
+        {
+          type: "link",
+          label: "Incident: Broken Model Cost Map",
+          href: "/blog/model-cost-map-incident",
+        },
       ],
     },
   ],

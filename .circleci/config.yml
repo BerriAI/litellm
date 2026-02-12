@@ -2277,6 +2277,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
+      - run: python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
       - run: python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
@@ -3801,7 +3802,6 @@ jobs:
       - run:
           name: Get new version
           command: |
-            cd litellm-proxy-extras
             NEW_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "export NEW_VERSION=$NEW_VERSION" >> $BASH_ENV
 
@@ -3826,7 +3826,6 @@ jobs:
       - run:
           name: Publish to PyPI
           command: |
-            cd litellm-proxy-extras
             echo -e "[pypi]\nusername = $PYPI_PUBLISH_USERNAME\npassword = $PYPI_PUBLISH_PASSWORD" > ~/.pypirc
             python -m pip install --upgrade pip build twine setuptools wheel
             rm -rf build dist

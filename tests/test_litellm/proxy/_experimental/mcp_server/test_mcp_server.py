@@ -886,7 +886,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
     # This will capture the arguments passed to _create_mcp_client
     captured_client_args = {}
 
-    def mock_create_mcp_client(
+    async def mock_create_mcp_client(
         server,
         mcp_auth_header=None,
         extra_headers=None,
