@@ -722,7 +722,9 @@ class BaseResponsesAPITest(ABC):
         Only runs for OpenAI/Azure (Responses API with shell support).
         """
         base_completion_call_args = self.get_base_completion_call_args()
-        model = base_completion_call_args.get("model") or ""
+        model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
+            "model"
+        ) or ""
         if "openai/" not in str(model) and "azure/" not in str(model):
             pytest.skip(
                 "Shell tool e2e is only run for OpenAI/Azure Responses API"
@@ -731,11 +733,11 @@ class BaseResponsesAPITest(ABC):
         input_msg = "List files in /mnt/data and show python --version."
         try:
             response = await litellm.aresponses(
+                **{**base_completion_call_args, "model": model},
                 input=input_msg,
                 max_output_tokens=256,
                 tools=tools,
                 tool_choice="auto",
-                **base_completion_call_args,
             )
         except litellm.InternalServerError:
             pytest.skip("Skipping test due to litellm.InternalServerError")
