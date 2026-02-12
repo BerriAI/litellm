@@ -1,50 +1,90 @@
-import { useState } from "react";
-import { Drawer, Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space } from "antd";
-import moment from "moment";
+import { useEffect, useMemo, useState } from "react";
+import { Button, Drawer } from "antd";
+import {
+  CheckOutlined,
+  CopyOutlined,
+  LeftOutlined,
+  RightOutlined,
+} from "@ant-design/icons";
+import { Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
-import { CostBreakdownViewer } from "../CostBreakdownViewer";
-import { ConfigInfoMessage } from "../ConfigInfoMessage";
-import { VectorStoreViewer } from "../VectorStoreViewer";
-import { TruncatedValue } from "./TruncatedValue";
-import { TokenFlow } from "./TokenFlow";
-import { JsonViewer } from "./JsonViewer";
+import { MCP_CALL_TYPES } from "../constants";
+import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
-import {
-  formatData,
-  checkHasMessages,
-  checkHasResponse,
-  normalizeGuardrailEntries,
-  calculateTotalMaskedEntities,
-  getGuardrailLabel,
-  checkHasVectorStoreData,
-} from "./utils";
-import {
-  DRAWER_WIDTH,
-  DRAWER_CONTENT_PADDING,
-  API_BASE_MAX_WIDTH,
-  METADATA_MAX_HEIGHT,
-  TAB_REQUEST,
-  TAB_RESPONSE,
-  FONT_SIZE_SMALL,
-  FONT_FAMILY_MONO,
-  SPACING_XLARGE,
-  SPACING_MEDIUM,
-} from "./constants";
-import { ToolsSection } from "../ToolsSection";
-import { PrettyMessagesView } from "./PrettyMessagesView";
-
-const { Text } = Typography;
+import { LogDetailContent } from "./LogDetailContent";
+import { sessionSpendLogsCall } from "../../networking";
+import { useQuery } from "@tanstack/react-query";
+import { getSpendString } from "@/utils/dataUtils";
+import { DRAWER_WIDTH } from "./constants";
 
 export interface LogDetailsDrawerProps {
   open: boolean;
   onClose: () => void;
   logEntry: LogEntry | null;
+  sessionId?: string | null;
+  accessToken?: string | null;
   onOpenSettings?: () => void;
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
+}
+
+const SIDEBAR_WIDTH_PX = 224;
+
+/* ------------------------------------------------------------------ */
+/*  TraceEventRow — compact event row used in both session & non-     */
+/*  session sidebar lists.  Extracted to avoid JSX duplication.       */
+/* ------------------------------------------------------------------ */
+interface TraceEventRowProps {
+  row: LogEntry;
+  isSelected: boolean;
+  onClick: () => void;
+}
+
+function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
+  const isMcp = MCP_CALL_TYPES.includes(row.call_type);
+  const durationValue =
+    row.duration != null
+      ? row.duration.toFixed(3)
+      : row.startTime && row.endTime
+        ? ((Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000).toFixed(3)
+        : "-";
+
+  return (
+    <button
+      type="button"
+      className={`w-full text-left pl-8 pr-2 py-1 transition-colors ${
+        isSelected ? "bg-blue-50" : "hover:bg-slate-100"
+      }`}
+      onClick={onClick}
+    >
+      <div className="flex items-center gap-1">
+        {isMcp ? (
+          <Wrench size={12} className="text-slate-500 flex-shrink-0" />
+        ) : (
+          <Sparkles size={12} className="text-slate-500 flex-shrink-0" />
+        )}
+        <span className="text-xs font-medium text-slate-900 truncate">
+          {getEventDisplayName(row.call_type, row.model)}
+        </span>
+      </div>
+      <div className="text-[10px] text-slate-500 mt-0 flex items-center gap-1.5 font-mono">
+        <span>{durationValue}s</span>
+        {row.spend ? (
+          <>
+            <span>·</span>
+            <span>{getSpendString(row.spend)}</span>
+          </>
+        ) : null}
+        {row.total_tokens ? (
+          <>
+            <span>·</span>
+            <span>{row.total_tokens} tok</span>
+          </>
+        ) : null}
+      </div>
+    </button>
+  );
 }
 
 /**
@@ -61,64 +101,118 @@ export function LogDetailsDrawer({
   open,
   onClose,
   logEntry,
+  sessionId,
+  accessToken,
   onOpenSettings,
   allLogs = [],
   onSelectLog,
 }: LogDetailsDrawerProps) {
-  const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
+  const isSessionMode = Boolean(sessionId);
+  const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
+
+  const { data: sessionLogs = [] } = useQuery({
+    queryKey: ["sessionLogs", sessionId],
+    queryFn: async () => {
+      if (!sessionId || !accessToken) return [];
+      const response = await sessionSpendLogsCall(accessToken, sessionId);
+      const allSessionLogs: LogEntry[] = response.data || response || [];
+      return allSessionLogs
+        .map((row) => ({
+          ...row,
+          duration: (Date.parse(row.endTime) - Date.parse(row.startTime)) / 1000,
+        }))
+        .sort((a, b) => {
+          const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
+          const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
+          if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
+          return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+        });
+    },
+    enabled: Boolean(open && isSessionMode && sessionId && accessToken),
+  });
+
+  const currentLog = useMemo(() => {
+    if (!isSessionMode) return logEntry;
+    if (!sessionLogs.length) return null;
+    if (selectedSessionRequestId) {
+      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || sessionLogs[0];
+    }
+    if (logEntry?.request_id) {
+      const clickedLog = sessionLogs.find((row) => row.request_id === logEntry.request_id);
+      return clickedLog || sessionLogs[0];
+    }
+    return sessionLogs[0];
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+
+  useEffect(() => {
+    if (!isSessionMode || !sessionLogs.length) return;
+    if (!selectedSessionRequestId || !sessionLogs.some((row) => row.request_id === selectedSessionRequestId)) {
+      const fallbackRequestId = logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
+        ? logEntry.request_id
+        : sessionLogs[0].request_id;
+      setSelectedSessionRequestId(fallbackRequestId);
+    }
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+
+  // Reset transient UI state when the drawer opens or closes.
+  useEffect(() => {
+    if (open) {
+      setIsSidebarCollapsed(false);
+    } else {
+      if (isSessionMode) setSelectedSessionRequestId(null);
+      setCopiedLeftPanelId(false);
+    }
+  }, [open, isSessionMode]);
 
   // Keyboard navigation
   const { selectNextLog, selectPreviousLog } = useKeyboardNavigation({
     isOpen: open,
-    currentLog: logEntry,
-    allLogs,
+    currentLog,
+    allLogs: isSessionMode ? sessionLogs : allLogs,
     onClose,
-    onSelectLog,
+    onSelectLog: (selected) => {
+      if (isSessionMode) {
+        setSelectedSessionRequestId(selected.request_id);
+      }
+      onSelectLog?.(selected);
+    },
   });
 
-  if (!logEntry) return null;
-
-  const metadata = logEntry.metadata || {};
-  const hasError = metadata.status === "failure";
-  const errorInfo = hasError ? metadata.error_information : null;
-
-  // Check if request/response data is present
-  const hasMessages = checkHasMessages(logEntry.messages);
-  const hasResponse = checkHasResponse(logEntry.response);
-  const missingData = !hasMessages && !hasResponse && !hasError;
-
-  // Guardrail data
-  const guardrailInfo = metadata?.guardrail_information;
-  const guardrailEntries = normalizeGuardrailEntries(guardrailInfo);
-  const hasGuardrailData = guardrailEntries.length > 0;
-  const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
-  const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
-
-  // Vector store data
-  const hasVectorStoreData = checkHasVectorStoreData(metadata);
+  const metadata = currentLog?.metadata || {};
 
   // Status display values
   const statusLabel = metadata.status === "failure" ? "Failure" : "Success";
   const statusColor = metadata.status === "failure" ? ("error" as const) : ("success" as const);
   const environment = metadata?.user_api_key_team_alias || "default";
 
-  const getRawRequest = () => {
-    return formatData(logEntry.proxy_server_request || logEntry.messages);
+  const totalSessionCost = sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);
+  const sessionStart = sessionLogs.length > 0
+    ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime())))
+    : null;
+  const sessionEnd = sessionLogs.length > 0
+    ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime())))
+    : null;
+  const sessionDurationSeconds =
+    sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
+  const llmCount = sessionLogs.filter((row) => !MCP_CALL_TYPES.includes(row.call_type)).length;
+  const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+  const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
+  const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
+  const leftPanelDisplayId =
+    leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
+
+  const handleCopyLeftPanelId = async () => {
+    if (!leftPanelId) return;
+    try {
+      await navigator.clipboard.writeText(leftPanelId);
+      setCopiedLeftPanelId(true);
+      setTimeout(() => setCopiedLeftPanelId(false), 1200);
+    } catch { /* clipboard unavailable in non-secure contexts */ }
   };
 
-  const getFormattedResponse = () => {
-    if (hasError && errorInfo) {
-      return {
-        error: {
-          message: errorInfo.error_message || "An error occurred",
-          type: errorInfo.error_class || "error",
-          code: errorInfo.error_code || "unknown",
-          param: null,
-        },
-      };
-    }
-    return formatData(logEntry.response);
-  };
+  if (!currentLog) return null;
 
   return (
     <Drawer
@@ -135,376 +229,133 @@ export function LogDetailsDrawer({
         header: { display: "none" },
       }}
     >
-      <DrawerHeader
-        log={logEntry}
-        onClose={onClose}
-        onPrevious={selectPreviousLog}
-        onNext={selectNextLog}
-        statusLabel={statusLabel}
-        statusColor={statusColor}
-        environment={environment}
-      />
+      <div style={{ height: "100%" }} className="flex relative">
+          {!isSidebarCollapsed ? (
+            <Button
+              type="text"
+              size="small"
+              icon={<LeftOutlined />}
+              onClick={() => setIsSidebarCollapsed(true)}
+              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+              aria-label="Collapse trace sidebar"
+            />
+          ) : (
+            <Button
+              type="text"
+              size="small"
+              icon={<RightOutlined />}
+              onClick={() => setIsSidebarCollapsed(false)}
+              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+              aria-label="Expand trace sidebar"
+            />
+          )}
+          {!isSidebarCollapsed && (
+          <div
+            className="border-r border-slate-200 bg-slate-50 flex flex-col"
+            style={{ width: SIDEBAR_WIDTH_PX }}
+          >
+            <div className="pl-12 pr-3 py-2 border-b border-slate-200 bg-white">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                    {isSessionMode ? "Session" : "Trace"}
+                  </div>
+                  <div className="font-mono text-[12px] text-slate-900 leading-tight flex items-center gap-1">
+                    <span className="truncate">{leftPanelDisplayId}</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyLeftPanelId}
+                      className="text-slate-400 hover:text-slate-600"
+                      aria-label="Copy trace id"
+                    >
+                      {copiedLeftPanelId ? (
+                        <CheckOutlined className="text-[11px]" />
+                      ) : (
+                        <CopyOutlined className="text-[11px]" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-1 text-[11px] text-slate-500 font-mono">
+                {logsForList.length} req
+                <span className="mx-1.5">·</span>
+                {isSessionMode
+                  ? `${llmCount} LLM`
+                  : `${logsForList.filter((row) => !MCP_CALL_TYPES.includes(row.call_type)).length} LLM`}
+                <span className="mx-1.5">·</span>
+                {isSessionMode
+                  ? `${mcpCount} MCP`
+                  : `${logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length} MCP`}
+                <span className="mx-1.5">·</span>
+                {isSessionMode
+                  ? getSpendString(totalSessionCost)
+                  : getSpendString(currentLog.spend || 0)}
+                {isSessionMode && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    {sessionDurationSeconds}s
+                  </>
+                )}
+              </div>
+            </div>
 
-      <div style={{ height: "calc(100vh - 100px)", overflowY: "auto", padding: `${DRAWER_CONTENT_PADDING} ${DRAWER_CONTENT_PADDING} 0` }}>
-        {/* Error Alert - Show prominently at top for failures */}
-        {hasError && errorInfo && (
-          <Alert
-            type="error"
-            showIcon
-            message="Request Failed"
-            description={<ErrorDescription errorInfo={errorInfo} />}
-            className="mb-6"
-          />
-        )}
-
-        {/* Tags - Only show if present */}
-        {logEntry.request_tags && Object.keys(logEntry.request_tags).length > 0 && (
-          <TagsSection tags={logEntry.request_tags} />
-        )}
-
-        {/* Request Details Section */}
-        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-          <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
-            <Descriptions column={2} size="small">
-            <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
-            <Descriptions.Item label="Provider">{logEntry.custom_llm_provider || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Call Type">{logEntry.call_type}</Descriptions.Item>
-            <Descriptions.Item label="Model ID">
-              <TruncatedValue value={logEntry.model_id} />
-            </Descriptions.Item>
-            <Descriptions.Item label="API Base">
-              <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
-            </Descriptions.Item>
-            {logEntry.requester_ip_address && (
-              <Descriptions.Item label="IP Address">{logEntry.requester_ip_address}</Descriptions.Item>
-            )}
-            {hasGuardrailData && (
-              <Descriptions.Item label="Guardrail">
-                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} />
-              </Descriptions.Item>
-            )}
-          </Descriptions>
-        </Card>
-        </div>
-
-        {/* Metrics Section */}
-        <MetricsSection logEntry={logEntry} metadata={metadata} />
-
-        {/* Cost Breakdown - Show if cost breakdown data is available */}
-        <CostBreakdownViewer costBreakdown={metadata?.cost_breakdown} totalSpend={logEntry.spend || 0} />
-
-        {/* Tools Section - Show if tools are present in request */}
-        <ToolsSection log={logEntry} />
-
-        {/* Configuration Info Message - Show when data is missing */}
-        {missingData && (
-          <div className="mb-6">
-            <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
+            <div className="flex-1 overflow-y-auto">
+              {isSessionMode ? (
+                <div className="py-1">
+                  {/* Child events — vertical tree line with horizontal connectors */}
+                  <div className="relative pl-2">
+                    <div className="absolute left-4 top-1 bottom-1 border-l border-slate-300" />
+                    {logsForList.map((row, idx) => {
+                      const isLast = idx === logsForList.length - 1;
+                      return (
+                        <div key={row.request_id} className="relative">
+                          <div className="absolute left-4 top-3 w-3 border-t border-slate-300" />
+                          {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-slate-50" />}
+                          <TraceEventRow
+                            row={row}
+                            isSelected={row.request_id === currentLog.request_id}
+                            onClick={() => {
+                              setSelectedSessionRequestId(row.request_id);
+                              onSelectLog?.(row);
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="py-1">
+                  {logsForList.map((row) => (
+                    <TraceEventRow
+                      key={row.request_id}
+                      row={row}
+                      isSelected={row.request_id === currentLog.request_id}
+                      onClick={() => onSelectLog?.(row)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        )}
+          )}
 
-        {/* Request/Response JSON - Collapsible */}
-        <RequestResponseSection
-          hasResponse={hasResponse}
-          hasError={hasError}
-          getRawRequest={getRawRequest}
-          getFormattedResponse={getFormattedResponse}
-          logEntry={logEntry}
-        />
-
-        {/* Guardrail Data - Show only if present */}
-        {hasGuardrailData && <GuardrailViewer data={guardrailInfo} />}
-
-        {/* Vector Store Request Data - Show only if present */}
-        {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
-
-        {/* Metadata Card - Only show if there's metadata */}
-        {logEntry.metadata && Object.keys(logEntry.metadata).length > 0 && (
-          <MetadataSection metadata={logEntry.metadata} />
-        )}
-        
-        {/* Bottom spacing for scroll area */}
-        <div style={{ height: DRAWER_CONTENT_PADDING }} />
-      </div>
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <DrawerHeader
+              log={currentLog}
+              onClose={onClose}
+              onPrevious={selectPreviousLog}
+              onNext={selectNextLog}
+              statusLabel={statusLabel}
+              statusColor={statusColor}
+              environment={environment}
+            />
+            <div className="flex-1 overflow-y-auto">
+              <LogDetailContent logEntry={currentLog} onOpenSettings={onOpenSettings} />
+            </div>
+          </div>
+        </div>
     </Drawer>
   );
 }
-
-// ============================================================================
-// Helper Components
-// ============================================================================
-
-function ErrorDescription({ errorInfo }: { errorInfo: any }) {
-  return (
-    <div>
-      {errorInfo.error_code && (
-        <div>
-          <Text strong>Error Code:</Text> {errorInfo.error_code}
-        </div>
-      )}
-      {errorInfo.error_message && (
-        <div>
-          <Text strong>Message:</Text> {errorInfo.error_message}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TagsSection({ tags }: { tags: Record<string, any> }) {
-  return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
-      <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
-        Tags
-      </Text>
-      <Space size={SPACING_MEDIUM} wrap>
-        {Object.entries(tags).map(([key, value]) => (
-          <Tag key={key}>
-            {key}: {String(value)}
-          </Tag>
-        ))}
-      </Space>
-    </div>
-  );
-}
-
-function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: number }) {
-  return (
-    <Space size={SPACING_MEDIUM}>
-      <span>{label}</span>
-      {maskedCount > 0 && (
-        <Tag color="blue">
-          {maskedCount} masked
-        </Tag>
-      )}
-    </Space>
-  );
-}
-
-function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
-  const hasCacheActivity =
-    logEntry.cache_hit ||
-    (metadata?.additional_usage_values?.cache_read_input_tokens &&
-      metadata.additional_usage_values.cache_read_input_tokens > 0);
-
-  return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Card title="Metrics" size="small" bordered={false} style={{ marginBottom: 0 }}>
-        <Descriptions column={2} size="small">
-        <Descriptions.Item label="Tokens">
-          <TokenFlow
-            prompt={logEntry.prompt_tokens}
-            completion={logEntry.completion_tokens}
-            total={logEntry.total_tokens}
-          />
-        </Descriptions.Item>
-        <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
-        <Descriptions.Item label="Duration">{logEntry.duration?.toFixed(3)} s</Descriptions.Item>
-
-        {/* Only show cache fields if there's cache activity */}
-        {hasCacheActivity && (
-          <>
-            <Descriptions.Item label="Cache Hit">
-              <Tag color={logEntry.cache_hit ? "green" : "default"}>{logEntry.cache_hit || "None"}</Tag>
-            </Descriptions.Item>
-            {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
-              <Descriptions.Item label="Cache Read Tokens">
-                {formatNumberWithCommas(metadata.additional_usage_values.cache_read_input_tokens)}
-              </Descriptions.Item>
-            )}
-            {metadata?.additional_usage_values?.cache_creation_input_tokens > 0 && (
-              <Descriptions.Item label="Cache Creation Tokens">
-                {formatNumberWithCommas(metadata.additional_usage_values.cache_creation_input_tokens)}
-              </Descriptions.Item>
-            )}
-          </>
-        )}
-
-        {metadata?.litellm_overhead_time_ms !== undefined && metadata.litellm_overhead_time_ms !== null && (
-          <Descriptions.Item label="LiteLLM Overhead">
-            {metadata.litellm_overhead_time_ms.toFixed(2)} ms
-          </Descriptions.Item>
-        )}
-
-        <Descriptions.Item label="Start Time">
-          {moment(logEntry.startTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
-        </Descriptions.Item>
-        <Descriptions.Item label="End Time">
-          {moment(logEntry.endTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
-        </Descriptions.Item>
-      </Descriptions>
-    </Card>
-    </div>
-  );
-}
-
-interface RequestResponseSectionProps {
-  hasResponse: boolean;
-  hasError: boolean;
-  getRawRequest: () => any;
-  getFormattedResponse: () => any;
-  logEntry: LogEntry;
-}
-
-function RequestResponseSection({
-  hasResponse,
-  hasError,
-  getRawRequest,
-  getFormattedResponse,
-  logEntry,
-}: RequestResponseSectionProps) {
-  const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
-  const [viewMode, setViewMode] = useState<'pretty' | 'json'>('pretty');
-
-  const getCopyText = () => {
-    const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
-    return JSON.stringify(data, null, 2);
-  };
-
-  // Calculate input and output costs
-  // Assume average cost if not explicitly provided
-  const totalSpend = logEntry.spend || 0;
-  const promptTokens = logEntry.prompt_tokens || 0;
-  const completionTokens = logEntry.completion_tokens || 0;
-  const totalTokens = promptTokens + completionTokens;
-  
-  // Estimate input/output costs proportionally if not available
-  const inputCost = totalTokens > 0 ? (totalSpend * promptTokens) / totalTokens : 0;
-  const outputCost = totalTokens > 0 ? (totalSpend * completionTokens) / totalTokens : 0;
-
-  return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        defaultActiveKey={["1"]}
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: (
-              <div 
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}
-                onClick={(e) => {
-                  // Only prevent if clicking on the Radio.Group area
-                  const target = e.target as HTMLElement;
-                  if (target.closest('.ant-radio-group')) {
-                    e.stopPropagation();
-                  }
-                }}
-              >
-                <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>Request & Response</h3>
-                {/* View Mode Toggle - In the header */}
-                <Radio.Group
-                  size="small"
-                  value={viewMode}
-                  onChange={(e) => setViewMode(e.target.value)}
-                >
-                  <Radio.Button value="pretty">Pretty</Radio.Button>
-                  <Radio.Button value="json">JSON</Radio.Button>
-                </Radio.Group>
-              </div>
-            ),
-            children: (
-              <div>
-                {viewMode === 'pretty' ? (
-                  <PrettyMessagesView
-                    request={getRawRequest()}
-                    response={getFormattedResponse()}
-                    metrics={{
-                      prompt_tokens: promptTokens,
-                      completion_tokens: completionTokens,
-                      input_cost: inputCost,
-                      output_cost: outputCost,
-                    }}
-                  />
-                ) : (
-                  <Tabs
-                    activeKey={activeTab}
-                    onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-                    tabBarExtraContent={
-                      <Text 
-                        copyable={{ 
-                          text: getCopyText(),
-                          tooltips: ["Copy JSON", "Copied!"]
-                        }}
-                        disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
-                      />
-                    }
-                    items={[
-                      {
-                        key: TAB_REQUEST,
-                        label: "Request",
-                        children: (
-                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            <JsonViewer data={getRawRequest()} mode="formatted" />
-                          </div>
-                        ),
-                      },
-                      {
-                        key: TAB_RESPONSE,
-                        label: "Response",
-                        children: (
-                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                            {hasResponse || hasError ? (
-                              <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                            ) : (
-                              <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                                Response data not available
-                              </div>
-                            )}
-                          </div>
-                        ),
-                      },
-                    ]}
-                  />
-                )}
-              </div>
-            ),
-          },
-        ]}
-      />
-    </div>
-  );
-}
-
-function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
-  return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        defaultActiveKey={["1"]}
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: <h3 className="text-lg font-medium text-gray-900">Metadata</h3>,
-            children: (
-              <div>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-                  <Text 
-                    copyable={{ 
-                      text: JSON.stringify(metadata, null, 2),
-                      tooltips: ["Copy Metadata", "Copied!"]
-                    }}
-                  />
-                </div>
-                <pre
-                  style={{
-                    maxHeight: METADATA_MAX_HEIGHT,
-                    overflowY: "auto",
-                    fontSize: FONT_SIZE_SMALL,
-                    fontFamily: FONT_FAMILY_MONO,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
-                    margin: 0,
-                  }}
-                >
-                  {JSON.stringify(metadata, null, 2)}
-                </pre>
-              </div>
-            ),
-          },
-        ]}
-      />
-    </div>
-  );
-}
-
