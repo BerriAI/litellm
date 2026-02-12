@@ -412,20 +412,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 tool_call_index += 1
 
             elif isinstance(item, ResponseApplyPatchToolCall):
-                # Convert apply_patch_call to a ChatCompletions-style tool call.
-                # The operation (create_file / update_file / delete_file) is
-                # serialised as JSON so it appears in function.arguments, just
-                # like any other tool call.
-                operation_dict = item.operation.model_dump()
-                tool_call_dict = {
-                    "id": item.call_id,
-                    "function": {
-                        "name": "apply_patch",
-                        "arguments": json.dumps(operation_dict),
-                    },
-                    "type": "function",
-                    "index": tool_call_index,
-                }
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
+                )
+
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_apply_patch_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=item,
+                    index=tool_call_index,
+                )
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1
 
