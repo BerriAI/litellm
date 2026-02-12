@@ -439,6 +439,7 @@ from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.model_catalog_endpoint import router as model_catalog_router
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
@@ -11782,6 +11783,7 @@ app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
+app.include_router(model_catalog_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
