@@ -13,7 +13,7 @@
 #   3. Installs LiteLLM with proxy support
 #   4. Patches the proxy config for the current machine
 #   5. Prompts for API keys and writes a .env file
-#   6. Starts the proxy on port 4000
+#   6. Starts the proxy on port 4141
 # =============================================================================
 set -euo pipefail
 
@@ -422,7 +422,7 @@ config.setdefault("models", {})
 config["models"].setdefault("providers", {})
 
 config["models"]["providers"]["litellm"] = {
-    "baseUrl": "http://127.0.0.1:4000/v1",
+    "baseUrl": "http://127.0.0.1:4141/v1",
     "apiKey": "sk-1234",
     "api": "openai-completions",
     "models": [
@@ -468,16 +468,16 @@ echo ""
 echo -e "${BOLD}=== Starting LiteLLM Proxy ===${NC}"
 echo ""
 echo -e "  Config : ${CYAN}$CONFIG_FILE${NC}"
-echo -e "  Port   : ${CYAN}4000${NC}"
+echo -e "  Port   : ${CYAN}4141${NC}"
 echo -e "  Key    : ${CYAN}sk-1234${NC}  (set in config litellm_settings.master_key)"
 echo ""
 echo -e "${BOLD}Test it:${NC}"
 echo ""
 echo "  # Health check"
-echo "  curl http://localhost:4000/health"
+echo "  curl http://localhost:4141/health"
 echo ""
 echo "  # Chat completion via the auto-router"
-echo '  curl http://localhost:4000/v1/chat/completions \'
+echo '  curl http://localhost:4141/v1/chat/completions \'
 echo '    -H "Content-Type: application/json" \'
 echo '    -H "Authorization: Bearer sk-1234" \'
 echo '    -d '"'"'{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'"'"
@@ -491,4 +491,4 @@ set -a
 source "$ENV_FILE"
 set +a
 
-exec litellm --config "$CONFIG_FILE" --port 4000
+exec litellm --config "$CONFIG_FILE" --port 4141

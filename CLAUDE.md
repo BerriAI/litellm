@@ -14,16 +14,16 @@ ClawRouter is a smart model routing system built on top of LiteLLM. It routes re
 ### Manual Start
 ```bash
 pip install -e .[proxy]
-litellm --config litellm/proxy/proxy_config.yaml --port 4000
+litellm --config litellm/proxy/proxy_config.yaml --port 4141
 ```
 
 ### Test It
 ```bash
 # Health check
-curl http://localhost:4000/health
+curl http://localhost:4141/health
 
 # Auto-routed request
-curl http://localhost:4000/v1/chat/completions \
+curl http://localhost:4141/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
@@ -205,7 +205,7 @@ model_list:
 6. Suggest tier models from `models.yaml` based on available API keys
 7. Auto-register provider models in `proxy_config.yaml`
 8. Ensure "auto" model entry exists
-9. Start proxy on port 4000
+9. Start proxy on port 4141
 
 ## OpenClaw Plugin
 
@@ -225,6 +225,6 @@ openclaw plugins install -l ./openclaw-plugin
 4. User sends messages → routed through `clawrouter/auto` → classified → tier model → response with tier prefix
 
 ### Config (`openclaw.plugin.json`)
-- `port` (default: 4000) — proxy port
+- `port` (default: 4141) — proxy port
 - `masterKey` (default: "sk-clawrouter") — proxy auth key
 - `gitRepo` — ClawRouter repo URL to clone
