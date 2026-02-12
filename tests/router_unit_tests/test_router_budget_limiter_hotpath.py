@@ -87,3 +87,58 @@ async def test_async_filter_deployments_resolves_provider_once_per_deployment(
 
     assert len(filtered_deployments) == len(healthy_deployments)
     assert provider_resolution_calls == len(healthy_deployments)
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_recompute_provider_when_resolved_none(
+    disable_budget_sync, monkeypatch
+):
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={
+            "openai": BudgetConfig(budget_duration="1d", max_budget=100.0),
+        },
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "max_budget": 100.0,
+                    "budget_duration": "1d",
+                },
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+
+    healthy_deployments = [
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "unknown-provider/model"},
+            "model_info": {"id": "deployment-1"},
+        }
+    ]
+
+    provider_resolution_calls = 0
+
+    def _provider_returns_none(deployment):
+        nonlocal provider_resolution_calls
+        provider_resolution_calls += 1
+        return None
+
+    monkeypatch.setattr(
+        provider_budget,
+        "_get_llm_provider_for_deployment",
+        _provider_returns_none,
+    )
+
+    filtered_deployments = await provider_budget.async_filter_deployments(
+        model="gpt-4o-mini",
+        healthy_deployments=healthy_deployments,
+        messages=[],
+        request_kwargs={},
+        parent_otel_span=None,
+    )
+
+    assert len(filtered_deployments) == len(healthy_deployments)
+    assert provider_resolution_calls == len(healthy_deployments)

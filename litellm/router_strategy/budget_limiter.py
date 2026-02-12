@@ -169,8 +169,10 @@ class RouterBudgetLimiting(CustomLogger):
 
             # Check provider budget
             if self.provider_budget_config:
-                provider = deployment_provider_map.get(id(deployment))
-                if provider is None:
+                deployment_object_id = id(deployment)
+                if deployment_object_id in deployment_provider_map:
+                    provider = deployment_provider_map[deployment_object_id]
+                else:
                     provider = self._get_llm_provider_for_deployment(deployment)
                 if provider in provider_configs:
                     config = provider_configs[provider]
@@ -249,7 +251,7 @@ class RouterBudgetLimiting(CustomLogger):
                 - List of cache keys to fetch from router cache for budget limiting
                 - Dict of provider budget configs `provider_configs`
                 - Dict of deployment budget configs `deployment_configs`
-                - Dict of deployment id to resolved provider `deployment_provider_map`
+                - Dict of deployment object id (`id(deployment)`) to resolved provider `deployment_provider_map`
         """
         cache_keys: List[str] = []
         provider_configs: Dict[str, GenericBudgetInfo] = {}
@@ -260,7 +262,8 @@ class RouterBudgetLimiting(CustomLogger):
             # Check provider budgets
             if self.provider_budget_config:
                 provider = self._get_llm_provider_for_deployment(deployment)
-                deployment_provider_map[id(deployment)] = provider
+                deployment_object_id = id(deployment)
+                deployment_provider_map[deployment_object_id] = provider
                 if provider is not None:
                     budget_config = self._get_budget_config_for_provider(provider)
                     if (
