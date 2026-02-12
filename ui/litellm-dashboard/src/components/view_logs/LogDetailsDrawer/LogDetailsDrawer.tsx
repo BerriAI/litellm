@@ -224,6 +224,7 @@ export function LogDetailsDrawer({
         ) : (
           <RequestResponseSection
             hasResponse={hasResponse}
+            hasError={hasError}
             getRawRequest={getRawRequest}
             getFormattedResponse={getFormattedResponse}
             logEntry={logEntry}

@@ -22,7 +22,6 @@ import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { columns, LogEntry } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { ERROR_CODE_OPTIONS, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
