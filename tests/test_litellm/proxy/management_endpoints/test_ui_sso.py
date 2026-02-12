@@ -3160,7 +3160,7 @@ class TestPKCEFunctionality:
                 self._store = {}
 
             async def async_set_cache(self, key, value, **kwargs):
-                self._store[key] = value
+                self._store[key] = json.dumps(value)
 
             async def async_get_cache(self, key, **kwargs):
                 val = self._store.get(key)
