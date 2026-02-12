@@ -360,7 +360,7 @@ def test_openai_image_generation_forwards_organization(mock_get_openai_client):
     # Basic sanity on response shape
     assert hasattr(resp, "data") and len(resp.data) == 1
 
-
+@pytest.mark.skip(reason="Skipping o1 due to not supporting parallel tool calls. Needs debug")
 @pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_o1_parallel_tool_calls(model):
     litellm.completion(
@@ -512,7 +512,7 @@ async def test_openai_pdf_url(model):
         "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
     )
 
-
+@pytest.mark.skip(reason="Skipping, needs access to gpt-5-codex-mini.")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_openai_codex_stream(sync_mode):

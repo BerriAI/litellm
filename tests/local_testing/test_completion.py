@@ -2184,7 +2184,7 @@ async def test_acompletion_ollama_function_call_stream(model):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
+@pytest.mark.skip(reason="Skipping, needs access to ministral-8b.")
 def test_completion_openrouter1():
     try:
         litellm.set_verbose = True
