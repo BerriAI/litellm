@@ -15,6 +15,21 @@ model_list:
       model: gemini/gemini-3-pro-preview
       api_key: os.environ/GOOGLE_API_KEY
 
+  - model_name: bedrock/claude-opus-4-6
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-4-6-v1
+      aws_region_name: os.environ/AWS_REGION_NAME
+
+  - model_name: bedrock/claude-sonnet-4-5
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region_name: os.environ/AWS_REGION_NAME
+
+  - model_name: bedrock/claude-sonnet-4
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-4-20250514-v1:0
+      aws_region_name: os.environ/AWS_REGION_NAME
+
 
   - model_name: auto
     litellm_params:

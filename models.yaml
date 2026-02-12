@@ -72,6 +72,10 @@ tier_candidates:
       cost: "$5.63/M"
 
   top:
+    - provider: bedrock
+      model: bedrock/us.anthropic.claude-opus-4-6-v1
+      display: "Claude-Opus-4.6 (Bedrock)"
+      cost: "$15.00/M"
     - provider: anthropic
       model: anthropic/claude-opus-4-5-20251101
       display: "Claude-Opus-4.5"
@@ -160,3 +164,16 @@ provider_models:
     models:
       - name: minimax/MiniMax-M2.1
         id: minimax/MiniMax-M2.1
+
+  bedrock:
+    key_env: AWS_ACCESS_KEY_ID
+    extra_env:
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_REGION_NAME
+    models:
+      - name: bedrock/claude-opus-4-6
+        id: bedrock/us.anthropic.claude-opus-4-6-v1
+      - name: bedrock/claude-sonnet-4-5
+        id: bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0
+      - name: bedrock/claude-sonnet-4
+        id: bedrock/anthropic.claude-sonnet-4-20250514-v1:0
