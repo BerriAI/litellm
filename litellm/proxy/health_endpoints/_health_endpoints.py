@@ -1130,7 +1130,7 @@ async def _db_health_readiness_check():
             verbose_proxy_logger.error(
                 "_db_health_readiness_check: reconnect failed"
             )
-            raise e
+            return db_health_cache
 
 
 @router.get(
