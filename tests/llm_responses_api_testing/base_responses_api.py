@@ -669,7 +669,7 @@ class BaseResponsesAPITest(ABC):
     async def test_cancel_responses_invalid_response_id(self, sync_mode):
         """Test cancel_responses with invalid response ID should raise appropriate error"""
         base_completion_call_args = self.get_base_completion_call_args()
-
+        
         if sync_mode:
             with pytest.raises(Exception):
                 litellm.cancel_responses(
@@ -680,40 +680,3 @@ class BaseResponsesAPITest(ABC):
                 await litellm.acancel_responses(
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )
-
-    @pytest.mark.parametrize("sync_mode", [True, False])
-    @pytest.mark.asyncio
-    async def test_responses_api_context_management_server_side_compaction(self, sync_mode):
-        """
-        E2E test for server-side compaction (context_management) on OpenAI Responses API.
-        Passes context_management with compact_threshold; validates that the request is
-        accepted and returns a valid response. Compaction may not run for short inputs.
-        """
-        base_completion_call_args = self.get_base_completion_call_args()
-        model = base_completion_call_args.get("model") or ""
-        # Only run with context_management for OpenAI (OAI) for now
-        if "openai/" not in str(model) and "azure/" not in str(model):
-            pytest.skip(
-                "context_management server-side compaction e2e is only run for OpenAI/Azure"
-            )
-        context_management = [{"type": "compaction", "compact_threshold": 200000}]
-        try:
-            if sync_mode:
-                response = litellm.responses(
-                    input="Short ping to verify context_management is accepted.",
-                    max_output_tokens=20,
-                    context_management=context_management,
-                    **base_completion_call_args,
-                )
-            else:
-                response = await litellm.aresponses(
-                    input="Short ping to verify context_management is accepted.",
-                    max_output_tokens=20,
-                    context_management=context_management,
-                    **base_completion_call_args,
-                )
-        except litellm.InternalServerError:
-            pytest.skip("Skipping test due to litellm.InternalServerError")
-        validate_responses_api_response(response, final_chunk=True)
-        assert response.get("id") is not None
-        assert response.get("status") is not None

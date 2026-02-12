@@ -1074,19 +1074,6 @@ class PromptObject(TypedDict, total=False):
     """Optional version of the prompt template."""
 
 
-class ContextManagementEntry(TypedDict, total=False):
-    """
-    Context management configuration entry for a request.
-    See https://developers.openai.com/api/docs/guides/compaction.
-    """
-
-    type: str
-    """The context management entry type. Currently only ``'compaction'`` is supported."""
-
-    compact_threshold: int
-    """Token threshold at which compaction is triggered for this entry. Minimum 1000."""
-
-
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -1117,8 +1104,6 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     partial_images: Optional[
         int
     ]  # Number of partial images to generate (1-3) for streaming image generation
-    context_management: Optional[List[ContextManagementEntry]]
-    """Context management configuration. E.g. [{\"type\": \"compaction\", \"compact_threshold\": 200000}] for server-side compaction (minimum 1000)."""
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
