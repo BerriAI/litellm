@@ -12,10 +12,10 @@ sys.path.insert(
 import pytest
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
-import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
+import litellm.proxy.health_endpoints._health_endpoints as _health_module
+
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
-    db_health_cache,
     get_callback_identifier,
     health_license_endpoint,
     health_services_endpoint,
@@ -29,82 +29,195 @@ from tests.test_litellm.proxy.conftest import create_proxy_test_client
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "prisma_error",
-    [
-        PrismaError("Can't reach database server"),
-        ClientNotConnectedError(),
-        HTTPClientClosedError(),
-    ],
-)
-async def test_db_health_readiness_check_with_prisma_error(prisma_error):
+async def test_db_health_cache_hit_returns_cached():
     """
-    Test that when prisma_client.health_check() raises a PrismaError and
-    allow_requests_on_db_unavailable is True, the function should not raise an error
-    and return the cached health status.
+    When cache is 'connected' and within the 15s TTL, return the cache
+    without calling health_check.
     """
-    # Mock the prisma client
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.health_check.side_effect = prisma_error
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock()
 
-    # Reset the health cache in the source module so _db_health_readiness_check
-    # sees the updated value (assigning to a test-module global doesn't work).
-    _health_endpoints_module.db_health_cache = {
+    _health_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now(),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
+
+    assert result["status"] == "connected"
+    mock_prisma.health_check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_db_health_cache_expired_calls_health_check():
+    """
+    When cache is 'connected' but older than 15s, call health_check
+    to re-validate the connection.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock()
+
+    _health_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
+
+    assert result["status"] == "connected"
+    mock_prisma.health_check.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_db_health_non_connected_ignores_cache_ttl():
+    """
+    When cache status is not 'connected' (e.g. 'disconnected', 'unknown'),
+    always call health_check regardless of how fresh the cache is.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock()
+
+    _health_module.db_health_cache = {
+        "status": "disconnected",
+        "last_updated": datetime.now(),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
+
+    assert result["status"] == "connected"
+    mock_prisma.health_check.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_db_health_prisma_client_none():
+    """
+    When prisma_client is None, return 'disconnected' without attempting
+    a health_check call.
+    """
+    _health_module.db_health_cache = {
         "status": "unknown",
         "last_updated": datetime.now() - timedelta(minutes=5),
     }
 
-    # Patch the imports and general_settings
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"allow_requests_on_db_unavailable": True},
-    ):
-        # Call the function
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
         result = await _db_health_readiness_check()
 
-        # Verify that the function called health_check
-        mock_prisma_client.health_check.assert_called_once()
-
-        # Verify that the function returned the cache
-        assert result is not None
-        assert result["status"] == "unknown"  # Should retain the status from the cache
+    assert result["status"] == "disconnected"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "prisma_error",
     [
-        PrismaError("Can't reach database server"),
+        PrismaError(),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
 )
-async def test_db_health_readiness_check_with_error_and_flag_off(prisma_error):
+async def test_db_health_error_flag_off_raises_no_reconnect(prisma_error):
     """
-    Test that when prisma_client.health_check() raises a DB error but
-    allow_requests_on_db_unavailable is False, the exception should be raised.
+    When health_check raises and allow_requests_on_db_unavailable is False,
+    handle_db_exception re-raises immediately. The reconnect path is never
+    reached, so disconnect/connect are never called.
     """
-    # Mock the prisma client
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.health_check.side_effect = prisma_error
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
+    mock_prisma.disconnect = AsyncMock()
 
-    # Reset the health cache in the source module
-    _health_endpoints_module.db_health_cache = {
-        "status": "unknown",
-        "last_updated": datetime.now() - timedelta(minutes=5),
+    _health_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
     }
 
-    # Patch the imports and general_settings where the flag is False
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
         "litellm.proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": False},
     ):
-        # The function should raise the exception
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception) as exc_info:
             await _db_health_readiness_check()
 
-        # Verify that the raised exception is the same
-        assert excinfo.value == prisma_error
+        assert exc_info.value is prisma_error
+        mock_prisma.disconnect.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prisma_error",
+    [
+        PrismaError(),
+        ClientNotConnectedError(),
+        HTTPClientClosedError(),
+    ],
+)
+async def test_db_health_error_flag_on_reconnect_succeeds(prisma_error):
+    """
+    When health_check raises, allow_requests_on_db_unavailable is True,
+    and the reconnect cycle (disconnect -> connect -> health_check) succeeds,
+    return 'connected' and update the cache.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(
+        side_effect=[prisma_error, None]
+    )
+    mock_prisma.disconnect = AsyncMock()
+    mock_prisma.connect = AsyncMock()
+
+    _health_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    ):
+        result = await _db_health_readiness_check()
+
+    assert result["status"] == "connected"
+    mock_prisma.disconnect.assert_called_once()
+    mock_prisma.connect.assert_called_once()
+    assert mock_prisma.health_check.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prisma_error",
+    [
+        PrismaError(),
+        ClientNotConnectedError(),
+        HTTPClientClosedError(),
+    ],
+)
+async def test_db_health_error_flag_on_reconnect_fails(prisma_error):
+    """
+    When health_check raises, allow_requests_on_db_unavailable is True,
+    but the reconnect also fails, raise the original exception.
+    The cache should reflect 'disconnected'.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
+    mock_prisma.disconnect = AsyncMock()
+    mock_prisma.connect = AsyncMock()
+
+    _health_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    ):
+        with pytest.raises(Exception) as exc_info:
+            await _db_health_readiness_check()
+
+        assert exc_info.value is prisma_error
+        assert _health_module.db_health_cache["status"] == "disconnected"
+        mock_prisma.disconnect.assert_called_once()
+        mock_prisma.connect.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -374,7 +487,6 @@ def proxy_client(monkeypatch):
         yield client
 
 
-@pytest.mark.xdist_group("proxy_health")
 def test_health_liveliness_endpoint(proxy_client):
     """
     Test that /health/liveliness endpoint returns 200 OK with "I'm alive!" message.
@@ -492,7 +604,7 @@ def test_get_callback_identifier_string_and_object_with_callback_name():
     - Object with empty/None callback_name (should fall through to other checks)
     """
     from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
-
+    
     # Test 1: String callback should be returned as-is
     assert get_callback_identifier("datadog") == "datadog"
     assert get_callback_identifier("langfuse") == "langfuse"
@@ -523,9 +635,9 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     - Object with callback_name that matches registry entry
     - Fallback to callback_name() helper function
     """
-    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
     from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
-
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+    
     # Test 1: Object registered in CustomLoggerRegistry (without callback_name attribute)
     # Mock a class that's registered in the registry
     class MockRegisteredLogger:
