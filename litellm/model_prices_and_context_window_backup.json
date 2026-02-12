@@ -5859,6 +5859,7 @@
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/kimi-k2-5-now-in-microsoft-foundry/4492321",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     },
     "azure_ai/ministral-3b": {
@@ -6134,8 +6135,11 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3.03e-06,
+        "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 3.18e-06,
@@ -22147,9 +22151,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://platform.moonshot.ai/docs/pricing/chat",
+        "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     },
     "moonshot/kimi-latest": {
@@ -24502,6 +24507,7 @@
         "source": "https://openrouter.ai/moonshotai/kimi-k2.5",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     },
     "openrouter/nousresearch/nous-hermes-llama2-13b": {
