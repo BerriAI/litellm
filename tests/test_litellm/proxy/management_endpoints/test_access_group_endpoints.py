@@ -5,11 +5,13 @@ Tests for access group management endpoints.
 import os
 import sys
 import types
+from contextlib import asynccontextmanager
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from prisma.errors import PrismaError
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
@@ -33,6 +35,7 @@ def _make_access_group_record(
     assigned_key_ids: list | None = None,
     created_by: str | None = "admin-user",
     updated_by: str | None = "admin-user",
+    created_at: datetime | None = None,
 ):
     record = MagicMock()
     record.access_group_id = access_group_id
@@ -43,7 +46,7 @@ def _make_access_group_record(
     record.access_agent_ids = access_agent_ids or []
     record.assigned_team_ids = assigned_team_ids or []
     record.assigned_key_ids = assigned_key_ids or []
-    record.created_at = datetime.now()
+    record.created_at = created_at or datetime.now()
     record.created_by = created_by
     record.updated_at = datetime.now()
     record.updated_by = updated_by
@@ -86,9 +89,30 @@ def client_and_mocks(monkeypatch):
     ))
     mock_access_group_table.delete = AsyncMock(return_value=None)
 
-    mock_prisma.db = types.SimpleNamespace(
+    mock_team_table = MagicMock()
+    mock_team_table.find_many = AsyncMock(return_value=[])
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    mock_key_table = MagicMock()
+    mock_key_table.find_many = AsyncMock(return_value=[])
+    mock_key_table.update = AsyncMock(return_value=None)
+
+    @asynccontextmanager
+    async def mock_tx():
+        tx = types.SimpleNamespace(
+            litellm_accessgrouptable=mock_access_group_table,
+            litellm_teamtable=mock_team_table,
+            litellm_verificationtoken=mock_key_table,
+        )
+        yield tx
+
+    mock_db = types.SimpleNamespace(
         litellm_accessgrouptable=mock_access_group_table,
+        litellm_teamtable=mock_team_table,
+        litellm_verificationtoken=mock_key_table,
+        tx=mock_tx,
     )
+    mock_prisma.db = mock_db
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
@@ -153,6 +177,26 @@ def test_create_access_group_duplicate_name_conflict(client_and_mocks):
     assert "already exists" in resp.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "Unique constraint failed on the fields: (`access_group_name`)",
+        "P2002: Unique constraint failed",
+        "unique constraint violation",
+    ],
+)
+def test_create_access_group_race_condition_returns_409(client_and_mocks, error_message):
+    """Create race condition: Prisma unique constraint surfaces as 409, not 500."""
+    client, _, mock_table = client_and_mocks
+
+    mock_table.find_unique = AsyncMock(return_value=None)
+    mock_table.create = AsyncMock(side_effect=Exception(error_message))
+
+    resp = client.post("/v1/access_group", json={"access_group_name": "race-group"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]
+
+
 @pytest.mark.parametrize("user_role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY])
 def test_create_access_group_forbidden_non_admin(client_and_mocks, user_role):
     """Non-admin users cannot create access groups."""
@@ -166,6 +210,27 @@ def test_create_access_group_forbidden_non_admin(client_and_mocks, user_role):
     resp = client.post("/v1/access_group", json={"access_group_name": "forbidden"})
     assert resp.status_code == 403
     assert resp.json()["detail"]["error"] == CommonProxyErrors.not_allowed_access.value
+
+
+def test_create_access_group_validation_missing_name(client_and_mocks):
+    """Create with missing access_group_name returns 422."""
+    client, _, _ = client_and_mocks
+
+    resp = client.post("/v1/access_group", json={})
+    assert resp.status_code == 422
+
+
+def test_create_access_group_500_on_non_constraint_prisma_error(client_and_mocks):
+    """Create with non-unique-constraint Prisma error returns 500."""
+    client, _, mock_table = client_and_mocks
+
+    mock_table.find_unique = AsyncMock(return_value=None)
+    mock_table.create = AsyncMock(side_effect=Exception("Some other database error"))
+
+    # Use raise_server_exceptions=False so unhandled exceptions become 500 responses
+    test_client = TestClient(app, raise_server_exceptions=False)
+    resp = test_client.post("/v1/access_group", json={"access_group_name": "test-group"})
+    assert resp.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +266,37 @@ def test_list_access_groups_success_with_items(client_and_mocks, base_path):
     assert len(body) == 2
     assert body[0]["access_group_name"] == "group-1"
     assert body[1]["access_group_name"] == "group-2"
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_list_access_groups_ordered_by_created_at_desc(client_and_mocks, base_path):
+    """List access groups calls find_many with created_at desc order."""
+    client, _, mock_table = client_and_mocks
+
+    older = datetime(2025, 1, 1, 12, 0, 0)
+    newer = datetime(2025, 1, 2, 12, 0, 0)
+    records = [
+        _make_access_group_record(
+            access_group_id="ag-newer",
+            access_group_name="newer-group",
+            created_at=newer,
+        ),
+        _make_access_group_record(
+            access_group_id="ag-older",
+            access_group_name="older-group",
+            created_at=older,
+        ),
+    ]
+    mock_table.find_many = AsyncMock(return_value=records)
+
+    resp = client.get(base_path)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 2
+    # Mock returns newest first (simulating Prisma order desc)
+    assert body[0]["access_group_name"] == "newer-group"
+    assert body[1]["access_group_name"] == "older-group"
+    mock_table.find_many.assert_awaited_once_with(order={"created_at": "desc"})
 
 
 @pytest.mark.parametrize("user_role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY])
@@ -319,6 +415,22 @@ def test_update_access_group_forbidden_non_admin(client_and_mocks, user_role):
     assert resp.json()["detail"]["error"] == CommonProxyErrors.not_allowed_access.value
 
 
+def test_update_access_group_empty_body(client_and_mocks):
+    """Update with empty body succeeds; only updated_by is set."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="unchanged")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    resp = client.put("/v1/access_group/ag-update", json={})
+    assert resp.status_code == 200
+    mock_table.update.assert_awaited_once()
+    call_kwargs = mock_table.update.call_args.kwargs
+    assert call_kwargs["where"] == {"access_group_id": "ag-update"}
+    assert "updated_by" in call_kwargs["data"]
+    assert call_kwargs["data"]["updated_by"] == "admin_user"
+
+
 # ---------------------------------------------------------------------------
 # DELETE
 # ---------------------------------------------------------------------------
@@ -363,6 +475,80 @@ def test_delete_access_group_forbidden_non_admin(client_and_mocks, user_role):
     resp = client.delete("/v1/access_group/ag-123")
     assert resp.status_code == 403
     assert resp.json()["detail"]["error"] == CommonProxyErrors.not_allowed_access.value
+
+
+def test_delete_access_group_cleans_up_teams_and_keys(client_and_mocks):
+    """Delete removes access_group_id from teams and keys before deleting the group."""
+    client, mock_prisma, mock_access_group_table = client_and_mocks
+    mock_team_table = mock_prisma.db.litellm_teamtable
+    mock_key_table = mock_prisma.db.litellm_verificationtoken
+
+    existing = _make_access_group_record(access_group_id="ag-to-delete")
+    mock_access_group_table.find_unique = AsyncMock(return_value=existing)
+
+    team_with_group = MagicMock()
+    team_with_group.team_id = "team-1"
+    team_with_group.access_group_ids = ["ag-to-delete", "ag-other"]
+    mock_team_table.find_many = AsyncMock(return_value=[team_with_group])
+
+    key_with_group = MagicMock()
+    key_with_group.token = "key-token-1"
+    key_with_group.access_group_ids = ["ag-to-delete"]
+    mock_key_table.find_many = AsyncMock(return_value=[key_with_group])
+
+    resp = client.delete("/v1/access_group/ag-to-delete")
+    assert resp.status_code == 204
+
+    mock_team_table.update.assert_awaited_once_with(
+        where={"team_id": "team-1"},
+        data={"access_group_ids": ["ag-other"]},
+    )
+    mock_key_table.update.assert_awaited_once_with(
+        where={"token": "key-token-1"},
+        data={"access_group_ids": []},
+    )
+    mock_access_group_table.delete.assert_awaited_once_with(
+        where={"access_group_id": "ag-to-delete"}
+    )
+
+
+def test_delete_access_group_503_on_db_connection_error(client_and_mocks):
+    """Delete returns 503 when DB connection error occurs during transaction."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-to-delete")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+    mock_table.delete = AsyncMock(side_effect=PrismaError())
+
+    resp = client.delete("/v1/access_group/ag-to-delete")
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == CommonProxyErrors.db_not_connected_error.value
+
+
+def test_delete_access_group_404_on_p2025_or_record_not_found(client_and_mocks):
+    """Delete returns 404 when Prisma raises P2025 or record-not-found error."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-to-delete")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+    mock_table.delete = AsyncMock(side_effect=Exception("P2025: Record to delete does not exist"))
+
+    resp = client.delete("/v1/access_group/ag-to-delete")
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"]
+
+
+def test_delete_access_group_500_on_generic_exception(client_and_mocks):
+    """Delete returns 500 when generic exception occurs during transaction."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-to-delete")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+    mock_table.delete = AsyncMock(side_effect=RuntimeError("Unexpected error"))
+
+    resp = client.delete("/v1/access_group/ag-to-delete")
+    assert resp.status_code == 500
+    assert "Failed to delete access group" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

@@ -2,8 +2,10 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import get_prisma_client_or_throw
 from litellm.types.access_group import (
     AccessGroupCreateRequest,
@@ -62,19 +64,29 @@ async def create_access_group(
             detail=f"Access group '{data.access_group_name}' already exists",
         )
 
-    record = await prisma_client.db.litellm_accessgrouptable.create(
-        data={
-            "access_group_name": data.access_group_name,
-            "description": data.description,
-            "access_model_ids": data.access_model_ids or [],
-            "access_mcp_server_ids": data.access_mcp_server_ids or [],
-            "access_agent_ids": data.access_agent_ids or [],
-            "assigned_team_ids": data.assigned_team_ids or [],
-            "assigned_key_ids": data.assigned_key_ids or [],
-            "created_by": user_api_key_dict.user_id,
-            "updated_by": user_api_key_dict.user_id,
-        }
-    )
+    try:
+        record = await prisma_client.db.litellm_accessgrouptable.create(
+            data={
+                "access_group_name": data.access_group_name,
+                "description": data.description,
+                "access_model_ids": data.access_model_ids or [],
+                "access_mcp_server_ids": data.access_mcp_server_ids or [],
+                "access_agent_ids": data.access_agent_ids or [],
+                "assigned_team_ids": data.assigned_team_ids or [],
+                "assigned_key_ids": data.assigned_key_ids or [],
+                "created_by": user_api_key_dict.user_id,
+                "updated_by": user_api_key_dict.user_id,
+            }
+        )
+    except Exception as e:
+        # Race condition: another request created the same name between find_unique and create.
+        # Prisma raises UniqueViolationError (P2002) or similar for unique constraint.
+        if "unique constraint" in str(e).lower() or "P2002" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Access group '{data.access_group_name}' already exists",
+            )
+        raise
     return _record_to_response(record)
 
 
@@ -159,18 +171,63 @@ async def delete_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    existing = await prisma_client.db.litellm_accessgrouptable.find_unique(
-        where={"access_group_id": access_group_id}
-    )
-    if existing is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Access group '{access_group_id}' not found",
-        )
+    try:
+        async with prisma_client.db.tx() as tx:
+            existing = await tx.litellm_accessgrouptable.find_unique(
+                where={"access_group_id": access_group_id}
+            )
+            if existing is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Access group '{access_group_id}' not found",
+                )
 
-    await prisma_client.db.litellm_accessgrouptable.delete(
-        where={"access_group_id": access_group_id}
-    )
+            # Remove access_group_id from teams and keys that reference it
+            teams_with_group = await tx.litellm_teamtable.find_many(
+                where={"access_group_ids": {"hasSome": [access_group_id]}}
+            )
+            for team in teams_with_group:
+                updated_ids = [tid for tid in (team.access_group_ids or []) if tid != access_group_id]
+                await tx.litellm_teamtable.update(
+                    where={"team_id": team.team_id},
+                    data={"access_group_ids": updated_ids},
+                )
+
+            keys_with_group = await tx.litellm_verificationtoken.find_many(
+                where={"access_group_ids": {"hasSome": [access_group_id]}}
+            )
+            for key in keys_with_group:
+                updated_ids = [kid for kid in (key.access_group_ids or []) if kid != access_group_id]
+                await tx.litellm_verificationtoken.update(
+                    where={"token": key.token},
+                    data={"access_group_ids": updated_ids},
+                )
+
+            await tx.litellm_accessgrouptable.delete(
+                where={"access_group_id": access_group_id}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "delete_access_group failed: access_group_id=%s error=%s",
+            access_group_id,
+            e,
+        )
+        if PrismaDBExceptionHandler.is_database_connection_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=CommonProxyErrors.db_not_connected_error.value,
+            )
+        if "P2025" in str(e) or ("record" in str(e).lower() and "not found" in str(e).lower()):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Access group '{access_group_id}' not found",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete access group. Please try again.",
+        )
 
 
 # Alias routes for /v1/unified_access_group
