@@ -6,7 +6,6 @@ from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
@@ -45,6 +44,12 @@ from litellm.types.utils import (
 )
 
 from .get_headers import get_response_headers
+
+_MESSAGE_FIELDS: frozenset = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {
+    "usage"
+}
 
 
 def _safe_convert_created_field(created_value) -> int:
@@ -443,7 +448,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
         bool
     ] = None,  # used for supporting 'json_schema' on older models
 ):
-    received_args = locals()
     additional_headers = get_response_headers(_response_headers)
 
     if hidden_params is None:
@@ -546,11 +550,10 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
-                    provider_specific_fields = {}
-                    message_keys = Message.model_fields.keys()
-                    for field in choice["message"].keys():
-                        if field not in message_keys:
-                            provider_specific_fields[field] = choice["message"][field]
+                    provider_specific_fields = {
+                        f: choice["message"][f]
+                        for f in choice["message"].keys() - _MESSAGE_FIELDS
+                    }
 
                     # Handle reasoning models that display `reasoning_content` within `content`
                     reasoning_content, content = _extract_reasoning_content(
@@ -599,10 +602,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
-                provider_specific_fields = {}
-                for field in choice.keys():
-                    if field not in Choices.model_fields.keys():
-                        provider_specific_fields[field] = choice[field]
+                provider_specific_fields = {
+                    f: choice[f] for f in choice.keys() - _CHOICES_FIELDS
+                }
 
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
@@ -626,7 +628,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 )
 
             if "id" in response_object:
-                model_response_object.id = response_object["id"] or str(uuid.uuid4())
+                model_response_object.id = response_object["id"]
 
             if "system_fingerprint" in response_object:
                 model_response_object.system_fingerprint = response_object[
@@ -661,10 +663,8 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
 
-            special_keys = list(litellm.ModelResponse.model_fields.keys())
-            special_keys.append("usage")
             for k, v in response_object.items():
-                if k not in special_keys:
+                if k not in _MODEL_RESPONSE_FIELDS:
                     setattr(model_response_object, k, v)
 
             return model_response_object
@@ -781,6 +781,17 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
             return model_response_object
     except Exception:
+        received_args = dict(
+            response_object=response_object,
+            model_response_object=model_response_object,
+            response_type=response_type,
+            stream=stream,
+            start_time=start_time,
+            end_time=end_time,
+            hidden_params=hidden_params,
+            _response_headers=_response_headers,
+            convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
+        )
         raise Exception(
             f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
         )

@@ -1059,3 +1059,182 @@ def test_convert_to_model_response_object_with_error_code_only():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+
+def test_model_prefix_preservation():
+    """
+    Test that when model_response_object has a prefix like 'openai/gpt-4'
+    and the response contains a different model name, the prefix is preserved.
+    """
+    response_object = {
+        "id": "chatcmpl-prefix-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(model="openai/gpt-4"),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.model == "openai/gpt-4o"
+
+
+def test_model_without_prefix():
+    """
+    Test that when model_response_object has no prefix (e.g. 'gpt-4'),
+    the original model is kept (provider response model is ignored).
+    """
+    response_object = {
+        "id": "chatcmpl-no-prefix",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        "model": "gpt-4o-2024-08-06",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(model="gpt-4"),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.model == "gpt-4"
+
+
+def test_extra_response_fields_preserved():
+    """
+    Test that extra response fields (e.g. service_tier) are preserved
+    on the returned ModelResponse object.
+    """
+    response_object = {
+        "id": "chatcmpl-extra-fields",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+        "service_tier": "default",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.service_tier == "default"
+
+
+def test_hidden_params_and_response_headers_set():
+    """
+    Test that _hidden_params and _response_headers are correctly set
+    on the returned ModelResponse.
+    """
+    response_object = {
+        "id": "chatcmpl-headers",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+    response_headers = {"x-request-id": "req_abc123"}
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params={"custom_key": "custom_value"},
+        _response_headers=response_headers,
+    )
+
+    assert result._hidden_params is not None
+    assert result._hidden_params["custom_key"] == "custom_value"
+    assert "additional_headers" in result._hidden_params
+    assert result._response_headers == response_headers
+
+
+def test_response_ms_computed():
+    """
+    Test that _response_ms is computed correctly from start_time and end_time.
+    """
+    response_object = {
+        "id": "chatcmpl-timing",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+    start = datetime(2024, 1, 1, 12, 0, 0)
+    end = start + timedelta(milliseconds=250)
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=start,
+        end_time=end,
+    )
+
+    assert result._response_ms == pytest.approx(250.0)
+
+
+def test_error_message_includes_function_args():
+    """
+    Test that when an exception occurs, the error message includes
+    the function arguments for debugging (deferred locals() - Opt 2).
+    """
+    # Pass a response_object that will cause an error inside the try block
+    # (e.g. choices is not iterable)
+    response_object = {
+        "choices": None,  # will fail the assert
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        convert_to_model_response_object(
+            model_response_object=ModelResponse(),
+            response_object=response_object,
+            stream=False,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    error_msg = str(exc_info.value)
+    assert "received_args=" in error_msg
+    assert "response_object" in error_msg
+    assert "response_type" in error_msg
