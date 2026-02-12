@@ -268,7 +268,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not isinstance(schema, dict):
             return schema
 
-        unsupported = {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "maxItems"}
+        unsupported = {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "maxItems", "pattern"}
 
         result: Dict[str, Any] = {}
         for key, value in schema.items():
@@ -281,8 +281,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             if key == "properties" and isinstance(value, dict):
                 result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
-            elif key in ("items", "$defs") and isinstance(value, dict):
-                if key == "$defs":
+            elif key in ("items", "$defs", "definitions") and isinstance(value, dict):
+                if key in ("$defs", "definitions"):
                     result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
                 else:
                     result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
@@ -303,9 +303,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             jsonschema.validate(instance=response_json, schema=original_schema)
         except jsonschema.ValidationError as e:
             error_path = ".".join(str(p) for p in e.path) if e.path else "root"
+            error_msg = getattr(e, 'message', getattr(e, 'msg', str(e)))
             raise ValueError(
-                f"Response from {model} violates schema constraints.\n"
-                f"Field: {error_path}\nError: {e.message}\nValue: {e.instance}"
+                f"Response from {model} violates the original schema constraints.\n"
+                f"Field: {error_path}\nError: {error_msg}\nValue: {e.instance}"
             )
 
     def validate_structured_output_response(self, response_content: str, model: str) -> None:
@@ -1715,6 +1716,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             prefix_prompt=prefix_prompt,
             speed=speed,
         )
+
+        # Validate structured output against original schema if applicable
+        if model_response.choices and len(model_response.choices) > 0:
+            message = model_response.choices[0].message
+            if message and message.content:
+                self.validate_structured_output_response(
+                    response_content=message.content,
+                    model=model
+                )
+
         return model_response
 
     @staticmethod
