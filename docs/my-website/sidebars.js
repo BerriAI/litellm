@@ -91,7 +91,8 @@ const sidebars = {
       items: [
         "proxy/alerting",
         "proxy/pagerduty",
-        "proxy/prometheus"
+        "proxy/prometheus",
+        "proxy/pyroscope_profiling"
       ]
     },
     {
