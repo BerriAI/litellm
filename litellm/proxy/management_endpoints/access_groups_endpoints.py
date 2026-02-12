@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import get_prisma_client_or_throw
-from litellm.types.unified_access_group import (
+from litellm.types.access_group import (
     AccessGroupCreateRequest,
     AccessGroupResponse,
     AccessGroupUpdateRequest,
@@ -43,11 +43,11 @@ def _record_to_response(record) -> AccessGroupResponse:
 
 
 @router.post(
-    "/v1/unified_access_group",
+    "/v1/access_group",
     response_model=AccessGroupResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_unified_access_group(
+async def create_access_group(
     data: AccessGroupCreateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> AccessGroupResponse:
@@ -80,10 +80,10 @@ async def create_unified_access_group(
 
 
 @router.get(
-    "/v1/unified_access_group",
+    "/v1/access_group",
     response_model=List[AccessGroupResponse],
 )
-async def list_unified_access_groups(
+async def list_access_groups(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> List[AccessGroupResponse]:
     _require_proxy_admin(user_api_key_dict)
@@ -96,10 +96,10 @@ async def list_unified_access_groups(
 
 
 @router.get(
-    "/v1/unified_access_group/{access_group_id}",
+    "/v1/access_group/{access_group_id}",
     response_model=AccessGroupResponse,
 )
-async def get_unified_access_group(
+async def get_access_group(
     access_group_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> AccessGroupResponse:
@@ -118,10 +118,10 @@ async def get_unified_access_group(
 
 
 @router.put(
-    "/v1/unified_access_group/{access_group_id}",
+    "/v1/access_group/{access_group_id}",
     response_model=AccessGroupResponse,
 )
-async def update_unified_access_group(
+async def update_access_group(
     access_group_id: str,
     data: AccessGroupUpdateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -150,10 +150,10 @@ async def update_unified_access_group(
 
 
 @router.delete(
-    "/v1/unified_access_group/{access_group_id}",
+    "/v1/access_group/{access_group_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_unified_access_group(
+async def delete_access_group(
     access_group_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> None:
