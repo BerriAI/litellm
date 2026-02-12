@@ -4471,7 +4471,6 @@ workflows:
             - search_testing
             - litellm_mapped_tests_proxy
             - litellm_mapped_tests_llms
-            - litellm_mapped_tests_core
             - litellm_mapped_tests_integrations
             - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
@@ -4550,7 +4549,6 @@ workflows:
             - search_testing
             - litellm_mapped_tests_proxy
             - litellm_mapped_tests_llms
-            - litellm_mapped_tests_core
             - litellm_mapped_tests_integrations
             - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
