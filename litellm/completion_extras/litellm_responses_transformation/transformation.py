@@ -296,8 +296,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 request_data["instructions"] = instructions
             elif key == "stream_options" and isinstance(value, dict):
                 request_data["stream_options"] = value.get("include_obfuscation")
-            elif key == "user" and isinstance(value, str) and len(value) <= 64:
-                request_data["user"] = value
+            elif key == "user" and isinstance(value, str):
+                # OpenAI API requires user param to be max 64 chars - truncate if longer
+                if len(value) <= 64:
+                    request_data["user"] = value
+                else:
+                    request_data["user"] = value[:64]
             else:
                 request_data[key] = value
 
