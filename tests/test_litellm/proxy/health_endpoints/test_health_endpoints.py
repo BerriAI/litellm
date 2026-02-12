@@ -194,8 +194,8 @@ async def test_db_health_error_flag_on_reconnect_succeeds(prisma_error):
 async def test_db_health_error_flag_on_reconnect_fails(prisma_error):
     """
     When health_check raises, allow_requests_on_db_unavailable is True,
-    but the reconnect also fails, raise the original exception.
-    The cache should reflect 'disconnected'.
+    but the reconnect also fails, return 'disconnected' instead of raising.
+    This respects the flag's intent: keep serving even without a DB.
     """
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
@@ -211,13 +211,11 @@ async def test_db_health_error_flag_on_reconnect_fails(prisma_error):
         "litellm.proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": True},
     ):
-        with pytest.raises(Exception) as exc_info:
-            await _db_health_readiness_check()
+        result = await _db_health_readiness_check()
 
-        assert exc_info.value is prisma_error
-        assert _health_module.db_health_cache["status"] == "disconnected"
-        mock_prisma.disconnect.assert_called_once()
-        mock_prisma.connect.assert_called_once()
+    assert result["status"] == "disconnected"
+    mock_prisma.disconnect.assert_called_once()
+    mock_prisma.connect.assert_called_once()
 
 
 @pytest.mark.asyncio
