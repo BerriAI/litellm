@@ -29,9 +29,9 @@ import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
-import type { Organization } from "./networking";
-import UsageIndicator from "./usage_indicator";
 import NewBadge from "./common_components/NewBadge";
+import type { Organization } from "./networking";
+import UsageIndicator from "./UsageIndicator";
 const { Sider } = Layout;
 
 // Define the props type

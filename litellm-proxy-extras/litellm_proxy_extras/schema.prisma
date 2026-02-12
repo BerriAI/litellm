@@ -914,6 +914,7 @@ model LiteLLM_PolicyAttachmentTable {
   teams            String[]  @default([])  // Team aliases or patterns
   keys             String[]  @default([])  // Key aliases or patterns
   models           String[]  @default([])  // Model names or patterns
+  tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt

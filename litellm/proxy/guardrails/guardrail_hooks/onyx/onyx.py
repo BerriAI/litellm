@@ -13,7 +13,10 @@ import httpx
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -27,7 +30,12 @@ if TYPE_CHECKING:
 
 class OnyxGuardrail(CustomGuardrail):
     def __init__(
-        self, api_base: Optional[str] = None, api_key: Optional[str] = None, mcp_api_key: Optional[str] = None, timeout: Optional[float] = 10.0, **kwargs
+        self,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        mcp_api_key: Optional[str] = None,
+        timeout: Optional[float] = 10.0,
+        **kwargs,
     ):
         timeout = timeout or int(os.getenv("ONYX_TIMEOUT", 10.0))
         self.async_handler = get_async_httpx_client(
@@ -90,6 +98,7 @@ class OnyxGuardrail(CustomGuardrail):
             )
         return result
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

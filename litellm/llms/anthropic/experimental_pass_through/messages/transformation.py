@@ -2,9 +2,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -46,10 +43,46 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "thinking",
             "context_management",
             "output_format",
+            "inference_geo",
+            "speed",
             "output_config",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
+    
+    @staticmethod
+    def _filter_billing_headers_from_system(system_param):
+        """
+        Filter out x-anthropic-billing-header metadata from system parameter.
+        
+        Args:
+            system_param: Can be a string or a list of system message content blocks
+            
+        Returns:
+            Filtered system parameter (string or list), or None if all content was filtered
+        """
+        if isinstance(system_param, str):
+            # If it's a string and starts with billing header, filter it out
+            if system_param.startswith("x-anthropic-billing-header:"):
+                return None
+            return system_param
+        elif isinstance(system_param, list):
+            # Filter list of system content blocks
+            filtered_list = []
+            for content_block in system_param:
+                if isinstance(content_block, dict):
+                    text = content_block.get("text", "")
+                    content_type = content_block.get("type", "")
+                    # Skip text blocks that start with billing header
+                    if content_type == "text" and text.startswith("x-anthropic-billing-header:"):
+                        continue
+                    filtered_list.append(content_block)
+                else:
+                    # Keep non-dict items as-is
+                    filtered_list.append(content_block)
+            return filtered_list if len(filtered_list) > 0 else None
+        else:
+            return system_param
 
     def get_complete_url(
         self,
@@ -94,11 +127,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=optional_params,
         )
 
-        headers = update_headers_with_filtered_beta(
-            headers=headers,
-            provider="anthropic",
-        )
-
         return headers, api_base
 
     def transform_anthropic_messages_request(
@@ -121,6 +149,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message="max_tokens is required for Anthropic /v1/messages API",
                 status_code=400,
             )
+        
+        # Filter out x-anthropic-billing-header from system messages
+        system_param = anthropic_messages_optional_request_params.get("system")
+        if system_param is not None:
+            filtered_system = self._filter_billing_headers_from_system(system_param)
+            if filtered_system is not None and len(filtered_system) > 0:
+                anthropic_messages_optional_request_params["system"] = filtered_system
+            else:
+                # Remove system parameter if all content was filtered out
+                anthropic_messages_optional_request_params.pop("system", None)
+        
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
@@ -184,10 +223,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - context_management: adds 'context-management-2025-06-27'
         - tool_search: adds provider-specific tool search header
         - output_format: adds 'structured-outputs-2025-11-13'
+        - speed: adds 'fast-mode-2026-02-01'
 
         Args:
             headers: Request headers dict
-            optional_params: Optional parameters including tools, context_management, output_format
+            optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
         """
         beta_values: set = set()
@@ -223,6 +263,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for structured outputs
         if optional_params.get("output_format") is not None:
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value)
+
+        # Check for fast mode
+        if optional_params.get("speed") == "fast":
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
         # Check for tool search tools
         tools = optional_params.get("tools")
