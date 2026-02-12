@@ -3073,14 +3073,15 @@ class TestPKCEFunctionality:
         test_state = "test_oauth_state_123"
         mock_request.query_params = {"state": test_state}
 
-        # Mock cache
+        # Mock cache with async methods
         mock_cache = MagicMock()
         test_code_verifier = "test_code_verifier_abc123xyz"
-        mock_cache.get_cache.return_value = test_code_verifier
+        mock_cache.async_get_cache = AsyncMock(return_value=test_code_verifier)
+        mock_cache.async_delete_cache = AsyncMock()
 
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
             # Act
-            token_params = SSOAuthenticationHandler.prepare_token_exchange_parameters(
+            token_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                 request=mock_request, generic_include_client_id=False
             )
 
@@ -3089,10 +3090,10 @@ class TestPKCEFunctionality:
             assert token_params["code_verifier"] == test_code_verifier
 
             # Verify cache was accessed and deleted
-            mock_cache.get_cache.assert_called_once_with(
+            mock_cache.async_get_cache.assert_called_once_with(
                 key=f"pkce_verifier:{test_state}"
             )
-            mock_cache.delete_cache.assert_called_once_with(
+            mock_cache.async_delete_cache.assert_called_once_with(
                 key=f"pkce_verifier:{test_state}"
             )
 
@@ -3117,6 +3118,8 @@ class TestPKCEFunctionality:
         test_state = "test456"
         mock_cache = MagicMock()
 
+        mock_cache.async_set_cache = AsyncMock()
+
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
                 # Act
@@ -3127,9 +3130,9 @@ class TestPKCEFunctionality:
                 )
 
                 # Assert
-                # Verify cache was called to store code_verifier
-                mock_cache.set_cache.assert_called_once()
-                cache_call = mock_cache.set_cache.call_args
+                # Verify async cache was called to store code_verifier
+                mock_cache.async_set_cache.assert_called_once()
+                cache_call = mock_cache.async_set_cache.call_args
                 assert cache_call.kwargs["key"] == f"pkce_verifier:{test_state}"
                 assert cache_call.kwargs["ttl"] == 600
                 assert len(cache_call.kwargs["value"]) == 43
