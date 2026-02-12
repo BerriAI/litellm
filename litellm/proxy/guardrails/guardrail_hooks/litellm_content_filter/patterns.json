@@ -388,6 +388,20 @@
       "pattern": "\\b\\d{4}\\s?\\d{5}\\s?\\d(?:\\s?\\d)?\\b",
       "category": "Australian PII Patterns",
       "description": "Detects Australian Medicare numbers (10 digits + optional reference digit)"
+    },
+    {
+      "name": "iban",
+      "display_name": "IBAN - International Bank Account Number",
+      "pattern": "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b",
+      "category": "Banking Patterns",
+      "description": "Detects International Bank Account Numbers (IBAN format: 2 country letters, 2 check digits, 11-30 alphanumeric)"
+    },
+    {
+      "name": "street_address",
+      "display_name": "Street Address (AU/US/UK)",
+      "pattern": "(?i)\\b\\d{1,5}(?:[-\\s]?\\d+)?\\s+[A-Z][a-z]*(?:\\s+[A-Z][a-z]*)*\\s+(?:Street|St\\.?|Road|Rd\\.?|Avenue|Ave\\.?|Drive|Dr\\.?|Court|Ct\\.?|Lane|Ln\\.?|Terrace|Tce\\.?|Way|Boulevard|Blvd\\.?)\\b(?:,?\\s*(?:[A-Z][a-z]*(?:\\s+[A-Z][a-z]*)*))*?(?:,?\\s*[A-Z]{2,3}\\s*\\d{4})?(?:,?\\s*[A-Z][a-z]*(?:\\s+[A-Z][a-z]*)*)?(?:,?\\s*Australia|USA|United States|UK)?",
+      "category": "PII Patterns",
+      "description": "Detects street addresses in Australian, US, and UK formats"
     }
   ]
 }

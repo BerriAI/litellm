@@ -1177,3 +1177,233 @@ class TestContentFilterGuardrail:
         assert result[0].count("[AU_TFN_REDACTED]") == 2
         assert "12345678" not in result[0]
         assert "987654321" not in result[0]
+
+    def test_iban_pattern(self):
+        """
+        Test IBAN (International Bank Account Number) pattern detection
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="iban",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-iban",
+            patterns=patterns,
+        )
+
+        # Test with UK IBAN
+        result = guardrail._check_patterns("IBAN: GB82WEST12345698765432")
+        assert result is not None
+        assert result[1] == "iban"
+        assert result[2] == ContentFilterAction.MASK
+
+        # Test with German IBAN
+        result = guardrail._check_patterns("IBAN: DE89370400440532013000")
+        assert result is not None
+        assert result[1] == "iban"
+
+        # Test with French IBAN
+        result = guardrail._check_patterns("IBAN: FR1420041010050500013M02606")
+        assert result is not None
+        assert result[1] == "iban"
+
+        # Test without IBAN
+        result = guardrail._check_patterns("This is a normal message")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_iban_pattern_mask(self):
+        """
+        Test that IBAN patterns are properly masked in apply_guardrail
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="iban",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-iban-mask",
+            patterns=patterns,
+        )
+
+        # Test masking UK IBAN
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Bank account: GB82WEST12345698765432"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert "[IBAN_REDACTED]" in result[0]
+        assert "GB82WEST12345698765432" not in result[0]
+
+        # Test masking German IBAN
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Account: DE89370400440532013000"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert "[IBAN_REDACTED]" in result[0]
+        assert "DE89370400440532013000" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_iban_multiple_matches(self):
+        """
+        Test that multiple IBAN matches are all masked
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="iban",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-iban-multiple",
+            patterns=patterns,
+        )
+
+        # Test with multiple IBANs
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={
+                "texts": [
+                    "Transfer from GB82WEST12345698765432 to DE89370400440532013000"
+                ]
+            },
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].count("[IBAN_REDACTED]") == 2
+        assert "GB82WEST12345698765432" not in result[0]
+        assert "DE89370400440532013000" not in result[0]
+
+    def test_street_address_pattern(self):
+        """
+        Test street address pattern detection for AU/US/UK formats
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="street_address",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-street-address",
+            patterns=patterns,
+        )
+
+        # Test with Australian address
+        result = guardrail._check_patterns(
+            "Office at 123 Main Street, Sydney NSW 2000, Australia"
+        )
+        assert result is not None
+        assert result[1] == "street_address"
+        assert result[2] == ContentFilterAction.MASK
+
+        # Test with US address
+        result = guardrail._check_patterns("Located at 1600 Pennsylvania Avenue")
+        assert result is not None
+        assert result[1] == "street_address"
+
+        # Test with UK address
+        result = guardrail._check_patterns("Visit 10 Downing Street, Westminster")
+        assert result is not None
+        assert result[1] == "street_address"
+
+        # Test without address
+        result = guardrail._check_patterns("This is a normal message")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_street_address_pattern_mask(self):
+        """
+        Test that street addresses are properly masked in apply_guardrail
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="street_address",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-address-mask",
+            patterns=patterns,
+        )
+
+        # Test masking Australian address
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Employee lives at 123 Main Street, Sydney NSW 2000"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert "[STREET_ADDRESS_REDACTED]" in result[0]
+        assert "123 Main Street" not in result[0]
+
+        # Test masking US address
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Office at 350 Fifth Ave., New York"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert "[STREET_ADDRESS_REDACTED]" in result[0]
+        assert "350 Fifth Ave" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_street_address_multiple_matches(self):
+        """
+        Test that multiple street addresses are all masked
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="street_address",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-address-multiple",
+            patterns=patterns,
+        )
+
+        # Test with multiple addresses
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={
+                "texts": [
+                    "Moving from 123 Main Street, Sydney to 456 Oak Avenue, Melbourne"
+                ]
+            },
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].count("[STREET_ADDRESS_REDACTED]") == 2
+        assert "123 Main Street" not in result[0]
+        assert "456 Oak Avenue" not in result[0]
