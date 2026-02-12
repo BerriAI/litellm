@@ -135,7 +135,7 @@ class TestDockerNoNetworkOnDeploy:
     def test_container_starts_without_network(self):
         """
         Test that the container can start with network completely disabled.
-        
+
         This test runs the container with --network=none to ensure no outbound
         network requests are required during startup.
         """
@@ -200,9 +200,7 @@ environment_variables: {}
         )
 
         if result.returncode != 0:
-            pytest.fail(
-                f"Failed to start container: {result.stderr}"
-            )
+            pytest.fail(f"Failed to start container: {result.stderr}")
 
         # Wait for container to start up
         time.sleep(5)
@@ -240,12 +238,7 @@ environment_variables: {}
 
         is_running = inspect_result.stdout.strip() == "true"
 
-        # Print diagnostic info
-        print("\n=== Container Startup Logs (first 100 lines) ===")
-        log_lines = logs.split("\n")[:100]
-        for line in log_lines:
-            print(line)
-        print("=" * 50)
+        # If container crashed, get exit code and reason
 
         # If container crashed, get exit code and reason
         if not is_running:
@@ -281,7 +274,7 @@ environment_variables: {}
         """
         Static analysis test: check that startup code doesn't contain
         hardcoded external URLs that would be called during import/startup.
-        
+
         This is a complementary test to catch issues without needing Docker.
         """
         # Directories to check for startup code
@@ -337,22 +330,15 @@ environment_variables: {}
                         content = f.read()
 
                     for pattern in problematic_patterns:
-                        matches = re.findall(
-                            pattern, content, re.MULTILINE
-                        )
+                        matches = re.findall(pattern, content, re.MULTILINE)
                         if matches:
-                            issues_found.append(
-                                f"{filepath}: {pattern} matched"
-                            )
+                            issues_found.append(f"{filepath}: {pattern} matched")
                 except Exception:
                     pass  # Skip unreadable files
 
         # This test is informational - we document but don't fail
         if issues_found:
-            print(
-                "\n=== Potential startup network calls found ===\n"
-                + "\n".join(issues_found)
-            )
+             pass
 
 
 @pytest.mark.skipif(
@@ -362,10 +348,10 @@ environment_variables: {}
 def test_container_build_no_network_fetch():
     """
     Test that the Docker build process doesn't require network for runtime.
-    
+
     This verifies that all dependencies are properly bundled and no
     runtime network calls are made during container initialization.
-    
+
     Note: Build itself may need network for pip install, but runtime should not.
     """
     # This is a simplified version - full test would need to:
@@ -396,8 +382,10 @@ def test_container_build_no_network_fetch():
             ):
                 problematic.append(f"Line {i}: {line.strip()}")
 
-    assert len(problematic) == 0, (
-        f"Dockerfile CMD/ENTRYPOINT contains network calls: {problematic}"
-    )
+    assert (
+        len(problematic) == 0
+    ), f"Dockerfile CMD/ENTRYPOINT contains network calls: {problematic}"
 
-    print("\nDockerfile CMD/ENTRYPOINT does not contain network calls.")
+    assert (
+        len(problematic) == 0
+    ), f"Dockerfile CMD/ENTRYPOINT contains network calls: {problematic}"

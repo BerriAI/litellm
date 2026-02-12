@@ -45,6 +45,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 
+
 class CacheCallTracker:
     """
     Tracks cache read/write operations by wrapping DualCache methods.
@@ -184,10 +185,6 @@ async def test_get_key_object_warm_cache():
 
     summary = tracker.get_summary()
 
-    print("\n=== get_key_object WARM CACHE ===")
-    print(f"Cache reads: {summary['total_cache_reads']}")
-    print(f"Keys read: {summary['cache_read_keys']}")
-
     # Should have exactly 1 cache read
     assert summary["total_cache_reads"] == 1
     assert hashed_token in summary["cache_read_keys"]
@@ -221,7 +218,7 @@ async def test_get_key_object_cold_cache():
     mock_prisma = MagicMock()
     mock_prisma.get_data = AsyncMock(return_value=valid_token)
 
-    result = await get_key_object(
+    await get_key_object(
         hashed_token=hashed_token,
         prisma_client=mock_prisma,
         user_api_key_cache=tracked_cache,
@@ -230,10 +227,6 @@ async def test_get_key_object_cold_cache():
     )
 
     summary = tracker.get_summary()
-
-    print("\n=== get_key_object COLD CACHE ===")
-    print(f"Cache reads: {summary['total_cache_reads']}")
-    print(f"Cache writes: {summary['total_cache_writes']}")
 
     # Should have 1 cache read (miss) and at least 1 cache write (populate cache)
     assert summary["total_cache_reads"] >= 1
@@ -267,7 +260,7 @@ async def test_get_team_object_warm_cache():
     mock_prisma.db.litellm_teamtable = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock()
 
-    result = await get_team_object(
+    await get_team_object(
         team_id=team_id,
         prisma_client=mock_prisma,
         user_api_key_cache=tracked_cache,
@@ -277,10 +270,6 @@ async def test_get_team_object_warm_cache():
 
     summary = tracker.get_summary()
 
-    print("\n=== get_team_object WARM CACHE ===")
-    print(f"Cache reads: {summary['total_cache_reads']}")
-    print(f"Keys read: {summary['cache_read_keys']}")
-
     assert summary["total_cache_reads"] >= 1
     assert cache_key in summary["cache_read_keys"]
 
@@ -289,7 +278,7 @@ async def test_get_team_object_warm_cache():
 
 
 # ============================================================================
-# TEST: get_user_object cache behavior  
+# TEST: get_user_object cache behavior
 # ============================================================================
 
 
@@ -312,7 +301,7 @@ async def test_get_user_object_warm_cache():
     mock_prisma.db.litellm_usertable = MagicMock()
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock()
 
-    result = await get_user_object(
+    await get_user_object(
         user_id=user_id,
         prisma_client=mock_prisma,
         user_api_key_cache=tracked_cache,
@@ -322,10 +311,6 @@ async def test_get_user_object_warm_cache():
     )
 
     summary = tracker.get_summary()
-
-    print("\n=== get_user_object WARM CACHE ===")
-    print(f"Cache reads: {summary['total_cache_reads']}")
-    print(f"Keys read: {summary['cache_read_keys']}")
 
     assert summary["total_cache_reads"] >= 1
     assert user_id in summary["cache_read_keys"]
@@ -368,7 +353,7 @@ async def test_get_team_membership_warm_cache():
     mock_prisma.db.litellm_teammembership = MagicMock()
     mock_prisma.db.litellm_teammembership.find_unique = AsyncMock()
 
-    result = await get_team_membership(
+    await get_team_membership(
         user_id=user_id,
         team_id=team_id,
         prisma_client=mock_prisma,
@@ -378,10 +363,6 @@ async def test_get_team_membership_warm_cache():
     )
 
     summary = tracker.get_summary()
-
-    print("\n=== get_team_membership WARM CACHE ===")
-    print(f"Cache reads: {summary['total_cache_reads']}")
-    print(f"Keys read: {summary['cache_read_keys']}")
 
     assert summary["total_cache_reads"] >= 1
     assert cache_key in summary["cache_read_keys"]
@@ -399,11 +380,11 @@ async def test_get_team_membership_warm_cache():
 async def test_team_membership_cache_key_duplication():
     """
     Document the team membership duplicate cache key issue:
-    
+
     Team membership is queried via TWO different cache keys:
     1. "{team_id}_{user_id}" - used in user_api_key_auth.py:1048
     2. "team_membership:{user_id}:{team_id}" - used in auth_checks.py:960 (get_team_membership)
-    
+
     This test documents that both keys refer to the same data but use different
     cache key formats, potentially leading to duplicate lookups.
     """
@@ -414,20 +395,21 @@ async def test_team_membership_cache_key_duplication():
     key_format_1 = f"{team_id}_{user_id}"  # user_api_key_auth format
     key_format_2 = f"team_membership:{user_id}:{team_id}"  # auth_checks format
 
-    membership_data = {
+    _ = {
         "user_id": user_id,
         "team_id": team_id,
         "spend": 3.0,
     }
 
     # Document that these are different keys
-    assert key_format_1 != key_format_2, "Cache keys should be different (this is the bug)"
-    
-    print("\n=== DOCUMENTATION: Team Membership Duplicate Cache Keys ===")
-    print(f"Cache key format 1 (user_api_key_auth): {key_format_1}")
-    print(f"Cache key format 2 (auth_checks):       {key_format_2}")
-    print("\nRecommendation: Consolidate to a single cache key format")
-    print("to avoid duplicate cache reads/writes for the same data.")
+    assert (
+        key_format_1 != key_format_2
+    ), "Cache keys should be different (this is the bug)"
+
+    # Document that these are different keys
+    assert (
+        key_format_1 != key_format_2
+    ), "Cache keys should be different (this is the bug)"
 
 
 # ============================================================================
@@ -440,7 +422,7 @@ async def test_full_hot_path_network_count():
     """
     Summary test that counts all network operations when processing
     a request with a key that has team_id and user_id attached.
-    
+
     This test verifies the baseline number of cache operations expected
     on a fully warm cache path.
     """
@@ -450,7 +432,9 @@ async def test_full_hot_path_network_count():
     hashed_token = hash_token(api_key)
 
     # Create all objects
-    valid_token = _create_valid_token(api_key, team_id, user_id, has_team_member_spend=True)
+    valid_token = _create_valid_token(
+        api_key, team_id, user_id, has_team_member_spend=True
+    )
     team_obj = _create_team_object(team_id)
     user_obj = _create_user_object(user_id)
     membership_data = LiteLLM_TeamMembership(
@@ -466,8 +450,12 @@ async def test_full_hot_path_network_count():
     await cache.async_set_cache(key=hashed_token, value=valid_token)
     await cache.async_set_cache(key=f"team_id:{team_id}", value=team_obj)
     await cache.async_set_cache(key=user_id, value=user_obj)
-    await cache.async_set_cache(key=f"team_membership:{user_id}:{team_id}", value=membership_data.model_dump())
-    await cache.async_set_cache(key=f"{team_id}_{user_id}", value=membership_data.model_dump())
+    await cache.async_set_cache(
+        key=f"team_membership:{user_id}:{team_id}", value=membership_data.model_dump()
+    )
+    await cache.async_set_cache(
+        key=f"{team_id}_{user_id}", value=membership_data.model_dump()
+    )
 
     # Create tracker AFTER populating cache
     tracker = CacheCallTracker()
@@ -484,7 +472,7 @@ async def test_full_hot_path_network_count():
         parent_otel_span=None,
         proxy_logging_obj=None,
     )
-    
+
     await get_team_object(
         team_id=team_id,
         prisma_client=mock_prisma,
@@ -492,7 +480,7 @@ async def test_full_hot_path_network_count():
         parent_otel_span=None,
         proxy_logging_obj=None,
     )
-    
+
     await get_user_object(
         user_id=user_id,
         prisma_client=mock_prisma,
@@ -501,7 +489,7 @@ async def test_full_hot_path_network_count():
         proxy_logging_obj=None,
         user_id_upsert=False,
     )
-    
+
     await get_team_membership(
         user_id=user_id,
         team_id=team_id,
@@ -513,31 +501,18 @@ async def test_full_hot_path_network_count():
 
     summary = tracker.get_summary()
 
-    print("\n" + "=" * 70)
-    print("HOT PATH NETWORK REQUEST SUMMARY")
-    print("Key with team_id and user_id attached - WARM CACHE")
-    print("=" * 70)
-    print(f"Cache reads:  {summary['total_cache_reads']}")
-    print(f"Cache writes: {summary['total_cache_writes']}")
-    print(f"DB queries:   {summary['total_db_queries']}")
-    print(f"TOTAL:        {summary['total_network_requests']}")
-    print(f"\nCache keys read:")
-    for key in summary["cache_read_keys"]:
-        print(f"  - {key}")
-    print("=" * 70)
-
     # Assertions for expected baseline
     # On warm cache: 4 reads (key, team, user, team_membership)
-    assert summary["total_cache_reads"] == 4, (
-        f"Expected 4 cache reads on warm path, got {summary['total_cache_reads']}"
-    )
-    
+    assert (
+        summary["total_cache_reads"] == 4
+    ), f"Expected 4 cache reads on warm path, got {summary['total_cache_reads']}"
+
     # No DB queries on warm cache
-    assert summary["total_db_queries"] == 0, (
-        f"Expected 0 DB queries on warm path, got {summary['total_db_queries']}"
-    )
-    
+    assert (
+        summary["total_db_queries"] == 0
+    ), f"Expected 0 DB queries on warm path, got {summary['total_db_queries']}"
+
     # Total network requests should be exactly 4 on warm cache
-    assert summary["total_network_requests"] == 4, (
-        f"Expected 4 total network requests on warm path, got {summary['total_network_requests']}"
-    )
+    assert (
+        summary["total_network_requests"] == 4
+    ), f"Expected 4 total network requests on warm path, got {summary['total_network_requests']}"
