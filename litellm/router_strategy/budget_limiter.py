@@ -57,6 +57,36 @@ class _LiteLLMParamsDictView:
     def __getattr__(self, key: str) -> Any:
         return self._params.get(key)
 
+    def __getitem__(self, key: str) -> Any:
+        return self._params.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._params
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._params.get(key, default)
+
+    def keys(self):
+        return self._params.keys()
+
+    def values(self):
+        return self._params.values()
+
+    def items(self):
+        return self._params.items()
+
+    def __iter__(self):
+        return iter(self._params)
+
+    def __len__(self) -> int:
+        return len(self._params)
+
+    def dict(self) -> Dict[str, Any]:
+        return dict(self._params)
+
+    def model_dump(self) -> Dict[str, Any]:
+        return dict(self._params)
+
 
 class RouterBudgetLimiting(CustomLogger):
     def __init__(

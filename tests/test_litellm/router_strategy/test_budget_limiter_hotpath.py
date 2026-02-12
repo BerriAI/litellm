@@ -43,6 +43,54 @@ async def test_get_llm_provider_for_deployment_dict_does_not_require_litellm_par
 
 
 @pytest.mark.asyncio
+async def test_get_llm_provider_for_deployment_dict_view_supports_mapping_and_attr_access(
+    disable_budget_sync, monkeypatch
+):
+    observed = {}
+
+    def _future_style_get_llm_provider(
+        model,
+        custom_llm_provider=None,
+        api_base=None,
+        api_key=None,
+        litellm_params=None,
+    ):
+        assert litellm_params is not None
+        observed["model_attr"] = litellm_params.model
+        observed["provider_get"] = litellm_params.get("custom_llm_provider")
+        observed["api_base_item"] = litellm_params["api_base"]
+        observed["has_api_key"] = "api_key" in litellm_params
+        observed["model_dump"] = litellm_params.model_dump()
+        return model, "openai", None, None
+
+    monkeypatch.setattr(
+        "litellm.router_strategy.budget_limiter.litellm.get_llm_provider",
+        _future_style_get_llm_provider,
+    )
+
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={},
+    )
+
+    deployment = {
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "custom_llm_provider": "openai",
+            "api_base": "https://api.openai.com/v1",
+        }
+    }
+    provider = provider_budget._get_llm_provider_for_deployment(deployment)
+
+    assert provider == "openai"
+    assert observed["model_attr"] == "openai/gpt-4o-mini"
+    assert observed["provider_get"] == "openai"
+    assert observed["api_base_item"] == "https://api.openai.com/v1"
+    assert observed["has_api_key"] is False
+    assert observed["model_dump"]["model"] == "openai/gpt-4o-mini"
+
+
+@pytest.mark.asyncio
 async def test_async_filter_deployments_resolves_provider_once_per_deployment(
     disable_budget_sync, monkeypatch
 ):
