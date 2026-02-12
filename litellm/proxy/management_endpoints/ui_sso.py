@@ -695,7 +695,7 @@ async def get_generic_sso_response(
     try:
         result = await generic_sso.verify_and_process(
             request,
-            params=SSOAuthenticationHandler.prepare_token_exchange_parameters(
+            params=await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                 request=request,
                 generic_include_client_id=generic_include_client_id,
             ),
@@ -1721,13 +1721,13 @@ class SSOAuthenticationHandler:
                 # so callbacks landing on another pod can retrieve it (multi-pod SSO).
                 cache_key = f"pkce_verifier:{redirect_params['state']}"
                 if redis_usage_cache is not None:
-                    redis_usage_cache.set_cache(
+                    await redis_usage_cache.async_set_cache(
                         key=cache_key,
                         value=json.dumps(code_verifier),
                         ttl=600,
                     )
                 else:
-                    user_api_key_cache.set_cache(
+                    await user_api_key_cache.async_set_cache(
                         key=cache_key,
                         value=code_verifier,
                         ttl=600,
@@ -2328,7 +2328,7 @@ class SSOAuthenticationHandler:
         return redirect_response
 
     @staticmethod
-    def prepare_token_exchange_parameters(
+    async def prepare_token_exchange_parameters(
         request: Request,
         generic_include_client_id: bool,
     ) -> dict:
@@ -2354,9 +2354,9 @@ class SSOAuthenticationHandler:
 
             cache_key = f"pkce_verifier:{state}"
             if redis_usage_cache is not None:
-                code_verifier = redis_usage_cache.get_cache(key=cache_key)
+                code_verifier = await redis_usage_cache.async_get_cache(key=cache_key)
             else:
-                code_verifier = user_api_key_cache.get_cache(key=cache_key)
+                code_verifier = await user_api_key_cache.async_get_cache(key=cache_key)
 
             if code_verifier:
                 # Add code_verifier to token exchange parameters (Redis returns decoded string)
@@ -2371,9 +2371,9 @@ class SSOAuthenticationHandler:
 
                 # Clean up the cache entry (single-use verifier)
                 if redis_usage_cache is not None:
-                    redis_usage_cache.delete_cache(key=cache_key)
+                    await redis_usage_cache.async_delete_cache(key=cache_key)
                 else:
-                    user_api_key_cache.delete_cache(key=cache_key)
+                    await user_api_key_cache.async_delete_cache(key=cache_key)
         return token_params
 
     @staticmethod
