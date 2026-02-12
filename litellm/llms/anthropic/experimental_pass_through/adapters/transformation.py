@@ -1,5 +1,6 @@
 import hashlib
 import json
+import copy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -756,16 +757,26 @@ class LiteLLMAnthropicMessagesAdapter:
             return None
 
         # Fix for #20997: Ensure schema is compatible with OpenAI Strict Mode
-        import copy
-        schema = copy.deepcopy(schema)
-        _ensure_strict_json_schema(schema, path=(), root=schema)
+        # Recursively adds "additionalProperties": false to all object nodes
+        def _make_strict(obj: Any):
+            if isinstance(obj, dict):
+                if obj.get("type") == "object":
+                    obj.setdefault("additionalProperties", False)
+                for value in obj.values():
+                    _make_strict(value)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _make_strict(item)
+
+        schema_copy = copy.deepcopy(schema)
+        _make_strict(schema_copy)
 
         # Convert to OpenAI response_format structure
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": "structured_output",
-                "schema": schema,
+                "schema": schema_copy,
                 "strict": True,
             },
         }

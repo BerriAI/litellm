@@ -1,5 +1,4 @@
 import pytest
-import os
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
 def test_anthropic_to_openai_strict_transformation():
