@@ -10,6 +10,8 @@ interface AdditionalModelSettingsProps {
   onTemperatureChange?: (value: number) => void;
   onMaxTokensChange?: (value: number) => void;
   onUseAdvancedParamsChange?: (value: boolean) => void;
+  mockTestFallbacks?: boolean;
+  onMockTestFallbacksChange?: (value: boolean) => void;
 }
 
 const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
@@ -19,6 +21,8 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
   onTemperatureChange,
   onMaxTokensChange,
   onUseAdvancedParamsChange,
+  mockTestFallbacks,
+  onMockTestFallbacksChange,
 }) => {
   const [internalUseAdvancedParams, setInternalUseAdvancedParams] = useState(false);
   const useAdvancedParams =
@@ -63,6 +67,20 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
       <Checkbox checked={useAdvancedParams} onChange={(e) => handleUseAdvancedParamsChange(e.target.checked)}>
         <span className="font-medium">Use Advanced Parameters</span>
       </Checkbox>
+
+      {onMockTestFallbacksChange && (
+        <Tooltip title="Causes the first request to fail so the router tries fallbacks (if configured). Use this to verify your fallback setup.">
+          <div className="flex items-center gap-1">
+            <Checkbox
+              checked={mockTestFallbacks ?? false}
+              onChange={(e) => onMockTestFallbacksChange(e.target.checked)}
+            >
+              <span className="font-medium">Simulate failure to test fallbacks</span>
+            </Checkbox>
+            <InfoCircleOutlined className="text-xs text-gray-400 cursor-help shrink-0" />
+          </div>
+        </Tooltip>
+      )}
 
       <div className="space-y-4 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
         <div>
