@@ -801,6 +801,7 @@ const sidebars = {
         "providers/elevenlabs",
         "providers/fal_ai",
         "providers/featherless_ai",
+        "providers/firmware",
         "providers/fireworks_ai",
         "providers/friendliai",
         "providers/galadriel",
