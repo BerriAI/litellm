@@ -861,6 +861,9 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
+    ## [Optional] Initialize Pyroscope continuous profiling (env: LITELLM_ENABLE_PYROSCOPE=true)
+    ProxyStartupEvent._init_pyroscope()
+
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
@@ -5550,6 +5553,55 @@ class ProxyStartupEvent:
             prof.start()
             verbose_proxy_logger.debug("Datadog Profiler started......")
 
+    @classmethod
+    def _init_pyroscope(cls):
+        """
+        Optional continuous profiling via Grafana Pyroscope.
+
+        Off by default. Enable with LITELLM_ENABLE_PYROSCOPE=true.
+        Requires: pip install pyroscope-io
+        Sends profiles to PYROSCOPE_SERVER_ADDRESS (default http://localhost:4040).
+        """
+        if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
+            print(  # noqa: T201
+                "LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
+            )
+            return
+        try:
+            import pyroscope
+
+            app_name = os.getenv("PYROSCOPE_APP_NAME")
+            if not app_name:
+                raise ValueError(
+                    "LITELLM_ENABLE_PYROSCOPE is true but PYROSCOPE_APP_NAME is not set. "
+                    "Set PYROSCOPE_APP_NAME when enabling Pyroscope."
+                )
+            server_address = os.getenv("PYROSCOPE_SERVER_ADDRESS")
+            if not server_address:
+                raise ValueError(
+                    "LITELLM_ENABLE_PYROSCOPE is true but PYROSCOPE_SERVER_ADDRESS is not set. "
+                    "Set PYROSCOPE_SERVER_ADDRESS when enabling Pyroscope."
+                )
+            tags = {}
+            env_name = os.getenv("OTEL_ENVIRONMENT_NAME") or os.getenv(
+                "LITELLM_DEPLOYMENT_ENVIRONMENT",
+            )
+            if env_name:
+                tags["environment"] = env_name
+            pyroscope.configure(
+                app_name=app_name,
+                server_address=server_address,
+                tags=tags if tags else None,
+            )
+            print(  # noqa: T201
+                f"LiteLLM: Pyroscope profiling started (app_name={app_name}, server_address={server_address}). "
+                f"View CPU profiles at the Pyroscope UI and select application '{app_name}'."
+            )
+        except ImportError:
+            print(  # noqa: T201
+                "LiteLLM: LITELLM_ENABLE_PYROSCOPE is set but the 'pyroscope-io' package is not installed. "
+                "Pyroscope profiling will not run. Install with: pip install pyroscope-io"
+            )
 
 #### API ENDPOINTS ####
 @router.get(
