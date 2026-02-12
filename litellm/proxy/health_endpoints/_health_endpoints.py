@@ -1276,7 +1276,7 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
-                **db_health_status,
+                "last_updated": db_health_status.get("last_updated"),
             }
         else:
             return {
