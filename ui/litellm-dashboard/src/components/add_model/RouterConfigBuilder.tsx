@@ -54,7 +54,7 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
             model: route.name || route.model || "", // handle both 'name' and 'model' fields
             utterances: route.utterances || [],
             description: route.description || "",
-            score_threshold: route.score_threshold || 0.5,
+            score_threshold: route.score_threshold ?? 0.5,
           };
         });
         return initializedRoutes;
