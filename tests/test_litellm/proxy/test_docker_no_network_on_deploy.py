@@ -385,7 +385,3 @@ def test_container_build_no_network_fetch():
     assert (
         len(problematic) == 0
     ), f"Dockerfile CMD/ENTRYPOINT contains network calls: {problematic}"
-
-    assert (
-        len(problematic) == 0
-    ), f"Dockerfile CMD/ENTRYPOINT contains network calls: {problematic}"
