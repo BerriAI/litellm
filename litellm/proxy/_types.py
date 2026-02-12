@@ -633,6 +633,9 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
+        "/invitation/new",
+        "/invitation/delete",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -1910,6 +1913,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     guardrails: Optional[PassThroughGuardrailsConfig] = Field(
         default=None,
         description="Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).",
+    )
+    is_from_config: bool = Field(
+        default=False,
+        description="True if this endpoint is defined in the config file, False if from DB. Config-defined endpoints cannot be edited via the UI.",
     )
 
 

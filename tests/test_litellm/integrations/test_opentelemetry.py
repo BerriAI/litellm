@@ -274,6 +274,26 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertEqual(config.deployment_environment, "production")
         self.assertEqual(config.model_id, "custom-service")
 
+    @patch.dict(os.environ, {}, clear=True)
+    def test_open_telemetry_config_auto_infer_otlp_http_when_endpoint_set(self):
+        """When endpoint is set but exporter is default 'console', auto-infer 'otlp_http'.
+
+        This fixes an issue where UI-configured OTEL settings would default to console
+        output instead of sending traces to the configured endpoint.
+        See: https://github.com/BerriAI/litellm/issues/XXXX
+        """
+        # When endpoint is specified without explicit exporter, should auto-infer otlp_http
+        config = OpenTelemetryConfig(endpoint="https://otel-collector.example.com:443")
+        self.assertEqual(config.exporter, "otlp_http")
+
+        # When exporter is explicitly set to something other than console, should not override
+        config_grpc = OpenTelemetryConfig(exporter="grpc", endpoint="https://otel-collector.example.com:443")
+        self.assertEqual(config_grpc.exporter, "grpc")
+
+        # When no endpoint is set, should keep console as default
+        config_no_endpoint = OpenTelemetryConfig()
+        self.assertEqual(config_no_endpoint.exporter, "console")
+
     def wait_for_spans(self, exporter: InMemorySpanExporter, prefix: str):
         """Poll until we see at least one span with an attribute key starting with `prefix`."""
         deadline = time.time() + self.POLL_TIMEOUT

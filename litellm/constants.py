@@ -48,6 +48,14 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
     os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
+
+# Model cost map validation constants
+MODEL_COST_MAP_MIN_MODEL_COUNT = int(
+    os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
+)  # Minimum number of models a fetched cost map must contain to be considered valid
+MODEL_COST_MAP_MAX_SHRINK_RATIO = float(
+    os.getenv("MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5)
+)  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
 DEFAULT_IMAGE_WIDTH = int(os.getenv("DEFAULT_IMAGE_WIDTH", 300))
 DEFAULT_IMAGE_HEIGHT = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
@@ -205,6 +213,10 @@ REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_bu
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
+# Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
+LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(
+    os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000)
+)
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -1298,6 +1310,9 @@ DEFAULT_SLACK_ALERTING_THRESHOLD = int(
     os.getenv("DEFAULT_SLACK_ALERTING_THRESHOLD", 300)
 )
 MAX_TEAM_LIST_LIMIT = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
+MAX_POLICY_ESTIMATE_IMPACT_ROWS = int(
+    os.getenv("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000)
+)
 DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(
     os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7)
 )

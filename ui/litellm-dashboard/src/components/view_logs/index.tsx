@@ -10,29 +10,30 @@ import { Row } from "@tanstack/react-table";
 import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Button, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
+import NewBadge from "../common_components/NewBadge";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import { allEndUsersCall, keyInfoV1Call, keyListCall, sessionSpendLogsCall, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { columns, LogEntry } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
+import { ERROR_CODE_OPTIONS, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
+import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { prefetchLogDetails } from "./prefetch";
-import { ERROR_CODE_OPTIONS, QUICK_SELECT_OPTIONS } from "./constants";
 import { RequestResponsePanel } from "./RequestResponsePanel";
 import { SessionView } from "./SessionView";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
 import { DataTable } from "./table";
 import { VectorStoreViewer } from "./VectorStoreViewer";
-import NewBadge from "../common_components/NewBadge";
-import { LogDetailsDrawer } from "./LogDetailsDrawer";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -205,7 +206,8 @@ export default function SpendLogsTable({
         filterByCurrentUser ? userID : undefined,
         selectedEndUser,
         selectedStatus,
-        selectedModel,
+        undefined,
+        selectedModel || undefined,
       );
 
       // Trigger prefetch for all logs
@@ -404,7 +406,7 @@ export default function SpendLogsTable({
     {
       name: "Model",
       label: "Model",
-      isSearchable: false,
+      customComponent: PaginatedModelSelect,
     },
     {
       name: "Key Alias",

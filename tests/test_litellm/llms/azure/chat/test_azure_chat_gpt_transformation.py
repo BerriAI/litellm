@@ -30,6 +30,19 @@ class TestAzureOpenAIConfig:
         assert not config._is_response_format_supported_model("gpt-35-turbo")
 
 
+    def test_prompt_cache_key_supported(self):
+        """Test that 'prompt_cache_key' is in supported params for Azure OpenAI chat completion models.
+
+        OpenAI's Chat Completions API supports prompt_cache_key for cache routing optimization.
+        """
+        config = AzureOpenAIConfig()
+        supported_params = config.get_supported_openai_params("gpt-4.1-nano")
+        assert "prompt_cache_key" in supported_params
+
+        supported_params = config.get_supported_openai_params("gpt-4.1")
+        assert "prompt_cache_key" in supported_params
+
+
 def test_map_openai_params_with_preview_api_version():
     config = AzureOpenAIConfig()
     non_default_params = {
