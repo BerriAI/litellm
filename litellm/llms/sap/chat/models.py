@@ -1,6 +1,6 @@
 from typing import Union, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError
 
 
 def validate_different_content(v: Union[str, dict, list]) -> str:
@@ -95,6 +95,8 @@ class SAPToolChatMessage(BaseModel):
 
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
+ChatMessage = Union[SAPUserMessage, SAPAssistantMessage, SAPToolChatMessage, SAPMessage]
+
 
 class ResponseFormat(BaseModel):
     type_: Literal["text", "json_object"] = Field(default="text", alias="type")
@@ -110,3 +112,110 @@ class JSONResponseSchema(BaseModel):
 class ResponseFormatJSONSchema(BaseModel):
     type_: Literal["json_schema"] = Field(default="json_schema", alias="type")
     json_schema: JSONResponseSchema
+
+
+class KeyValueListPair(BaseModel):
+    key: str
+    value: list[str]
+
+
+class DocumentMetadataKeyValueListPairs(KeyValueListPair):
+    select_mode: list[Literal['ignoreIfKeyAbsent']] = None
+
+
+class GroundingSearchConfig(BaseModel):
+    max_chunk_count: int = Field(default=None, ge=0)
+    max_document_count: int = Field(default=None, ge=0)
+
+    @model_validator(mode='after')
+    def validate_max_chunk_count_and_max_document_count(self):
+        if self.max_chunk_count and self.max_document_count:
+            raise ValidationError("Cannot specify both maxChunkCount and maxDocumentCount.")
+        return self
+
+
+class DocumentGroundingFilter(BaseModel):
+    id_: str = Field(default=None, alias="id")
+    data_repository_type: Literal["vector", "help.sap.com"]
+    search_config: GroundingSearchConfig = None
+    data_repositories: list[str] = None
+    data_repository_metadata: list[KeyValueListPair] = None
+    document_metadata: list[DocumentMetadataKeyValueListPairs] = None
+    chunk_metadata: list[KeyValueListPair] = None
+
+
+class DocumentGroundingPlaceholders(BaseModel):
+    input: list[str] = Field(min_length=1)
+    output: str
+
+
+class DocumentGroundingConfig(BaseModel):
+    filters: list[DocumentGroundingFilter] = None
+    placeholders: DocumentGroundingPlaceholders
+    metadata_params: list[str] = None
+
+
+class GroundingModuleConfig(BaseModel):
+    type_: Literal["document_grounding_service"] = Field(default="document_grounding_service", alias="type")
+    config: DocumentGroundingConfig
+
+
+class Template(BaseModel):
+    template: list[ChatMessage]
+    defaults: dict = None
+    response_format: ResponseFormat | ResponseFormatJSONSchema = None
+    tools: list[FunctionTool] = None
+
+
+class LLMModelDetails(BaseModel):
+    name: str
+    version: str = "latest"
+    params: dict = None
+
+
+class PromptTemplatingModuleConfig(BaseModel):
+    prompt: Template
+    model: LLMModelDetails
+
+
+class ModuleConfig(BaseModel):
+    prompt_templating: PromptTemplatingModuleConfig
+    # filtering: Optional[FilteringModuleConfig] = None
+    # masking: Optional[MaskingModuleConfig] = None
+    grounding: GroundingModuleConfig = None
+    # translation: Optional[TranslationModuleConfig] = None
+
+
+class GlobalStreamOptions(BaseModel):
+    enabled: bool = False
+    chunk_size: int = 100
+    delimiters: list[str] = None
+
+    @model_validator(mode='after')
+    def validate_streaming_params(self):
+        """Validate that chunk_size and delimiters are not set when enabled is False."""
+        if not self.enabled:
+            if self.chunk_size != 100:  # Check if chunk_size was explicitly set
+                raise ValueError("chunk_size cannot be set when enabled is False")
+            if self.delimiters is not None:
+                raise ValueError("delimiters cannot be set when enabled is False")
+        return self
+
+    def model_dump(self, **kwargs):
+        """Override model_dump to exclude chunk_size and delimiters when enabled is False."""
+        data = super().model_dump(**kwargs)
+        if not self.enabled:
+            # Remove chunk_size and delimiters from output when streaming is disabled
+            data.pop('chunk_size', None)
+            data.pop('delimiters', None)
+        return data
+
+
+class OrchestrationConfig(BaseModel):
+    modules: ModuleConfig
+    stream: GlobalStreamOptions = None
+
+
+class OrchestrationRequest(BaseModel):
+    config: OrchestrationConfig
+    placeholder_values: dict = None
