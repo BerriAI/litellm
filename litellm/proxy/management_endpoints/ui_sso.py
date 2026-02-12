@@ -11,7 +11,6 @@ Has all /sso/* routes
 import asyncio
 import base64
 import hashlib
-import json
 import os
 import secrets
 from copy import deepcopy
@@ -1723,7 +1722,7 @@ class SSOAuthenticationHandler:
                 if redis_usage_cache is not None:
                     await redis_usage_cache.async_set_cache(
                         key=cache_key,
-                        value=json.dumps(code_verifier),
+                        value=code_verifier,
                         ttl=600,
                     )
                 else:
