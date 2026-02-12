@@ -143,7 +143,7 @@ class TestGetOptionalParamsIntegration:
 class TestOpenAIChatCompletionStreamingHandler:
     """Tests for OpenAIChatCompletionStreamingHandler.chunk_parser()"""
 
-    def test_chunk_parser_pre serves_usage(self):
+    def test_chunk_parser_preserves_usage(self):
         """
         Test that chunk_parser preserves the usage field from streaming chunks.
 
@@ -203,6 +203,11 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.id == "gen-123"
         assert result.choices[0].delta.content == "Hello"
         assert not hasattr(result, "usage") or result.usage is None
+
+
+class TestPromptCacheKeyIntegration:
+    """Tests for prompt_cache_key support"""
+
     def test_prompt_cache_key_in_optional_params(self):
         """Test that 'prompt_cache_key' flows through get_optional_params for OpenAI models."""
         from litellm.utils import get_optional_params
