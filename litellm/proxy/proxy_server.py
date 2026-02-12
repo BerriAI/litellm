@@ -338,7 +338,10 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (
+    admin_can_invite_user,
+    _user_has_admin_privileges,
+)
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
 )
@@ -427,6 +430,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
+from litellm.proxy.policy_engine.policy_resolve_endpoints import (
+    router as policy_resolve_router,
+)
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -4603,11 +4609,16 @@ async def initialize(  # noqa: PLR0915
             elif litellm_log_setting.upper() == "DEBUG":
                 import logging
 
-                from litellm._logging import verbose_proxy_logger, verbose_router_logger
+                from litellm._logging import (
+                    verbose_logger,
+                    verbose_proxy_logger,
+                    verbose_router_logger,
+                )
 
+                verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
                 verbose_router_logger.setLevel(
                     level=logging.DEBUG
-                )  # set router logs to info
+                )  # set router logs to debug
                 verbose_proxy_logger.setLevel(
                     level=logging.DEBUG
                 )  # set proxy logs to debug
@@ -10372,7 +10383,17 @@ async def new_invitation(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Allow proxy admins and org/team admins (admin status from DB via get_user_object)
+        has_access = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or await _user_has_admin_privileges(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )
+        if not has_access:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -10382,6 +10403,23 @@ async def new_invitation(
                     )
                 },
             )
+
+        # Org/team admins can only invite users within their org/team
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            can_invite = await admin_can_invite_user(
+                target_user_id=data.user_id,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if not can_invite:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "You can only create invitations for users in your organization or team."
+                    },
+                )
 
         response = await create_invitation_for_user(
             data=data,
@@ -10535,7 +10573,16 @@ async def invitation_delete(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Proxy admins can delete any invitation; org admins only their own
+    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_other_admin = await _user_has_admin_privileges(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    if not is_proxy_admin and not is_other_admin:
         raise HTTPException(
             status_code=400,
             detail={
@@ -10545,6 +10592,24 @@ async def invitation_delete(
                 )
             },
         )
+
+    # Org admins can only delete invitations they created
+    if is_other_admin and not is_proxy_admin:
+        invitation = await prisma_client.db.litellm_invitationlink.find_unique(
+            where={"id": data.invitation_id}
+        )
+        if invitation is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invitation id does not exist in the database."},
+            )
+        if invitation.created_by != user_api_key_dict.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Organization admins can only delete invitations they created."
+                },
+            )
 
     response = await prisma_client.db.litellm_invitationlink.delete(
         where={"id": data.invitation_id}
@@ -11746,6 +11811,7 @@ app.include_router(analytics_router)
 app.include_router(guardrails_router)
 app.include_router(policy_router)
 app.include_router(policy_crud_router)
+app.include_router(policy_resolve_router)
 app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)

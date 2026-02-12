@@ -2,9 +2,10 @@
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
@@ -76,6 +77,17 @@ class TestOpenAIGPTConfig:
         for param in base_expected_params:
             assert param in supported_params, f"Expected '{param}' in supported params"
 
+    def test_prompt_cache_key_supported(self):
+        """Test that 'prompt_cache_key' is in supported params for OpenAI chat completion models.
+
+        OpenAI's Chat Completions API supports prompt_cache_key for cache routing optimization.
+        """
+        supported_params = self.config.get_supported_openai_params("gpt-4.1-nano")
+        assert "prompt_cache_key" in supported_params
+
+        supported_params = self.config.get_supported_openai_params("gpt-4.1")
+        assert "prompt_cache_key" in supported_params
+
 
 class TestGetOptionalParamsIntegration:
     """Integration tests using litellm.get_optional_params()"""
@@ -131,7 +143,7 @@ class TestGetOptionalParamsIntegration:
 class TestOpenAIChatCompletionStreamingHandler:
     """Tests for OpenAIChatCompletionStreamingHandler.chunk_parser()"""
 
-    def test_chunk_parser_preserves_usage(self):
+    def test_chunk_parser_pre serves_usage(self):
         """
         Test that chunk_parser preserves the usage field from streaming chunks.
 
@@ -191,3 +203,13 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.id == "gen-123"
         assert result.choices[0].delta.content == "Hello"
         assert not hasattr(result, "usage") or result.usage is None
+    def test_prompt_cache_key_in_optional_params(self):
+        """Test that 'prompt_cache_key' flows through get_optional_params for OpenAI models."""
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="gpt-4.1-nano",
+            custom_llm_provider="openai",
+            prompt_cache_key="test-cache-key-123",
+        )
+        assert optional_params.get("prompt_cache_key") == "test-cache-key-123"
