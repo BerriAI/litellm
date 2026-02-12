@@ -450,7 +450,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   Alias
-                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name with spaces replaced by underscores. Cannot contain spaces or hyphens; use underscores instead.">
+                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
