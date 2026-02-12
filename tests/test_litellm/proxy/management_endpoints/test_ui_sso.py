@@ -3272,8 +3272,10 @@ class TestPKCEFunctionality:
                     # Pod B: callback with same state, retrieve from "Redis"
                     mock_request = MagicMock(spec=Request)
                     mock_request.query_params = {"state": "multi_pod_state_xyz"}
-                    token_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                        request=mock_request, generic_include_client_id=False
+                    token_params = (
+                        await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                            request=mock_request, generic_include_client_id=False
+                        )
                     )
                     assert "code_verifier" in token_params
                     assert token_params["code_verifier"] == json.loads(stored_value)
