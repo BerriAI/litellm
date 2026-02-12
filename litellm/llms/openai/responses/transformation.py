@@ -240,6 +240,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         event_pydantic_model = OpenAIResponsesAPIConfig.get_event_model_class(
             event_type=event_type
         )
+        # Some OpenAI-compatible providers send error.code: null; coalesce so validation succeeds.
+        try:
+            error_obj = parsed_chunk.get("error")
+            if isinstance(error_obj, dict) and error_obj.get("code") is None:
+                parsed_chunk = dict(parsed_chunk)
+                parsed_chunk["error"] = dict(error_obj)
+                parsed_chunk["error"]["code"] = "unknown_error"
+        except Exception:
+            verbose_logger.debug("Failed to coalesce error.code in parsed_chunk")
         return event_pydantic_model(**parsed_chunk)
 
     @staticmethod
