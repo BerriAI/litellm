@@ -60,11 +60,18 @@ def fetch_remote_policy_templates(url: str, timeout: int = 5) -> List[Any]:
     """
     Fetch policy templates from a remote URL.
 
-    Returns the parsed JSON list. Raises on network/parse errors.
+    Returns the parsed JSON list. Falls back to local backup on any error.
     """
-    response = httpx.get(url, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = httpx.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to fetch policy templates from {url}: {e}. "
+            "Falling back to local backup."
+        )
+        return load_local_policy_templates()
 
 
 def get_policy_templates_list() -> List[Any]:
@@ -86,35 +93,23 @@ def get_policy_templates_list() -> List[Any]:
         )
         return load_local_policy_templates()
 
-    # Try to fetch from GitHub
-    try:
-        templates = fetch_remote_policy_templates(POLICY_TEMPLATES_GITHUB_URL)
+    # Fetch from GitHub (automatically falls back to local on any error)
+    templates = fetch_remote_policy_templates(POLICY_TEMPLATES_GITHUB_URL)
 
-        # Validate it's a non-empty list
-        if not isinstance(templates, list):
-            verbose_proxy_logger.warning(
-                f"Fetched policy templates is not a list (type={type(templates).__name__}). "
-                "Falling back to local backup."
-            )
-            return load_local_policy_templates()
-
-        if len(templates) == 0:
-            verbose_proxy_logger.warning(
-                "Fetched policy templates is empty. Falling back to local backup."
-            )
-            return load_local_policy_templates()
-
-        verbose_proxy_logger.debug(
-            f"Successfully fetched {len(templates)} policy templates from GitHub"
-        )
-        return templates
-
-    except Exception as e:
+    # Validate it's a non-empty list
+    if not isinstance(templates, list):
         verbose_proxy_logger.warning(
-            f"Failed to fetch policy templates from {POLICY_TEMPLATES_GITHUB_URL}: {e}. "
-            "Falling back to local backup."
+            f"Policy templates is not a list (type={type(templates).__name__}). "
+            "Using local backup."
         )
         return load_local_policy_templates()
+
+    if len(templates) == 0:
+        verbose_proxy_logger.warning("Policy templates is empty. Using local backup.")
+        return load_local_policy_templates()
+
+    verbose_proxy_logger.debug(f"Successfully loaded {len(templates)} policy templates")
+    return templates
 
 
 @router.post(
