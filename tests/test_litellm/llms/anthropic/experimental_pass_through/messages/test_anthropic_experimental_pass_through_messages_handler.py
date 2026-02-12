@@ -103,28 +103,28 @@ async def test_bedrock_converse_budget_tokens_preserved():
     """
     client = AsyncHTTPHandler()
 
-    with patch.object(client, "post") as mock_post:
-        # Use MagicMock for response since httpx.Response.json() is synchronous
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {}
-        mock_response.text = "mock response"
-        mock_response.json.return_value = {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": "4"}]
-                }
-            },
-            "stopReason": "end_turn",
-            "usage": {
-                "inputTokens": 10,
-                "outputTokens": 5,
-                "totalTokens": 15
+    # Use MagicMock for response since httpx.Response.json() is synchronous
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.text = "mock response"
+    mock_response.json.return_value = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": "4"}]
             }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15
         }
-        # Make post() async return the sync response
-        mock_post.return_value = mock_response
+    }
+
+    # Use AsyncMock for the async post method, with MagicMock response
+    with patch.object(client, "post", new=AsyncMock(return_value=mock_response)) as mock_post:
         
         try:
             await messages.acreate(
