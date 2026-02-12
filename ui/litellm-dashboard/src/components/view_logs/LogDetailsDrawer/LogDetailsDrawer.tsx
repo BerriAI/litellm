@@ -188,8 +188,12 @@ export function LogDetailsDrawer({
   const environment = metadata?.user_api_key_team_alias || "default";
 
   const totalSessionCost = sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);
-  const sessionStart = sessionLogs.length > 0 ? new Date(sessionLogs[0].startTime) : null;
-  const sessionEnd = sessionLogs.length > 0 ? new Date(sessionLogs[sessionLogs.length - 1].endTime) : null;
+  const sessionStart = sessionLogs.length > 0
+    ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime())))
+    : null;
+  const sessionEnd = sessionLogs.length > 0
+    ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime())))
+    : null;
   const sessionDurationSeconds =
     sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
   const llmCount = sessionLogs.filter((row) => !MCP_CALL_TYPES.includes(row.call_type)).length;
