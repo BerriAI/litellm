@@ -37,7 +37,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import CallTypes, GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -381,8 +381,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         # Set call type for logging
-        from litellm.types.utils import CallTypes
-
         setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
 
         # Prepare litellm params
