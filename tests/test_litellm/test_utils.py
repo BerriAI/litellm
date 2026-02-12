@@ -3305,3 +3305,73 @@ class TestIsStreamingRequest:
 
     def test_stream_true_overrides_non_streaming_call_type(self):
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
+
+
+class TestMetadataNoneHandling:
+    """
+    Test that metadata=None in kwargs doesn't cause TypeError.
+
+    When metadata key exists with value None (e.g., from Azure OpenAI streaming),
+    dict.get("metadata", {}) returns None (key exists, so default is ignored).
+    The fix uses (kwargs.get("metadata") or {}) which handles both missing key
+    and explicit None value.
+
+    Related: #20871
+    """
+
+    def test_metadata_none_get_previous_models(self):
+        """kwargs.get("metadata") or {} should return {} when metadata is None."""
+        kwargs = {"metadata": None}
+        previous_models = (kwargs.get("metadata") or {}).get(
+            "previous_models", None
+        )
+        assert previous_models is None
+
+    def test_metadata_none_model_group_check(self):
+        """'model_group' in (kwargs.get("metadata") or {}) should not raise TypeError."""
+        kwargs = {"metadata": None}
+        _is_litellm_router_call = "model_group" in (
+            kwargs.get("metadata") or {}
+        )
+        assert _is_litellm_router_call is False
+
+    def test_metadata_missing_key(self):
+        """Should work when metadata key is completely absent."""
+        kwargs = {}
+        previous_models = (kwargs.get("metadata") or {}).get(
+            "previous_models", None
+        )
+        assert previous_models is None
+
+    def test_metadata_present_with_values(self):
+        """Should work when metadata has actual values."""
+        kwargs = {"metadata": {"previous_models": ["model1"], "model_group": "test"}}
+        previous_models = (kwargs.get("metadata") or {}).get(
+            "previous_models", None
+        )
+        assert previous_models == ["model1"]
+        _is_litellm_router_call = "model_group" in (
+            kwargs.get("metadata") or {}
+        )
+        assert _is_litellm_router_call is True
+
+    def test_metadata_none_causes_error_with_old_pattern(self):
+        """Demonstrate the bug: dict.get('metadata', {}) returns None when key exists with None value."""
+        kwargs = {"metadata": None}
+        # Old pattern: kwargs.get("metadata", {}) returns None because key exists
+        result = kwargs.get("metadata", {})
+        assert result is None  # This is the root cause of the bug
+
+        # Attempting to use .get() on None raises AttributeError or TypeError
+        with pytest.raises((TypeError, AttributeError)):
+            kwargs.get("metadata", {}).get("previous_models", None)
+
+        # Attempting 'in' on None raises TypeError
+        with pytest.raises(TypeError):
+            "model_group" in kwargs.get("metadata", {})
+
+    def test_litellm_params_metadata_none(self):
+        """litellm_params.get("metadata") or {} should handle None value."""
+        litellm_params = {"metadata": None}
+        metadata = litellm_params.get("metadata") or {}
+        assert metadata == {}

@@ -102,11 +102,18 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
                 status_code=raw_response.status_code
             )
 
-        if "embedding" not in response_data:
+        # Handle both raw array format (TEI) and wrapped format (standard HF)
+        if isinstance(response_data, list):
+            # TEI and some HF models return raw embedding arrays directly
+            embeddings = response_data
+        elif isinstance(response_data, dict) and "embedding" in response_data:
+            # Standard HF format with "embedding" key
+            embeddings = response_data["embedding"]
+        else:
             raise SagemakerError(
-                status_code=500, message="HF response missing 'embedding' field"
+                status_code=500,
+                message=f"Unexpected response format. Expected list or dict with 'embedding' key, got: {type(response_data).__name__}",
             )
-        embeddings = response_data["embedding"]
 
         if not isinstance(embeddings, list):
             raise SagemakerError(

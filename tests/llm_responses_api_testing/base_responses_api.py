@@ -2,7 +2,7 @@ import httpx
 import json
 import pytest
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 import os
 from litellm._uuid import uuid
@@ -112,6 +112,10 @@ class BaseResponsesAPITest(ABC):
 
     def get_base_completion_reasoning_call_args(self) -> dict:
         """Must return the base completion reasoning call args"""
+        return None
+
+    def get_advanced_model_for_shell_tool(self) -> Optional[str]:
+        """If specified, overrides the model used by test_responses_api_shell_tool_streaming_sees_shell_output (e.g. openai/gpt-5.2 for shell support)."""
         return None
 
     @pytest.mark.parametrize("sync_mode", [True, False])
@@ -669,7 +673,7 @@ class BaseResponsesAPITest(ABC):
     async def test_cancel_responses_invalid_response_id(self, sync_mode):
         """Test cancel_responses with invalid response ID should raise appropriate error"""
         base_completion_call_args = self.get_base_completion_call_args()
-        
+
         if sync_mode:
             with pytest.raises(Exception):
                 litellm.cancel_responses(
@@ -680,3 +684,127 @@ class BaseResponsesAPITest(ABC):
                 await litellm.acancel_responses(
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )
+
+    @pytest.mark.asyncio
+    async def test_responses_api_context_management_server_side_compaction(self):
+        """
+        E2E test for server-side compaction (context_management) on OpenAI Responses API.
+        Passes context_management with compact_threshold; validates that the request is
+        accepted and returns a valid response. Compaction may not run for short inputs.
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        model = base_completion_call_args.get("model") or ""
+        # Only run with context_management for OpenAI (OAI) for now
+        if "openai/" not in str(model) and "azure/" not in str(model):
+            pytest.skip(
+                "context_management server-side compaction e2e is only run for OpenAI/Azure"
+            )
+        context_management = [{"type": "compaction", "compact_threshold": 200000}]
+        try:
+            response = await litellm.aresponses(
+                input="Short ping to verify context_management is accepted.",
+                max_output_tokens=20,
+                context_management=context_management,
+                **base_completion_call_args,
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Skipping test due to litellm.InternalServerError")
+        validate_responses_api_response(response, final_chunk=True)
+        assert response.get("id") is not None
+        assert response.get("status") is not None
+
+    @pytest.mark.asyncio
+    async def test_responses_api_shell_tool(self):
+        """
+        E2E test for Shell tool on OpenAI Responses API.
+        Passes tools=[{"type": "shell", "environment": {"type": "container_auto"}}];
+        validates that the request is accepted and returns a valid response.
+        Only runs for OpenAI/Azure (Responses API with shell support).
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
+            "model"
+        ) or ""
+        if "openai/" not in str(model) and "azure/" not in str(model):
+            pytest.skip(
+                "Shell tool e2e is only run for OpenAI/Azure Responses API"
+            )
+        tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
+        input_msg = "List files in /mnt/data and show python --version."
+        try:
+            response = await litellm.aresponses(
+                **{**base_completion_call_args, "model": model},
+                input=input_msg,
+                max_output_tokens=256,
+                tools=tools,
+                tool_choice="auto",
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Skipping test due to litellm.InternalServerError")
+        except litellm.BadRequestError as e:
+            if "shell" in str(e).lower() and "not supported" in str(e).lower():
+                pytest.skip(
+                    "Shell tool is not supported for this model (e.g. gpt-4o); use a model that supports shell"
+                )
+            raise
+        validate_responses_api_response(response, final_chunk=True)
+        assert response.get("id") is not None
+        assert response.get("status") is not None
+
+    @pytest.mark.asyncio
+    async def test_responses_api_shell_tool_streaming_sees_shell_output(self):
+        """
+        E2E streaming call with Shell tool; validate we can see shell output in the stream.
+
+        Calls aresponses(..., tools=[shell], stream=True), then iterates the stream and
+        asserts at least one event is shell-related or response output contains shell_call.
+        Skips when model does not support shell (e.g. gpt-4o).
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
+            "model"
+        ) or "openai/gpt-5.2"
+        tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
+        input_msg = "List files in /mnt/data and run python --version."
+
+        stream = await litellm.aresponses(
+            **{**base_completion_call_args, "model": model},
+            input=input_msg,
+            max_output_tokens=512,
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+        )
+
+
+        event_types_seen = []
+        output_items_with_shell = []
+
+        async for event in stream:
+            print("event=", json.dumps(event, indent=4, default=str))
+            event_type = getattr(event, "type", None) or (
+                event.get("type") if isinstance(event, dict) else None
+            )
+            if event_type is not None:
+                event_types_seen.append(str(event_type))
+            if "shell" in str(event_type or "").lower():
+                output_items_with_shell.append(event_type)
+            response_obj = getattr(event, "response", None) or (
+                event.get("response") if isinstance(event, dict) else None
+            )
+            if response_obj is not None:
+                output = getattr(response_obj, "output", None) or (
+                    response_obj.get("output") if isinstance(response_obj, dict) else None
+                )
+                if isinstance(output, list):
+                    for item in output:
+                        item_type = getattr(item, "type", None) or (
+                            item.get("type") if isinstance(item, dict) else None
+                        )
+                        if item_type and "shell" in str(item_type).lower():
+                            output_items_with_shell.append(item_type)
+
+        assert len(event_types_seen) > 0, "Expected at least one stream event"
+        assert len(output_items_with_shell) > 0, (
+            f"Expected to see shell output in stream; event types seen: {event_types_seen!r}"
+        )
