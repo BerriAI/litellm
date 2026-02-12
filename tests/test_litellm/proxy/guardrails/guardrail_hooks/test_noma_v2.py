@@ -55,17 +55,16 @@ class TestNomaV2Configuration:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = '{"aggregatedAction":"allow","scanResult":[]}'
+        mock_response.text = '{"action":"NONE"}'
         mock_response.json.return_value = {
-            "aggregatedAction": "allow",
-            "scanResult": [],
+            "action": "NONE",
         }
         mock_response.raise_for_status = MagicMock()
         mock_post = AsyncMock(return_value=mock_response)
 
         with patch.object(noma_v2_guardrail.async_handler, "post", mock_post):
             await noma_v2_guardrail._call_noma_scan(
-                payload={"input": []},
+                payload={"inputs": {"texts": []}},
                 request_data={"litellm_call_id": "test-call-id"},
                 logging_obj=None,
             )
@@ -73,6 +72,75 @@ class TestNomaV2Configuration:
         call_kwargs = mock_post.call_args.kwargs
         assert call_kwargs["headers"]["Authorization"] == "Bearer test-api-key"
         assert call_kwargs["headers"]["X-Noma-Request-ID"] == "test-call-id"
+
+    def test_build_scan_payload_sends_raw_available_data(self, noma_v2_guardrail):
+        inputs = {
+            "texts": ["hello"],
+            "images": ["https://example.com/image.png"],
+            "structured_messages": [{"role": "user", "content": "hello"}],
+            "tool_calls": [{"id": "tool-1"}],
+            "model": "gpt-4o-mini",
+        }
+        request_data = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {"headers": {"x-noma-application-id": "header-app"}},
+            "litellm_metadata": {"user_api_key_alias": "litellm-alias"},
+            "litellm_call_id": "call-id-1",
+        }
+        dynamic_params = {"application_id": "dynamic-app", "future_field": {"a": 1}}
+
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+            logging_obj=None,
+            dynamic_params=dynamic_params,
+        )
+
+        assert payload["inputs"] == inputs
+        assert payload["request_data"] == request_data
+        assert payload["input_type"] == "request"
+        assert payload["dynamic_params"] == dynamic_params
+        assert payload["x-noma-context"]["applicationId"] == "dynamic-app"
+        assert "input" not in payload
+
+    def test_build_scan_payload_passes_model_call_details_as_is(
+        self, noma_v2_guardrail
+    ):
+        class _LoggingObj:
+            def __init__(self) -> None:
+                self.model_call_details = {
+                    "model": "gpt-4.1-mini",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": False,
+                    "call_type": "acompletion",
+                    "litellm_call_id": "call-id-123",
+                    "function_id": "fn-id-456",
+                    "litellm_trace_id": "trace-id-789",
+                    "api_key": "included-as-is",
+                }
+
+        request_data = {"litellm_logging_obj": "<Logging object>"}
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=_LoggingObj(),
+            dynamic_params={},
+        )
+
+        assert payload["request_data"]["litellm_logging_obj"] == {
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+            "call_type": "acompletion",
+            "litellm_call_id": "call-id-123",
+            "function_id": "fn-id-456",
+            "litellm_trace_id": "trace-id-789",
+            "api_key": "included-as-is",
+        }
+        assert "logging_obj" not in payload
+        assert request_data["litellm_logging_obj"] == "<Logging object>"
 
     @pytest.mark.asyncio
     async def test_oauth_path_and_token_reuse(self):
@@ -102,18 +170,52 @@ class TestNomaV2Configuration:
         assert auth_2 == "Bearer oauth-token"
         assert token_post.call_count == 1
 
+    @pytest.mark.asyncio
+    async def test_call_noma_scan_sanitizes_response_model_dump_object(
+        self, noma_v2_guardrail
+    ):
+        import json
+
+        class _FakeModelResponse:
+            def model_dump(self):
+                return {"id": "resp-1", "content": "ok"}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"action":"NONE"}'
+        mock_response.json.return_value = {"action": "NONE"}
+        mock_response.raise_for_status = MagicMock()
+        mock_post = AsyncMock(return_value=mock_response)
+
+        payload = {
+            "inputs": {"texts": ["hello"]},
+            "request_data": {"response": _FakeModelResponse()},
+            "input_type": "response",
+            "dynamic_params": {},
+        }
+
+        with patch.object(noma_v2_guardrail.async_handler, "post", mock_post):
+            await noma_v2_guardrail._call_noma_scan(
+                payload=payload,
+                request_data={"litellm_call_id": "test-call-id"},
+                logging_obj=None,
+            )
+
+        sent_payload = mock_post.call_args.kwargs["json"]
+        json.dumps(sent_payload)
+        assert sent_payload["request_data"]["response"]["id"] == "resp-1"
+
 
 class TestNomaV2ActionBehavior:
     @pytest.mark.asyncio
-    async def test_aggregated_action_allow(self, noma_v2_guardrail):
+    async def test_native_action_none(self, noma_v2_guardrail):
         inputs = {"texts": ["hello"]}
         with patch.object(
             noma_v2_guardrail,
             "_call_noma_scan",
             AsyncMock(
                 return_value={
-                    "aggregatedAction": "allow",
-                    "scanResult": [],
+                    "action": "NONE",
                 }
             ),
         ):
@@ -126,25 +228,23 @@ class TestNomaV2ActionBehavior:
         assert result == inputs
 
     @pytest.mark.asyncio
-    async def test_aggregated_action_mask(self, noma_v2_guardrail):
+    async def test_native_action_guardrail_intervened_updates_supported_fields(
+        self, noma_v2_guardrail
+    ):
         inputs = {
             "texts": ["Name: Jane"],
-            "structured_messages": [{"role": "user", "content": "Name: Jane"}],
+            "images": ["https://old.example/image.png"],
+            "tools": [{"type": "function", "function": {"name": "old_tool"}}],
         }
         with patch.object(
             noma_v2_guardrail,
             "_call_noma_scan",
             AsyncMock(
                 return_value={
-                    "aggregatedAction": "mask",
-                    "scanResult": [
-                        {
-                            "role": "user",
-                            "results": {
-                                "anonymizedContent": {"anonymized": "Name: *******"}
-                            },
-                        }
-                    ],
+                    "action": "GUARDRAIL_INTERVENED",
+                    "texts": ["Name: *******"],
+                    "images": ["https://new.example/image.png"],
+                    "tools": [{"type": "function", "function": {"name": "new_tool"}}],
                 }
             ),
         ):
@@ -155,46 +255,52 @@ class TestNomaV2ActionBehavior:
             )
 
         assert result["texts"] == ["Name: *******"]
+        assert result["images"] == ["https://new.example/image.png"]
+        assert result["tools"] == [
+            {"type": "function", "function": {"name": "new_tool"}}
+        ]
 
     @pytest.mark.asyncio
-    async def test_aggregated_action_block(self, noma_v2_guardrail):
+    async def test_native_action_blocked(self, noma_v2_guardrail):
         inputs = {"texts": ["bad"]}
         with patch.object(
             noma_v2_guardrail,
             "_call_noma_scan",
             AsyncMock(
                 return_value={
-                    "aggregatedAction": "block",
-                    "scanResult": [{"role": "user"}],
+                    "action": "BLOCKED",
+                    "blocked_reason": "blocked by policy",
                 }
             ),
         ):
-            with pytest.raises(NomaBlockedMessage):
+            with pytest.raises(NomaBlockedMessage) as exc_info:
                 await noma_v2_guardrail.apply_guardrail(
                     inputs=inputs,
                     request_data={"metadata": {}},
                     input_type="request",
                 )
+        assert exc_info.value.detail["details"]["blocked_reason"] == "blocked by policy"
 
     @pytest.mark.asyncio
-    async def test_mask_without_anonymized_payload_blocks(self, noma_v2_guardrail):
+    async def test_intervened_without_modifications_returns_original_inputs(
+        self, noma_v2_guardrail
+    ):
         inputs = {"texts": ["Name: Jane"]}
         with patch.object(
             noma_v2_guardrail,
             "_call_noma_scan",
             AsyncMock(
                 return_value={
-                    "aggregatedAction": "mask",
-                    "scanResult": [{"role": "user", "results": {}}],
+                    "action": "GUARDRAIL_INTERVENED",
                 }
             ),
         ):
-            with pytest.raises(NomaBlockedMessage):
-                await noma_v2_guardrail.apply_guardrail(
-                    inputs=inputs,
-                    request_data={"metadata": {}},
-                    input_type="request",
-                )
+            result = await noma_v2_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+        assert result == inputs
 
     @pytest.mark.asyncio
     async def test_fail_open_on_technical_scan_failure(self, noma_v2_guardrail):

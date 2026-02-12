@@ -10,14 +10,13 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 from urllib.parse import urljoin
 
 from litellm._logging import verbose_proxy_logger
-from litellm.completion_extras.litellm_responses_transformation.transformation import (
-    LiteLLMResponsesTransformationHandler,
-)
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -30,19 +29,18 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
-_REQUEST_ROLE = "user"
-_RESPONSE_ROLE = "assistant"
 _DEFAULT_API_BASE = "https://api.noma.security/"
-_AIDR_SCAN_ENDPOINT = "/ai-dr/v2/prompt/scan"
+_AIDR_SCAN_ENDPOINT = "/ai-dr/v2/litellm/guardrails/scan"
 _DEFAULT_APPLICATION_ID = "litellm"
 _DEFAULT_TOKEN_TTL_SECONDS = 300
 _TOKEN_REFRESH_BUFFER_SECONDS = 30
+_INTERVENED_INPUT_FIELDS = ("texts", "images", "tools")
 
 
 class _Action(str, enum.Enum):
-    ALLOW = "allow"
-    MASK = "mask"
-    BLOCK = "block"
+    BLOCKED = "BLOCKED"
+    NONE = "NONE"
+    GUARDRAIL_INTERVENED = "GUARDRAIL_INTERVENED"
 
 
 class NomaV2Guardrail(CustomGuardrail):
@@ -59,7 +57,6 @@ class NomaV2Guardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self._responses_transform_handler = LiteLLMResponsesTransformationHandler()
 
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
         self.api_base = (
@@ -165,110 +162,18 @@ class NomaV2Guardrail(CustomGuardrail):
             )
             return access_token
 
-    def _extract_anonymized_content_for_role(
-        self, response_json: dict, role: str
-    ) -> List[str]:
-        anonymized_contents: List[str] = []
-        scan_result = response_json.get("scanResult")
-        if not isinstance(scan_result, list):
-            return anonymized_contents
-
-        for item in scan_result:
-            if not isinstance(item, dict) or item.get("role") != role:
-                continue
-            results = item.get("results", {})
-            if not isinstance(results, dict):
-                continue
-            anonymized = results.get("anonymizedContent", {})
-            if not isinstance(anonymized, dict):
-                continue
-            anonymized_text = anonymized.get("anonymized")
-            if isinstance(anonymized_text, str) and anonymized_text:
-                anonymized_contents.append(anonymized_text)
-        return anonymized_contents
-
-    def _extract_text_roles(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        input_type: Literal["request", "response"],
-    ) -> List[str]:
-        default_role = _RESPONSE_ROLE if input_type == "response" else _REQUEST_ROLE
-        structured_messages = inputs.get("structured_messages") or []
-        if not structured_messages:
-            return [default_role] * len(inputs.get("texts", []))
-
-        roles: List[str] = []
-        for message in structured_messages:
-            if not isinstance(message, dict):
-                continue
-            role_value = message.get("role")
-            role: str = role_value if isinstance(role_value, str) else default_role
-            content = message.get("content")
-            if isinstance(content, str):
-                roles.append(role)
-            elif isinstance(content, list):
-                for content_item in content:
-                    if isinstance(content_item, dict) and isinstance(
-                        content_item.get("text"), str
-                    ):
-                        roles.append(role)
-        return roles
-
-    def _apply_anonymization_to_texts(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        input_type: Literal["request", "response"],
-        response_json: dict,
-    ) -> GenericGuardrailAPIInputs:
-        texts = inputs.get("texts", [])
-        if not texts:
-            raise NomaBlockedMessage(response_json.get("scanResult", response_json))
-
-        target_role = _RESPONSE_ROLE if input_type == "response" else _REQUEST_ROLE
-        anonymized_values = self._extract_anonymized_content_for_role(
-            response_json=response_json, role=target_role
-        )
-        if not anonymized_values:
-            raise NomaBlockedMessage(response_json.get("scanResult", response_json))
-
-        text_roles = self._extract_text_roles(inputs=inputs, input_type=input_type)
-        updated_texts = list(texts)
-        anonymized_index = 0
-
-        for idx, _text in enumerate(updated_texts):
-            role_for_idx = text_roles[idx] if idx < len(text_roles) else target_role
-            if role_for_idx != target_role:
-                continue
-            replacement_idx = min(anonymized_index, len(anonymized_values) - 1)
-            updated_texts[idx] = anonymized_values[replacement_idx]
-            anonymized_index += 1
-
-        if anonymized_index == 0:
-            # Best-effort fallback: no role-matched entry was found, so apply to the last text.
-            updated_texts[-1] = anonymized_values[0]
-
-        updated_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
-        updated_inputs["texts"] = updated_texts
-        return updated_inputs
-
     def _resolve_action_from_response(
         self,
         response_json: dict,
     ) -> _Action:
-        aggregated_action = response_json.get("aggregatedAction")
-        if isinstance(aggregated_action, str):
+        action = response_json.get("action")
+        if isinstance(action, str):
             try:
-                return _Action(aggregated_action.lower())
+                return _Action(action)
             except ValueError:
                 pass
 
-        raise ValueError("Noma response missing aggregatedAction")
-
-    @staticmethod
-    def _status_for_action(action: _Action) -> str:
-        if action == _Action.ALLOW:
-            return "success"
-        return "guardrail_intervened"
+        raise ValueError("Noma v2 response missing valid action")
 
     def _build_noma_context(
         self,
@@ -279,7 +184,6 @@ class NomaV2Guardrail(CustomGuardrail):
         metadata = request_data.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
-
         litellm_metadata = request_data.get("litellm_metadata")
         if not isinstance(litellm_metadata, dict):
             litellm_metadata = {}
@@ -323,54 +227,6 @@ class NomaV2Guardrail(CustomGuardrail):
             "requestId": request_id,
         }
 
-    def _build_input_items_from_structured_messages(
-        self, structured_messages: List[Any]
-    ) -> List[dict]:
-        (
-            input_items,
-            instructions,
-        ) = self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(
-            structured_messages
-        )
-        if instructions:
-            input_items.insert(
-                0,
-                {
-                    "type": "message",
-                    "role": "system",
-                    "content": [{"type": "input_text", "text": instructions}],
-                },
-            )
-        return input_items
-
-    def _build_input_items_from_generic_inputs(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        input_type: Literal["request", "response"],
-    ) -> List[dict]:
-        role = _RESPONSE_ROLE if input_type == "response" else _REQUEST_ROLE
-        content_items: List[dict] = []
-
-        for text in inputs.get("texts", []) or []:
-            content_items.append({"type": "input_text", "text": text})
-
-        for image in inputs.get("images", []) or []:
-            content_items.append({"type": "input_image", "image_url": image})
-
-        tool_calls = inputs.get("tool_calls") or []
-        for tool_call in tool_calls:
-            content_items.append(
-                {
-                    "type": "input_text",
-                    "text": json.dumps(tool_call, default=str),
-                }
-            )
-
-        if not content_items:
-            return []
-
-        return [{"type": "message", "role": role, "content": content_items}]
-
     def _build_scan_payload(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -379,26 +235,44 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         dynamic_params: dict,
     ) -> dict:
-        structured_messages = inputs.get("structured_messages")
-        if isinstance(structured_messages, list) and structured_messages:
-            input_items = self._build_input_items_from_structured_messages(
-                structured_messages=structured_messages
-            )
-        else:
-            input_items = self._build_input_items_from_generic_inputs(
-                inputs=inputs, input_type=input_type
+        payload_request_data = dict(request_data)
+        if logging_obj is not None:
+            payload_request_data["litellm_logging_obj"] = getattr(
+                logging_obj, "model_call_details", logging_obj
             )
 
-        payload: Dict[str, Any] = {"input": input_items}
-        if inputs.get("model"):
-            payload["model"] = inputs.get("model")
-
+        payload: Dict[str, Any] = {
+            "inputs": inputs,
+            "request_data": payload_request_data,
+            "input_type": input_type,
+            "dynamic_params": dynamic_params,
+        }
         payload["x-noma-context"] = self._build_noma_context(
             request_data=request_data,
             logging_obj=logging_obj,
             dynamic_params=dynamic_params,
         )
         return payload
+
+    @staticmethod
+    def _sanitize_payload_for_transport(payload: dict) -> dict:
+        def _default(obj: Any) -> Any:
+            if hasattr(obj, "model_dump"):
+                try:
+                    return obj.model_dump()
+                except Exception:
+                    pass
+            return str(obj)
+
+        try:
+            json_str = json.dumps(payload, default=_default)
+        except (ValueError, TypeError):
+            json_str = safe_dumps(payload)
+
+        safe_payload = safe_json_loads(json_str, default={})
+        if isinstance(safe_payload, dict):
+            return safe_payload
+        return {}
 
     async def _call_noma_scan(
         self,
@@ -424,16 +298,17 @@ class NomaV2Guardrail(CustomGuardrail):
             key: ("<redacted>" if key.lower() == "authorization" else value)
             for key, value in headers.items()
         }
+        sanitized_payload = self._sanitize_payload_for_transport(payload)
         verbose_proxy_logger.debug(
             "Noma v2 AIDR request: endpoint=%s headers=%s payload=%s",
             endpoint,
-            json.dumps(headers_for_log, default=str),
-            json.dumps(payload, default=str),
+            safe_dumps(headers_for_log),
+            safe_dumps(sanitized_payload),
         )
         response = await self.async_handler.post(
             url=endpoint,
             headers=headers,
-            json=payload,
+            json=sanitized_payload,
         )
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response: status_code=%s body=%s",
@@ -457,19 +332,26 @@ class NomaV2Guardrail(CustomGuardrail):
     def _apply_action(
         self,
         inputs: GenericGuardrailAPIInputs,
-        input_type: Literal["request", "response"],
         response_json: dict,
         action: _Action,
     ) -> GenericGuardrailAPIInputs:
-        if action == _Action.BLOCK:
-            raise NomaBlockedMessage(response_json.get("scanResult", response_json))
+        if action == _Action.BLOCKED:
+            raise NomaBlockedMessage(response_json)
 
-        if action == _Action.MASK:
-            return self._apply_anonymization_to_texts(
-                inputs=inputs,
-                input_type=input_type,
-                response_json=response_json,
-            )
+        if action == _Action.GUARDRAIL_INTERVENED:
+            updated_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
+            texts = response_json.get("texts")
+            if isinstance(texts, list):
+                updated_inputs["texts"] = texts
+
+            images = response_json.get("images")
+            if isinstance(images, list):
+                updated_inputs["images"] = images
+
+            tools = response_json.get("tools")
+            if isinstance(tools, list):
+                updated_inputs["tools"] = tools
+            return updated_inputs
 
         return inputs
 
@@ -503,7 +385,6 @@ class NomaV2Guardrail(CustomGuardrail):
             )
             processed_inputs = self._apply_action(
                 inputs=inputs,
-                input_type=input_type,
                 response_json=response_json,
                 action=action,
             )
@@ -514,7 +395,7 @@ class NomaV2Guardrail(CustomGuardrail):
                 guardrail_provider="noma",
                 guardrail_json_response=response_json,
                 request_data=request_data,
-                guardrail_status=self._status_for_action(action),  # type: ignore[arg-type]
+                guardrail_status="success" if action == _Action.NONE else "guardrail_intervened",  # type: ignore[arg-type]
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=duration,
