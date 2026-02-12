@@ -545,6 +545,7 @@ llama_models: Set = set()
 nscale_models: Set = set()
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
+neosantara_embedding_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
@@ -573,6 +574,7 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+neosantara_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -834,6 +836,11 @@ def add_known_models():
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "neosantara":
+            if value.get("mode") == "embedding":
+                neosantara_embedding_models.add(key)
+            else:
+                neosantara_models.add(key)
 
 
 add_known_models()
@@ -1044,6 +1051,7 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
+    "neosantara": neosantara_models | neosantara_embedding_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1079,6 +1087,7 @@ all_embedding_models = (
     | nebius_embedding_models
     | sambanova_embedding_models
     | ovhcloud_embedding_models
+    | neosantara_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################

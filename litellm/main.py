@@ -4784,6 +4784,8 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
             or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
+            or custom_llm_provider in litellm.openai_compatible_providers
+            or JSONProviderRegistry.exists(custom_llm_provider)
         ):
             api_base = (
                 api_base

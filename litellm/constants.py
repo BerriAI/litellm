@@ -509,6 +509,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "neosantara",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -516,6 +517,7 @@ LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
     "azure",
     "hosted_vllm",
     "nebius",
+    "neosantara",
 ]
 
 
@@ -660,6 +662,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "api.neosantara.xyz/v1",
 ]
 
 
@@ -718,6 +721,7 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "neosantara",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -955,6 +959,12 @@ nebius_embedding_models: set = set(
         "BAAI/bge-en-icl",
         "BAAI/bge-multilingual-gemma2",
         "intfloat/e5-mistral-7b-instruct",
+    ]
+)
+
+neosantara_embedding_models: set = set(
+    [
+        "nusa-embedding-0001",
     ]
 )
 
