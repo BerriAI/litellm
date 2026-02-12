@@ -3161,16 +3161,22 @@ async def _build_ui_spend_logs_response(
                 if r.get("session_id")
             }
 
-    enriched: List[dict] = []
-    for row in data:
-        row_dict = row.model_dump()
-        if enrich_session_counts:
+    if enrich_session_counts:
+        enriched: List[dict] = []
+        for row in data:
+            row_dict = row.model_dump()
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
-        enriched.append(row_dict)
+            enriched.append(row_dict)
+        response_data: list = enriched
+    else:
+        # v2 path: return raw Prisma model instances so FastAPI applies its
+        # own Pydantic-aware serialisation (preserves alias handling, custom
+        # serializers, etc.).
+        response_data = data  # type: ignore[assignment]
 
     return {
-        "data": enriched,
+        "data": response_data,
         "total": total_records,
         "page": page,
         "page_size": page_size,
