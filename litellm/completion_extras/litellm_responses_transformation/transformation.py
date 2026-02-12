@@ -261,7 +261,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
-    def _handle_stream_parameter(
+    def _handle_stream_and_session(
         self,
         optional_params: dict,
         litellm_params: dict,
@@ -376,7 +376,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self._map_optional_params(optional_params, responses_api_request, instructions)
 
         # Handle stream and session
-        self._handle_stream_parameter(
+        self._handle_stream_and_session(
             optional_params, litellm_params, responses_api_request
         )
 
