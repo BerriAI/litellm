@@ -97,14 +97,15 @@ async def test_bedrock_converse_budget_tokens_preserved():
     """
     Test that budget_tokens value in thinking parameter is correctly passed to Bedrock Converse API
     when using messages.acreate with bedrock/converse model.
-    
+
     The bug was that the messages -> completion adapter was converting thinking to reasoning_effort
     and losing the original budget_tokens value, causing it to use the default (128) instead.
     """
     client = AsyncHTTPHandler()
-    
+
     with patch.object(client, "post") as mock_post:
-        mock_response = AsyncMock()
+        # Use MagicMock for response since httpx.Response.json() is synchronous
+        mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {}
         mock_response.text = "mock response"
@@ -122,6 +123,7 @@ async def test_bedrock_converse_budget_tokens_preserved():
                 "totalTokens": 15
             }
         }
+        # Make post() async return the sync response
         mock_post.return_value = mock_response
         
         try:
