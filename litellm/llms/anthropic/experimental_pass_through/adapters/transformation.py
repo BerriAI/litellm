@@ -12,6 +12,7 @@ from typing import (
     Union,
     cast,
 )
+from openai.lib._pydantic import _ensure_strict_json_schema
 
 # OpenAI has a 64-character limit for function/tool names
 # Anthropic does not have this limit, so we need to truncate long names
@@ -742,15 +743,6 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> Optional[Dict[str, Any]]:
         """
         Translate Anthropic's output_format to OpenAI's response_format.
-
-        Anthropic output_format: {"type": "json_schema", "schema": {...}}
-        OpenAI response_format: {"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}}
-
-        Args:
-            output_format: Anthropic output_format dict with 'type' and 'schema'
-
-        Returns:
-            OpenAI-compatible response_format dict, or None if invalid
         """
         if not isinstance(output_format, dict):
             return None
@@ -762,6 +754,11 @@ class LiteLLMAnthropicMessagesAdapter:
         schema = output_format.get("schema")
         if not schema:
             return None
+
+        # Fix for #20997: Ensure schema is compatible with OpenAI Strict Mode
+        import copy
+        schema = copy.deepcopy(schema)
+        _ensure_strict_json_schema(schema, path=(), root=schema)
 
         # Convert to OpenAI response_format structure
         return {
