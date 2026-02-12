@@ -986,3 +986,194 @@ class TestContentFilterGuardrail:
             assert detail.get("category") == "harm_toxic_abuse"
         else:
             assert "harm_toxic_abuse" in str(detail)
+
+    def test_australian_tfn_pattern(self):
+        """
+        Test Australian Tax File Number (TFN) pattern detection
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="au_tfn",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-au-tfn",
+            patterns=patterns,
+        )
+
+        # Test with 8-digit TFN
+        result = guardrail._check_patterns("My TFN is 12345678")
+        assert result is not None
+        assert result[1] == "au_tfn"
+        assert result[2] == ContentFilterAction.MASK
+
+        # Test with 9-digit TFN
+        result = guardrail._check_patterns("My TFN is 123456789")
+        assert result is not None
+        assert result[1] == "au_tfn"
+
+        # Test without TFN
+        result = guardrail._check_patterns("This is a normal message")
+        assert result is None
+
+    def test_australian_abn_pattern(self):
+        """
+        Test Australian Business Number (ABN) pattern detection
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="au_abn",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-au-abn",
+            patterns=patterns,
+        )
+
+        # Test with formatted ABN (spaces)
+        result = guardrail._check_patterns("ABN: 51 824 753 556")
+        assert result is not None
+        assert result[1] == "au_abn"
+        assert result[2] == ContentFilterAction.MASK
+
+        # Test with unformatted ABN (no spaces)
+        result = guardrail._check_patterns("ABN: 51824753556")
+        assert result is not None
+        assert result[1] == "au_abn"
+
+        # Test without ABN
+        result = guardrail._check_patterns("This is a normal message")
+        assert result is None
+
+    def test_australian_medicare_pattern(self):
+        """
+        Test Australian Medicare Number pattern detection
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="au_medicare",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-au-medicare",
+            patterns=patterns,
+        )
+
+        # Test with formatted Medicare number
+        result = guardrail._check_patterns("Medicare: 1234 56789 0")
+        assert result is not None
+        assert result[1] == "au_medicare"
+        assert result[2] == ContentFilterAction.MASK
+
+        # Test with unformatted Medicare number
+        result = guardrail._check_patterns("Medicare: 12345678901")
+        assert result is not None
+        assert result[1] == "au_medicare"
+
+        # Test without Medicare number
+        result = guardrail._check_patterns("This is a normal message")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_australian_pii_patterns_mask(self):
+        """
+        Test that Australian PII patterns are properly masked in apply_guardrail
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="au_tfn",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="au_abn",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="au_medicare",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-au-pii-mask",
+            patterns=patterns,
+        )
+
+        # Test masking TFN
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Employee TFN: 12345678 for payroll"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert "[AU_TFN_REDACTED]" in result[0]
+        assert "12345678" not in result[0]
+
+        # Test masking ABN
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Company ABN: 51 824 753 556"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert "[AU_ABN_REDACTED]" in result[0]
+        assert "51 824 753 556" not in result[0]
+
+        # Test masking Medicare
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Medicare card: 1234 56789 0"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert "[AU_MEDICARE_REDACTED]" in result[0]
+        assert "1234 56789 0" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_australian_pii_multiple_matches(self):
+        """
+        Test that multiple Australian PII matches are all masked
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="au_tfn",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-au-multiple",
+            patterns=patterns,
+        )
+
+        # Test with multiple TFNs
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["TFN1: 12345678 and TFN2: 987654321"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].count("[AU_TFN_REDACTED]") == 2
+        assert "12345678" not in result[0]
+        assert "987654321" not in result[0]
