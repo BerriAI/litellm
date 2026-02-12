@@ -21432,6 +21432,36 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192
     },
+    "minimax/MiniMax-M2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07,
+        "litellm_provider": "minimax",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192
+    },
+    "minimax/MiniMax-M2.5-lightning": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.4e-06,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07,
+        "litellm_provider": "minimax",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192
+    },
     "minimax/MiniMax-M2": {
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
