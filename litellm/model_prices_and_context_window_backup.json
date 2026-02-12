@@ -32315,6 +32315,20 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "zai.glm-4.7": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "zai/glm-4.7": {
         "cache_creation_input_token_cost": 0,
         "cache_read_input_token_cost": 1.1e-07,
