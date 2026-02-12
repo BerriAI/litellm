@@ -252,6 +252,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         if ssl_verify is not None:
             ssl_kwargs["ssl"] = ssl_verify
 
+        # Type ignore needed because MyPy cannot infer that ssl_kwargs only contains
+        # the 'ssl' key with appropriate type when unpacked
         response = await client_session.request(
             method=request.method,
             url=YarlURL(str(request.url), encoded=True),
@@ -266,7 +268,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             ),
             proxy=proxy,
             server_hostname=sni_hostname,
-            **ssl_kwargs,
+            **ssl_kwargs,  # type: ignore[arg-type]
         ).__aenter__()
 
         return response
