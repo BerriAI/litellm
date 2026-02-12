@@ -217,7 +217,7 @@ def _team_key_operation_team_member_check(
     if is_admin:
         return True
     elif team_member_object is None:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.debug(
             "Key %s check failed: requesting user_id=%s (role=%s) not a member of team=%s. "
             "Team members: %s",
             route,
@@ -235,7 +235,7 @@ def _team_key_operation_team_member_check(
         and team_member_object.role
         not in team_key_generation["allowed_team_member_roles"]
     ):
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.debug(
             "Key %s check failed: user_id=%s has role=%s in team=%s, "
             "but allowed_team_member_roles=%s",
             route,
@@ -1199,7 +1199,7 @@ async def generate_key_fn(
             decision = result.get("decision", True)
             message = result.get("message", "Authentication Failed - Custom Auth Rule")
             if not decision:
-                verbose_proxy_logger.error(
+                verbose_proxy_logger.debug(
                     "generate_key_fn: user_custom_key_generate rejected request. "
                     "message=%s, user_id=%s, team_id=%s",
                     message,
@@ -4582,7 +4582,7 @@ async def _enforce_unique_key_alias(
             where=where_clause
         )
         if existing_key is not None:
-            verbose_proxy_logger.error(
+            verbose_proxy_logger.debug(
                 "_enforce_unique_key_alias: duplicate key_alias='%s' found. "
                 "Existing key token (hashed)=%s, existing_key_token_to_exclude=%s",
                 key_alias,
