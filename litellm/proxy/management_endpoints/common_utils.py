@@ -383,6 +383,17 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"] = {field_name: _value}
 
 
+def _has_non_empty_value(value: Any) -> bool:
+    """Check if a value has real content (not None, not empty list, not blank string)."""
+    if value is None:
+        return False
+    if isinstance(value, list) and len(value) == 0:
+        return False
+    if isinstance(value, str) and value.strip() == "":
+        return False
+    return True
+
+
 def _update_metadata_fields(updated_kv: dict) -> None:
     """
     Helper function to update all metadata fields (both premium and standard).
@@ -391,7 +402,7 @@ def _update_metadata_fields(updated_kv: dict) -> None:
         updated_kv: The key-value dict being used for the update
     """
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if field in updated_kv and updated_kv[field] is not None:
+        if field in updated_kv and _has_non_empty_value(updated_kv[field]):
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
