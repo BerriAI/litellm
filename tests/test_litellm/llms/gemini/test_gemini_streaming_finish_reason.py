@@ -7,7 +7,7 @@ of "tool_calls" in streaming mode when tool calls are present.
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
