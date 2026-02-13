@@ -76,6 +76,7 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -2156,7 +2157,8 @@ def jsonify_object(data: dict) -> dict:
 
 # In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
 # Avoids a DB query on every auth request for non-deprecated keys.
-_deprecated_key_cache: Dict[str, tuple] = {}
+# Bounded to prevent memory leaks from accumulated rotations.
+_deprecated_key_cache: LimitedSizeOrderedDict = LimitedSizeOrderedDict(max_size=1000)
 _DEPRECATED_KEY_CACHE_TTL_SECONDS = 60
 
 
@@ -2196,6 +2198,11 @@ async def _lookup_deprecated_key(
                 now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
             )
             return deprecated_row.active_token_id
+        # Cache negative result to avoid repeated DB lookups for invalid tokens
+        _deprecated_key_cache[hashed_token] = (
+            None,
+            now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+        )
     except Exception as e:
         verbose_proxy_logger.debug("Deprecated key lookup skipped: %s", e)
 
@@ -2537,6 +2544,7 @@ class PrismaClient:
         parent_otel_span: Optional[Span] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
         budget_id_list: Optional[List[str]] = None,
+        check_deprecated: bool = True,
     ):
         args_passed_in = locals()
         start_time = time.time()
@@ -2835,7 +2843,12 @@ class PrismaClient:
                     )
 
                     # If not found in main table, check deprecated keys (grace period)
-                    if response is None and hashed_token is not None:
+                    # check_deprecated=False on the recursive call prevents unbounded chaining
+                    if (
+                        response is None
+                        and hashed_token is not None
+                        and check_deprecated
+                    ):
                         active_token_id = await _lookup_deprecated_key(
                             db=self.db, hashed_token=hashed_token
                         )
@@ -2846,6 +2859,7 @@ class PrismaClient:
                                 query_type="find_unique",
                                 parent_otel_span=parent_otel_span,
                                 proxy_logging_obj=proxy_logging_obj,
+                                check_deprecated=False,
                             )
                             if response is not None:
                                 verbose_proxy_logger.debug(
