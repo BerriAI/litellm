@@ -481,6 +481,167 @@ class TestProxyInitializationHelpers:
                 mock_uvicorn_run.assert_called_once()
 
 
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    def test_ssl_keyfile_password_uvicorn(self, mock_print, mock_uvicorn_run):
+        """Test that ssl_keyfile_password is passed to uvicorn when provided with SSL cert/key"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=MagicMock(),
+                    ProxyConfig=MagicMock(),
+                    KeyManagementSettings=MagicMock(),
+                    save_worker_config=MagicMock(),
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            # Test with SSL keyfile password
+            result = runner.invoke(
+                run_server,
+                [
+                    "--local",
+                    "--ssl_keyfile_path", "key.pem",
+                    "--ssl_certfile_path", "cert.pem",
+                    "--ssl_keyfile_password", "mysecretpass",
+                ],
+            )
+
+            assert result.exit_code == 0
+            mock_uvicorn_run.assert_called_once()
+            call_args = mock_uvicorn_run.call_args
+            assert call_args[1]["ssl_keyfile"] == "key.pem"
+            assert call_args[1]["ssl_certfile"] == "cert.pem"
+            assert call_args[1]["ssl_keyfile_password"] == "mysecretpass"
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    def test_ssl_keyfile_password_not_set_when_omitted(self, mock_print, mock_uvicorn_run):
+        """Test that ssl_keyfile_password is not passed to uvicorn when not provided"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=MagicMock(),
+                    ProxyConfig=MagicMock(),
+                    KeyManagementSettings=MagicMock(),
+                    save_worker_config=MagicMock(),
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            # Test with SSL but without keyfile password
+            result = runner.invoke(
+                run_server,
+                [
+                    "--local",
+                    "--ssl_keyfile_path", "key.pem",
+                    "--ssl_certfile_path", "cert.pem",
+                ],
+            )
+
+            assert result.exit_code == 0
+            mock_uvicorn_run.assert_called_once()
+            call_args = mock_uvicorn_run.call_args
+            assert call_args[1]["ssl_keyfile"] == "key.pem"
+            assert call_args[1]["ssl_certfile"] == "cert.pem"
+            assert "ssl_keyfile_password" not in call_args[1]
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    def test_ssl_keyfile_password_from_env_var(self, mock_print, mock_uvicorn_run):
+        """Test that SSL_KEYFILE_PASSWORD environment variable is picked up"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=MagicMock(),
+                    ProxyConfig=MagicMock(),
+                    KeyManagementSettings=MagicMock(),
+                    save_worker_config=MagicMock(),
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args, patch.dict(
+            os.environ,
+            {
+                "SSL_KEYFILE_PASSWORD": "envpassword",
+            },
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                [
+                    "--local",
+                    "--ssl_keyfile_path", "key.pem",
+                    "--ssl_certfile_path", "cert.pem",
+                ],
+            )
+
+            assert result.exit_code == 0
+            mock_uvicorn_run.assert_called_once()
+            call_args = mock_uvicorn_run.call_args
+            assert call_args[1]["ssl_keyfile_password"] == "envpassword"
+
+    @patch("asyncio.run")
+    @patch("builtins.print")
+    def test_ssl_keyfile_password_hypercorn(self, mock_print, mock_asyncio_run):
+        """Test that ssl_keyfile_password is passed to hypercorn config"""
+        mock_app = MagicMock()
+
+        # Test with password
+        ProxyInitializationHelpers._init_hypercorn_server(
+            mock_app, "localhost", 8000, "cert.pem", "key.pem", "mysecretpass", "ECDHE"
+        )
+        mock_asyncio_run.assert_called_once()
+
+        # Test without password
+        mock_asyncio_run.reset_mock()
+        ProxyInitializationHelpers._init_hypercorn_server(
+            mock_app, "localhost", 8000, "cert.pem", "key.pem", None, None
+        )
+        mock_asyncio_run.assert_called_once()
+
+
 class TestHealthAppFactory:
     """Test cases for the health app factory module"""
 
