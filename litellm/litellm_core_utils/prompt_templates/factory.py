@@ -1397,7 +1397,8 @@ def convert_to_gemini_tool_call_invoke(
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
-                            "function_call": gemini_function_call
+                            # Gemini request payloads should use camelCase functionCall.
+                            "functionCall": gemini_function_call
                         }
                         thought_signature = _get_thought_signature_from_tool(
                             dict(tool), model=model
@@ -1418,7 +1419,8 @@ def convert_to_gemini_tool_call_invoke(
             )
             if gemini_function_call is not None:
                 part_dict_function: VertexPartType = {
-                    "function_call": gemini_function_call
+                    # Gemini request payloads should use camelCase functionCall.
+                    "functionCall": gemini_function_call
                 }
 
                 # Extract thought signature from function_call's provider_specific_fields
