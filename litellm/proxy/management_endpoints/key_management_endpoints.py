@@ -43,6 +43,7 @@ from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     get_key_object,
     get_org_object,
+    get_project_object,
     get_team_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
@@ -881,6 +882,61 @@ async def _check_team_key_limits(
     )
 
 
+async def _check_project_key_limits(
+    project_id: str,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+) -> None:
+    """
+    Validate that key's models and budget respect its project's limits.
+
+    - Key models must be a subset of project models
+    - Key max_budget must be <= project max_budget
+    """
+    project_obj = await get_project_object(
+        project_id=project_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    if project_obj is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Project not found, project_id={project_id}"},
+        )
+
+    # Validate key models are a subset of project models
+    if data.models and len(project_obj.models) > 0:
+        for m in data.models:
+            if m not in project_obj.models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model '{m}' not in project's allowed models. Project allowed models={project_obj.models}. Project: {project_id}"
+                    },
+                )
+
+    # Validate key max_budget <= project max_budget
+    project_max_budget = None
+    if project_obj.litellm_budget_table is not None:
+        project_max_budget = getattr(
+            project_obj.litellm_budget_table, "max_budget", None
+        )
+
+    if (
+        data.max_budget is not None
+        and project_max_budget is not None
+        and data.max_budget > project_max_budget
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Key max_budget ({data.max_budget}) exceeds project's max_budget ({project_max_budget}). Project: {project_id}"
+            },
+        )
+
+
 def check_org_key_model_specific_limits(
     keys: List[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
@@ -1133,6 +1189,15 @@ async def generate_key_fn(
                 team_table=team_table,
                 data=data,
                 prisma_client=prisma_client,
+            )
+
+        # Validate key against project limits if project_id is set
+        if data.project_id is not None:
+            await _check_project_key_limits(
+                project_id=data.project_id,
+                data=data,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
             )
 
         return await _common_key_generation_helper(
@@ -1807,6 +1872,20 @@ async def update_key_fn(
                     data=data,
                     prisma_client=prisma_client,
                 )
+
+        # Validate key against project limits if project_id is being set
+        _project_id_to_check = getattr(data, "project_id", None) or getattr(
+            existing_key_row, "project_id", None
+        )
+        if _project_id_to_check is not None and (
+            data.models is not None or data.max_budget is not None
+        ):
+            await _check_project_key_limits(
+                project_id=_project_id_to_check,
+                data=data,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         # if team change - check if this is possible
         if is_different_team(data=data, existing_key_row=existing_key_row):
