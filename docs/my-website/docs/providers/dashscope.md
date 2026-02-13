@@ -1,7 +1,7 @@
 # Dashscope API (Qwen models)
 https://dashscope.console.aliyun.com/
 
-**We support ALL Qwen models (Alibaba Cloud), just set `dashscope/` as a prefix when sending completion requests**
+**We support ALL Qwen models (from Alibaba Cloud), just set `dashscope/` as a prefix when sending completion requests**
 
 ## API Key
 ```python
@@ -63,9 +63,7 @@ for chunk in response:
 ```
 
 
-## Supported Models - ALL Qwen Models Supported!
-We support ALL Qwen models, just set `dashscope/` as a prefix when sending completion requests
-
+## All supported Models
 
 [DashScope Model List](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope?spm=a2c4g.11186623.help-menu-2400256.d_2_8_0.1efd516e2tTXBn&scm=20140722.H_2833609._.OR_help-T_cn~zh-V_1#7f9c78ae99pwz)
 
