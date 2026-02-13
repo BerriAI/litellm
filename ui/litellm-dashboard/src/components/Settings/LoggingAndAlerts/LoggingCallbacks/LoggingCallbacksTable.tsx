@@ -57,7 +57,8 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       title: <span className="font-medium text-gray-700">Mode</span>,
       key: "mode",
       render: (_: unknown, record: CallbackRow) => {
-        const mode = record.mode || "success";
+        // BUG FIX #8: added record.type to match backend
+        const mode = record.type || record.mode || "success";
         const label = CALLBACK_MODES.find((m) => m.value === mode)?.label || mode;
         const badgeClass =
           mode === "success"
@@ -79,9 +80,24 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       align: "right",
       render: (_: unknown, record: CallbackRow) => (
         <div className="flex justify-end gap-2">
-          <TableIconActionButton variant="Test" tooltipText="Test Callback" onClick={() => onTest(record)} />
-          <TableIconActionButton variant="Edit" tooltipText="Edit Callback" onClick={() => onEdit(record)} />
-          <TableIconActionButton variant="Delete" tooltipText="Delete Callback" onClick={() => onDelete(record)} />
+          <TableIconActionButton
+            variant="Test"
+            tooltipText="Test Callback"
+            onClick={() => onTest(record)}
+            dataTestId={`logging-callback-test-${record.name}`}
+          />
+          <TableIconActionButton
+            variant="Edit"
+            tooltipText="Edit Callback"
+            onClick={() => onEdit(record)}
+            dataTestId={`logging-callback-edit-${record.name}`}
+          />
+          <TableIconActionButton
+            variant="Delete"
+            tooltipText="Delete Callback"
+            onClick={() => onDelete(record)}
+            dataTestId={`logging-callback-delete-${record.name}`}
+          />
         </div>
       ),
       width: 240,

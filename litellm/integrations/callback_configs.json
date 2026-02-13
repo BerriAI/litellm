@@ -433,5 +433,25 @@
       }
     },
     "description": "SQS Queue (AWS) Logging Integration"
+  },
+  {
+    "id": "websearch_interception",
+    "displayName": "WebSearch Interception",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "enabled_providers": {
+        "type": "text",
+        "ui_name": "Enabled Providers",
+        "description": "Comma-separated list of providers to enable web search for (e.g. bedrock, azure, vertex_ai)",
+        "required": true
+      },
+      "search_tool_name": {
+        "type": "text",
+        "ui_name": "Search Tool Name",
+        "description": "Optional: specific search tool from search_tools config. If not set, uses first available.",
+        "required": false
+      }
+    },
+    "description": "Enable Claude Code web search with any provider (Bedrock, Azure, Vertex AI). Intercepts web search requests and executes them server-side."
   }
 ]
