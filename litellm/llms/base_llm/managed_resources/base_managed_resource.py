@@ -301,25 +301,31 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         unified_resource_id: str,
         user_api_key_dict: UserAPIKeyAuth,
+        litellm_parent_otel_span: Optional[Span] = None,
     ) -> bool:
         """
         Check if user has access to the unified resource ID.
         
+        Uses get_unified_resource_id() which checks cache first before hitting the database,
+        avoiding direct DB queries in the critical request path.
+        
         Args:
             unified_resource_id: The unified resource ID to check
             user_api_key_dict: User API key authentication details
+            litellm_parent_otel_span: OpenTelemetry span for tracing
             
         Returns:
             True if user has access, False otherwise
         """
         user_id = user_api_key_dict.user_id
-        table = getattr(self.prisma_client.db, self.table_name)
-        managed_resource = await table.find_first(
-            where={"unified_resource_id": unified_resource_id}
+        
+        # Use cached method instead of direct DB query
+        resource = await self.get_unified_resource_id(
+            unified_resource_id, litellm_parent_otel_span
         )
 
-        if managed_resource:
-            return managed_resource.created_by == user_id
+        if resource:
+            return resource.get("created_by") == user_id
         
         return False
 
