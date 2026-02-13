@@ -67,3 +67,11 @@ def test_all_numeric_constants_can_be_overridden():
             assert (
                 new_value == test_value
             ), f"Failed to override {name} with environment variable. Expected {test_value}, got {new_value}"
+
+
+def test_default_max_lru_cache_size_is_64(monkeypatch):
+    """Guard the production default; env var can still override this value."""
+    monkeypatch.delenv("DEFAULT_MAX_LRU_CACHE_SIZE", raising=False)
+    importlib.reload(constants)
+
+    assert constants.DEFAULT_MAX_LRU_CACHE_SIZE == 64
