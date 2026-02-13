@@ -140,9 +140,14 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     
     metadata_field = get_metadata_variable_name_from_kwargs(litellm_params)
     metadata = litellm_params.get(metadata_field, {})
-    
+    if not isinstance(metadata, dict):
+        # Fall back: litellm_metadata was None, try metadata
+        metadata = litellm_params.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
     # Get headers from the metadata
-    request_headers = metadata.get("headers", {}) if isinstance(metadata, dict) else {}
+    request_headers = metadata.get("headers", {})
 
     # Check for headers that explicitly control redaction
     if request_headers and bool(

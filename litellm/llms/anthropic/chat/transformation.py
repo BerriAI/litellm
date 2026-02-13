@@ -664,35 +664,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]], 
         model: str,
     ) -> Optional[AnthropicThinkingParam]:
+        if reasoning_effort is None or reasoning_effort == "none":
+            return None
         if AnthropicConfig._is_claude_opus_4_6(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
+        elif reasoning_effort == "low":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "medium":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "high":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "minimal":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+            )
         else:
-            if reasoning_effort is None:
-                return None
-            elif reasoning_effort == "low":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "medium":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "high":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "minimal":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
-                )
-            else:
-                raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -834,6 +833,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "sonnet-4-5",
                         "opus-4.1",
                         "opus-4-1",
+                        "opus-4.5",
+                        "opus-4-5",
+                        "opus-4.6",
+                        "opus-4-6",
                     }
                 ):
                     _output_format = (
@@ -931,6 +934,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
+        Filters out system messages containing x-anthropic-billing-header metadata.
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
@@ -941,6 +945,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if isinstance(system_message_block["content"], str):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
+                        continue
+                    # Skip system messages containing x-anthropic-billing-header metadata
+                    if system_message_block["content"].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -959,6 +966,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         # Skip empty text blocks - Anthropic API raises errors for empty text
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
+                            continue
+                        # Skip system messages containing x-anthropic-billing-header metadata
+                        if _content.get("type") == "text" and text_value and text_value.startswith("x-anthropic-billing-header:"):
                             continue
                         anthropic_system_message_content = (
                             AnthropicSystemMessageContent(

@@ -19,6 +19,7 @@ from litellm.types.proxy.policy_engine.policy_types import (
     PolicyScope,
 )
 from litellm.types.proxy.policy_engine.resolver_types import (
+    AttachmentImpactResponse,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
     PolicyAttachmentListResponse,
@@ -30,6 +31,9 @@ from litellm.types.proxy.policy_engine.resolver_types import (
     PolicyListDBResponse,
     PolicyListResponse,
     PolicyMatchContext,
+    PolicyMatchDetail,
+    PolicyResolveRequest,
+    PolicyResolveResponse,
     PolicyScopeResponse,
     PolicySummaryItem,
     PolicyTestResponse,
@@ -75,4 +79,9 @@ __all__ = [
     "PolicyAttachmentCreateRequest",
     "PolicyAttachmentDBResponse",
     "PolicyAttachmentListResponse",
+    # Resolve types
+    "PolicyResolveRequest",
+    "PolicyResolveResponse",
+    "PolicyMatchDetail",
+    "AttachmentImpactResponse",
 ]

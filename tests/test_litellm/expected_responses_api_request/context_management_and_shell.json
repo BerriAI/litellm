@@ -1,0 +1,20 @@
+{
+  "model": "gpt-4o",
+  "input": "List files in /mnt/data and run python --version.",
+  "context_management": [
+    {
+      "type": "compaction",
+      "compact_threshold": 200000
+    }
+  ],
+  "tools": [
+    {
+      "type": "shell",
+      "environment": {
+        "type": "container_auto"
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "max_output_tokens": 256
+}

@@ -628,10 +628,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
+        _masked = "{}****{}".format(data.key[:4], data.key[-4:]) if len(data.key) > 8 else "****"
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {_masked}"
             },
         )
 
@@ -2770,6 +2771,7 @@ async def can_modify_verification_token(
 
     Rules:
     - Proxy admin can modify any key
+    - Internal jobs service account can modify any key (for auto-rotation)
     - For team keys: only team admin or key owner can modify
     - For personal keys: only key owner can modify
 
@@ -2782,13 +2784,19 @@ async def can_modify_verification_token(
     Returns:
         True if user can modify the key, False otherwise
     """
+    from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
+
     is_team_key = _is_team_key(data=key_info)
 
     # 1. Proxy admin can modify any key
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
 
-    # 2. For team keys: only team admin or key owner can modify
+    # 2. Internal jobs service account can modify any key (for auto-rotation)
+    if user_api_key_dict.api_key == LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME:
+        return True
+
+    # 3. For team keys: only team admin or key owner can modify
     if is_team_key and key_info.team_id is not None:
         # Get team object to check if user is team admin
         team_table = await get_team_object(
@@ -2818,7 +2826,7 @@ async def can_modify_verification_token(
         # Not team admin and doesn't own the key
         return False
 
-    # 3. For personal keys: only key owner can modify
+    # 4. For personal keys: only key owner can modify
     if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
         return True
 
@@ -3179,7 +3187,7 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(
+async def regenerate_key_fn(  # noqa: PLR0915
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -3330,6 +3338,10 @@ async def regenerate_key_fn(
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
+        verbose_proxy_logger.info(
+            "Key regeneration requested: key_alias=%s",
+            getattr(_key_in_db, "key_alias", None),
+        )
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
         new_token = get_new_token(data=data)
@@ -3380,6 +3392,10 @@ async def regenerate_key_fn(
             **updated_token_dict,
         )
 
+        verbose_proxy_logger.info(
+            "Key regeneration completed: key_alias=%s",
+            getattr(_key_in_db, "key_alias", None),
+        )
         asyncio.create_task(
             KeyManagementEventHooks.async_key_rotated_hook(
                 data=data,
