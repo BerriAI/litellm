@@ -14,6 +14,7 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -887,8 +888,15 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
-            # For stdio, we need to get the stdio config from the server
-            resolved_env = stdio_env if stdio_env is not None else server.env or {}
+            resolved_env = stdio_env if stdio_env is not None else dict(server.env or {})
+
+            # Ensure npm-based STDIO MCP servers have a writable cache dir.
+            # In containers the default (~/.npm or /app/.npm) may not exist
+            # or be read-only, causing npx to fail with ENOENT.
+            if "NPM_CONFIG_CACHE" not in resolved_env:
+                from litellm.constants import MCP_NPM_CACHE_DIR
+
+                resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -1437,6 +1445,9 @@ class MCPServerManager:
         """
         Fetch tools from MCP client with timeout and error handling.
 
+        Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
+        with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
@@ -1444,24 +1455,12 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
-
-        async def _list_tools_task():
-            try:
+        try:
+            with anyio.fail_after(30.0):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Client operation failed for {server_name}: {str(e)}"
-                )
-                return []
-
-        try:
-            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
         except asyncio.CancelledError:
@@ -2481,6 +2480,9 @@ class MCPServerManager:
             except asyncio.TimeoutError:
                 health_check_error = "Health check timed out after 10 seconds"
                 status = "unhealthy"
+            except asyncio.CancelledError:
+                health_check_error = "Health check was cancelled"
+                status = "unknown"
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"

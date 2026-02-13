@@ -29,6 +29,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
+from fastapi.exceptions import HTTPException
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -624,7 +625,9 @@ class CustomGuardrail(CustomLogger):
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
         # Convert None to empty dict to satisfy type requirements
-        guardrail_response = {} if response is None else response
+        guardrail_response: Union[Dict[str, Any], str] = (
+            {} if response is None else response
+        )
 
         # For apply_guardrail functions in custom_code_guardrail scenario,
         # simplify the logged response to "allow", "deny", or "mask"
@@ -648,6 +651,23 @@ class CustomGuardrail(CustomLogger):
         )
         return response
 
+    @staticmethod
+    def _is_guardrail_intervention(e: Exception) -> bool:
+        """
+        Returns True if the exception represents an intentional guardrail block
+        (this was logged previously as an API failure - guardrail_failed_to_respond).
+
+        Guardrails signal intentional blocks by raising:
+        - HTTPException with status 400 (content policy violation)
+        - ModifyResponseException (passthrough mode violation)
+        """
+
+        if isinstance(e, ModifyResponseException):
+            return True
+        if isinstance(e, HTTPException) and e.status_code == 400:
+            return True
+        return False
+
     def _process_error(
         self,
         e: Exception,
@@ -662,6 +682,11 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
+        guardrail_status: GuardrailStatus = (
+            "guardrail_intervened"
+            if self._is_guardrail_intervention(e)
+            else "guardrail_failed_to_respond"
+        )
         # For custom_code_guardrail scenario, log as "deny" instead of full exception
         # Check if this is from custom_code_guardrail by checking the class name
         guardrail_response: Union[Exception, str] = e
@@ -671,7 +696,7 @@ class CustomGuardrail(CustomLogger):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,
-            guardrail_status="guardrail_failed_to_respond",
+            guardrail_status=guardrail_status,
             duration=duration,
             start_time=start_time,
             end_time=end_time,
