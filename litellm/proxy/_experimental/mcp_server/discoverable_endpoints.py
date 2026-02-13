@@ -465,15 +465,16 @@ def _build_oauth_protected_resource_response(
 
     request_base_url = get_request_base_url(request)
 
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
     # When no server name provided, try to resolve the single OAuth2 server
     if mcp_server_name is None:
-        resolved = _resolve_oauth2_server_for_root_endpoints()
+        resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             mcp_server_name = resolved.server_name or resolved.name
 
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        client_ip = IPAddressUtils.get_mcp_client_ip(request)
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
@@ -575,10 +576,11 @@ def _build_oauth_authorization_server_response(
     )
 
     request_base_url = get_request_base_url(request)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
     # When no server name provided, try to resolve the single OAuth2 server
     if mcp_server_name is None:
-        resolved = _resolve_oauth2_server_for_root_endpoints()
+        resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             mcp_server_name = resolved.server_name or resolved.name
 
@@ -595,7 +597,6 @@ def _build_oauth_authorization_server_response(
 
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        client_ip = IPAddressUtils.get_mcp_client_ip(request)
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
@@ -681,13 +682,15 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     request_data = await _read_request_body(request=request)
     data: dict = {**request_data}
 
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
     dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
         "redirect_uris": [f"{request_base_url}/callback"],
     }
     if not mcp_server_name:
-        resolved = _resolve_oauth2_server_for_root_endpoints()
+        resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             return await register_client_with_server(
                 request=request,
@@ -702,7 +705,6 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
             )
         return dummy_return
 
-    client_ip = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
         mcp_server_name, client_ip=client_ip
     )
