@@ -977,6 +977,13 @@ class CustomStreamWrapper:
                     finish_reason=self.received_finish_reason
                 )  # ensure consistent output to openai
 
+                ## if tool use - override "stop" to "tool_calls"
+                if (
+                    model_response.choices[0].finish_reason == "stop"
+                    and self.tool_call
+                ):
+                    model_response.choices[0].finish_reason = "tool_calls"
+
                 self.sent_last_chunk = True
 
             return model_response
@@ -1494,6 +1501,15 @@ class CustomStreamWrapper:
                     ]
                     completion_obj["tool_calls"] = None
 
+                self.tool_call = True
+
+            # Also check model_response delta for tool_calls (set from original_chunk
+            # in the openai/gemini path above, which doesn't go through completion_obj)
+            if (
+                not self.tool_call
+                and hasattr(model_response.choices[0].delta, "tool_calls")
+                and model_response.choices[0].delta.tool_calls is not None
+            ):
                 self.tool_call = True
 
             ## RETURN ARG
