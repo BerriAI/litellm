@@ -3476,6 +3476,7 @@ class ProxyConfig:
         """
         Adds callbacks from DB config to litellm
         """
+        # BUG FIX #7: failure callbacks also checked and updated
         litellm_settings = config_data.get("litellm_settings", {}) or {}
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)
@@ -11349,21 +11350,39 @@ async def delete_callback(
 
         # Check if callback exists in current configuration
         litellm_settings = config.get("litellm_settings", {})
-        success_callbacks = litellm_settings.get("success_callback", [])
+        success_callbacks = list(litellm_settings.get("success_callback") or [])
+        callbacks_success_and_failure = list(
+            litellm_settings.get("callbacks") or []
+        )
 
-        if callback_name not in success_callbacks:
+        found = False
+        if callback_name in success_callbacks:
+            success_callbacks.remove(callback_name)
+            config.setdefault("litellm_settings", {})[
+                "success_callback"
+            ] = success_callbacks
+            found = True
+
+        # Also remove from callbacks (success_and_failure) if present
+        def _matches(item):
+            if isinstance(item, str):
+                return item.lower() == callback_name
+            if isinstance(item, dict) and len(item) == 1:
+                return next(iter(item.keys())).lower() == callback_name
+            return False
+
+        new_callbacks = [c for c in callbacks_success_and_failure if not _matches(c)]
+        if len(new_callbacks) != len(callbacks_success_and_failure):
+            config.setdefault("litellm_settings", {})["callbacks"] = new_callbacks
+            found = True
+
+        if not found:
             raise HTTPException(
                 status_code=404,
                 detail={
                     "error": f"Callback '{callback_name}' not found in active configuration"
                 },
             )
-
-        # Remove callback from success_callback list
-        success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})[
-            "success_callback"
-        ] = success_callbacks
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
@@ -11463,9 +11482,16 @@ async def get_config():  # noqa: PLR0915
             )
 
         for _callback in _success_and_failure_callbacks:
+            _callback_params = None
+            if isinstance(_callback, dict) and len(_callback) == 1:
+                (_callback_name, _callback_params), = _callback.items()
+                _callback = _callback_name
             _data_to_return.append(
                 process_callback(
-                    _callback, "success_and_failure", environment_variables
+                    _callback,
+                    "success_and_failure",
+                    environment_variables,
+                    callback_params=_callback_params,
                 )
             )
 

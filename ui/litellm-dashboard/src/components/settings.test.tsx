@@ -1,6 +1,12 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, getByRole, render, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
+import {
+  alertingSettingsCall,
+  deleteCallback,
+  getCallbackConfigsCall,
+  getCallbacksCall,
+  setCallbacksCall,
+} from "./networking";
 import Settings from "./settings";
 
 vi.mock("./networking", () => ({
@@ -73,6 +79,8 @@ describe("Settings", () => {
   const mockGetCallbacksCall = vi.mocked(getCallbacksCall);
   const mockGetCallbackConfigsCall = vi.mocked(getCallbackConfigsCall);
   const mockAlertingSettingsCall = vi.mocked(alertingSettingsCall);
+  const mockSetCallbacksCall = vi.mocked(setCallbacksCall);
+  const mockDeleteCallback = vi.mocked(deleteCallback);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -202,5 +210,151 @@ describe("Settings", () => {
     });
 
     expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+  });
+
+  it("should display websearch_interception callback when returned by getCallbacksCall with params", async () => {
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [
+        {
+          name: "websearch_interception",
+          type: "success_and_failure",
+          variables: {},
+          params: { enabled_providers: ["bedrock", "azure"] },
+        },
+      ],
+      available_callbacks: {
+        websearch_interception: {
+          litellm_callback_name: "websearch_interception",
+          litellm_callback_params: ["enabled_providers", "search_tool_name"],
+          ui_callback_name: "WebSearch Interception",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([]);
+
+    const { getByText } = render(<Settings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(getByText("WebSearch Interception")).toBeInTheDocument();
+      expect(getByText("Success & Failure")).toBeInTheDocument();
+    });
+  });
+
+  describe("Logging callbacks", () => {
+    const langfuseAvailableCallbacks = {
+      langfuse: {
+        litellm_callback_name: "langfuse",
+        litellm_callback_params: [] as string[],
+        ui_callback_name: "Langfuse",
+      },
+    };
+
+    const getCallbacksResponseWithLangfuse = (callback: { name: string; type: "success"; variables: Record<string, unknown> }) => ({
+      callbacks: [callback],
+      available_callbacks: { ...langfuseAvailableCallbacks, langfuse: { ...langfuseAvailableCallbacks.langfuse, litellm_callback_params: Object.keys(callback.variables).filter((k) => callback.variables[k] != null) } },
+      alerts: [],
+    });
+
+    it("should call setCallbacksCall with expected payload when editing and saving a callback", async () => {
+      const mockCallback = {
+        name: "langfuse",
+        type: "success" as const,
+        variables: {
+          LANGFUSE_PUBLIC_KEY: "pk-test",
+          LANGFUSE_SECRET_KEY: "sk-test",
+          LANGFUSE_HOST: "https://langfuse.example.com",
+          SLACK_WEBHOOK_URL: null,
+          OPENMETER_API_KEY: null,
+        },
+      };
+      const mockCallbackConfig = {
+        id: "langfuse",
+        displayName: "Langfuse",
+        dynamic_params: {
+          LANGFUSE_PUBLIC_KEY: { type: "text", ui_name: "Public Key", required: true },
+          LANGFUSE_SECRET_KEY: { type: "password", ui_name: "Secret Key", required: true },
+          LANGFUSE_HOST: { type: "text", ui_name: "Host", required: false },
+        },
+      };
+
+      mockGetCallbacksCall.mockResolvedValue(getCallbacksResponseWithLangfuse(mockCallback));
+      mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
+      mockSetCallbacksCall.mockResolvedValue(undefined);
+
+      const { getByText, getByTestId } = render(<Settings {...defaultProps} />);
+
+      await waitFor(() => expect(getByText("Langfuse")).toBeInTheDocument());
+
+      act(() => fireEvent.click(getByTestId("logging-callback-edit-langfuse")));
+      await waitFor(() => expect(getByText("Edit Callback Settings")).toBeInTheDocument());
+
+      const dialog = getByRole(document.body, "dialog", { name: /Edit Callback Settings/i });
+      act(() => fireEvent.click(within(dialog).getByRole("button", { name: /Save Changes/i })));
+
+      await waitFor(() =>
+        expect(mockSetCallbacksCall).toHaveBeenCalledWith(
+          defaultProps.accessToken,
+          expect.objectContaining({
+            litellm_settings: expect.objectContaining({ success_callback: ["langfuse"] }),
+          })
+        )
+      );
+    });
+
+    it("should call deleteCallback with callback name when delete is confirmed", async () => {
+      const mockCallback = { name: "langfuse", type: "success" as const, variables: {} };
+      mockGetCallbacksCall.mockResolvedValue(getCallbacksResponseWithLangfuse(mockCallback));
+      mockGetCallbackConfigsCall.mockResolvedValue([]);
+      mockDeleteCallback.mockResolvedValue(undefined);
+
+      const { getByText, getByTestId } = render(<Settings {...defaultProps} />);
+
+      await waitFor(() => expect(getByText("Langfuse")).toBeInTheDocument());
+
+      act(() => fireEvent.click(getByTestId("logging-callback-delete-langfuse")));
+      await waitFor(() => expect(getByRole(document.body, "dialog", { name: "Delete Callback" })).toBeInTheDocument());
+
+      const deleteDialog = getByRole(document.body, "dialog", { name: "Delete Callback" });
+      act(() => fireEvent.click(within(deleteDialog).getByRole("button", { name: /^Delete$/ })));
+
+      await waitFor(() => expect(mockDeleteCallback).toHaveBeenCalledWith(defaultProps.accessToken, "langfuse"));
+    });
+
+    it("should handle getCallbacksCall rejection without crashing", async () => {
+      const NotificationsManager = (await import("./molecules/notifications_manager")).default;
+      mockGetCallbacksCall.mockRejectedValue(new Error("Network error"));
+
+      const { container, getByText } = render(<Settings {...defaultProps} />);
+
+      await waitFor(() => expect(getByText("Active Logging Callbacks")).toBeInTheDocument());
+      await waitFor(() => expect(NotificationsManager.fromBackend).toHaveBeenCalled());
+
+      expect(container).toBeInTheDocument();
+    });
+
+    it("should handle setCallbacksCall rejection when saving callback without crashing", async () => {
+      const NotificationsManager = (await import("./molecules/notifications_manager")).default;
+      const mockCallback = { name: "langfuse", type: "success" as const, variables: {} };
+      mockGetCallbacksCall.mockResolvedValue(getCallbacksResponseWithLangfuse(mockCallback));
+      mockGetCallbackConfigsCall.mockResolvedValue([]);
+      mockSetCallbacksCall.mockRejectedValue(new Error("Save failed"));
+
+      const { getByText, getByTestId } = render(<Settings {...defaultProps} />);
+
+      await waitFor(() => expect(getByText("Langfuse")).toBeInTheDocument());
+
+      act(() => fireEvent.click(getByTestId("logging-callback-edit-langfuse")));
+      await waitFor(() => expect(getByText("Edit Callback Settings")).toBeInTheDocument());
+
+      const editDialog = getByRole(document.body, "dialog", { name: /Edit Callback Settings/i });
+      act(() => fireEvent.click(within(editDialog).getByRole("button", { name: /Save Changes/i })));
+
+      await waitFor(() => expect(NotificationsManager.fromBackend).toHaveBeenCalled());
+    });
   });
 });

@@ -37,6 +37,9 @@ import {
   serviceHealthCheck,
   setCallbacksCall,
 } from "./networking";
+import {
+  buildCallbackPayload,
+} from "./Settings/LoggingAndAlerts/LoggingCallbacks/callbackPayloadHelpers";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
@@ -203,16 +206,6 @@ const getDynamicParamsForCallback = (
   return fallbackVariables ? Object.keys(fallbackVariables) : [];
 };
 
-// Shared helper function to build callback payload
-const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string) => {
-  return {
-    environment_variables: formValues,
-    litellm_settings: {
-      success_callback: [callbackName],
-    },
-  };
-};
-
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -265,8 +258,18 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       const normalized = Object.fromEntries(
         Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
       );
+      const params = selectedEditCallback.params as Record<string, unknown> | undefined;
+      const paramFields =
+        params &&
+        Object.fromEntries(
+          Object.entries(params).map(([k, v]) => [
+            k,
+            Array.isArray(v) ? (v as string[]).join(", ") : v ?? "",
+          ])
+        );
       editForm.setFieldsValue({
         ...normalized,
+        ...paramFields,
         callback: selectedEditCallback.name,
       });
     }
@@ -294,26 +297,29 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     if (!accessToken || !userRole || !userID) {
       return;
     }
-    getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      setCallbacks(data.callbacks);
-      setAllCallbacks(data.available_callbacks);
-      // setCallbacks(callbacks_data);
+    getCallbacksCall(accessToken, userID, userRole)
+      .then((data) => {
+        setCallbacks(data.callbacks);
+        setAllCallbacks(data.available_callbacks);
+        // setCallbacks(callbacks_data);
 
-      let alerts_data = data.alerts;
-      if (alerts_data) {
-        if (alerts_data.length > 0) {
-          let _alert_info = alerts_data[0];
-          let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
+        let alerts_data = data.alerts;
+        if (alerts_data) {
+          if (alerts_data.length > 0) {
+            let _alert_info = alerts_data[0];
+            let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
 
-          let active_alerts = _alert_info.active_alerts;
-          setActiveAlerts(active_alerts);
-          setCatchAllWebhookURL(catch_all_webhook);
-          setAlertToWebhooks(_alert_info.alerts_to_webhook);
+            let active_alerts = _alert_info.active_alerts;
+            setActiveAlerts(active_alerts);
+            setCatchAllWebhookURL(catch_all_webhook);
+            setAlertToWebhooks(_alert_info.alerts_to_webhook);
+          }
         }
-      }
 
-      setAlerts(alerts_data);
-    });
+        setAlerts(alerts_data);
+      })
+      // Display backend errors as user notifications so fetch failures aren't silent.
+      .catch((err) => NotificationsManager.fromBackend(err));
   }, [accessToken, userRole, userID]);
 
   const isAlertOn = (alertName: string) => {
@@ -332,7 +338,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const payload = buildCallbackPayload(formValues, callbackName);
+    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit);
 
     try {
       await setCallbacksCall(accessToken, payload);
