@@ -464,18 +464,10 @@ class ProxyLogging:
                     llm_router=llm_router,
                 )
 
-                if initialized_callback is not None:
-                    string_callbacks_to_replace[idx] = initialized_callback
-            else:
-                # Only add non-string callbacks to the manager; string
-                # callbacks will be replaced in-place below and are already
-                # present in litellm.callbacks, so adding them to the manager
-                # (which appends to litellm.callbacks) would create duplicates.
-                litellm.logging_callback_manager.add_litellm_callback(callback)
-
         # Replace string entries in litellm.callbacks with initialized instances
         for idx, initialized_callback in string_callbacks_to_replace.items():
             litellm.callbacks[idx] = initialized_callback
+            litellm.logging_callback_manager.add_litellm_callback(initialized_callback)
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
