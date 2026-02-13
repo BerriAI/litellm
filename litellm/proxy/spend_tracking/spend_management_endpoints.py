@@ -15,8 +15,13 @@ from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
+    _is_internal_user,
     _is_user_team_admin,
     _user_has_admin_view,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    get_admin_team_ids,
+    validate_key_list_check,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
@@ -1831,8 +1836,72 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        is_internal_user = _is_internal_user(user_api_key_dict=user_api_key_dict)
+        
         if not is_admin_view:
-            if team_id is not None:
+            if is_internal_user:
+                # Internal users can see:
+                # 1. Spend logs for keys they own or created
+                # 2. Spend logs for teams they admin
+                user_id = user_api_key_dict.user_id
+                if user_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={"error": "No user_id found for internal user"},
+                    )
+                
+                complete_user_info = await validate_key_list_check(
+                    user_api_key_dict=user_api_key_dict,
+                    user_id=None,
+                    team_id=None,
+                    organization_id=None,
+                    key_alias=None,
+                    key_hash=None,
+                    prisma_client=prisma_client,
+                )
+                
+                admin_team_ids = await get_admin_team_ids(
+                    complete_user_info=complete_user_info,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                )
+                
+                user_api_keys = await _get_user_owned_or_created_api_keys(
+                    prisma_client=prisma_client,
+                    user_id=user_id,
+                )
+                
+                or_conditions = []
+                
+                if team_id is not None:
+                    if admin_team_ids and team_id in admin_team_ids:
+                        or_conditions.append({"team_id": team_id})
+                    
+                    if user_api_keys:
+                        or_conditions.append({
+                            "AND": [
+                                {"api_key": {"in": user_api_keys}},
+                                {"team_id": team_id}
+                            ]
+                        })
+                else:
+                    if admin_team_ids:
+                        or_conditions.append({"team_id": {"in": admin_team_ids}})
+                    
+                    if user_api_keys:
+                        or_conditions.append({"api_key": {"in": user_api_keys}})
+                
+                if or_conditions:
+                    if len(or_conditions) == 1:
+                        where_conditions.update(or_conditions[0])
+                    else:
+                        existing_and = where_conditions.get("AND", [])
+                        existing_and.append({"OR": or_conditions})
+                        where_conditions["AND"] = existing_and
+                else:
+                    where_conditions["request_id"] = "__no_matching_logs__"
+            elif team_id is not None:
+                # Non-internal user with team_id specified
                 can_view_team = await _can_team_member_view_log(
                     prisma_client=prisma_client,
                     user_api_key_dict=user_api_key_dict,
@@ -1849,6 +1918,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                     )
                 where_conditions["team_id"] = team_id
             else:
+                # Non-internal user without team_id - check if they can view their own logs
                 if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
                     where_conditions["user"] = user_api_key_dict.user_id
                     where_conditions.pop("team_id", None)
@@ -3275,3 +3345,23 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     ) and user_id is not None
+
+
+async def _get_user_owned_or_created_api_keys(
+    prisma_client: PrismaClient,
+    user_id: str,
+) -> List[str]:
+    """
+    Get all API key hashes (tokens) for keys owned by or created by the user.
+    Returns a list of hashed API keys (tokens).
+    """
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={
+            "OR": [
+                {"user_id": user_id},
+                {"created_by": user_id},
+            ]
+        },
+        select={"token": True},
+    )
+    return [key.token for key in keys if key.token]

@@ -25,6 +25,16 @@ def _user_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
     )
 
 
+def _is_internal_user(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Check if the requesting user is an internal user (not internal_user_viewer).
+    Internal users can view spend logs for keys they own or created, and for teams they admin.
+    """
+    user_role = user_api_key_dict.user_role
+    user_id = user_api_key_dict.user_id
+    return user_role == LitellmUserRoles.INTERNAL_USER and user_id is not None
+
+
 def _is_user_team_admin(
     user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
 ) -> bool:

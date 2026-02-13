@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import (
+    LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
     SpendLogsPayload,
@@ -642,28 +643,97 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, m
     """
     # Mock spend logs for 2 users
     mock_spend_logs = [
-        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "internal_user_1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
-        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "internal_user_2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key-1", "user": "internal_user_1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key-2", "user": "internal_user_2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
     ]
 
-    # Prisma client mock that filters by "user" where condition
+    # Mock user table response
+    mock_user_info = LiteLLM_UserTable(
+        user_id="internal_user_1",
+        teams=[],
+        organization_memberships=None,
+    )
+
+    # Mock API keys owned by user
+    mock_user_api_keys = ["sk-test-key-1"]
+
+    # Prisma client mock that filters by API keys or user
     class MockDB:
         async def find_many(self, *args, **kwargs):
             where = kwargs.get("where", {})
+            # Check if filtering by api_key
+            if "api_key" in where:
+                api_key_condition = where["api_key"]
+                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                    api_keys = api_key_condition["in"]
+                    if "sk-test-key-1" in api_keys:
+                        return [mock_spend_logs[0]]
+            # Check if filtering by user
             if "user" in where and where["user"] == "internal_user_1":
                 return [mock_spend_logs[0]]
+            # Check OR conditions
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "api_key" in or_cond:
+                                api_key_condition = or_cond["api_key"]
+                                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                                    api_keys = api_key_condition["in"]
+                                    if "sk-test-key-1" in api_keys:
+                                        return [mock_spend_logs[0]]
             return mock_spend_logs
 
         async def count(self, *args, **kwargs):
             where = kwargs.get("where", {})
+            # Check if filtering by api_key
+            if "api_key" in where:
+                api_key_condition = where["api_key"]
+                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                    api_keys = api_key_condition["in"]
+                    if "sk-test-key-1" in api_keys:
+                        return 1
+            # Check if filtering by user
             if "user" in where and where["user"] == "internal_user_1":
                 return 1
+            # Check OR conditions
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "api_key" in or_cond:
+                                api_key_condition = or_cond["api_key"]
+                                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                                    api_keys = api_key_condition["in"]
+                                    if "sk-test-key-1" in api_keys:
+                                        return 1
             return len(mock_spend_logs)
+
+        class MockUserTable:
+            async def find_unique(self, *args, **kwargs):
+                return mock_user_info
+
+        class MockVerificationToken:
+            async def find_many(self, *args, **kwargs):
+                # Return mock API keys owned by user
+                class MockKey:
+                    def __init__(self, token):
+                        self.token = token
+                return [MockKey(key) for key in mock_user_api_keys]
+
+        class MockTeamTable:
+            async def find_many(self, *args, **kwargs):
+                return []
+
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.litellm_usertable = self.MockUserTable()
+            self.litellm_verificationtoken = self.MockVerificationToken()
+            self.litellm_teamtable = self.MockTeamTable()
 
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
 
     mock_prisma_client = MockPrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -705,37 +775,86 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
         {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "member2", "team_id": "team_other", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
     ]
 
+    # Mock user info - user is member of team_admin_team
+    mock_user_info = LiteLLM_UserTable(
+        user_id="admin_user",
+        teams=["team_admin_team"],
+        organization_memberships=None,
+    )
+
+    # Mock team object - user is admin
+    class MockTeam:
+        def __init__(self):
+            self.team_id = "team_admin_team"
+            self.members_with_roles = [Member(user_id="admin_user", role="admin")]
+        
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [member.model_dump() if hasattr(member, "model_dump") else {"user_id": member.user_id, "role": member.role} for member in self.members_with_roles],
+            }
+
     class MockDB:
         async def find_many(self, *args, **kwargs):
             where = kwargs.get("where", {})
+            # Check if filtering by team_id directly
             if "team_id" in where and where["team_id"] == "team_admin_team":
                 return [mock_spend_logs[0]]
+            # Check OR conditions (team admin case)
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "team_id" in or_cond and or_cond["team_id"] == "team_admin_team":
+                                return [mock_spend_logs[0]]
             return mock_spend_logs
 
         async def count(self, *args, **kwargs):
             where = kwargs.get("where", {})
+            # Check if filtering by team_id directly
             if "team_id" in where and where["team_id"] == "team_admin_team":
                 return 1
+            # Check OR conditions (team admin case)
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "team_id" in or_cond and or_cond["team_id"] == "team_admin_team":
+                                return 1
             return len(mock_spend_logs)
+
+        class MockUserTable:
+            async def find_unique(self, *args, **kwargs):
+                return mock_user_info
+
+        class MockVerificationToken:
+            async def find_many(self, *args, **kwargs):
+                return []
+
+        class MockTeamTable:
+            async def find_unique(self, *args, **kwargs):
+                where = kwargs.get("where", {})
+                if where.get("team_id") == "team_admin_team":
+                    return MockTeam()
+                return None
+
+            async def find_many(self, *args, **kwargs):
+                where = kwargs.get("where", {})
+                if "team_id" in where and "in" in where["team_id"]:
+                    team_ids = where["team_id"]["in"]
+                    if "team_admin_team" in team_ids:
+                        return [MockTeam()]
+                return []
+
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.litellm_usertable = self.MockUserTable()
+            self.litellm_verificationtoken = self.MockVerificationToken()
+            self.litellm_teamtable = self.MockTeamTable()
 
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-            # Team lookup for RBAC check
-            class TeamTable:
-                def __init__(self):
-                    # user "admin_user" is team admin
-                    self.members_with_roles = [Member(user_id="admin_user", role="admin")]
-
-            async def find_unique(where: dict):
-                if where == {"team_id": "team_admin_team"}:
-                    return TeamTable()
-                return None
-
-            self.db.litellm_teamtable = self
-            self.litellm_teamtable = self
-            self.find_unique = find_unique
 
     mock_prisma_client = MockPrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -2416,3 +2535,470 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
         assert metadata["user_api_key_alias"] == "test-key-1"
         assert "error_information" in metadata
         assert metadata["error_information"]["error_code"] == "500"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_internal_user_with_api_keys(client, monkeypatch):
+    """
+    Internal users should see spend logs for API keys they own or created.
+    """
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-user-key-1", "user": "user1", "team_id": None, "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-user-key-2", "user": "user2", "team_id": None, "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {"id": "log3", "request_id": "req3", "api_key": "sk-other-key", "user": "user3", "team_id": None, "spend": 0.15, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id="internal_user_1",
+        teams=[],
+        organization_memberships=None,
+    )
+
+    # User owns these API keys
+    mock_user_api_keys = ["sk-user-key-1", "sk-user-key-2"]
+
+    class MockDB:
+        async def find_many(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "api_key" in where:
+                api_key_condition = where["api_key"]
+                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                    api_keys = api_key_condition["in"]
+                    return [log for log in mock_spend_logs if log["api_key"] in api_keys]
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "api_key" in or_cond:
+                                api_key_condition = or_cond["api_key"]
+                                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                                    api_keys = api_key_condition["in"]
+                                    return [log for log in mock_spend_logs if log["api_key"] in api_keys]
+            return mock_spend_logs
+
+        async def count(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "api_key" in where:
+                api_key_condition = where["api_key"]
+                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                    api_keys = api_key_condition["in"]
+                    return len([log for log in mock_spend_logs if log["api_key"] in api_keys])
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "api_key" in or_cond:
+                                api_key_condition = or_cond["api_key"]
+                                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                                    api_keys = api_key_condition["in"]
+                                    return len([log for log in mock_spend_logs if log["api_key"] in api_keys])
+            return len(mock_spend_logs)
+
+        class MockUserTable:
+            async def find_unique(self, *args, **kwargs):
+                return mock_user_info
+
+        class MockVerificationToken:
+            async def find_many(self, *args, **kwargs):
+                class MockKey:
+                    def __init__(self, token):
+                        self.token = token
+                return [MockKey(key) for key in mock_user_api_keys]
+
+        class MockTeamTable:
+            async def find_many(self, *args, **kwargs):
+                return []
+
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.litellm_usertable = self.MockUserTable()
+            self.litellm_verificationtoken = self.MockVerificationToken()
+            self.litellm_teamtable = self.MockTeamTable()
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user_1"
+    )
+
+    try:
+        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2  # Should only see logs for keys user owns
+        assert len(data["data"]) == 2
+        assert all(log["api_key"] in mock_user_api_keys for log in data["data"])
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_internal_user_team_admin_only(client, monkeypatch):
+    """
+    Internal users who are team admins should see team spend logs.
+    """
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-key-1", "user": "member1", "team_id": "team_admin_team", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-key-2", "user": "member2", "team_id": "team_other", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id="admin_user",
+        teams=["team_admin_team"],
+        organization_memberships=None,
+    )
+
+    class MockTeam:
+        def __init__(self):
+            self.team_id = "team_admin_team"
+            self.members_with_roles = [Member(user_id="admin_user", role="admin")]
+        
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [member.model_dump() if hasattr(member, "model_dump") else {"user_id": member.user_id, "role": member.role} for member in self.members_with_roles],
+            }
+
+    class MockDB:
+        async def find_many(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "team_id" in where:
+                team_id_condition = where["team_id"]
+                if isinstance(team_id_condition, dict) and "in" in team_id_condition:
+                    team_ids = team_id_condition["in"]
+                    return [log for log in mock_spend_logs if log["team_id"] in team_ids]
+                elif team_id_condition == "team_admin_team":
+                    return [mock_spend_logs[0]]
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "team_id" in or_cond:
+                                team_id_condition = or_cond["team_id"]
+                                if isinstance(team_id_condition, dict) and "in" in team_id_condition:
+                                    team_ids = team_id_condition["in"]
+                                    return [log for log in mock_spend_logs if log["team_id"] in team_ids]
+                                elif team_id_condition == "team_admin_team":
+                                    return [mock_spend_logs[0]]
+            return mock_spend_logs
+
+        async def count(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "team_id" in where:
+                team_id_condition = where["team_id"]
+                if isinstance(team_id_condition, dict) and "in" in team_id_condition:
+                    team_ids = team_id_condition["in"]
+                    return len([log for log in mock_spend_logs if log["team_id"] in team_ids])
+                elif team_id_condition == "team_admin_team":
+                    return 1
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        for or_cond in condition["OR"]:
+                            if "team_id" in or_cond:
+                                team_id_condition = or_cond["team_id"]
+                                if isinstance(team_id_condition, dict) and "in" in team_id_condition:
+                                    team_ids = team_id_condition["in"]
+                                    return len([log for log in mock_spend_logs if log["team_id"] in team_ids])
+                                elif team_id_condition == "team_admin_team":
+                                    return 1
+            return len(mock_spend_logs)
+
+        class MockUserTable:
+            async def find_unique(self, *args, **kwargs):
+                return mock_user_info
+
+        class MockVerificationToken:
+            async def find_many(self, *args, **kwargs):
+                return []
+
+        class MockTeamTable:
+            async def find_unique(self, *args, **kwargs):
+                where = kwargs.get("where", {})
+                if where.get("team_id") == "team_admin_team":
+                    return MockTeam()
+                return None
+
+            async def find_many(self, *args, **kwargs):
+                where = kwargs.get("where", {})
+                if "team_id" in where and "in" in where["team_id"]:
+                    team_ids = where["team_id"]["in"]
+                    if "team_admin_team" in team_ids:
+                        return [MockTeam()]
+                return []
+
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.litellm_usertable = self.MockUserTable()
+            self.litellm_verificationtoken = self.MockVerificationToken()
+            self.litellm_teamtable = self.MockTeamTable()
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin_user"
+    )
+
+    try:
+        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1  # Should only see logs for team_admin_team
+        assert len(data["data"]) == 1
+        assert data["data"][0]["team_id"] == "team_admin_team"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_internal_user_no_access(client, monkeypatch):
+    """
+    Internal users with no API keys and no team admin access should see no logs.
+    """
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-other-key", "user": "other_user", "team_id": "other_team", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
+    ]
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id="internal_user_1",
+        teams=[],
+        organization_memberships=None,
+    )
+
+    class MockDB:
+        async def find_many(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            # Check for the "no matching logs" condition
+            if "request_id" in where and where["request_id"] == "__no_matching_logs__":
+                return []
+            return mock_spend_logs
+
+        async def count(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "request_id" in where and where["request_id"] == "__no_matching_logs__":
+                return 0
+            return len(mock_spend_logs)
+
+        class MockUserTable:
+            async def find_unique(self, *args, **kwargs):
+                return mock_user_info
+
+        class MockVerificationToken:
+            async def find_many(self, *args, **kwargs):
+                return []  # No API keys owned
+
+        class MockTeamTable:
+            async def find_many(self, *args, **kwargs):
+                return []  # No teams
+
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.litellm_usertable = self.MockUserTable()
+            self.litellm_verificationtoken = self.MockVerificationToken()
+            self.litellm_teamtable = self.MockTeamTable()
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user_1"
+    )
+
+    try:
+        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0  # Should see no logs
+        assert len(data["data"]) == 0
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_internal_user_with_api_keys_and_team_admin(client, monkeypatch):
+    """
+    Internal users with both API keys and team admin access should see logs for both.
+    """
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-user-key", "user": "user1", "team_id": None, "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-team-key", "user": "member1", "team_id": "team_admin_team", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {"id": "log3", "request_id": "req3", "api_key": "sk-other-key", "user": "other_user", "team_id": "other_team", "spend": 0.15, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id="admin_user",
+        teams=["team_admin_team"],
+        organization_memberships=None,
+    )
+
+    mock_user_api_keys = ["sk-user-key"]
+
+    class MockTeam:
+        def __init__(self):
+            self.team_id = "team_admin_team"
+            self.members_with_roles = [Member(user_id="admin_user", role="admin")]
+        
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [member.model_dump() if hasattr(member, "model_dump") else {"user_id": member.user_id, "role": member.role} for member in self.members_with_roles],
+            }
+
+    class MockDB:
+        async def find_many(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            # Check OR conditions - should match logs for user's API keys OR team admin teams
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        matching_logs = []
+                        for or_cond in condition["OR"]:
+                            if "api_key" in or_cond:
+                                api_key_condition = or_cond["api_key"]
+                                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                                    api_keys = api_key_condition["in"]
+                                    matching_logs.extend([log for log in mock_spend_logs if log["api_key"] in api_keys])
+                            elif "team_id" in or_cond:
+                                team_id_condition = or_cond["team_id"]
+                                if isinstance(team_id_condition, dict) and "in" in team_id_condition:
+                                    team_ids = team_id_condition["in"]
+                                    matching_logs.extend([log for log in mock_spend_logs if log["team_id"] in team_ids])
+                        # Remove duplicates
+                        seen_ids = set()
+                        unique_logs = []
+                        for log in matching_logs:
+                            if log["id"] not in seen_ids:
+                                seen_ids.add(log["id"])
+                                unique_logs.append(log)
+                        return unique_logs
+            return mock_spend_logs
+
+        async def count(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "AND" in where:
+                for condition in where["AND"]:
+                    if "OR" in condition:
+                        matching_count = 0
+                        seen_ids = set()
+                        for or_cond in condition["OR"]:
+                            if "api_key" in or_cond:
+                                api_key_condition = or_cond["api_key"]
+                                if isinstance(api_key_condition, dict) and "in" in api_key_condition:
+                                    api_keys = api_key_condition["in"]
+                                    for log in mock_spend_logs:
+                                        if log["id"] not in seen_ids and log["api_key"] in api_keys:
+                                            seen_ids.add(log["id"])
+                                            matching_count += 1
+                            elif "team_id" in or_cond:
+                                team_id_condition = or_cond["team_id"]
+                                if isinstance(team_id_condition, dict) and "in" in team_id_condition:
+                                    team_ids = team_id_condition["in"]
+                                    for log in mock_spend_logs:
+                                        if log["id"] not in seen_ids and log["team_id"] in team_ids:
+                                            seen_ids.add(log["id"])
+                                            matching_count += 1
+                        return matching_count
+            return len(mock_spend_logs)
+
+        class MockUserTable:
+            async def find_unique(self, *args, **kwargs):
+                return mock_user_info
+
+        class MockVerificationToken:
+            async def find_many(self, *args, **kwargs):
+                class MockKey:
+                    def __init__(self, token):
+                        self.token = token
+                return [MockKey(key) for key in mock_user_api_keys]
+
+        class MockTeamTable:
+            async def find_unique(self, *args, **kwargs):
+                where = kwargs.get("where", {})
+                if where.get("team_id") == "team_admin_team":
+                    return MockTeam()
+                return None
+
+            async def find_many(self, *args, **kwargs):
+                where = kwargs.get("where", {})
+                if "team_id" in where and "in" in where["team_id"]:
+                    team_ids = where["team_id"]["in"]
+                    if "team_admin_team" in team_ids:
+                        return [MockTeam()]
+                return []
+
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.litellm_usertable = self.MockUserTable()
+            self.litellm_verificationtoken = self.MockVerificationToken()
+            self.litellm_teamtable = self.MockTeamTable()
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin_user"
+    )
+
+    try:
+        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2  # Should see logs for user's API key AND team admin team
+        assert len(data["data"]) == 2
+        # Verify we see both types of logs
+        api_keys_seen = {log["api_key"] for log in data["data"]}
+        team_ids_seen = {log["team_id"] for log in data["data"] if log["team_id"]}
+        assert "sk-user-key" in api_keys_seen or None in team_ids_seen
+        assert "team_admin_team" in team_ids_seen or "sk-user-key" in api_keys_seen
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
