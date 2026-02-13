@@ -2369,6 +2369,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ) = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
+                    litellm_params=self.litellm_params,
                 )
 
                 result._hidden_params["response_cost"] = response_cost
