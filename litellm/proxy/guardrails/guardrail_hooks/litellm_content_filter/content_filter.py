@@ -10,19 +10,8 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Pattern,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
+                    Optional, Pattern, Tuple, Union, cast)
 
 import yaml
 from fastapi import HTTPException
@@ -37,20 +26,12 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
-from litellm.types.guardrails import (
-    BlockedWord,
-    ContentFilterAction,
-    ContentFilterPattern,
-    GuardrailEventHooks,
-    Mode,
-)
+from litellm.types.guardrails import (BlockedWord, ContentFilterAction,
+                                      ContentFilterPattern,
+                                      GuardrailEventHooks, Mode)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    BlockedWordDetection,
-    CategoryKeywordDetection,
-    ContentFilterCategoryConfig,
-    ContentFilterDetection,
-    PatternDetection,
-)
+    BlockedWordDetection, CategoryKeywordDetection,
+    ContentFilterCategoryConfig, ContentFilterDetection, PatternDetection)
 
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
@@ -675,15 +656,21 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Check category keywords
         for keyword, (category, severity, action) in self.category_keywords.items():
+            # Convert asterisks (*) in keywords to regex wildcards
+            # Asterisks are used in the source data to obfuscate profanity (e.g., "fu*c*k" -> "fuck")
+            # We treat * as a wildcard matching zero or one character
+            keyword_pattern_str = keyword.replace("*", ".?")
+
             # Use word boundary matching for single words to avoid false positives
             # (e.g., "men" should not match "recommend")
             # For multi-word phrases, use substring matching
             if " " in keyword:
-                # Multi-word phrase - use substring matching
-                keyword_found = keyword in text_lower
+                # Multi-word phrase - use substring matching with wildcards
+                keyword_pattern = keyword_pattern_str
+                keyword_found = bool(re.search(keyword_pattern, text_lower))
             else:
                 # Single word - use word boundary matching to match whole words only
-                keyword_pattern = r"\b" + re.escape(keyword) + r"\b"
+                keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
                 keyword_found = bool(re.search(keyword_pattern, text_lower))
 
             if keyword_found:
@@ -804,8 +791,10 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
             elif action == ContentFilterAction.MASK:
                 # Replace keyword with redaction tag
+                # Convert asterisks to regex wildcards for matching
+                keyword_pattern_for_masking = keyword.replace("*", ".?")
                 text = re.sub(
-                    re.escape(keyword),
+                    keyword_pattern_for_masking,
                     self.keyword_redaction_tag,
                     text,
                     flags=re.IGNORECASE,
@@ -851,7 +840,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         # to ensure all matching keywords are processed, not just the first one
         text_lower = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
-            if keyword not in text_lower:
+            # Convert asterisks to regex wildcards for matching
+            keyword_pattern_str = keyword.replace("*", ".?")
+            if not re.search(keyword_pattern_str, text_lower):
                 continue
 
             verbose_proxy_logger.debug(
@@ -882,8 +873,10 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
             elif action == ContentFilterAction.MASK:
                 # Replace keyword with redaction tag (case-insensitive)
+                # Convert asterisks to regex wildcards for matching
+                keyword_pattern_for_masking = keyword.replace("*", ".?")
                 text = re.sub(
-                    re.escape(keyword),
+                    keyword_pattern_for_masking,
                     self.keyword_redaction_tag,
                     text,
                     flags=re.IGNORECASE,
@@ -1221,8 +1214,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     @staticmethod
     def get_config_model():
-        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-            LitellmContentFilterGuardrailConfigModel,
-        )
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
+            LitellmContentFilterGuardrailConfigModel
 
         return LitellmContentFilterGuardrailConfigModel

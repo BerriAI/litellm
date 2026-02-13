@@ -14,15 +14,11 @@ sys.path.insert(
 
 from fastapi import HTTPException
 
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
-    ContentFilterGuardrail,
-)
-from litellm.types.guardrails import (
-    BlockedWord,
-    ContentFilterAction,
-    ContentFilterPattern,
-    GuardrailEventHooks,
-)
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
+    ContentFilterGuardrail
+from litellm.types.guardrails import (BlockedWord, ContentFilterAction,
+                                      ContentFilterPattern,
+                                      GuardrailEventHooks)
 
 
 class TestContentFilterGuardrail:
@@ -391,7 +387,8 @@ class TestContentFilterGuardrail:
         Test streaming hook with MASK action.
         This now works with the 50-char sliding window buffer.
         """
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.types.utils import (Delta, ModelResponseStream,
+                                         StreamingChoices)
 
         patterns = [
             ContentFilterPattern(
@@ -456,7 +453,8 @@ class TestContentFilterGuardrail:
         Test streaming hook with BLOCK action
         """
 
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.types.utils import (Delta, ModelResponseStream,
+                                         StreamingChoices)
 
         patterns = [
             ContentFilterPattern(
@@ -986,6 +984,141 @@ class TestContentFilterGuardrail:
             assert detail.get("category") == "harm_toxic_abuse"
         else:
             assert "harm_toxic_abuse" in str(detail)
+
+    @pytest.mark.asyncio
+    async def test_category_keywords_with_asterisks_match_actual_text(self):
+        """
+        Test that category keywords containing asterisks (e.g., 'fu*c*k')
+        successfully match actual profanity (e.g., 'fuck').
+
+        The harm_toxic_abuse.json file contains keywords with asterisks as obfuscation
+        (e.g., "fu*c*k", "sh*i*t"). These asterisks should be treated as regex wildcards
+        matching zero or one character, allowing the pattern to match actual profanity.
+
+        Regression test for issue where keywords with asterisks failed to match
+        because they were treated as literal strings instead of patterns.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-asterisk-wildcards",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test cases where asterisk-obfuscated keywords should match actual profanity
+        test_cases = [
+            "fuck you",  # Should match 'fu*c*k'
+            "what the fuck",  # Should match 'fu*c*k' in context
+            "this is shit",  # Should match 'sh*i*t'
+            "fucking hell",  # Should match 'fu*c*king'
+        ]
+
+        for test_input in test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+
+            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            detail = exc_info.value.detail
+            if isinstance(detail, dict):
+                assert detail.get("category") == "harm_toxic_abuse"
+            else:
+                assert "harm_toxic_abuse" in str(detail)
+
+    @pytest.mark.asyncio
+    async def test_category_keywords_with_asterisks_mask_action(self):
+        """
+        Test that category keywords with asterisks work correctly with MASK action.
+
+        Note: The current implementation masks the first matching keyword found.
+        For multiple profane words, each needs to be checked separately.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-asterisk-mask",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "MASK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test masking with asterisk-obfuscated keywords - single word
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["why the fuck is this happening"]},
+            request_data={},
+            input_type="request",
+        )
+
+        processed_text = result.get("texts", [])[0]
+
+        # The profane word should be masked
+        assert "fuck" not in processed_text.lower()
+        assert "[KEYWORD_REDACTED]" in processed_text
+
+    @pytest.mark.asyncio
+    async def test_blocked_words_with_asterisks(self):
+        """
+        Test that manually configured blocked words with asterisks also work correctly.
+        """
+        blocked_words = [
+            BlockedWord(
+                keyword="te*st",  # Should match "test", "tst", "tesst", etc.
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-blocked-asterisks",
+            blocked_words=blocked_words,
+        )
+
+        # Should match "test" even though keyword is "te*st"
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["this is a test message"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "te*st" in str(exc_info.value.detail)
+
+    def test_check_category_keywords_asterisk_pattern_matching(self):
+        """
+        Unit test for _check_category_keywords method to verify asterisk wildcard conversion.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-asterisk-unit",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test direct method call
+        result = guardrail._check_category_keywords("fuck you", exceptions=[])
+
+        assert result is not None, "Should detect profanity with asterisk pattern"
+        keyword, category, severity, action = result
+        # The keyword stored is 'fu*c*k' but should match 'fuck'
+        assert category == "harm_toxic_abuse"
+        assert action == ContentFilterAction.BLOCK
+
     async def test_html_tags_in_messages_not_blocked(self):
         """
         Test that HTML tags like <script> in LLM message content are NOT blocked
@@ -1101,9 +1234,7 @@ class TestContentFilterGuardrail:
         Regression test for GitHub issue #20441.
         """
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
-            PREBUILT_PATTERNS,
-            get_compiled_pattern,
-        )
+            PREBUILT_PATTERNS, get_compiled_pattern)
 
         html_test_strings = [
             "<script>alert('xss')</script>",
