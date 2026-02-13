@@ -1098,16 +1098,24 @@ const sidebars = {
         "proxy_server",
       ],
     },
-    "troubleshoot",
     {
       type: "category",
-      label: "Issue Reporting",
+      label: "Troubleshooting",
       items: [
-        "troubleshoot/prisma_migrations",
-        "troubleshoot/cpu_issues",
-        "troubleshoot/memory_issues",
-        "troubleshoot/spend_queue_warnings",
-        "troubleshoot/max_callbacks",
+        "troubleshoot/ui_issues",
+        "mcp_troubleshoot",
+        {
+          type: "category",
+          label: "Performance / Latency",
+          items: [
+            "troubleshoot/cpu_issues",
+            "troubleshoot/memory_issues",
+            "troubleshoot/spend_queue_warnings",
+            "troubleshoot/max_callbacks",
+            "troubleshoot/prisma_migrations",
+          ],
+        },
+        "troubleshoot",
       ],
     },
     {
