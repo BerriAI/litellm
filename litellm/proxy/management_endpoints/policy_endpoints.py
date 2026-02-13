@@ -6,15 +6,12 @@ All /policy management endpoints
 /policy/validate - Validate a policy configuration
 /policy/list - List all loaded policies
 /policy/info - Get information about a specific policy
-/policy/templates - Get available policy templates
+/policy/templates - Get policy templates (GitHub with local fallback)
 """
 
 import json
 import os
-from importlib.resources import files
-from typing import Any, List
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from litellm._logging import verbose_proxy_logger
@@ -34,82 +31,6 @@ from litellm.types.proxy.policy_engine import (
 )
 
 router = APIRouter()
-
-
-# Policy Templates GitHub URL
-POLICY_TEMPLATES_GITHUB_URL = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
-)
-
-
-def load_local_policy_templates() -> List[Any]:
-    """Load the local backup policy templates bundled with the package."""
-    try:
-        content = json.loads(
-            files("litellm")
-            .joinpath("policy_templates_backup.json")
-            .read_text(encoding="utf-8")
-        )
-        return content
-    except Exception as e:
-        verbose_proxy_logger.error(f"Failed to load local policy templates backup: {e}")
-        return []
-
-
-def fetch_remote_policy_templates(url: str, timeout: int = 5) -> List[Any]:
-    """
-    Fetch policy templates from a remote URL.
-
-    Returns the parsed JSON list. Falls back to local backup on any error.
-    """
-    try:
-        response = httpx.get(url, timeout=timeout)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Failed to fetch policy templates from {url}: {e}. "
-            "Falling back to local backup."
-        )
-        return load_local_policy_templates()
-
-
-def get_policy_templates_list() -> List[Any]:
-    """
-    Get policy templates with GitHub fallback to local backup.
-
-    1. Try to fetch from GitHub URL (https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json)
-    2. On any failure, fall back to local backup (litellm/policy_templates_backup.json)
-    3. Validate that result is a non-empty list
-
-    Set LITELLM_LOCAL_POLICY_TEMPLATES=true to always use local backup.
-    """
-    # Check if we should use local only (LITELLM_LOCAL_POLICY_TEMPLATES=true)
-    use_local_only = os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").lower() == "true"
-
-    if use_local_only:
-        verbose_proxy_logger.info(
-            "Using local policy templates (LITELLM_LOCAL_POLICY_TEMPLATES=true)"
-        )
-        return load_local_policy_templates()
-
-    # Fetch from GitHub (automatically falls back to local on any error)
-    templates = fetch_remote_policy_templates(POLICY_TEMPLATES_GITHUB_URL)
-
-    # Validate it's a non-empty list
-    if not isinstance(templates, list):
-        verbose_proxy_logger.warning(
-            f"Policy templates is not a list (type={type(templates).__name__}). "
-            "Using local backup."
-        )
-        return load_local_policy_templates()
-
-    if len(templates) == 0:
-        verbose_proxy_logger.warning("Policy templates is empty. Using local backup.")
-        return load_local_policy_templates()
-
-    verbose_proxy_logger.debug(f"Successfully loaded {len(templates)} policy templates")
-    return templates
 
 
 @router.post(
@@ -342,6 +263,24 @@ async def test_policy_matching(
     )
 
 
+POLICY_TEMPLATES_GITHUB_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
+
+
+def _load_policy_templates_from_local_backup() -> list:
+    """Load policy templates from local backup file (litellm/policy_templates_backup.json)."""
+    backup_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "policy_templates_backup.json",
+    )
+    path = os.path.abspath(backup_path)
+    if not os.path.exists(path):
+        return []
+    with open(path, "r") as f:
+        return json.load(f)
+
+
 @router.get(
     "/policy/templates",
     tags=["policy management"],
@@ -351,24 +290,35 @@ async def test_policy_matching(
 async def get_policy_templates(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> List[Any]:
+) -> list:
     """
-    Get available policy templates for quick policy setup.
+    Get policy templates for the UI (pre-configured guardrail combinations).
 
-    Returns a list of pre-configured policy templates that users can use
-    as a starting point for creating their own policies.
-
-    Templates are fetched from GitHub by default, with fallback to local backup.
-    Set LITELLM_LOCAL_POLICY_TEMPLATES=true to always use local backup.
+    Fetches from GitHub with automatic fallback to local backup on failure.
+    Set LITELLM_LOCAL_POLICY_TEMPLATES=true to skip GitHub and use local backup only.
     """
+    use_local = os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    if use_local:
+        return _load_policy_templates_from_local_backup()
+
     try:
-        templates = get_policy_templates_list()
-        verbose_proxy_logger.debug(f"Loaded {len(templates)} policy templates")
-        return templates
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
 
-    except Exception as e:
-        verbose_proxy_logger.error(f"Error loading policy templates: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error loading policy templates: {str(e)}",
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.UI,
+            params={"timeout": 10.0},
         )
+        response = await async_client.get(POLICY_TEMPLATES_GITHUB_URL)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to fetch policy templates from GitHub, using local backup: %s", e
+        )
+
+    return _load_policy_templates_from_local_backup()

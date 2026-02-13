@@ -215,7 +215,55 @@
       "financial-pii"
     ],
     "complexity": "Low",
-    "guardrailDefinitions": [],
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "au-pii-tax-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "au_tfn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "au_abn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "au_medicare", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Masks Australian Tax File Numbers, Business Numbers, and Medicare Numbers"}
+      },
+      {
+        "guardrail_name": "credentials-api-keys",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Blocks requests containing API keys and credentials (AWS, GitHub, Slack)"}
+      },
+      {
+        "guardrail_name": "financial-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "amex", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "discover", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Masks financial information including credit cards and bank account numbers"}
+      }
+    ],
     "templateData": {
       "policy_name": "baseline-pii-protection",
       "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only.",
