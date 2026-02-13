@@ -102,13 +102,21 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-Expected response on failure - user message gets replaced with reject prompt
+Expected response on failure (HTTP 400)
 
 ```json
 {
-  "messages": [
-    {"role": "user", "content": "Unable to complete request, prompt injection/jailbreak detected"}
-  ]
+  "error": {
+    "message": {
+      "error": "Unable to complete request, prompt injection/jailbreak detected",
+      "highflame_guardrail_response": {
+        "assessments": [...]
+      }
+    },
+    "type": null,
+    "param": null,
+    "code": "400"
+  }
 }
 ```
 
@@ -131,13 +139,21 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-Expected response on failure
+Expected response on failure (HTTP 400)
 
 ```json
 {
-  "messages": [
-    {"role": "user", "content": "Unable to complete request, trust & safety violation detected"}
-  ]
+  "error": {
+    "message": {
+      "error": "Unable to complete request, trust & safety violation detected",
+      "highflame_guardrail_response": {
+        "assessments": [...]
+      }
+    },
+    "type": null,
+    "param": null,
+    "code": "400"
+  }
 }
 ```
 
@@ -160,13 +176,21 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-Expected response on failure
+Expected response on failure (HTTP 400)
 
 ```json
 {
-  "messages": [
-    {"role": "user", "content": "Unable to complete request, language violation detected"}
-  ]
+  "error": {
+    "message": {
+      "error": "Unable to complete request, language violation detected",
+      "highflame_guardrail_response": {
+        "assessments": [...]
+      }
+    },
+    "type": null,
+    "param": null,
+    "code": "400"
+  }
 }
 ```
 
