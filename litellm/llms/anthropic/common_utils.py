@@ -226,8 +226,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if not optional_params:
             return False
 
-        # Check if reasoning_effort is provided for Claude Opus 4.5
-        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
+        # Check if reasoning_effort is provided for Claude Opus 4.5 or 4.6
+        if model and (
+            "opus-4-5" in model.lower()
+            or "opus_4_5" in model.lower()
+            or "opus-4-6" in model.lower()
+            or "opus_4_6" in model.lower()
+        ):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True

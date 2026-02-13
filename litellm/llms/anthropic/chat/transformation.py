@@ -172,7 +172,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _is_claude_opus_4_6(model: str) -> bool:
-        """Check if the model is Claude Opus 4.5."""
+        """Check if the model is Claude Opus 4.6."""
         return "opus-4-6" in model.lower() or "opus_4_6" in model.lower()
 
     def get_supported_openai_params(self, model: str):
@@ -871,9 +871,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=value, model=model
-                )
+                if value == "max":
+                    if AnthropicConfig._is_claude_opus_4_6(model):
+                        existing = optional_params.get("output_config") or {}
+                        optional_params["output_config"] = {
+                            **existing,
+                            "effort": "max",
+                        }
+                        optional_params["thinking"] = AnthropicThinkingParam(
+                            type="adaptive",
+                        )
+                    else:
+                        raise ValueError(
+                            "reasoning_effort='max' is only supported by Claude Opus 4.6. "
+                            "Use 'high', 'medium', or 'low' for other models."
+                        )
+                else:
+                    mapped = AnthropicConfig._map_reasoning_effort(
+                        reasoning_effort=value, model=model
+                    )
+                    if mapped is not None:
+                        optional_params["thinking"] = mapped
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1238,9 +1256,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             output_config = optional_params.get("output_config")
             if output_config and isinstance(output_config, dict):
                 effort = output_config.get("effort")
-                if effort and effort not in ["high", "medium", "low"]:
+                valid_efforts = ["high", "medium", "low"]
+                if AnthropicConfig._is_claude_opus_4_6(model):
+                    valid_efforts.append("max")
+                if effort and effort not in valid_efforts:
                     raise ValueError(
-                        f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low'"
+                        f"Invalid effort value: {effort}. Must be one of: {valid_efforts}"
                     )
                 data["output_config"] = output_config
 
