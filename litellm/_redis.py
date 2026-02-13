@@ -12,6 +12,8 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
+import ssl as _ssl_module
+import threading
 from typing import Callable, List, Optional, Union
 
 import redis  # type: ignore
@@ -307,10 +309,163 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)  # type: ignore
 
 
+def _remove_sentinel_kwargs(redis_kwargs: dict) -> dict:
+    """
+    Remove Sentinel-specific kwargs that are not supported by standard Redis client.
+    """
+    sentinel_specific_keys = ["sentinel_nodes", "sentinel_password", "service_name"]
+    cleaned_kwargs = redis_kwargs.copy()
+    for key in sentinel_specific_keys:
+        cleaned_kwargs.pop(key, None)
+    return cleaned_kwargs
+
+
+def _get_redis_ssl_context(ssl_cert_reqs=None) -> _ssl_module.SSLContext:
+    """
+    Create a new SSLContext configured for Redis connections.
+
+    redis-py 5.2 creates a NEW ssl.SSLContext per connection via
+    ssl.create_default_context(), which calls set_default_verify_paths()
+    and parses ALL system CA certs into C-level structures each time.
+    With 100+ connections in a Sentinel pool this causes 700+ MB memory
+    spikes.
+
+    One shared context eliminates this overhead entirely.
+    """
+    ctx = _ssl_module.create_default_context()
+    if ssl_cert_reqs is not None:
+        req_str = str(ssl_cert_reqs).lower()
+        if req_str == "none":
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl_module.CERT_NONE
+        elif req_str == "optional":
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl_module.CERT_OPTIONAL
+    return ctx
+
+
+# Process-wide caches (one SSLContext and one class per key)
+_redis_ssl_context_cache: dict = {}
+_redis_ssl_class_cache: dict = {}
+_redis_ssl_context_lock = threading.RLock()
+
+
+def _get_cached_redis_ssl_context(ssl_cert_reqs=None) -> _ssl_module.SSLContext:
+    key = str(ssl_cert_reqs).lower() if ssl_cert_reqs is not None else "required"
+    with _redis_ssl_context_lock:
+        if key not in _redis_ssl_context_cache:
+            _redis_ssl_context_cache[key] = _get_redis_ssl_context(ssl_cert_reqs)
+        return _redis_ssl_context_cache[key]
+
+
+def _make_shared_ssl_connection_class(base_cls, ssl_cert_reqs=None):
+    """
+    Create (or return cached) a connection class that reuses a shared SSLContext
+    instead of creating a new one per connection.
+
+    Sync SSLConnection._wrap_socket_with_ssl() calls ssl.create_default_context()
+    every time.  We override it to use a cached context.
+
+    Async SSLConnection stores self.ssl_context = RedisSSLContext(...) which
+    creates context lazily.  We replace it after __init__ with a pre-built one.
+    """
+    cert_key = str(ssl_cert_reqs).lower() if ssl_cert_reqs is not None else "required"
+    cache_key = (base_cls, cert_key)
+    with _redis_ssl_context_lock:
+        if cache_key in _redis_ssl_class_cache:
+            return _redis_ssl_class_cache[cache_key]
+
+        shared_ctx = _get_cached_redis_ssl_context(ssl_cert_reqs)
+
+        class SharedSSLConnection(base_cls):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                # Async path: replace RedisSSLContext lazy context with shared one.
+                # Only safe when no per-connection cert/key/ca/ciphers are
+                # configured; otherwise let RedisSSLContext.get() create its own.
+                if hasattr(self, "ssl_context") and hasattr(self.ssl_context, "get"):
+                    sc = self.ssl_context
+                    has_custom = (
+                        getattr(sc, "certfile", None)
+                        or getattr(sc, "keyfile", None)
+                        or getattr(sc, "ca_certs", None)
+                        or getattr(sc, "ca_data", None)
+                        or getattr(sc, "min_version", None)
+                        or getattr(sc, "ciphers", None)
+                        or getattr(sc, "include_verify_flags", None)
+                        or getattr(sc, "exclude_verify_flags", None)
+                    )
+                    if not has_custom:
+                        sc.context = shared_ctx
+
+            # Sync path: use shared SSLContext for vanilla TLS (server-cert only).
+            # For any per-connection customization (client certs, custom CA, OCSP,
+            # min_version, ciphers) fall back to the original redis-py method.
+            def _wrap_socket_with_ssl(self, sock):
+                has_custom = (
+                    getattr(self, "certfile", None)
+                    or getattr(self, "keyfile", None)
+                    or getattr(self, "ca_certs", None)
+                    or getattr(self, "ca_path", None)
+                    or getattr(self, "ca_data", None)
+                    or getattr(self, "ssl_validate_ocsp", False)
+                    or getattr(self, "ssl_validate_ocsp_stapled", False)
+                    or getattr(self, "ssl_min_version", None)
+                    or getattr(self, "ssl_ciphers", None)
+                    or getattr(self, "ssl_include_verify_flags", None)
+                    or getattr(self, "ssl_exclude_verify_flags", None)
+                )
+                if has_custom:
+                    return super()._wrap_socket_with_ssl(sock)
+                return shared_ctx.wrap_socket(sock, server_hostname=self.host)
+
+        SharedSSLConnection.__name__ = f"Shared{base_cls.__name__}"
+        SharedSSLConnection.__qualname__ = f"Shared{base_cls.__qualname__}"
+        _redis_ssl_class_cache[cache_key] = SharedSSLConnection
+        return SharedSSLConnection
+
+
+def _build_sentinel_master_kwargs(redis_kwargs: dict) -> dict:
+    """
+    Build kwargs for sentinel.master_for() from redis_kwargs.
+    Forwards connection-relevant params, skips sentinel-specific ones.
+    """
+    master_kwargs = {}
+    # NOTE: max_connections intentionally excluded — SentinelConnectionPool
+    # should use its default (unlimited).  The max_connections value from
+    # Helm/redis_kwargs is meant for BlockingConnectionPool, not Sentinel.
+    # Passing it here caused "Too many connections" errors under burst load.
+    # NOTE: ssl_certfile, ssl_keyfile, ssl_ca_certs etc. are intentionally
+    # excluded — they reach connection instances through the connection_class
+    # kwargs set by sentinel.master_for(). Only top-level ssl and ssl_cert_reqs
+    # are needed to select SSL vs plain connection class.
+    forward_keys = [
+        "username", "password", "db",
+        "socket_timeout", "socket_connect_timeout",
+        "socket_keepalive", "socket_keepalive_options",
+        "retry_on_timeout", "decode_responses",
+        "encoding", "encoding_errors",
+        "health_check_interval", "ssl", "ssl_cert_reqs",
+    ]
+    for key in forward_keys:
+        if key in redis_kwargs and redis_kwargs[key] is not None:
+            master_kwargs[key] = redis_kwargs[key]
+    master_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
+    # Backward compatibility: if no explicit master password is set but
+    # sentinel_password is provided, use it for master auth too.  The old
+    # code passed sentinel_password as the positional `password` arg to
+    # redis.Sentinel(), which redis-py treated as the default master auth.
+    if "password" not in master_kwargs and redis_kwargs.get("sentinel_password"):
+        master_kwargs["password"] = redis_kwargs["sentinel_password"]
+    return master_kwargs
+
+
 def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    ssl_enabled = redis_kwargs.get("ssl", False)
+    ssl_cert_reqs = redis_kwargs.get("ssl_cert_reqs")
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -319,22 +474,45 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
-    # Set up the Sentinel client
+    sentinel_kwargs_dict = {}
+    if sentinel_password:
+        sentinel_kwargs_dict["password"] = sentinel_password
+    if ssl_enabled:
+        sentinel_kwargs_dict["ssl"] = True
+        if ssl_cert_reqs is not None:
+            sentinel_kwargs_dict["ssl_cert_reqs"] = ssl_cert_reqs
+
     sentinel = redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs=sentinel_kwargs_dict,
     )
 
-    # Return the master instance for the given service
+    master_kwargs = _build_sentinel_master_kwargs(redis_kwargs)
+    if ssl_enabled:
+        master_kwargs["connection_class"] = _make_shared_ssl_connection_class(
+            redis.sentinel.SentinelManagedSSLConnection, ssl_cert_reqs
+        )
+        master_kwargs.pop("ssl", None)
+        # Patch sentinel connection pools to reuse shared SSLContext.
+        # Redis.__init__ creates SSLConnection per connection; we replace
+        # connection_class on already-created pools before any connections
+        # are established (pools start empty).
+        _shared_sentinel_cls = _make_shared_ssl_connection_class(
+            redis.connection.SSLConnection, ssl_cert_reqs
+        )
+        for s in sentinel.sentinels:
+            s.connection_pool.connection_class = _shared_sentinel_cls
 
-    return sentinel.master_for(service_name)
+    return sentinel.master_for(service_name, **master_kwargs)
 
 
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    ssl_enabled = redis_kwargs.get("ssl", False)
+    ssl_cert_reqs = redis_kwargs.get("ssl_cert_reqs")
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -343,16 +521,34 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
-    # Set up the Sentinel client
+    sentinel_kwargs_dict = {}
+    if sentinel_password:
+        sentinel_kwargs_dict["password"] = sentinel_password
+    if ssl_enabled:
+        sentinel_kwargs_dict["ssl"] = True
+        if ssl_cert_reqs is not None:
+            sentinel_kwargs_dict["ssl_cert_reqs"] = ssl_cert_reqs
+
     sentinel = async_redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs=sentinel_kwargs_dict,
     )
 
-    # Return the master instance for the given service
+    master_kwargs = _build_sentinel_master_kwargs(redis_kwargs)
+    if ssl_enabled:
+        master_kwargs["connection_class"] = _make_shared_ssl_connection_class(
+            async_redis.sentinel.SentinelManagedSSLConnection, ssl_cert_reqs
+        )
+        master_kwargs.pop("ssl", None)
+        # Patch sentinel connection pools to reuse shared SSLContext
+        _shared_sentinel_cls = _make_shared_ssl_connection_class(
+            async_redis.connection.SSLConnection, ssl_cert_reqs
+        )
+        for s in sentinel.sentinels:
+            s.connection_pool.connection_class = _shared_sentinel_cls
 
-    return sentinel.master_for(service_name)
+    return sentinel.master_for(service_name, **master_kwargs)
 
 
 def get_redis_client(**env_overrides):
@@ -373,7 +569,7 @@ def get_redis_client(**env_overrides):
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_redis_sentinel(redis_kwargs)
 
-    return redis.Redis(**redis_kwargs)
+    return redis.Redis(**_remove_sentinel_kwargs(redis_kwargs))
 
 
 def get_redis_async_client(
@@ -452,6 +648,7 @@ def get_redis_async_client(
     if connection_pool is not None:
         redis_kwargs["connection_pool"] = connection_pool
 
+    redis_kwargs = _remove_sentinel_kwargs(redis_kwargs)
     return async_redis.Redis(
         **redis_kwargs,
     )
@@ -470,6 +667,7 @@ def get_redis_connection_pool(**env_overrides):
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
     redis_kwargs.pop("startup_nodes", None)
+    redis_kwargs = _remove_sentinel_kwargs(redis_kwargs)
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )
