@@ -21,6 +21,7 @@ interface CostBreakdownViewerProps {
   totalSpend: number;
   promptTokens?: number;
   completionTokens?: number;
+  cacheHit?: string;
 }
 
 const formatCost = (cost: number | undefined): string => {
@@ -38,11 +39,11 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   totalSpend,
   promptTokens,
   completionTokens,
+  cacheHit,
 }) => {
-  const isCached = totalSpend === 0;
+  const isCached = cacheHit?.toLowerCase() === "true";
   const hasTokenCounts = promptTokens !== undefined || completionTokens !== undefined;
 
-  // When cached, show if we have token counts; otherwise need costBreakdown with meaningful data
   const hasCostBreakdown = costBreakdown?.input_cost !== undefined || costBreakdown?.output_cost !== undefined;
   const hasMeaningfulData =
     hasCostBreakdown ||
@@ -54,7 +55,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
         (costBreakdown.margin_fixed_amount !== undefined && costBreakdown.margin_fixed_amount !== 0) ||
         (costBreakdown.margin_total_amount !== undefined && costBreakdown.margin_total_amount !== 0)));
 
-  if (!hasMeaningfulData && !(isCached && hasTokenCounts)) {
+  if (!hasMeaningfulData) {
     return null;
   }
 
