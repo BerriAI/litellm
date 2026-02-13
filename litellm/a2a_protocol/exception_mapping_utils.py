@@ -200,4 +200,5 @@ def handle_a2a_localhost_retry(
     return _A2AClient(
         httpx_client=a2a_client._transport.httpx_client,  # type: ignore[union-attr]
         agent_card=agent_card,
+        url=error.base_url,
     )
