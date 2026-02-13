@@ -1003,6 +1003,7 @@ const sidebars = {
         "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
+        "tutorials/claude_code_beta_headers",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
