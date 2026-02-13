@@ -40,9 +40,9 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
+    MAPPED_PASS_THROUGH_PREFIXES,
     ConfigFieldInfo,
     ConfigFieldUpdate,
-    LiteLLMRoutes,
     PassThroughEndpointResponse,
     PassThroughGenericEndpoint,
     ProxyException,
@@ -2014,9 +2014,8 @@ class InitPassThroughEndpointHelpers:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if route.startswith(mapped_route):
-                return True
+        if route.startswith(MAPPED_PASS_THROUGH_PREFIXES):
+            return True
 
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"

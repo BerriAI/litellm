@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    MAPPED_PASS_THROUGH_PREFIXES,
     CommonProxyErrors,
     LiteLLM_UserTable,
     LiteLLMRoutes,
@@ -343,9 +344,8 @@ class RouteChecks:
         if RouteChecks._is_azure_openai_route(route=route):
             return True
 
-        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if _llm_passthrough_route in route:
-                return True
+        if route.startswith(MAPPED_PASS_THROUGH_PREFIXES):
+            return True
         return False
 
     @staticmethod

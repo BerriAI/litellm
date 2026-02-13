@@ -422,3 +422,163 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
     assert result.user_tpm_limit == 1000
     assert result.user_rpm_limit == 100
     assert result.user_email == "test@example.com"
+
+
+# ── Regression tests for auth optimizations ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_check_api_key_normal_route_returns_api_key():
+    """Normal route, no pass-through config -> returns api_key unchanged."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        check_api_key_for_custom_headers_or_pass_through_endpoints,
+    )
+
+    request = MagicMock()
+    request.headers = {}
+    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/chat/completions",
+        pass_through_endpoints=None,
+        api_key="sk-test123",
+    )
+    assert result == "sk-test123"
+
+
+@pytest.mark.asyncio
+async def test_check_api_key_mapped_pass_through_with_header():
+    """Route /anthropic/v1/messages, header litellm_user_api_key set -> extracts key."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        check_api_key_for_custom_headers_or_pass_through_endpoints,
+    )
+
+    request = MagicMock()
+    request.headers = {"litellm_user_api_key": "sk-from-header"}
+    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/anthropic/v1/messages",
+        pass_through_endpoints=None,
+        api_key="sk-original",
+    )
+    assert result == "sk-from-header"
+
+
+@pytest.mark.asyncio
+async def test_check_api_key_configured_endpoint_auth_disabled():
+    """Pass-through endpoint with auth: false -> returns UserAPIKeyAuth()."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import (
+        check_api_key_for_custom_headers_or_pass_through_endpoints,
+    )
+
+    request = MagicMock()
+    request.headers = {}
+    endpoints = [{"path": "/custom/endpoint", "auth": False}]
+    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/custom/endpoint",
+        pass_through_endpoints=endpoints,
+        api_key="sk-test",
+    )
+    assert isinstance(result, UserAPIKeyAuth)
+
+
+@pytest.mark.asyncio
+async def test_check_api_key_configured_endpoint_langfuse_parser():
+    """Langfuse endpoint with Base64 auth -> parses correctly."""
+    import base64
+
+    from litellm.proxy.auth.user_api_key_auth import (
+        check_api_key_for_custom_headers_or_pass_through_endpoints,
+    )
+
+    public_key = "sk-lf-public"
+    secret_key = "sk-lf-secret"
+    basic_auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+
+    request = MagicMock()
+    request.headers = {}
+    endpoints = [
+        {"path": "/langfuse/api", "auth": True, "custom_auth_parser": "langfuse"}
+    ]
+    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/langfuse/api",
+        pass_through_endpoints=endpoints,
+        api_key=f"Basic {basic_auth}",
+    )
+    assert result == public_key
+
+
+@pytest.mark.asyncio
+async def test_check_api_key_configured_endpoint_custom_header():
+    """Pass-through endpoint with custom header config -> extracts from configured header."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        check_api_key_for_custom_headers_or_pass_through_endpoints,
+    )
+
+    request = MagicMock()
+    request.headers = {"x-custom-key": "sk-custom-value"}
+    endpoints = [
+        {
+            "path": "/custom/endpoint",
+            "auth": True,
+            "headers": {"litellm_user_api_key": "x-custom-key"},
+        }
+    ]
+    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/custom/endpoint",
+        pass_through_endpoints=endpoints,
+        api_key="sk-original",
+    )
+    assert result == "sk-custom-value"
+
+
+def test_get_api_key_without_pass_through_branch():
+    """
+    Regression test for Round 2: after removing the elif pass_through_endpoints branch
+    from get_api_key, the key should still be extractable via Bearer token even when
+    pass_through_endpoints is configured (the later check_api_key_for_... call handles it).
+    """
+    endpoints = [
+        {
+            "path": "/custom/endpoint",
+            "auth": True,
+            "headers": {"litellm_user_api_key": "x-custom-key"},
+        }
+    ]
+    request = MagicMock()
+    request.headers = {"x-custom-key": "sk-custom-value"}
+
+    api_key, passed_in_key = get_api_key(
+        custom_litellm_key_header=None,
+        api_key="Bearer sk-test-key",
+        azure_api_key_header=None,
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        pass_through_endpoints=endpoints,
+        route="/custom/endpoint",
+        request=request,
+    )
+    # Bearer token should be extracted normally regardless of pass_through_endpoints
+    assert api_key == "sk-test-key"
+    assert passed_in_key == "Bearer sk-test-key"
+
+
+def test_safe_get_request_headers_caching():
+    """Call _safe_get_request_headers twice on same request, assert returns same dict object."""
+    from starlette.datastructures import State
+
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _safe_get_request_headers,
+    )
+
+    request = MagicMock()
+    request.headers = {"content-type": "application/json", "authorization": "Bearer sk-123"}
+    request.state = State()  # real State object that supports attribute setting
+
+    result1 = _safe_get_request_headers(request)
+    result2 = _safe_get_request_headers(request)
+    assert result1 is result2, "Second call should return the same cached dict object"
