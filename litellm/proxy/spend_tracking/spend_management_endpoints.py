@@ -1928,6 +1928,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             sql_params.append(f"%{error_message}%")
             p += 1
 
+        # Quote column names that need quoting in SQL
+        _sql_col = f'"{order_column}"' if order_column in ("startTime", "endTime") else order_column
+        _sql_dir = "ASC" if order_direction == "asc" else "DESC"
+
         sql_query = f"""
             SELECT
                 request_id, call_type, api_key, spend, total_tokens,
@@ -1939,7 +1943,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 session_id, status, mcp_namespaced_tool_name, agent_id
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
-            ORDER BY "startTime" DESC
+            ORDER BY {_sql_col} {_sql_dir}
             LIMIT ${p} OFFSET ${p + 1}
         """
         sql_params.extend([page_size, skip])
