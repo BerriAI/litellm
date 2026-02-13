@@ -1179,8 +1179,6 @@ if MCP_AVAILABLE:
             raise HTTPException(status_code=500, detail=str(e))
 
     # --- MCP Discovery ---
-    import json
-    import os
 
     _MCP_REGISTRY_PATH = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
