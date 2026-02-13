@@ -432,7 +432,7 @@ class LiteLLMProxyRequestSetup:
             )
             for k, v in litellm_logging_metadata_headers.items():
                 if v is not None:
-                    returned_headers["x-litellm-{}".format(k)] = v
+                    returned_headers["x-litellm-{}".format(k)] = str(v)
 
         return returned_headers
 
