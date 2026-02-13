@@ -34,6 +34,7 @@ from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
+from litellm.utils import _mask_secret_fields_for_logging
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
@@ -250,34 +251,6 @@ def clean_headers(
         ):
             clean_headers[header] = value
     return clean_headers
-
-
-def _mask_secret_fields_for_logging(secret_fields: dict) -> dict:
-    """
-    Masks sensitive values (like JWT tokens) in secret_fields before logging.
-    Keeps the field structure intact but redacts authorization header values.
-    """
-    _sensitive_header_keys = frozenset(
-        {"authorization", "x-api-key", "api-key", "x-litellm-api-key"}
-    )
-    if not isinstance(secret_fields, dict):
-        return secret_fields
-    masked = {}
-    for field_key, field_value in secret_fields.items():
-        if isinstance(field_value, dict):
-            masked_inner = {}
-            for k, v in field_value.items():
-                if k.lower() in _sensitive_header_keys and isinstance(v, str):
-                    if len(v) > 20:
-                        masked_inner[k] = v[:10] + "****" + v[-4:]
-                    else:
-                        masked_inner[k] = "****"
-                else:
-                    masked_inner[k] = v
-            masked[field_key] = masked_inner
-        else:
-            masked[field_key] = field_value
-    return masked
 
 
 class LiteLLMProxyRequestSetup:
@@ -927,7 +900,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     ## Cache Controls
     headers = request.headers
-    verbose_proxy_logger.debug("Request Headers: %s", clean_headers(headers))
+    verbose_proxy_logger.debug(
+        "Request Headers: %s",
+        clean_headers(
+            headers,
+            litellm_key_header_name=(
+                general_settings.get("litellm_key_header_name")
+                if general_settings is not None
+                else None
+            ),
+        ),
+    )
     cache_control_header = headers.get("Cache-Control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)

@@ -329,10 +329,10 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import (
-    _mask_secret_fields_for_logging,
     add_litellm_data_to_request,
     clean_headers,
 )
+from litellm.utils import _mask_secret_fields_for_logging
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )

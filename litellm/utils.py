@@ -7267,6 +7267,11 @@ def get_valid_models(
         return []  # NON-Blocking
 
 
+_SENSITIVE_HEADER_KEYS = frozenset(
+    {"authorization", "x-api-key", "api-key", "x-litellm-api-key"}
+)
+
+
 def _mask_secret_fields_for_logging(secret_fields: dict) -> dict:
     """
     Masks sensitive values (like JWT tokens) in secret_fields before logging.
@@ -7279,7 +7284,7 @@ def _mask_secret_fields_for_logging(secret_fields: dict) -> dict:
         if isinstance(field_value, dict):
             masked_inner = {}
             for k, v in field_value.items():
-                if k.lower() in ("authorization", "x-api-key", "api-key", "x-litellm-api-key") and isinstance(v, str):
+                if k.lower() in _SENSITIVE_HEADER_KEYS and isinstance(v, str):
                     # Show first 10 and last 4 chars, mask the rest
                     if len(v) > 20:
                         masked_inner[k] = v[:10] + "****" + v[-4:]
