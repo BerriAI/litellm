@@ -539,7 +539,7 @@ async def test_openai_codex_stream(sync_mode):
 
     assert complete_response.choices[0].message.content is not None
 
-
+@pytest.mark.skip(reason="Skipping, needs access to gpt-5-codex-mini.")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_openai_codex(sync_mode):
