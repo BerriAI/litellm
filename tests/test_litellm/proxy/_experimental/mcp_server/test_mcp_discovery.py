@@ -21,6 +21,8 @@ class TestMCPRegistryFile:
             "..",
             "..",
             "..",
+            "litellm",
+            "proxy",
             "mcp_registry.json",
         )
 

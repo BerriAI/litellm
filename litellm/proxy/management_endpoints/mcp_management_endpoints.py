@@ -15,6 +15,8 @@ Endpoints here:
 """
 
 import importlib
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Literal, Optional
@@ -1181,7 +1183,7 @@ if MCP_AVAILABLE:
     # --- MCP Discovery ---
 
     _MCP_REGISTRY_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "mcp_registry.json",
     )
 
