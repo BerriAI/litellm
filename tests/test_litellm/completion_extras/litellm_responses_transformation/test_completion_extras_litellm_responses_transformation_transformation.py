@@ -1,18 +1,12 @@
-import datetime
 import json
 import os
 import sys
-import unittest
-from typing import List, Optional, Tuple
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import Mock
 
-import httpx
-import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
-import litellm
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
@@ -48,7 +42,6 @@ def test_convert_chat_completion_messages_to_responses_api_image_input():
     assert user_content in response_str
     assert user_image in response_str
 
-    print("response: ", response)
     assert response[0]["content"][1]["image_url"] == user_image
 
 
@@ -139,8 +132,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
     ), "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
-    print("✓ Tool result with image correctly transformed to Responses API format")
-
 
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text():
     """
@@ -216,8 +207,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
     assert (
         text_item["text"] == "15 degrees"
     ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
-
-    print("✓ Tool result with text correctly transformed to use input_text for Responses API format")
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -503,8 +492,6 @@ and I learn to carry this small calm home."""
     # Check reasoning content
     assert choice.message.reasoning_content == reasoning_summary.text
 
-    print("✓ transform_response correctly handled reasoning items and output messages")
-
 
 def test_convert_tools_to_responses_format():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -620,10 +607,6 @@ def test_transform_request_single_char_keys_not_matched():
     # Verify that the correct keys ARE mapped properly
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
-
-    print(
-        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
-    )
 
 
 # =============================================================================
@@ -860,10 +843,10 @@ def test_tool_message_output_uses_input_text_not_output_text():
     output = function_call_output["output"]
     assert isinstance(output, list), f"output should be a list, got {type(output)}"
     assert len(output) == 1
-    assert output[0]["type"] == "input_text", f"Expected input_text, got {output[0].get('type')}"
+    assert (
+        output[0]["type"] == "input_text"
+    ), f"Expected input_text, got {output[0].get('type')}"
     assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
-
-    print("✓ Tool message output correctly uses input_text type")
 
 
 def test_multiple_tool_calls_in_single_choice():
@@ -1006,8 +989,6 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["id"] == "call_horoscope"
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
-    print("✓ Multiple tool calls are correctly grouped in a single choice")
-
 
 def test_map_reasoning_effort_adds_summary_detailed():
     """
@@ -1021,10 +1002,11 @@ def test_map_reasoning_effort_adds_summary_detailed():
     """
     import os
 
-    import litellm
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
+
+    import litellm
 
     handler = LiteLLMResponsesTransformationHandler()
 
@@ -1046,9 +1028,9 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
-            assert "summary" not in result, f"Summary should NOT be present by default for effort={effort}"
-
-            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)")
+            assert (
+                "summary" not in result
+            ), f"Summary should NOT be present by default for effort={effort}"
 
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
@@ -1058,17 +1040,18 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
-            assert result["summary"] == "detailed", f"Summary should be 'detailed' when flag is enabled for effort={effort}"
-
-            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)")
+            assert (
+                result["summary"] == "detailed"
+            ), f"Summary should be 'detailed' when flag is enabled for effort={effort}"
 
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
         os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
 
         result = handler._map_reasoning_effort("high")
-        assert result["summary"] == "detailed", "Summary should be 'detailed' when env var is enabled"
-        print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
+        assert (
+            result["summary"] == "detailed"
+        ), "Summary should be 'detailed' when env var is enabled"
 
         # Test 4: Dict input is passed through as-is (no modification)
         litellm.reasoning_auto_summary = False
@@ -1079,14 +1062,10 @@ def test_map_reasoning_effort_adds_summary_detailed():
         result_dict = handler._map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
-        print("✓ Dict input is passed through without modification")
 
         # Test 5: None/unknown values return None
         result_unknown = handler._map_reasoning_effort("unknown_value")
         assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
-
-        print("✓ All reasoning_effort behaviors work correctly with flag/env var control")
 
     finally:
         # Restore original values
@@ -1166,9 +1145,7 @@ def test_transform_response_preserves_annotations():
             audio_tokens=None, cached_tokens=0, text_tokens=None
         ),
         output_tokens=20,
-        output_tokens_details=OutputTokensDetails(
-            reasoning_tokens=0, text_tokens=None
-        ),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=30,
         cost=None,
     )
@@ -1253,9 +1230,13 @@ def test_transform_response_preserves_annotations():
     assert choice.message.content == "Here is some information with citations."
 
     # Check that annotations are preserved
-    assert hasattr(choice.message, "annotations"), "Message should have annotations attribute"
+    assert hasattr(
+        choice.message, "annotations"
+    ), "Message should have annotations attribute"
     assert choice.message.annotations is not None, "Annotations should not be None"
-    assert len(choice.message.annotations) == 2, f"Expected 2 annotations, got {len(choice.message.annotations)}"
+    assert (
+        len(choice.message.annotations) == 2
+    ), f"Expected 2 annotations, got {len(choice.message.annotations)}"
 
     # Verify annotation content
     annotation1 = choice.message.annotations[0]
@@ -1276,8 +1257,6 @@ def test_transform_response_preserves_annotations():
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
-
-    print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
 
 
 def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
@@ -1412,5 +1391,3 @@ def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
     assert args["type"] == "create_file"
     assert args["path"] == "hello.py"
     assert "print('hello world')" in args["diff"]
-
-    print("✓ apply_patch_call correctly converted to ChatCompletions tool call")
