@@ -1706,3 +1706,85 @@ def test_translate_openai_response_restores_tool_names():
     assert len(tool_use_blocks) == 1
     # Name should be restored to original
     assert tool_use_blocks[0]["name"] == original_name
+
+
+# =====================================================================
+# Thinking Summary Preservation Tests (Issue #20998)
+# =====================================================================
+
+
+def test_translate_anthropic_thinking_to_reasoning_effort_preserves_summary():
+    """
+    When thinking config includes a 'summary' field, it should be preserved
+    in the returned dict so downstream handlers don't overwrite it.
+    """
+    thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
+
+    result = LiteLLMAnthropicMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
+        thinking
+    )
+
+    assert isinstance(result, dict), f"Expected dict when summary is present, got {type(result)}"
+    assert result["effort"] == "medium"
+    assert result["summary"] == "concise"
+
+
+def test_translate_anthropic_thinking_to_reasoning_effort_no_summary_returns_string():
+    """
+    When thinking config does NOT include a 'summary' field,
+    the method should return a plain string (backward compatible).
+    """
+    thinking = {"type": "enabled", "budget_tokens": 5000}
+
+    result = LiteLLMAnthropicMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
+        thinking
+    )
+
+    assert isinstance(result, str), f"Expected str when no summary, got {type(result)}"
+    assert result == "medium"
+
+
+def test_translate_anthropic_thinking_to_reasoning_effort_summary_detailed():
+    """Test that 'detailed' summary is also preserved correctly."""
+    thinking = {"type": "enabled", "budget_tokens": 15000, "summary": "detailed"}
+
+    result = LiteLLMAnthropicMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
+        thinking
+    )
+
+    assert isinstance(result, dict)
+    assert result["effort"] == "high"
+    assert result["summary"] == "detailed"
+
+
+def test_translate_thinking_for_model_non_claude_preserves_summary():
+    """
+    translate_thinking_for_model for non-Claude models should pass through
+    the summary from translate_anthropic_thinking_to_reasoning_effort.
+    """
+    thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
+
+    result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+        thinking, "openai/gpt-5.1"
+    )
+
+    assert "reasoning_effort" in result
+    reasoning_effort = result["reasoning_effort"]
+    assert isinstance(reasoning_effort, dict)
+    assert reasoning_effort["effort"] == "medium"
+    assert reasoning_effort["summary"] == "concise"
+
+
+def test_translate_thinking_for_model_claude_passes_through():
+    """
+    translate_thinking_for_model for Claude models should pass the thinking
+    dict through unchanged (including summary).
+    """
+    thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
+
+    result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+        thinking, "anthropic/claude-opus-4-6"
+    )
+
+    assert "thinking" in result
+    assert result["thinking"] == thinking

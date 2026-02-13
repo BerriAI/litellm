@@ -596,18 +596,22 @@ class LiteLLMAnthropicMessagesAdapter:
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
         thinking: Dict[str, Any]
-    ) -> Optional[str]:
+    ) -> Optional[Union[str, Dict[str, str]]]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
 
-        Anthropic thinking format: {'type': 'enabled'|'disabled', 'budget_tokens': int}
+        Anthropic thinking format: {'type': 'enabled'|'disabled', 'budget_tokens': int, 'summary': str}
         OpenAI reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'default'
+            or dict: {'effort': str, 'summary': str}
 
         Mapping:
         - budget_tokens >= 10000 -> 'high'
         - budget_tokens >= 5000  -> 'medium'
         - budget_tokens >= 2000  -> 'low'
         - budget_tokens < 2000   -> 'minimal'
+
+        When the thinking config includes a 'summary' field (e.g. "concise", "detailed"),
+        it is preserved in the returned dict so downstream handlers don't overwrite it.
         """
         if not isinstance(thinking, dict):
             return None
@@ -619,13 +623,18 @@ class LiteLLMAnthropicMessagesAdapter:
         elif thinking_type == "enabled":
             budget_tokens = thinking.get("budget_tokens", 0)
             if budget_tokens >= 10000:
-                return "high"
+                effort_str = "high"
             elif budget_tokens >= 5000:
-                return "medium"
+                effort_str = "medium"
             elif budget_tokens >= 2000:
-                return "low"
+                effort_str = "low"
             else:
-                return "minimal"
+                effort_str = "minimal"
+
+            summary = thinking.get("summary")
+            if summary:
+                return {"effort": effort_str, "summary": summary}
+            return effort_str
 
         return None
 
