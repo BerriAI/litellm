@@ -60,7 +60,7 @@ class SupportedGuardrailIntegrations(Enum):
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
     ZSCALER_AI_GUARD = "zscaler_ai_guard"
-    JAVELIN = "javelin"
+    HIGHFLAME = "highflame"
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
@@ -469,20 +469,21 @@ class ZscalerAIGuardConfigModel(BaseModel):
     )
 
 
-class JavelinGuardrailConfigModel(BaseModel):
-    """Configuration parameters for the Javelin guardrail"""
+class HighflameGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Highflame guardrail. See https://docs.highflame.ai/"""
 
     guard_name: Optional[str] = Field(
-        default=None, description="Name of the Javelin guard to use"
+        default="highflame_guard",
+        description="Name of the Highflame guard to use",
     )
     api_version: Optional[str] = Field(
-        default="v1", description="API version for Javelin service"
+        default="v1", description="API version for Highflame service"
     )
     metadata: Optional[Dict] = Field(
         default=None, description="Additional metadata to send with requests"
     )
     application: Optional[str] = Field(
-        default=None, description="Application name for Javelin service"
+        default=None, description="Application name for Highflame service"
     )
     config: Optional[Dict] = Field(
         default=None, description="Additional configuration for the guardrail"
@@ -677,7 +678,7 @@ class LitellmParams(
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
-    JavelinGuardrailConfigModel,
+    HighflameGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,

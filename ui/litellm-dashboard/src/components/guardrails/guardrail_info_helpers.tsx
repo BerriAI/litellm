@@ -113,7 +113,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Aporia AI": `${asset_logos_folder}aporia.png`,
   "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
   "Noma Security": `${asset_logos_folder}noma_security.png`,
-  "Javelin Guardrails": `${asset_logos_folder}javelin.png`,
+  "Highflame Guardrails": `${asset_logos_folder}highflame.png`,
   "Pillar Guardrail": `${asset_logos_folder}pillar.jpeg`,
   "Google Cloud Model Armor": `${asset_logos_folder}google.svg`,
   "Guardrails AI": `${asset_logos_folder}guardrails_ai.jpeg`,
