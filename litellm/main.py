@@ -599,7 +599,7 @@ async def acompletion(  # noqa: PLR0915
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
-            
+
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
@@ -939,7 +939,7 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
-        
+
         if web_search_options is not None and custom_llm_provider == "xai":
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
@@ -1558,7 +1558,9 @@ def completion(  # type: ignore # noqa: PLR0915
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         model_info, model = responses_api_bridge_check(
-            model=model, custom_llm_provider=custom_llm_provider, web_search_options=web_search_options
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            web_search_options=web_search_options,
         )
 
         if model_info.get("mode") == "responses":
@@ -2209,17 +2211,21 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "a2a":
             # A2A (Agent-to-Agent) Protocol
             # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
-            api_base, api_key, headers = litellm.A2AConfig.resolve_agent_config_from_registry(
+            (
+                api_base,
+                api_key,
+                headers,
+            ) = litellm.A2AConfig.resolve_agent_config_from_registry(
                 model=model,
                 api_base=api_base,
                 api_key=api_key,
                 headers=headers,
                 optional_params=optional_params,
             )
-            
+
             # Fall back to environment variables and defaults
             api_base = api_base or litellm.api_base or get_secret_str("A2A_API_BASE")
-            
+
             if api_base is None:
                 raise Exception(
                     "api_base is required for A2A provider. "
@@ -3686,9 +3692,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -4783,7 +4789,10 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
-            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
+            or (
+                model in litellm.open_ai_embedding_models
+                and custom_llm_provider is None
+            )
         ):
             api_base = (
                 api_base
@@ -6053,9 +6062,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -6760,9 +6769,9 @@ def speech(  # noqa: PLR0915
                 ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
             ] = query_params
 
-        litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = (
-            voice_id
-        )
+        litellm_params_dict[
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY
+        ] = voice_id
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -7268,9 +7277,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -7281,9 +7290,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -7294,9 +7303,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         annotation_chunks = [
             chunk
@@ -7436,6 +7445,7 @@ def __getattr__(name: str) -> Any:
         # before loading tiktoken, ensuring the local cache is used
         # instead of downloading from the internet
         from litellm._lazy_imports import _get_default_encoding
+
         _encoding = _get_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys

@@ -135,7 +135,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     """
     file_content: Optional[bytes] = None
     fallback_filename: Optional[str] = None
-    
+
     if isinstance(file_obj, tuple):
         if len(file_obj) < 2:
             fallback_filename = str(file_obj[0]) if len(file_obj) > 0 else None
@@ -145,7 +145,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     else:
         file_content_obj = file_obj
         fallback_filename = get_audio_file_name(file_obj)
-    
+
     try:
         if isinstance(file_content_obj, (bytes, bytearray)):
             file_content = bytes(file_content_obj)
@@ -160,7 +160,11 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                 file_content = None
         elif hasattr(file_content_obj, "read"):
             try:
-                current_position = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
+                current_position = (
+                    file_content_obj.tell()
+                    if hasattr(file_content_obj, "tell")
+                    else None
+                )
                 if hasattr(file_content_obj, "seek"):
                     file_content_obj.seek(0)
                 file_content = file_content_obj.read()  # type: ignore
@@ -172,20 +176,20 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             file_content = None
     except Exception:
         file_content = None
-    
+
     if file_content is not None and isinstance(file_content, bytes):
         try:
             hash_object = hashlib.sha256(file_content)
             return hash_object.hexdigest()
         except Exception:
             pass
-    
+
     if fallback_filename:
-        hash_object = hashlib.sha256(fallback_filename.encode('utf-8'))
+        hash_object = hashlib.sha256(fallback_filename.encode("utf-8"))
         return hash_object.hexdigest()
-    
+
     file_obj_str = str(file_obj)
-    hash_object = hashlib.sha256(file_obj_str.encode('utf-8'))
+    hash_object = hashlib.sha256(file_obj_str.encode("utf-8"))
     return hash_object.hexdigest()
 
 

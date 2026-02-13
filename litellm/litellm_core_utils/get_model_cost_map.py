@@ -91,7 +91,10 @@ class GetModelCostMap:
             )
             return False
 
-        if backup_model_count > 0 and fetched_count < backup_model_count * max_shrink_ratio:
+        if (
+            backup_model_count > 0
+            and fetched_count < backup_model_count * max_shrink_ratio
+        ):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map shrank significantly "
                 "(fetched=%d, backup=%d, threshold=%.0f%%). "

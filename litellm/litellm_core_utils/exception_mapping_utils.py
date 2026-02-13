@@ -73,7 +73,10 @@ class ExceptionCheckers:
         # Exclude param validation errors (e.g. OpenAI "user" param max 64 chars)
         if "string_above_max_length" in _error_str_lowercase:
             return False
-        if "invalid 'user'" in _error_str_lowercase and "string too long" in _error_str_lowercase:
+        if (
+            "invalid 'user'" in _error_str_lowercase
+            and "string too long" in _error_str_lowercase
+        ):
             return False
         known_exception_substrings = [
             "exceed context limit",
@@ -97,7 +100,7 @@ class ExceptionCheckers:
             return True
 
         return False
-    
+
     @staticmethod
     def is_azure_content_policy_violation_error(error_str: str) -> bool:
         """
@@ -2072,13 +2075,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             # content policy violation even when the top-level
                             # code is generic (e.g. "invalid_request_error").
                             if azure_error_code != "content_policy_violation":
-                                _inner = (
-                                    body_dict["error"].get("inner_error")  # type: ignore[index]
-                                    or body_dict["error"].get("innererror")  # type: ignore[index]
-                                )
-                                if isinstance(_inner, dict) and _inner.get(
-                                    "code"
-                                ) == "ResponsibleAIPolicyViolation":
+                                _inner = body_dict["error"].get(
+                                    "inner_error"
+                                ) or body_dict[  # type: ignore[index]
+                                    "error"
+                                ].get(
+                                    "innererror"
+                                )  # type: ignore[index]
+                                if (
+                                    isinstance(_inner, dict)
+                                    and _inner.get("code")
+                                    == "ResponsibleAIPolicyViolation"
+                                ):
                                     azure_error_code = "content_policy_violation"
                         else:
                             azure_error_code = body_dict.get("code")
@@ -2114,19 +2122,22 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif (
                     azure_error_code == "content_policy_violation"
-                    or ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+                    or ExceptionCheckers.is_azure_content_policy_violation_error(
+                        error_str
+                    )
                 ):
                     exception_mapping_worked = True
                     from litellm.llms.azure.exception_mapping import (
                         AzureOpenAIExceptionMapping,
                     )
+
                     raise AzureOpenAIExceptionMapping.create_content_policy_violation_error(
                         message=message,
                         model=model,
                         extra_information=extra_information,
                         original_exception=original_exception,
                     )
-                    
+
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(

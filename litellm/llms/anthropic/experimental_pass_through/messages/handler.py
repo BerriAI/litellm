@@ -213,7 +213,7 @@ def anthropic_messages_handler(
 ]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
-    
+
     Args:
         container: Container config with skills for code execution
     """
@@ -247,7 +247,7 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    
+
     # Store agentic loop params in logging object for agentic hooks
     # This provides original request context needed for follow-up calls
     if litellm_logging_obj is not None:
@@ -255,14 +255,15 @@ def anthropic_messages_handler(
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
         }
-        
+
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False
         if kwargs.get("_websearch_interception_converted_stream", False):
-            litellm_logging_obj.model_call_details["websearch_interception_converted_stream"] = True
+            litellm_logging_obj.model_call_details[
+                "websearch_interception_converted_stream"
+            ] = True
 
     if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
-
         return mock_response(
             model=model,
             messages=messages,

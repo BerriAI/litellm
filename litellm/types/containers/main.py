@@ -6,12 +6,14 @@ from typing_extensions import TypedDict
 
 class ExpiresAfter(BaseModel):
     """Container expiration settings."""
+
     anchor: Literal["last_active_at"]
     minutes: int
 
 
 class ContainerObject(BaseModel):
     """Represents a container object."""
+
     id: str
     object: Literal["container"]
     created_at: int
@@ -43,6 +45,7 @@ class ContainerObject(BaseModel):
 
 class DeleteContainerResult(BaseModel):
     """Result of a delete container request."""
+
     id: str
     object: Literal["container.deleted"]
     deleted: bool
@@ -65,6 +68,7 @@ class DeleteContainerResult(BaseModel):
 
 class ContainerListResponse(BaseModel):
     """Response object for list containers request."""
+
     object: Literal["list"]
     data: List[ContainerObject]
     first_id: Optional[str] = None
@@ -90,9 +94,10 @@ class ContainerListResponse(BaseModel):
 class ContainerCreateOptionalRequestParams(TypedDict, total=False):
     """
     TypedDict for Optional parameters supported by OpenAI's container creation API.
-    
+
     Params here: https://platform.openai.com/docs/api-reference/containers/create
     """
+
     expires_after: Optional[Dict[str, Any]]  # ExpiresAfter object
     file_ids: Optional[List[str]]
     extra_headers: Optional[Dict[str, str]]
@@ -102,18 +107,20 @@ class ContainerCreateOptionalRequestParams(TypedDict, total=False):
 class ContainerCreateRequestParams(ContainerCreateOptionalRequestParams, total=False):
     """
     TypedDict for request parameters supported by OpenAI's container creation API.
-    
+
     Params here: https://platform.openai.com/docs/api-reference/containers/create
     """
+
     name: str
 
 
 class ContainerListOptionalRequestParams(TypedDict, total=False):
     """
     TypedDict for Optional parameters supported by OpenAI's container list API.
-    
+
     Params here: https://platform.openai.com/docs/api-reference/containers/list
     """
+
     after: Optional[str]
     limit: Optional[int]
     order: Optional[str]
@@ -123,8 +130,11 @@ class ContainerListOptionalRequestParams(TypedDict, total=False):
 
 class ContainerFileObject(BaseModel):
     """Represents a container file object."""
+
     id: str
-    object: Literal["container.file", "container_file"]  # OpenAI returns "container.file"
+    object: Literal[
+        "container.file", "container_file"
+    ]  # OpenAI returns "container.file"
     container_id: str
     bytes: Optional[int] = None  # Can be null for some files
     created_at: int
@@ -150,6 +160,7 @@ class ContainerFileObject(BaseModel):
 
 class ContainerFileListResponse(BaseModel):
     """Response object for list container files request."""
+
     object: Literal["list"]
     data: List[ContainerFileObject]
     first_id: Optional[str] = None
@@ -174,6 +185,7 @@ class ContainerFileListResponse(BaseModel):
 
 class DeleteContainerFileResponse(BaseModel):
     """Response object for delete container file request."""
+
     id: str
     object: Literal["container_file.deleted"]
     deleted: bool
@@ -192,4 +204,3 @@ class DeleteContainerFileResponse(BaseModel):
             return self.model_dump(**kwargs)
         except Exception:
             return self.dict()
-

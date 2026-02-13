@@ -846,9 +846,9 @@ class ProxyBaseLLMRequestProcessing:
             # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
             # what the client sent.
             if requested_model_from_client:
-                self.data["_litellm_client_requested_model"] = (
-                    requested_model_from_client
-                )
+                self.data[
+                    "_litellm_client_requested_model"
+                ] = requested_model_from_client
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -1443,9 +1443,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

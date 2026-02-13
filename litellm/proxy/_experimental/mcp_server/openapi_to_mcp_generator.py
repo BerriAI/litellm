@@ -63,6 +63,7 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
             raise
     return asyncio.run(load_openapi_spec_async(filepath))
 
+
 async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)

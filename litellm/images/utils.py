@@ -40,9 +40,7 @@ class ImageEditRequestUtils:
                 filtered_optional_params.pop(param, None)
 
         unsupported_params = [
-            param
-            for param in filtered_optional_params
-            if param not in supported_params
+            param for param in filtered_optional_params if param not in supported_params
         ]
 
         if unsupported_params:

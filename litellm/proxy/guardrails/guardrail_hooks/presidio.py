@@ -391,9 +391,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
             # contain API keys or other secrets) in error responses.
-            raise Exception(
-                f"Presidio PII analysis failed: {type(e).__name__}"
-            ) from e
+            raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
 
     async def anonymize_text(
         self,
@@ -619,9 +617,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -722,9 +720,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result

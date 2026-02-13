@@ -120,12 +120,12 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
-        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
             api_key = match.group(1)
         else:
             # If no Bearer token found in Credential, try to extract just the credential value
-            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            match = re.search(r"Credential=([^/\s,]+)", api_key)
             if match:
                 api_key = match.group(1)
 
@@ -145,12 +145,12 @@ def _get_bearer_token(
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
-        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
             api_key = match.group(1)
         else:
             # If no Bearer token found in Credential, try to extract just the credential value
-            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            match = re.search(r"Credential=([^/\s,]+)", api_key)
             if match:
                 api_key = match.group(1)
             else:
@@ -274,7 +274,9 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+    if (
+        litellm.max_budget > 0 and prisma_client is not None
+    ):  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
         cache_key = "{}:spend".format(litellm_proxy_admin_name)
         global_proxy_spend = await _fetch_global_spend_with_event_coordination(
@@ -590,9 +592,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         user_id=user_id,
                         team_id=team_id,
                         team_alias=(
-                            team_object.team_alias
-                            if team_object is not None
-                            else None
+                            team_object.team_alias if team_object is not None else None
                         ),
                         team_metadata=team_object.metadata
                         if team_object is not None
@@ -644,13 +644,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if team_object is not None
                     else None,
                 )
-                
+
                 # Check if model has zero cost - if so, skip all budget checks
                 model = get_model_from_request(request_data, route)
                 skip_budget_checks = False
                 if model is not None and llm_router is not None:
                     from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                    
+
                     skip_budget_checks = _is_model_cost_zero(
                         model=model, llm_router=llm_router
                     )
@@ -658,7 +658,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         verbose_proxy_logger.info(
                             f"Skipping all budget checks for zero-cost model: {model}"
                         )
-                
+
                 # run through common checks
                 _ = await common_checks(
                     request=request,
@@ -938,7 +938,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(
                 api_key, str
             ):  # if generated token, make sure it starts with sk-.
-                _masked_key = "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
+                _masked_key = (
+                    "{}****{}".format(api_key[:4], api_key[-4:])
+                    if len(api_key) > 8
+                    else "****"
+                )
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
@@ -1070,7 +1074,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             skip_budget_checks = False
             if model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                
+
                 skip_budget_checks = _is_model_cost_zero(
                     model=model, llm_router=llm_router
                 )

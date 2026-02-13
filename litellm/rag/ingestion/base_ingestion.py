@@ -76,7 +76,9 @@ class BaseRAGIngestion(ABC):
 
         credential_name = self.vector_store_config.get("litellm_credential_name")
         if credential_name and litellm.credential_list:
-            credential_values = CredentialAccessor.get_credential_values(credential_name)
+            credential_values = CredentialAccessor.get_credential_values(
+                credential_name
+            )
             # Merge credentials into vector_store_config (don't overwrite existing values)
             for key, value in credential_values.items():
                 if key not in self.vector_store_config:
@@ -114,7 +116,9 @@ class BaseRAGIngestion(ABC):
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"
-            content_type = response.headers.get("content-type", "application/octet-stream")
+            content_type = response.headers.get(
+                "content-type", "application/octet-stream"
+            )
             return filename, file_content, content_type, None
 
         if file_id:
@@ -352,4 +356,3 @@ class BaseRAGIngestion(ABC):
                 file_id=None,
                 error=str(e),
             )
-

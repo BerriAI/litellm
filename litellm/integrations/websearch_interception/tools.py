@@ -41,18 +41,18 @@ def get_litellm_web_search_tool() -> Dict[str, Any]:
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query to execute"
+                    "description": "The search query to execute",
                 }
             },
-            "required": ["query"]
-        }
+            "required": ["query"],
+        },
     }
 
 
 def is_web_search_tool_chat_completion(tool: Dict[str, Any]) -> bool:
     """
     Check if a tool is a web search tool for Chat Completions API (strict check).
-    
+
     This is a stricter version that ONLY checks for the exact LiteLLM web search tool name.
     Use this for Chat Completions API to avoid false positives with user-defined tools.
 
@@ -78,7 +78,7 @@ def is_web_search_tool_chat_completion(tool: Dict[str, Any]) -> bool:
     """
     tool_name = tool.get("name", "")
     tool_type = tool.get("type", "")
-    
+
     # Check for OpenAI format: {"type": "function", "function": {"name": "litellm_web_search"}}
     if tool_type == "function" and "function" in tool:
         function_def = tool.get("function", {})
@@ -122,7 +122,7 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
     """
     tool_name = tool.get("name", "")
     tool_type = tool.get("type", "")
-    
+
     # Check for OpenAI format: {"type": "function", "function": {"name": "..."}}
     if tool_type == "function" and "function" in tool:
         function_def = tool.get("function", {})

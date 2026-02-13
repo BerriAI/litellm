@@ -478,12 +478,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -888,7 +888,9 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
-            resolved_env = stdio_env if stdio_env is not None else dict(server.env or {})
+            resolved_env = (
+                stdio_env if stdio_env is not None else dict(server.env or {})
+            )
 
             # Ensure npm-based STDIO MCP servers have a writable cache dir.
             # In containers the default (~/.npm or /app/.npm) may not exist

@@ -628,7 +628,9 @@ class SagemakerLLM(BaseAWSLLM):
         #### EMBEDDING LOGIC
         # Transform request based on model type
         provider_config = SagemakerEmbeddingConfig.get_model_config(model)
-        request_data = provider_config.transform_embedding_request(model, input, optional_params, {})
+        request_data = provider_config.transform_embedding_request(
+            model, input, optional_params, {}
+        )
         data = json.dumps(request_data).encode("utf-8")
 
         ## LOGGING
@@ -673,19 +675,19 @@ class SagemakerLLM(BaseAWSLLM):
         )
 
         print_verbose(f"raw model_response: {response}")
-        
+
         # Transform response based on model type
         from httpx import Response as HttpxResponse
-        
+
         # Create a mock httpx Response object for the transformation
         mock_response = HttpxResponse(
             status_code=200,
-            content=json.dumps(response).encode('utf-8'),
-            headers={"content-type": "application/json"}
+            content=json.dumps(response).encode("utf-8"),
+            headers={"content-type": "application/json"},
         )
-        
+
         model_response = EmbeddingResponse()
-        
+
         # Use the request_data that was already transformed above
         return provider_config.transform_embedding_response(
             model=model,
@@ -695,5 +697,5 @@ class SagemakerLLM(BaseAWSLLM):
             api_key=None,
             request_data=request_data,
             optional_params=optional_params,
-            litellm_params=litellm_params or {}
+            litellm_params=litellm_params or {},
         )

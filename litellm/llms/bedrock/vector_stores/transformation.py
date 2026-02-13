@@ -152,7 +152,6 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             if param == "max_num_results":
                 optional_params["numberOfResults"] = value
             elif param == "filters" and value is not None:
-
                 # map the openai filters to the aws kb filters format
                 # openai filters = {"key": <key>, "value": <value>, "operator": <operator>} OR {"and" | "or": [{"key": <key>, "value": <value>, "operator": <operator>}]}
                 # aws kb filters = {"operator": {"<key>": <value>}} OR {"andAll | orAll": [{"operator": {"<key>": <value>}}]}

@@ -407,7 +407,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                     List[ChatCompletionToolCallChunk], tool_calls
                 )
                 # Include model information if available
-                if hasattr(model_response_stream, "model") and model_response_stream.model:
+                if (
+                    hasattr(model_response_stream, "model")
+                    and model_response_stream.model
+                ):
                     inputs["model"] = model_response_stream.model
                 _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
@@ -448,7 +451,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                     )
                     return responses_so_far
             else:
-                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
+                verbose_proxy_logger.debug(
+                    "Skipping output guardrail - model response has no choices"
+                )
         # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
         # tool_calls = model_response_stream.choices[0].tool_calls
         # convert openai response to model response
@@ -456,7 +461,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         inputs = GenericGuardrailAPIInputs(texts=[string_so_far])
         # Try to get model from the final chunk if available
         if isinstance(final_chunk, dict):
-            response_model = final_chunk.get("response", {}).get("model") if isinstance(final_chunk.get("response"), dict) else None
+            response_model = (
+                final_chunk.get("response", {}).get("model")
+                if isinstance(final_chunk.get("response"), dict)
+                else None
+            )
             if response_model:
                 inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(

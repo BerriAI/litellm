@@ -82,7 +82,7 @@ BEDROCK_COMPUTER_USE_TOOLS = [
 UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
     "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
     "prompt-caching",  # Prompt caching not supported in Converse API
-    "compact-2026-01-12", # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
+    "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
 
@@ -1098,22 +1098,49 @@ class AmazonConverseConfig(BaseConfig):
                 # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
                 # "computer-use-2024-10-22" for older models
                 model_lower = model.lower()
-                if "opus-4.6" in model_lower or "opus_4.6" in model_lower or "opus-4-6" in model_lower or "opus_4_6" in model_lower:
+                if (
+                    "opus-4.6" in model_lower
+                    or "opus_4.6" in model_lower
+                    or "opus-4-6" in model_lower
+                    or "opus_4_6" in model_lower
+                ):
                     computer_use_header = "computer-use-2025-11-24"
-                elif "opus-4.5" in model_lower or "opus_4.5" in model_lower or "opus-4-5" in model_lower or "opus_4_5" in model_lower:
+                elif (
+                    "opus-4.5" in model_lower
+                    or "opus_4.5" in model_lower
+                    or "opus-4-5" in model_lower
+                    or "opus_4_5" in model_lower
+                ):
                     computer_use_header = "computer-use-2025-11-24"
-                elif any(pattern in model_lower for pattern in [
-                    "sonnet-4.5", "sonnet_4.5", "sonnet-4-5", "sonnet_4_5",
-                    "haiku-4.5", "haiku_4.5", "haiku-4-5", "haiku_4_5",
-                    "opus-4.1", "opus_4.1", "opus-4-1", "opus_4_1",
-                    "sonnet-4", "sonnet_4",
-                    "opus-4", "opus_4",
-                    "sonnet-3.7", "sonnet_3.7", "sonnet-3-7", "sonnet_3_7"
-                ]):
+                elif any(
+                    pattern in model_lower
+                    for pattern in [
+                        "sonnet-4.5",
+                        "sonnet_4.5",
+                        "sonnet-4-5",
+                        "sonnet_4_5",
+                        "haiku-4.5",
+                        "haiku_4.5",
+                        "haiku-4-5",
+                        "haiku_4_5",
+                        "opus-4.1",
+                        "opus_4.1",
+                        "opus-4-1",
+                        "opus_4_1",
+                        "sonnet-4",
+                        "sonnet_4",
+                        "opus-4",
+                        "opus_4",
+                        "sonnet-3.7",
+                        "sonnet_3.7",
+                        "sonnet-3-7",
+                        "sonnet_3_7",
+                    ]
+                ):
                     computer_use_header = "computer-use-2025-01-24"
                 else:
                     computer_use_header = "computer-use-2024-10-22"
-                
+
                 anthropic_beta_list.append(computer_use_header)
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools = self._transform_computer_use_tools(

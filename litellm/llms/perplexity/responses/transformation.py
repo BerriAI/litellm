@@ -34,7 +34,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     """
     Configuration for Perplexity Agentic Research API (Responses API)
 
-    
+
     Reference: https://docs.perplexity.ai/agentic-research/quickstart
     """
 
@@ -45,7 +45,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Perplexity Responses API supports a different set of parameters
-        
+
         Ref: https://docs.perplexity.ai/api-reference/responses-post
         """
         return [
@@ -65,16 +65,15 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> dict:
         """Validate environment and set up headers"""
         # Get API key from environment
-        api_key = (
-            get_secret_str("PERPLEXITYAI_API_KEY")
-            or get_secret_str("PERPLEXITY_API_KEY")
+        api_key = get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str(
+            "PERPLEXITY_API_KEY"
         )
-        
+
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        
+
         headers["Content-Type"] = "application/json"
-        
+
         return headers
 
     def get_complete_url(
@@ -84,11 +83,13 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> str:
         """Get the complete URL for the Perplexity Responses API"""
         if api_base is None:
-            api_base = get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
-        
+            api_base = (
+                get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
+            )
+
         # Ensure api_base doesn't end with a slash
         api_base = api_base.rstrip("/")
-        
+
         # Add the responses endpoint
         return f"{api_base}/v1/responses"
 
@@ -100,78 +101,87 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> Dict:
         """
         Map OpenAI Responses API parameters to Perplexity format
-        
+
         Key differences:
         - Supports 'preset' parameter for predefined configurations
         - Supports 'instructions' parameter for system-level guidance
         - Tools are specified differently (web_search, fetch_url)
         """
         mapped_params: Dict[str, Any] = {}
-        
+
         # Map standard parameters
         if response_api_optional_params.get("max_output_tokens"):
-            mapped_params["max_output_tokens"] = response_api_optional_params["max_output_tokens"]
-        
+            mapped_params["max_output_tokens"] = response_api_optional_params[
+                "max_output_tokens"
+            ]
+
         if response_api_optional_params.get("temperature"):
             mapped_params["temperature"] = response_api_optional_params["temperature"]
-        
+
         if response_api_optional_params.get("top_p"):
             mapped_params["top_p"] = response_api_optional_params["top_p"]
-        
+
         if response_api_optional_params.get("stream"):
             mapped_params["stream"] = response_api_optional_params["stream"]
-        
+
         if response_api_optional_params.get("stream_options"):
-            mapped_params["stream_options"] = response_api_optional_params["stream_options"]
-        
+            mapped_params["stream_options"] = response_api_optional_params[
+                "stream_options"
+            ]
+
         # Map Perplexity-specific parameters (using .get() with Any dict access)
         preset = response_api_optional_params.get("preset")  # type: ignore
         if preset:
             mapped_params["preset"] = preset
-        
+
         instructions = response_api_optional_params.get("instructions")  # type: ignore
         if instructions:
             mapped_params["instructions"] = instructions
-        
+
         if response_api_optional_params.get("reasoning"):
             mapped_params["reasoning"] = response_api_optional_params["reasoning"]
-        
+
         tools = response_api_optional_params.get("tools")
         if tools:
             # Convert tools to list of dicts for transformation
-            tools_list = [dict(tool) if hasattr(tool, '__dict__') else tool for tool in tools]  # type: ignore
+            tools_list = [dict(tool) if hasattr(tool, "__dict__") else tool for tool in tools]  # type: ignore
             mapped_params["tools"] = self._transform_tools(tools_list)  # type: ignore
-        
+
         return mapped_params
 
     def _transform_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Transform tools to Perplexity format
-        
+
         Perplexity supports:
         - web_search: Performs web searches
         - fetch_url: Fetches content from URLs
         """
         perplexity_tools = []
-        
+
         for tool in tools:
             if isinstance(tool, dict):
                 tool_type = tool.get("type")
-                
+
                 # Direct Perplexity tool format
                 if tool_type in ["web_search", "fetch_url"]:
                     perplexity_tools.append(tool)
-                
+
                 # OpenAI function format - try to map to Perplexity tools
                 elif tool_type == "function":
                     function = tool.get("function", {})
                     function_name = function.get("name", "")
-                    
-                    if function_name == "web_search" or "search" in function_name.lower():
+
+                    if (
+                        function_name == "web_search"
+                        or "search" in function_name.lower()
+                    ):
                         perplexity_tools.append({"type": "web_search"})
-                    elif function_name == "fetch_url" or "fetch" in function_name.lower():
+                    elif (
+                        function_name == "fetch_url" or "fetch" in function_name.lower()
+                    ):
                         perplexity_tools.append({"type": "fetch_url"})
-        
+
         return perplexity_tools
 
     def transform_responses_api_request(
@@ -204,24 +214,26 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
                 "model": model,
                 "input": self._format_input(input),
             }
-        
+
         # Add all optional parameters
         for key, value in response_api_optional_request_params.items():
             data[key] = value
-        
+
         return data
 
-    def _format_input(self, input: Union[str, ResponseInputParam]) -> Union[str, List[Dict[str, Any]]]:
+    def _format_input(
+        self, input: Union[str, ResponseInputParam]
+    ) -> Union[str, List[Dict[str, Any]]]:
         """
         Format input for Perplexity Responses API
-        
+
         The API accepts either:
         - A simple string for single-turn queries
         - An array of message objects for multi-turn conversations
         """
         if isinstance(input, str):
             return input
-        
+
         # Handle ResponseInputParam format
         if isinstance(input, list):
             formatted_messages = []
@@ -234,7 +246,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
                     }
                     formatted_messages.append(formatted_message)
             return formatted_messages
-        
+
         return str(input)
 
     def transform_response_api_response(
@@ -267,10 +279,14 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         # Transform usage to handle Perplexity's cost structure
         usage_data = raw_response_json.get("usage", {})
         transformed_usage_dict = self._transform_usage(usage_data)
-        
+
         # Convert usage dict to ResponseAPIUsage object
-        usage_obj = ResponseAPIUsage(**transformed_usage_dict) if transformed_usage_dict else None
-        
+        usage_obj = (
+            ResponseAPIUsage(**transformed_usage_dict)
+            if transformed_usage_dict
+            else None
+        )
+
         # Map Perplexity response to OpenAI Responses API format
         response = ResponsesAPIResponse(
             id=raw_response_json.get("id", ""),
@@ -283,11 +299,11 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         )
 
         return response
-    
+
     def _transform_usage(self, usage_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Transform Perplexity usage data to OpenAI format
-        
+
         Perplexity returns:
         {
             "input_tokens": 100,
@@ -300,7 +316,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
                 "total_cost": 0.0003
             }
         }
-        
+
         OpenAI expects:
         {
             "input_tokens": 100,
@@ -314,7 +330,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             "output_tokens": usage_data.get("output_tokens", 0),
             "total_tokens": usage_data.get("total_tokens", 0),
         }
-        
+
         # Transform cost from Perplexity format (dict) to OpenAI format (float)
         cost_obj = usage_data.get("cost")
         if isinstance(cost_obj, dict) and "total_cost" in cost_obj:
@@ -322,20 +338,20 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             verbose_logger.debug(
                 "Transformed Perplexity cost object to float: %s -> %s",
                 cost_obj,
-                cost_obj["total_cost"]
+                cost_obj["total_cost"],
             )
         elif cost_obj is not None:
             # If cost is already a float/number, use it as-is
             transformed["cost"] = cost_obj
-        
+
         # Add input_tokens_details if present
         if "input_tokens_details" in usage_data:
             transformed["input_tokens_details"] = usage_data["input_tokens_details"]
-        
+
         # Add output_tokens_details if present
         if "output_tokens_details" in usage_data:
             transformed["output_tokens_details"] = usage_data["output_tokens_details"]
-        
+
         return transformed
 
     def transform_streaming_response(
@@ -353,10 +369,10 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         event_pydantic_model = PerplexityResponsesConfig.get_event_model_class(
             event_type=event_type
         )
-        
+
         # Transform Perplexity-specific fields to OpenAI format
         parsed_chunk = self._transform_perplexity_chunk(parsed_chunk)
-        
+
         # Defensive: Handle error.code being null (similar to OpenAI implementation)
         try:
             error_obj = parsed_chunk.get("error")
@@ -375,13 +391,13 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def _transform_perplexity_chunk(self, chunk: dict) -> dict:
         """
         Transform Perplexity-specific fields in a streaming chunk to OpenAI format.
-        
+
         This handles:
         - Converting Perplexity's cost object to a simple float
         """
         # Make a copy to avoid modifying the original
         chunk = dict(chunk)
-        
+
         # Transform usage.cost from Perplexity format to OpenAI format
         # Perplexity: {"currency": "USD", "input_cost": 0.0001, "output_cost": 0.0002, "total_cost": 0.0003}
         # OpenAI: 0.0003 (just the total_cost as a float)
@@ -400,10 +416,10 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
                         verbose_logger.debug(
                             "Transformed Perplexity cost object to float: %s -> %s",
                             cost_obj,
-                            cost_obj["total_cost"]
+                            cost_obj["total_cost"],
                         )
         except Exception as e:
             # If transformation fails, log and continue with original chunk
             verbose_logger.debug("Failed to transform Perplexity cost object: %s", e)
-        
+
         return chunk

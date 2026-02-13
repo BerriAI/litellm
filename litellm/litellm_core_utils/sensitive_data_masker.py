@@ -86,7 +86,9 @@ class SensitiveDataMasker:
                 masked_items.append(self._mask_value(item))
             else:
                 masked_items.append(
-                    item if isinstance(item, (int, float, bool, str, list)) else str(item)
+                    item
+                    if isinstance(item, (int, float, bool, str, list))
+                    else str(item)
                 )
         return masked_items
 

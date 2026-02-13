@@ -29,8 +29,14 @@ router = APIRouter()
 )
 async def public_model_hub():
     import litellm
-    from litellm.proxy.proxy_server import _get_model_group_info, llm_router, prisma_client
-    from litellm.proxy.health_endpoints._health_endpoints import _convert_health_check_to_dict
+    from litellm.proxy.proxy_server import (
+        _get_model_group_info,
+        llm_router,
+        prisma_client,
+    )
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _convert_health_check_to_dict,
+    )
 
     if llm_router is None:
         raise HTTPException(
@@ -163,7 +169,7 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "proxy",
         "public_endpoints",
-        "provider_create_fields.json"
+        "provider_create_fields.json",
     )
 
     with open(provider_create_fields_path, "r") as f:
@@ -201,7 +207,7 @@ async def get_litellm_model_cost_map():
 async def get_agent_fields() -> List[AgentCreateInfo]:
     """
     Return agent type metadata required by the dashboard create-agent flow.
-    
+
     If an agent has `inherit_credentials_from_provider`, the provider's credential
     fields are automatically appended to the agent's credential_fields.
     """
@@ -210,19 +216,19 @@ async def get_agent_fields() -> List[AgentCreateInfo]:
         "proxy",
         "public_endpoints",
     )
-    
+
     agent_create_fields_path = os.path.join(base_path, "agent_create_fields.json")
     provider_create_fields_path = os.path.join(base_path, "provider_create_fields.json")
 
     with open(agent_create_fields_path, "r") as f:
         agent_create_fields = json.load(f)
-    
+
     with open(provider_create_fields_path, "r") as f:
         provider_create_fields = json.load(f)
-    
+
     # Build a lookup map for providers by name
     provider_map = {p["provider"]: p for p in provider_create_fields}
-    
+
     # Merge inherited credential fields
     for agent in agent_create_fields:
         inherit_from = agent.get("inherit_credentials_from_provider")
@@ -235,7 +241,9 @@ async def get_agent_fields() -> List[AgentCreateInfo]:
                 field_copy["include_in_litellm_params"] = True
                 inherited_fields.append(field_copy)
             # Append provider credential fields after agent's own fields
-            agent["credential_fields"] = agent.get("credential_fields", []) + inherited_fields
+            agent["credential_fields"] = (
+                agent.get("credential_fields", []) + inherited_fields
+            )
         # Remove the inherit field from response (not needed by frontend)
         agent.pop("inherit_credentials_from_provider", None)
 

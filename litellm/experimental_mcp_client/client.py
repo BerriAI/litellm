@@ -14,7 +14,10 @@ from mcp.client.stdio import stdio_client
 streamable_http_client: Optional[Any] = None
 try:
     import mcp.client.streamable_http as streamable_http_module  # type: ignore
-    streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
+
+    streamable_http_client = getattr(
+        streamable_http_module, "streamable_http_client", None
+    )
 except ImportError:
     pass
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
@@ -105,12 +108,15 @@ class MCPClient:
         if self.transport_type == MCPTransport.sse:
             headers = self._get_auth_headers()
             httpx_client_factory = self._create_httpx_client_factory()
-            return sse_client(
-                url=self.server_url,
-                timeout=self.timeout,
-                headers=headers,
-                httpx_client_factory=httpx_client_factory,
-            ), None
+            return (
+                sse_client(
+                    url=self.server_url,
+                    timeout=self.timeout,
+                    headers=headers,
+                    httpx_client_factory=httpx_client_factory,
+                ),
+                None,
+            )
 
         # HTTP transport (default)
         if streamable_http_client is None:
@@ -118,12 +124,10 @@ class MCPClient:
                 "streamable_http_client is not available. "
                 "Please install mcp with HTTP support."
             )
-        
+
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
-        verbose_logger.debug(
-            "litellm headers for streamable_http_client: %s", headers
-        )
+        verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
         http_client = httpx_client_factory(
             headers=headers,
             timeout=httpx.Timeout(self.timeout),
@@ -298,7 +302,7 @@ class MCPClient:
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
-        host_progress_callback: Optional[Callable] = None
+        host_progress_callback: Optional[Callable] = None,
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
@@ -307,13 +311,15 @@ class MCPClient:
             f"MCP client calling tool '{call_tool_request_params.name}' with arguments: {call_tool_request_params.arguments}"
         )
 
-        async def on_progress(progress: float, total: float | None, message: str | None):
+        async def on_progress(
+            progress: float, total: float | None, message: str | None
+        ):
             percentage = (progress / total * 100) if total else 0
             verbose_logger.info(
                 f"MCP Tool '{call_tool_request_params.name}' progress: "
                 f"{progress}/{total} ({percentage:.0f}%) - {message or ''}"
             )
-            
+
             # Forward to Host if callback provided
             if host_progress_callback:
                 try:
@@ -327,8 +333,8 @@ class MCPClient:
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
                 progress_callback=on_progress,
-
             )
+
         try:
             tool_result = await self.run_with_session(_call_tool_operation)
             verbose_logger.info(

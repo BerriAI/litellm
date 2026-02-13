@@ -114,7 +114,8 @@ class PipelineExecutor:
                 return PipelineExecutionResult(
                     terminal_action="modify_response",
                     step_results=step_results,
-                    modify_response_message=step.modify_response_message or error_detail,
+                    modify_response_message=step.modify_response_message
+                    or error_detail,
                 )
 
             # action == "next" → continue to next step

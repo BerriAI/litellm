@@ -26,7 +26,14 @@ from litellm.types.llms.bedrock_agentcore import (
     AgentCoreUsage,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    StreamingChoices,
+    Usage,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -450,11 +457,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             buffer += text_chunk
 
             # Process complete lines
-            while '\n' in buffer:
-                line, buffer = buffer.split('\n', 1)
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
                 line = line.strip()
 
-                if not line or not line.startswith('data:'):
+                if not line or not line.startswith("data:"):
                     continue
 
                 json_str = line[5:].strip()
@@ -508,11 +515,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                 )
                             ]
                             usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(chunk, "usage", Usage(
-                                prompt_tokens=usage_data.get("inputTokens", 0),
-                                completion_tokens=usage_data.get("outputTokens", 0),
-                                total_tokens=usage_data.get("totalTokens", 0),
-                            ))
+                            setattr(
+                                chunk,
+                                "usage",
+                                Usage(
+                                    prompt_tokens=usage_data.get("inputTokens", 0),
+                                    completion_tokens=usage_data.get("outputTokens", 0),
+                                    total_tokens=usage_data.get("totalTokens", 0),
+                                ),
+                            )
                             yield chunk
 
                     # Process final message
@@ -605,11 +616,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             buffer += text_chunk
 
             # Process complete lines
-            while '\n' in buffer:
-                line, buffer = buffer.split('\n', 1)
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
                 line = line.strip()
 
-                if not line or not line.startswith('data:'):
+                if not line or not line.startswith("data:"):
                     continue
 
                 json_str = line[5:].strip()
@@ -663,11 +674,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                 )
                             ]
                             usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(chunk, "usage", Usage(
-                                prompt_tokens=usage_data.get("inputTokens", 0),
-                                completion_tokens=usage_data.get("outputTokens", 0),
-                                total_tokens=usage_data.get("totalTokens", 0),
-                            ))
+                            setattr(
+                                chunk,
+                                "usage",
+                                Usage(
+                                    prompt_tokens=usage_data.get("inputTokens", 0),
+                                    completion_tokens=usage_data.get("outputTokens", 0),
+                                    total_tokens=usage_data.get("totalTokens", 0),
+                                ),
+                            )
                             yield chunk
 
                     # Process final message

@@ -62,7 +62,9 @@ async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
     expires_after: Optional[FileExpiresAfter] = None,
-    custom_llm_provider: Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"
+    ] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -107,7 +109,11 @@ def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
     expires_after: Optional[FileExpiresAfter] = None,
-    custom_llm_provider: Optional[Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"]] = None,
+    custom_llm_provider: Optional[
+        Literal[
+            "openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"
+        ]
+    ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -295,7 +301,9 @@ def create_file(
 @client
 async def afile_retrieve(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "gemini", "hosted_vllm", "manus"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "gemini", "hosted_vllm", "manus"
+    ] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -439,22 +447,25 @@ def file_retrieve(
                 litellm_params_dict = get_litellm_params(**kwargs)
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
-                
+
                 logging_obj = kwargs.get("litellm_logging_obj")
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
                         Logging as LiteLLMLoggingObj,
                     )
+
                     logging_obj = LiteLLMLoggingObj(
                         model="",
                         messages=[],
                         stream=False,
                         call_type="afile_retrieve" if _is_async else "file_retrieve",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        litellm_call_id=kwargs.get(
+                            "litellm_call_id", str(uuid_module.uuid4())
+                        ),
                         function_id=str(kwargs.get("id") or ""),
                     )
-                
+
                 client = kwargs.get("client")
                 response = base_llm_http_handler.retrieve_file(
                     file_id=file_id,
@@ -538,7 +549,9 @@ async def afile_delete(
 def file_delete(
     file_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure", "gemini", "manus"], str] = "openai",
+    custom_llm_provider: Union[
+        Literal["openai", "azure", "gemini", "manus"], str
+    ] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -648,22 +661,25 @@ def file_delete(
             if provider_config is not None:
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
-                
+
                 logging_obj = kwargs.get("litellm_logging_obj")
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
                         Logging as LiteLLMLoggingObj,
                     )
+
                     logging_obj = LiteLLMLoggingObj(
                         model="",
                         messages=[],
                         stream=False,
                         call_type="afile_delete" if _is_async else "file_delete",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        litellm_call_id=kwargs.get(
+                            "litellm_call_id", str(uuid_module.uuid4())
+                        ),
                         function_id=str(kwargs.get("id") or ""),
                     )
-                
+
                 response = base_llm_http_handler.delete_file(
                     file_id=file_id,
                     provider_config=provider_config,
@@ -771,7 +787,7 @@ def file_list(
             timeout = 600.0
 
         _is_async = kwargs.pop("is_async", False) is True
-        
+
         # Check if provider has a custom files config (e.g., Manus, Bedrock, Vertex AI)
         provider_config = ProviderConfigManager.get_provider_files_config(
             model="",
@@ -781,22 +797,25 @@ def file_list(
             litellm_params_dict = get_litellm_params(**kwargs)
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
-            
+
             logging_obj = kwargs.get("litellm_logging_obj")
             if logging_obj is None:
                 from litellm.litellm_core_utils.litellm_logging import (
                     Logging as LiteLLMLoggingObj,
                 )
+
                 logging_obj = LiteLLMLoggingObj(
                     model="",
                     messages=[],
                     stream=False,
                     call_type="afile_list" if _is_async else "file_list",
                     start_time=time.time(),
-                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                    litellm_call_id=kwargs.get(
+                        "litellm_call_id", str(uuid_module.uuid4())
+                    ),
                     function_id=str(kwargs.get("id", "")),
                 )
-            
+
             client = kwargs.get("client")
             response = base_llm_http_handler.list_files(
                 purpose=purpose,
@@ -898,7 +917,9 @@ def file_list(
 @client
 async def afile_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
+    ] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -943,7 +964,18 @@ def file_content(
     file_id: str,
     model: Optional[str] = None,
     custom_llm_provider: Optional[
-        Union[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"], str]
+        Union[
+            Literal[
+                "openai",
+                "azure",
+                "vertex_ai",
+                "bedrock",
+                "hosted_vllm",
+                "anthropic",
+                "manus",
+            ],
+            str,
+        ]
     ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,

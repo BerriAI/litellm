@@ -1214,9 +1214,7 @@ if MCP_AVAILABLE:
         query: Optional[str] = Query(
             None, description="Search filter for server names and descriptions"
         ),
-        category: Optional[str] = Query(
-            None, description="Filter by category"
-        ),
+        category: Optional[str] = Query(None, description="Filter by category"),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -1250,15 +1248,11 @@ if MCP_AVAILABLE:
 
         # Apply category filter
         if category:
-            servers = [
-                s for s in servers if s.get("category", "") == category
-            ]
+            servers = [s for s in servers if s.get("category", "") == category]
 
         # Extract unique categories from the full list (before filtering)
         all_servers = registry.get("servers", [])
-        categories = sorted(
-            set(s.get("category", "Other") for s in all_servers)
-        )
+        categories = sorted(set(s.get("category", "Other") for s in all_servers))
 
         return {
             "servers": servers,

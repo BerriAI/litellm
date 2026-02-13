@@ -104,7 +104,9 @@ def get_access_token(
     token, expires_at = _request_token_sync(credentials, scope, auth_url)
 
     # Cache token
-    ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+    ttl_seconds = max(
+        0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000
+    )
     if ttl_seconds > 0:
         _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 
@@ -140,7 +142,9 @@ async def get_access_token_async(
     token, expires_at = await _request_token_async(credentials, scope, auth_url)
 
     # Cache token
-    ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+    ttl_seconds = max(
+        0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000
+    )
     if ttl_seconds > 0:
         _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 

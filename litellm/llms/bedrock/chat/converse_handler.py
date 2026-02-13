@@ -14,8 +14,8 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 from litellm.anthropic_beta_headers_manager import (
-            update_headers_with_filtered_beta,
-        )
+    update_headers_with_filtered_beta,
+)
 from ..base_aws_llm import BaseAWSLLM, Credentials
 from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
@@ -69,7 +69,9 @@ def make_sync_call(
         )
     else:
         decoder = AWSEventStreamDecoder(model=model)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        completion_stream = decoder.iter_bytes(
+            response.iter_bytes(chunk_size=stream_chunk_size)
+        )
 
     # LOGGING
     logging_obj.post_call(
@@ -123,7 +125,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
-            api_key=api_key
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -183,7 +185,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             headers=headers,
         )
         data = json.dumps(request_data)
-        
+
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
@@ -191,7 +193,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
-            api_key=api_key
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -281,7 +283,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             custom_llm_provider="bedrock",
         )
 
-
         ### SET REGION NAME ###
         aws_region_name = self._get_aws_region_name(
             optional_params=optional_params,
@@ -339,7 +340,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        
+
         # Filter beta headers in HTTP headers before making the request
         headers = update_headers_with_filtered_beta(
             headers=headers, provider="bedrock_converse"
@@ -385,7 +386,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 timeout=timeout,
                 client=client,
                 credentials=credentials,
-                api_key=api_key
+                api_key=api_key,
             )  # type: ignore
 
         ## TRANSFORMATION ##
@@ -398,7 +399,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             headers=extra_headers,
         )
         data = json.dumps(_data)
-        
+
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -406,7 +407,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=proxy_endpoint_url,
             data=data,
             headers=headers,
-            api_key=api_key
+            api_key=api_key,
         )
 
         ## LOGGING

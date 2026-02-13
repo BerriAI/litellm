@@ -77,6 +77,7 @@ db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
+
 def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     """
     Log a warning when budget lookup fails; cache will not be populated.
@@ -94,38 +95,41 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
         x in err_str
         for x in ("column", "schema", "does not exist", "prisma", "migrate")
     ):
-        hint = " Run `prisma db push` or `prisma migrate deploy` to fix schema mismatches."
+        hint = (
+            " Run `prisma db push` or `prisma migrate deploy` to fix schema mismatches."
+        )
     verbose_proxy_logger.error(
         f"Budget lookup failed for {entity}; cache will not be populated. "
         f"Each request will hit the database. Error: {error}.{hint}"
     )
+
 
 def _is_model_cost_zero(
     model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
 ) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
-    
+
     Uses the router's get_model_group_info method to get pricing information.
-    
+
     Args:
         model: The model name or list of model names
         llm_router: The LiteLLM router instance
-    
+
     Returns:
         bool: True if all costs for the model are zero, False otherwise
     """
     if model is None or llm_router is None:
         return False
-    
+
     # Handle list of models
     model_list = [model] if isinstance(model, str) else model
-    
+
     for model_name in model_list:
         try:
             # Use router's get_model_group_info method directly for better reliability
             model_group_info = llm_router.get_model_group_info(model_group=model_name)
-            
+
             if model_group_info is None:
                 # Model not found or no pricing info available
                 # Conservative approach: assume it has cost
@@ -133,38 +137,38 @@ def _is_model_cost_zero(
                     f"No model group info found for {model_name}, assuming it has cost"
                 )
                 return False
-            
+
             # Check costs for this model
             # Only allow bypass if BOTH costs are explicitly set to 0 (not None)
             input_cost = model_group_info.input_cost_per_token
             output_cost = model_group_info.output_cost_per_token
-            
+
             # If costs are not explicitly configured (None), assume it has cost
             if input_cost is None or output_cost is None:
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has undefined cost (input: {input_cost}, output: {output_cost}), assuming it has cost"
                 )
                 return False
-            
+
             # If either cost is non-zero, return False
             if input_cost > 0 or output_cost > 0:
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has non-zero cost (input: {input_cost}, output: {output_cost})"
                 )
                 return False
-            
+
             # This model has zero cost explicitly configured
             verbose_proxy_logger.debug(
                 f"Model {model_name} has zero cost explicitly configured (input: {input_cost}, output: {output_cost})"
             )
-            
+
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
             verbose_proxy_logger.debug(
                 f"Error checking cost for model {model_name}: {str(e)}, assuming it has cost"
             )
             return False
-    
+
     # All models checked have zero cost
     return True
 
@@ -292,7 +296,10 @@ async def common_checks(
         )
 
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
-        if end_user_object is not None and end_user_object.litellm_budget_table is not None:
+        if (
+            end_user_object is not None
+            and end_user_object.litellm_budget_table is not None
+        ):
             end_user_budget = end_user_object.litellm_budget_table.max_budget
             if end_user_budget is not None and end_user_object.spend > end_user_budget:
                 raise litellm.BudgetExceededError(
@@ -1370,7 +1377,7 @@ async def _get_team_object_from_user_api_key_cache(
         raise Exception
 
     _response = LiteLLM_TeamTableCachedObj(**response.dict())
-    
+
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
         try:
@@ -1385,7 +1392,7 @@ async def _get_team_object_from_user_api_key_cache(
             verbose_proxy_logger.debug(
                 f"Failed to load object_permission for team {team_id} with object_permission_id={_response.object_permission_id}: {e}"
             )
-    
+
     # save the team object to cache
     await _cache_team_object(
         team_id=team_id,
@@ -2789,14 +2796,26 @@ async def _team_soft_budget_check(
         if valid_token:
             # Extract alert emails from team metadata
             alert_emails: Optional[List[str]] = None
-            if team_object.metadata is not None and isinstance(team_object.metadata, dict):
-                soft_budget_alert_emails = team_object.metadata.get("soft_budget_alerting_emails")
+            if team_object.metadata is not None and isinstance(
+                team_object.metadata, dict
+            ):
+                soft_budget_alert_emails = team_object.metadata.get(
+                    "soft_budget_alerting_emails"
+                )
                 if soft_budget_alert_emails is not None:
                     if isinstance(soft_budget_alert_emails, list):
-                        alert_emails = [email for email in soft_budget_alert_emails if isinstance(email, str) and email.strip()]
+                        alert_emails = [
+                            email
+                            for email in soft_budget_alert_emails
+                            if isinstance(email, str) and email.strip()
+                        ]
                     elif isinstance(soft_budget_alert_emails, str):
                         # Handle comma-separated string
-                        alert_emails = [email.strip() for email in soft_budget_alert_emails.split(",") if email.strip()]
+                        alert_emails = [
+                            email.strip()
+                            for email in soft_budget_alert_emails.split(",")
+                            if email.strip()
+                        ]
                     # Filter out empty strings
                     if alert_emails:
                         alert_emails = [email for email in alert_emails if email]

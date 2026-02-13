@@ -244,10 +244,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "output_tokens": chunk.usage.completion_tokens or 0,
                     }
                     # Add cache tokens if available (for prompt caching support)
-                    if hasattr(chunk.usage, "_cache_creation_input_tokens") and chunk.usage._cache_creation_input_tokens > 0:
-                        usage_dict["cache_creation_input_tokens"] = chunk.usage._cache_creation_input_tokens
-                    if hasattr(chunk.usage, "_cache_read_input_tokens") and chunk.usage._cache_read_input_tokens > 0:
-                        usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
+                    if (
+                        hasattr(chunk.usage, "_cache_creation_input_tokens")
+                        and chunk.usage._cache_creation_input_tokens > 0
+                    ):
+                        usage_dict[
+                            "cache_creation_input_tokens"
+                        ] = chunk.usage._cache_creation_input_tokens
+                    if (
+                        hasattr(chunk.usage, "_cache_read_input_tokens")
+                        and chunk.usage._cache_read_input_tokens > 0
+                    ):
+                        usage_dict[
+                            "cache_read_input_tokens"
+                        ] = chunk.usage._cache_read_input_tokens
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -413,12 +423,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
             from typing import cast
             from litellm.types.llms.anthropic import ToolUseBlock
-            
+
             tool_block = cast(ToolUseBlock, content_block_start)
-            
+
             if tool_block.get("name"):
                 truncated_name = tool_block["name"]
-                original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
+                original_name = self.tool_name_mapping.get(
+                    truncated_name, truncated_name
+                )
                 tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:
@@ -431,7 +443,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if block_type == "tool_use":
             from typing import cast
             from litellm.types.llms.anthropic import ToolUseBlock
-            
+
             tool_block = cast(ToolUseBlock, content_block_start)
             if tool_block.get("name"):
                 self.current_content_block_type = block_type

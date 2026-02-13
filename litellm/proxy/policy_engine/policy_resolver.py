@@ -185,9 +185,7 @@ class PolicyResolver:
             )
 
         result = list(all_guardrails)
-        verbose_proxy_logger.debug(
-            f"Final guardrails for context: {result}"
-        )
+        verbose_proxy_logger.debug(f"Final guardrails for context: {result}")
 
         return result
 

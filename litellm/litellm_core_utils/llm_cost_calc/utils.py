@@ -215,9 +215,7 @@ def _get_token_base_cost(
                     cache_creation_tiered_key = (
                         f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
                     )
-                    cache_creation_1hr_tiered_key = (
-                        f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
-                    )
+                    cache_creation_1hr_tiered_key = f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
                     cache_read_tiered_key = (
                         f"cache_read_input_token_cost_above_{threshold_str}_tokens"
                     )
@@ -599,7 +597,9 @@ def generic_cost_per_token(  # noqa: PLR0915
     image_tokens = prompt_tokens_details["image_tokens"]
 
     # Check for double-counting: sum of details > prompt_tokens means overlap
-    total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    total_details = (
+        text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    )
     has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
 
     if text_tokens == 0 or has_double_counting:

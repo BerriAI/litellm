@@ -1099,7 +1099,9 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
-            custom_body: Optional[dict] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
+            custom_body: Optional[
+                dict
+            ] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
         ):
             return await chat_completion_pass_through_endpoint(
                 fastapi_response=fastapi_response,
@@ -2029,8 +2031,8 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
                 if route_type == "exact" and route == registered_path:
                     return True
@@ -2049,8 +2051,8 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
 
                 if route_type == "exact" and route == registered_path:
@@ -2371,9 +2373,7 @@ async def get_pass_through_endpoints(
 
     # Merge: config endpoints not in DB + all DB endpoints (DB overrides config for same path)
     db_paths = {ep.path for ep in db_endpoints}
-    config_only_endpoints = [
-        ep for ep in config_endpoints if ep.path not in db_paths
-    ]
+    config_only_endpoints = [ep for ep in config_endpoints if ep.path not in db_paths]
     if endpoint_id is not None:
         # When filtering by endpoint_id, only return if found in DB (config endpoints use generated IDs)
         pass_through_endpoints = db_endpoints

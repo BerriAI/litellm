@@ -145,11 +145,9 @@ def completion(  # noqa: PLR0915
 
             json_obj = json.loads(vertex_credentials)
 
-            creds = (
-                google.oauth2.service_account.Credentials.from_service_account_info(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
         else:
             creds, _ = google.auth.default(quota_project_id=vertex_project)

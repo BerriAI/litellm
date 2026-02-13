@@ -21,6 +21,7 @@ DocumentType = Dict[str, str]
 
 class OCRPageDimensions(LiteLLMPydanticObjectBase):
     """Page dimensions from OCR response."""
+
     dpi: Optional[int] = None
     height: Optional[int] = None
     width: Optional[int] = None
@@ -28,27 +29,30 @@ class OCRPageDimensions(LiteLLMPydanticObjectBase):
 
 class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
+
     image_base64: Optional[str] = None
     bbox: Optional[Dict[str, Any]] = None
-    
+
     model_config = {"extra": "allow"}
 
 
 class OCRPage(LiteLLMPydanticObjectBase):
     """Single page from OCR response."""
+
     index: int
     markdown: str
     images: Optional[List[OCRPageImage]] = None
     dimensions: Optional[OCRPageDimensions] = None
-    
+
     model_config = {"extra": "allow"}
 
 
 class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
+
     pages_processed: Optional[int] = None
     doc_size_bytes: Optional[int] = None
-    
+
     model_config = {"extra": "allow"}
 
 
@@ -57,12 +61,13 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     Standard OCR response format.
     Standardized to Mistral OCR format - other providers should transform to this format.
     """
+
     pages: List[OCRPage]
     model: str
     document_annotation: Optional[Any] = None
     usage_info: Optional[OCRUsageInfo] = None
     object: str = "ocr"
-    
+
     model_config = {"extra": "allow"}
 
     # Define private attributes using PrivateAttr
@@ -71,6 +76,7 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
 class OCRRequestData(LiteLLMPydanticObjectBase):
     """OCR request data structure."""
+
     data: Optional[Union[Dict, bytes]] = None
     files: Optional[Dict[str, Any]] = None
 
@@ -140,17 +146,19 @@ class BaseOCRConfig:
         """
         Transform OCR request to provider-specific format.
         Override in provider-specific implementations.
-        
+
         Args:
             model: Model name
             document: Document to process (Mistral format dict, or file path, bytes, etc.)
             optional_params: Optional parameters for the request
             headers: Request headers
-            
+
         Returns:
             OCRRequestData with data and files fields
         """
-        raise NotImplementedError("transform_ocr_request must be implemented by provider")
+        raise NotImplementedError(
+            "transform_ocr_request must be implemented by provider"
+        )
 
     async def async_transform_ocr_request(
         self,
@@ -164,15 +172,15 @@ class BaseOCRConfig:
         Async transform OCR request to provider-specific format.
         Optional method - providers can override if they need async transformations
         (e.g., Azure AI for URL-to-base64 conversion).
-        
+
         Default implementation falls back to sync transform_ocr_request.
-        
+
         Args:
             model: Model name
             document: Document to process (Mistral format dict, or file path, bytes, etc.)
             optional_params: Optional parameters for the request
             headers: Request headers
-            
+
         Returns:
             OCRRequestData with data and files fields
         """
@@ -196,7 +204,9 @@ class BaseOCRConfig:
         Transform provider-specific OCR response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError("transform_ocr_response must be implemented by provider")
+        raise NotImplementedError(
+            "transform_ocr_response must be implemented by provider"
+        )
 
     async def async_transform_ocr_response(
         self,
@@ -209,14 +219,14 @@ class BaseOCRConfig:
         Async transform provider-specific OCR response to standard format.
         Optional method - providers can override if they need async transformations
         (e.g., Azure Document Intelligence for async operation polling).
-        
+
         Default implementation falls back to sync transform_ocr_response.
-        
+
         Args:
             model: Model name
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             OCRResponse in standard format
         """
@@ -240,4 +250,3 @@ class BaseOCRConfig:
             message=error_message,
             headers=headers,
         )
-

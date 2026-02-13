@@ -165,7 +165,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the complete url for the request
         """
-        bucket_name = litellm_params.get("bucket_name") or litellm_params.get("litellm_metadata", {}).pop("gcs_bucket_name", None) or os.getenv("GCS_BUCKET_NAME")
+        bucket_name = (
+            litellm_params.get("bucket_name")
+            or litellm_params.get("litellm_metadata", {}).pop("gcs_bucket_name", None)
+            or os.getenv("GCS_BUCKET_NAME")
+        )
         if not bucket_name:
             raise ValueError("GCS bucket_name is required")
         file_data = data.get("file")
@@ -389,7 +393,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError("VertexAIFilesConfig does not support file content retrieval")
+        raise NotImplementedError(
+            "VertexAIFilesConfig does not support file content retrieval"
+        )
 
     def transform_file_content_response(
         self,
@@ -397,7 +403,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError("VertexAIFilesConfig does not support file content retrieval")
+        raise NotImplementedError(
+            "VertexAIFilesConfig does not support file content retrieval"
+        )
 
 
 class VertexAIJsonlFilesTransformation(VertexGeminiConfig):

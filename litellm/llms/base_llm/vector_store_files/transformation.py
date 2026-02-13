@@ -58,9 +58,9 @@ class BaseVectorStoreFilesConfig(ABC):
         ...
 
     @abstractmethod
-    def get_vector_store_file_endpoints_by_type(self) -> Dict[
-        str, Tuple[Tuple[str, str], ...]
-    ]:
+    def get_vector_store_file_endpoints_by_type(
+        self,
+    ) -> Dict[str, Tuple[Tuple[str, str], ...]]:
         ...
 
     @abstractmethod

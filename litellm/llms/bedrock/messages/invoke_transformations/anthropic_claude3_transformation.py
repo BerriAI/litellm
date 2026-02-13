@@ -424,7 +424,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
         # ------------------------------------------------------------------------------
-    
+
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
 

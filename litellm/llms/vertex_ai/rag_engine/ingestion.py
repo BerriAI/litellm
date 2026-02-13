@@ -79,10 +79,9 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             )
 
         # GCP config
-        self.vertex_project = (
-            self.vector_store_config.get("vertex_project")
-            or get_secret_str("VERTEXAI_PROJECT")
-        )
+        self.vertex_project = self.vector_store_config.get(
+            "vertex_project"
+        ) or get_secret_str("VERTEXAI_PROJECT")
         self.vertex_location = (
             self.vector_store_config.get("vertex_location")
             or get_secret_str("VERTEXAI_LOCATION")
@@ -91,9 +90,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         self.vertex_credentials = self.vector_store_config.get("vertex_credentials")
 
         # GCS bucket for file uploads
-        self.gcs_bucket = (
-            self.vector_store_config.get("gcs_bucket")
-            or os.environ.get("GCS_BUCKET_NAME")
+        self.gcs_bucket = self.vector_store_config.get("gcs_bucket") or os.environ.get(
+            "GCS_BUCKET_NAME"
         )
         if not self.gcs_bucket:
             raise ValueError(
@@ -312,4 +310,3 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             raise RuntimeError(f"Failed to import file into RAG corpus: {e}") from e
 
         return str(self.corpus_id), gcs_uri
-

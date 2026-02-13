@@ -408,7 +408,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 litellm_params=litellm_params,
             )
             if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
-                raise ValueError("Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI")
+                raise ValueError(
+                    "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
+                )
             ## LOGGING
             logging_obj.pre_call(
                 input=data["messages"],
@@ -585,7 +587,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 litellm_params=litellm_params,
             )
             if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
-                raise ValueError("Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI")
+                raise ValueError(
+                    "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
+                )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -664,13 +668,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 litellm_params=litellm_params,
             )
             if not isinstance(openai_aclient, (AsyncAzureOpenAI, AsyncOpenAI)):
-                raise ValueError("Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI")
+                raise ValueError(
+                    "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
+                )
 
             raw_response = await openai_aclient.embeddings.with_raw_response.create(
                 **data, timeout=timeout
             )
             headers = dict(raw_response.headers)
-            
+
             # Convert json.JSONDecodeError to AzureOpenAIError for two critical reasons:
             #
             # 1. ROUTER BEHAVIOR: The router relies on exception.status_code to determine cooldown logic:
@@ -688,9 +694,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             except json.JSONDecodeError as json_error:
                 raise AzureOpenAIError(
                     status_code=raw_response.status_code or 500,
-                    message=f"Failed to parse raw Azure embedding response: {str(json_error)}"
+                    message=f"Failed to parse raw Azure embedding response: {str(json_error)}",
                 ) from json_error
-            
+
             stringified_response = response.model_dump()
 
             ## LOGGING
@@ -1088,7 +1094,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout=None,
         model: Optional[str] = None,
     ) -> ImageResponse:
-
         response: Optional[dict] = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
@@ -1100,7 +1105,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             api_version: str = azure_client_params.get("api_version", "")
             # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
-                azure_client_params=azure_client_params, model=model or data.get("model", "")
+                azure_client_params=azure_client_params,
+                model=model or data.get("model", ""),
             )
 
             ## LOGGING
@@ -1193,13 +1199,17 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 and litellm_params is not None
                 and litellm_params.get("base_model", None) is not None
             ):
-                model_response._hidden_params["model"] = litellm_params.get("base_model", None)
+                model_response._hidden_params["model"] = litellm_params.get(
+                    "base_model", None
+                )
 
             # Azure image generation API doesn't support extra_body parameter
             extra_body = optional_params.pop("extra_body", {})
             flattened_params = {**optional_params, **extra_body}
-            
-            base_model = litellm_params.get("base_model", None) if litellm_params else None
+
+            base_model = (
+                litellm_params.get("base_model", None) if litellm_params else None
+            )
             data = {"model": base_model or model, "prompt": prompt, **flattened_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):

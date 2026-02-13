@@ -93,9 +93,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(
-                f"Error calling Bedrock CountTokens API: {e}"
-            )
+            verbose_logger.warning(f"Error calling Bedrock CountTokens API: {e}")
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

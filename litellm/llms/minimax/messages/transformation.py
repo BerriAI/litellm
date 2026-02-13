@@ -16,7 +16,7 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     MiniMax provides an Anthropic-compatible API at:
     - International: https://api.minimax.io/anthropic
     - China: https://api.minimaxi.com/anthropic
-    
+
     Supported models:
     - MiniMax-M2.1
     - MiniMax-M2.1-lightning
@@ -32,11 +32,7 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         """
         Get MiniMax API key from environment or parameters.
         """
-        return (
-            api_key
-            or get_secret_str("MINIMAX_API_KEY")
-            or litellm.api_key
-        )
+        return api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
 
     @staticmethod
     def get_api_base(
@@ -68,14 +64,13 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         """
         # Get the base URL (either provided or default MiniMax endpoint)
         base_url = self.get_api_base(api_base=api_base)
-        
+
         # If the base URL already includes the full path, return it
         if base_url.endswith("/v1/messages"):
             return base_url
-        
+
         # Otherwise append the messages endpoint
         if base_url.endswith("/"):
             return f"{base_url}v1/messages"
         else:
             return f"{base_url}/v1/messages"
-

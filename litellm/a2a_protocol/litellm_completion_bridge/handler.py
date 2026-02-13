@@ -50,30 +50,28 @@ class A2ACompletionBridgeHandler:
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
             custom_llm_provider=custom_llm_provider
         )
-        
+
         # If provider config exists, use it
         if a2a_provider_config is not None:
             if api_base is None:
                 raise ValueError(f"api_base is required for {custom_llm_provider}")
-            
-            verbose_logger.info(
-                f"A2A: Using provider config for {custom_llm_provider}"
-            )
-            
+
+            verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider}")
+
             response_data = await a2a_provider_config.handle_non_streaming(
                 request_id=request_id,
                 params=params,
                 api_base=api_base,
             )
-            
+
             return response_data
-        
+
         # Extract message from params
         message = params.get("message", {})
 
         # Transform A2A message to OpenAI format
-        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(
-            message
+        openai_messages = (
+            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         )
 
         # Get completion params
@@ -100,7 +98,8 @@ class A2ACompletionBridgeHandler:
         }
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
         litellm_params_to_add = {
-            k: v for k, v in litellm_params.items()
+            k: v
+            for k, v in litellm_params.items()
             if k not in ("model", "custom_llm_provider")
         }
         completion_params.update(litellm_params_to_add)
@@ -109,9 +108,11 @@ class A2ACompletionBridgeHandler:
         response = await litellm.acompletion(**completion_params)
 
         # Transform response to A2A format
-        a2a_response = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
-            response=response,
-            request_id=request_id,
+        a2a_response = (
+            A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
+                response=response,
+                request_id=request_id,
+            )
         )
 
         verbose_logger.info(f"A2A completion bridge completed: request_id={request_id}")
@@ -148,25 +149,25 @@ class A2ACompletionBridgeHandler:
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
             custom_llm_provider=custom_llm_provider
         )
-        
+
         # If provider config exists, use it
         if a2a_provider_config is not None:
             if api_base is None:
                 raise ValueError(f"api_base is required for {custom_llm_provider}")
-            
+
             verbose_logger.info(
                 f"A2A: Using provider config for {custom_llm_provider} (streaming)"
             )
-            
+
             async for chunk in a2a_provider_config.handle_streaming(
                 request_id=request_id,
                 params=params,
                 api_base=api_base,
             ):
                 yield chunk
-            
+
             return
-        
+
         # Extract message from params
         message = params.get("message", {})
 
@@ -177,8 +178,8 @@ class A2ACompletionBridgeHandler:
         )
 
         # Transform A2A message to OpenAI format
-        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(
-            message
+        openai_messages = (
+            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         )
 
         # Get completion params
@@ -205,7 +206,8 @@ class A2ACompletionBridgeHandler:
         }
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
         litellm_params_to_add = {
-            k: v for k, v in litellm_params.items()
+            k: v
+            for k, v in litellm_params.items()
             if k not in ("model", "custom_llm_provider")
         }
         completion_params.update(litellm_params_to_add)
@@ -244,9 +246,11 @@ class A2ACompletionBridgeHandler:
 
         # Emit artifact update with accumulated content
         if accumulated_text:
-            artifact_event = A2ACompletionBridgeTransformation.create_artifact_update_event(
-                ctx=ctx,
-                text=accumulated_text,
+            artifact_event = (
+                A2ACompletionBridgeTransformation.create_artifact_update_event(
+                    ctx=ctx,
+                    text=accumulated_text,
+                )
             )
             yield artifact_event
 

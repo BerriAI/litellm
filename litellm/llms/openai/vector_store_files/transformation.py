@@ -41,9 +41,9 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
             }
         }
 
-    def get_vector_store_file_endpoints_by_type(self) -> Dict[
-        str, Tuple[Tuple[str, str], ...]
-    ]:
+    def get_vector_store_file_endpoints_by_type(
+        self,
+    ) -> Dict[str, Tuple[Tuple[str, str], ...]]:
         return {
             "read": (
                 ("GET", "/vector_stores/{vector_store_id}/files"),

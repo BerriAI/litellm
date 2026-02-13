@@ -43,13 +43,13 @@ def _load_endpoints_config() -> Dict:
 def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
     """
     Create a sync SDK function from endpoint config.
-    
+
     Uses the generic container handler instead of individual handler methods.
     """
     endpoint_name = endpoint_config["name"]
     response_type = RESPONSE_TYPES.get(endpoint_config["response_type"])
     path_params = endpoint_config.get("path_params", [])
-    
+
     @client
     def endpoint_func(
         timeout: int = 600,
@@ -76,14 +76,16 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
 
             # Get provider config
             litellm_params = GenericLiteLLMParams(**kwargs)
-            container_provider_config: Optional[BaseContainerConfig] = (
-                ProviderConfigManager.get_provider_container_config(
-                    provider=litellm.LlmProviders(custom_llm_provider),
-                )
+            container_provider_config: Optional[
+                BaseContainerConfig
+            ] = ProviderConfigManager.get_provider_container_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
             )
 
             if container_provider_config is None:
-                raise ValueError(f"Container provider config not found for: {custom_llm_provider}")
+                raise ValueError(
+                    f"Container provider config not found for: {custom_llm_provider}"
+                )
 
             # Build optional params for logging
             optional_params = {k: kwargs.get(k) for k in path_params if k in kwargs}
@@ -126,7 +128,7 @@ def create_async_endpoint_function(
     endpoint_config: Dict,
 ) -> Callable:
     """Create an async SDK function that wraps the sync function."""
-    
+
     @client
     async def async_endpoint_func(
         timeout: int = 600,
@@ -176,21 +178,21 @@ def create_async_endpoint_function(
 def generate_container_endpoints() -> Dict[str, Callable]:
     """
     Generate all container endpoint functions from the JSON config.
-    
+
     Returns a dict mapping function names to their implementations.
     """
     config = _load_endpoints_config()
     endpoints = {}
-    
+
     for endpoint_config in config["endpoints"]:
         # Create sync function
         sync_func = create_sync_endpoint_function(endpoint_config)
         endpoints[endpoint_config["name"]] = sync_func
-        
+
         # Create async function
         async_func = create_async_endpoint_function(sync_func, endpoint_config)
         endpoints[endpoint_config["async_name"]] = async_func
-    
+
     return endpoints
 
 
@@ -222,5 +224,9 @@ retrieve_container_file = _generated_endpoints.get("retrieve_container_file")
 aretrieve_container_file = _generated_endpoints.get("aretrieve_container_file")
 delete_container_file = _generated_endpoints.get("delete_container_file")
 adelete_container_file = _generated_endpoints.get("adelete_container_file")
-retrieve_container_file_content = _generated_endpoints.get("retrieve_container_file_content")
-aretrieve_container_file_content = _generated_endpoints.get("aretrieve_container_file_content")
+retrieve_container_file_content = _generated_endpoints.get(
+    "retrieve_container_file_content"
+)
+aretrieve_container_file_content = _generated_endpoints.get(
+    "aretrieve_container_file_content"
+)

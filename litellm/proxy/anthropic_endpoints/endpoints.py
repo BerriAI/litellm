@@ -252,7 +252,7 @@ async def event_logging_batch(
 ):
     """
     Stubbed endpoint for Anthropic event logging batch requests.
-    
+
     This endpoint accepts event logging requests but does nothing with them.
     It exists to prevent 404 errors from Claude Code clients that send telemetry.
     """

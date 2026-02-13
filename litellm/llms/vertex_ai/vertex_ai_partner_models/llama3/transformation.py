@@ -151,12 +151,12 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     """
     Vertex AI Llama models may not include role in streaming chunk deltas.
     This handler ensures the first chunk always has role="assistant".
-    
+
     When Vertex AI returns a single chunk with both role and finish_reason (empty response),
     this handler splits it into two chunks:
     1. First chunk: role="assistant", content="", finish_reason=None
     2. Second chunk: role=None, content=None, finish_reason="stop"
-    
+
     This matches OpenAI's streaming format where the first chunk has role and
     the final chunk has finish_reason but no role.
     """
@@ -171,7 +171,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
         if not self.sent_role and result.choices:
             delta = result.choices[0].delta
             finish_reason = result.choices[0].finish_reason
-            
+
             # If this is both the first chunk AND the final chunk (has finish_reason),
             # we need to split it into two chunks to match OpenAI format
             if finish_reason is not None:
@@ -202,7 +202,9 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
             elif delta.role is None:
                 delta.role = "assistant"
             # If the first chunk has empty content, ensure it's still emitted
-            if (delta.content == "" or delta.content is None) and delta.provider_specific_fields is None:
+            if (
+                delta.content == "" or delta.content is None
+            ) and delta.provider_specific_fields is None:
                 delta.provider_specific_fields = {}
             self.sent_role = True
         return result

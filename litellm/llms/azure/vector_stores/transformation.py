@@ -14,14 +14,12 @@ class AzureOpenAIVectorStoreConfig(OpenAIVectorStoreConfig):
         return BaseAzureLLM._get_base_azure_url(
             api_base=api_base,
             litellm_params=litellm_params,
-            route="/openai/vector_stores"
+            route="/openai/vector_stores",
         )
 
-
     def validate_environment(
-        self, headers: dict,  litellm_params: Optional[GenericLiteLLMParams]
+        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers,
-            litellm_params=litellm_params
+            headers=headers, litellm_params=litellm_params
         )

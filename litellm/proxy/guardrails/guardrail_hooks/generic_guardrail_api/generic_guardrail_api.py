@@ -34,17 +34,19 @@ if TYPE_CHECKING:
 GUARDRAIL_NAME = "generic_guardrail_api"
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
-_HEADER_VALUE_ALLOWLIST = frozenset({
-    "host",
-    "accept-encoding",
-    "connection",
-    "accept",
-    "content-type",
-    "user-agent",
-    "x-stainless-*",
-    "x-litellm-*",
-    "content-length",
-})
+_HEADER_VALUE_ALLOWLIST = frozenset(
+    {
+        "host",
+        "accept-encoding",
+        "connection",
+        "accept",
+        "content-type",
+        "user-agent",
+        "x-stainless-*",
+        "x-litellm-*",
+        "content-length",
+    }
+)
 
 # Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
 _HEADER_PRESENT_PLACEHOLDER = "[present]"
@@ -313,7 +315,9 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
-        inbound_headers = _extract_inbound_headers(request_data=request_data, logging_obj=logging_obj)
+        inbound_headers = _extract_inbound_headers(
+            request_data=request_data, logging_obj=logging_obj
+        )
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(

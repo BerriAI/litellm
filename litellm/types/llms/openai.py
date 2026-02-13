@@ -55,7 +55,7 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import ( Text as ResponseText ) # type: ignore[attr-defined] # fmt: skip # isort: skip
+    from openai.types.responses.response_create_params import Text as ResponseText  # type: ignore[attr-defined] # fmt: skip # isort: skip
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -655,7 +655,9 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     filename: str
     format: str
     detail: str  # For video/image resolution control (low, medium, high, ultra_high)
-    video_metadata: Dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
+    video_metadata: Dict[
+        str, Any
+    ]  # For video-specific metadata (fps, start_offset, end_offset)
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -948,12 +950,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[Union[str, float]] = (
-        None  # Scaling factor for the learning rate
-    )
-    n_epochs: Optional[Union[str, int]] = (
-        None  # "The number of epochs to train the model for"
-    )
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ] = None  # Scaling factor for the learning rate
+    n_epochs: Optional[
+        Union[str, int]
+    ] = None  # "The number of epochs to train the model for"
 
 
 class FineTuningJobCreate(BaseModel):
@@ -980,18 +982,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[Hyperparameters] = (
-        None  # "The hyperparameters used for the fine-tuning job."
-    )
-    suffix: Optional[str] = (
-        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    )
-    validation_file: Optional[str] = (
-        None  # "The ID of an uploaded file that contains validation data."
-    )
-    integrations: Optional[List[str]] = (
-        None  # "A list of integrations to enable for your fine-tuning job."
-    )
+    hyperparameters: Optional[
+        Hyperparameters
+    ] = None  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[
+        str
+    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ] = None  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ] = None  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -1034,8 +1036,7 @@ OpenAIImageGenerationOptionalParams = Literal[
 OpenAIImageEditOptionalParams = Literal[
     "background",
     "n",
-    "mask"
-    "output_compression",
+    "mask" "output_compression",
     "output_format",
     "quality",
     "partial_images",
@@ -1044,6 +1045,7 @@ OpenAIImageEditOptionalParams = Literal[
     "style",
     "user",
 ]
+
 
 class ComputerToolParam(TypedDict, total=False):
     display_height: Required[float]
@@ -2057,7 +2059,15 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
+    "stop",
+    "content_filter",
+    "function_call",
+    "tool_calls",
+    "length",
+    "guardrail_intervened",
+    "eos",
+    "finish_reason_unspecified",
+    "malformed_function_call",  # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
 ]
 
 

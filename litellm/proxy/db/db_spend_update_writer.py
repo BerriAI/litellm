@@ -13,7 +13,17 @@ import random
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+    cast,
+    overload,
+)
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -124,7 +134,7 @@ class DBSpendUpdateWriter:
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
                 payload["endTime"] = payload["endTime"].isoformat()
-            
+
             if org_id is not None and org_id != "":
                 payload["organization_id"] = org_id
 
@@ -877,7 +887,7 @@ class DBSpendUpdateWriter:
                 team_id = key.split("::")[1]
                 user_id = key.split("::")[3]
                 team_memberships_to_invalidate.append((user_id, team_id))
-            
+
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -914,11 +924,13 @@ class DBSpendUpdateWriter:
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
-            
+
             # Invalidate cache for updated team memberships
             # This ensures budget checks read fresh spend data from the database
             if team_memberships_to_invalidate and proxy_logging_obj is not None:
-                user_api_key_cache = proxy_logging_obj.call_details.get("user_api_key_cache")
+                user_api_key_cache = proxy_logging_obj.call_details.get(
+                    "user_api_key_cache"
+                )
                 if user_api_key_cache is not None:
                     for user_id, team_id in team_memberships_to_invalidate:
                         cache_key = "team_membership:{}:{}".format(user_id, team_id)
@@ -1230,7 +1242,9 @@ class DBSpendUpdateWriter:
                                     ),
                                     "endpoint": transaction.get("endpoint") or "",
                                     "prompt_tokens": transaction["prompt_tokens"],
-                                    "completion_tokens": transaction["completion_tokens"],
+                                    "completion_tokens": transaction[
+                                        "completion_tokens"
+                                    ],
                                     "spend": transaction["spend"],
                                     "api_requests": transaction["api_requests"],
                                     "successful_requests": transaction[
@@ -1241,12 +1255,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data["cache_read_input_tokens"] = (
-                                        transaction.get("cache_read_input_tokens", 0)
-                                    )
+                                    common_data[
+                                        "cache_read_input_tokens"
+                                    ] = transaction.get("cache_read_input_tokens", 0)
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data["cache_creation_input_tokens"] = (
-                                        transaction.get("cache_creation_input_tokens", 0)
+                                    common_data[
+                                        "cache_creation_input_tokens"
+                                    ] = transaction.get(
+                                        "cache_creation_input_tokens", 0
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:
@@ -1289,10 +1305,14 @@ class DBSpendUpdateWriter:
                                     }
 
                                 if entity_type == "tag" and "request_id" in transaction:
-                                    update_data["request_id"] = transaction.get("request_id")
+                                    update_data["request_id"] = transaction.get(
+                                        "request_id"
+                                    )
 
                                 # Add endpoint to update_data so existing rows get their endpoint field updated
-                                update_data["endpoint"] = transaction.get("endpoint") or ""
+                                update_data["endpoint"] = (
+                                    transaction.get("endpoint") or ""
+                                )
 
                                 table.upsert(
                                     where=where_clause,
@@ -1476,7 +1496,9 @@ class DBSpendUpdateWriter:
         self,
         payload: Union[dict, SpendLogsPayload],
         prisma_client: PrismaClient,
-        type: Literal["user", "team", "org", "request_tags", "end_user", "agent"] = "user",
+        type: Literal[
+            "user", "team", "org", "request_tags", "end_user", "agent"
+        ] = "user",
     ) -> Optional[BaseDailySpendTransaction]:
         common_expected_keys = ["startTime", "api_key"]
         if type == "user":
@@ -1535,7 +1557,7 @@ class DBSpendUpdateWriter:
             endpoint = None
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
-            
+
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
@@ -1754,7 +1776,7 @@ class DBSpendUpdateWriter:
         endpoint_str = base_daily_transaction.get("endpoint") or ""
         daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyAgentSpendTransaction(
-            agent_id=payload['agent_id'], **base_daily_transaction
+            agent_id=payload["agent_id"], **base_daily_transaction
         )
         await self.daily_agent_spend_update_queue.add_update(
             update={daily_transaction_key: daily_transaction}

@@ -263,7 +263,9 @@ async def test_policy_matching(
     )
 
 
-POLICY_TEMPLATES_GITHUB_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
+POLICY_TEMPLATES_GITHUB_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
+)
 
 
 def _load_policy_templates_from_local_backup() -> list:

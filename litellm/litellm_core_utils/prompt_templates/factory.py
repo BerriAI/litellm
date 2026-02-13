@@ -1390,10 +1390,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
@@ -1701,7 +1701,9 @@ def convert_to_anthropic_tool_result(
                     anthropic_content_element=_anthropic_image_param,
                     original_content_element=content,
                 )
-                anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+                anthropic_content_list.append(
+                    cast(AnthropicMessagesImageParam, _anthropic_image_param)
+                )
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -2091,9 +2093,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[str, dict[str, Any]] = (
-                                    image_url_value
-                                )
+                                image_url_input: Union[
+                                    str, dict[str, Any]
+                                ] = image_url_value
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -2120,9 +2122,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -2160,9 +2162,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2195,7 +2197,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 "provider_specific_fields"
             )
             if isinstance(_provider_specific_fields_raw, dict):
-                _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
+                _compaction_blocks = _provider_specific_fields_raw.get(
+                    "compaction_blocks"
+                )
                 if _compaction_blocks and isinstance(_compaction_blocks, list):
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)  # type: ignore
@@ -3316,16 +3320,12 @@ def _convert_to_bedrock_tool_call_invoke(
                         #   '{"cmd":"a"}{"cmd":"b"}{"cmd":"c"}'
                         # Split them and emit one toolUse block per object.
                         # Fixes: https://github.com/BerriAI/litellm/issues/20543
-                        parsed_objects = split_concatenated_json_objects(
-                            arguments
-                        )
+                        parsed_objects = split_concatenated_json_objects(arguments)
                         if parsed_objects:
                             # First object keeps the original tool id.
                             for obj_idx, obj in enumerate(parsed_objects):
                                 block_id = (
-                                    tool_id
-                                    if obj_idx == 0
-                                    else f"{tool_id}_{obj_idx}"
+                                    tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
                                 )
                                 bedrock_tool = BedrockToolUseBlock(
                                     input=obj, name=name, toolUseId=block_id
@@ -3338,9 +3338,7 @@ def _convert_to_bedrock_tool_call_invoke(
                             if tool.get("cache_control", None) is not None:
                                 _parts_list.append(
                                     BedrockContentBlock(
-                                        cachePoint=CachePointBlock(
-                                            type="default"
-                                        )
+                                        cachePoint=CachePointBlock(type="default")
                                     )
                                 )
                             continue
@@ -4093,7 +4091,9 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
 
-            assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+            assistant_content = _deduplicate_bedrock_content_blocks(
+                assistant_content, "toolUse"
+            )
 
             if assistant_content:
                 contents.append(
@@ -4409,7 +4409,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             # AWS Bedrock doesn't allow empty or whitespace-only text content
                             # Skip completely empty strings to avoid blank content blocks
                             if element.get("text", "").strip():
-                                assistants_part = BedrockContentBlock(text=element["text"])
+                                assistants_part = BedrockContentBlock(
+                                    text=element["text"]
+                                )
                                 assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
@@ -4435,7 +4437,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 # Skip completely empty strings to avoid blank content blocks
                 if _assistant_content.strip():
-                    assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                    assistant_content.append(
+                        BedrockContentBlock(text=_assistant_content)
+                    )
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -4452,7 +4456,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
             msg_i += 1
 
-        assistant_content = _deduplicate_bedrock_content_blocks(assistant_content, "toolUse")
+        assistant_content = _deduplicate_bedrock_content_blocks(
+            assistant_content, "toolUse"
+        )
 
         if assistant_content:
             contents.append(
@@ -4516,18 +4522,18 @@ def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
 def _is_bedrock_tool_block(tool: dict) -> bool:
     """
     Check if a tool is already a BedrockToolBlock.
-    
+
     BedrockToolBlock has one of: systemTool, toolSpec, or cachePoint.
     This is used to detect tools that are already in Bedrock format
     (e.g., systemTool for Nova grounding) vs OpenAI-style function tools
     that need transformation.
-    
+
     Args:
         tool: The tool dict to check
-        
+
     Returns:
         True if the tool is already a BedrockToolBlock, False otherwise
-        
+
     Examples:
         >>> _is_bedrock_tool_block({"systemTool": {"name": "nova_grounding"}})
         True

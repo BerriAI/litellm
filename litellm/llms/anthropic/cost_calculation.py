@@ -23,15 +23,19 @@ def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     model_with_prefix = model
-    
+
     # First, prepend inference_geo if present
-    if hasattr(usage, "inference_geo") and usage.inference_geo and usage.inference_geo.lower() not in ["global", "not_available"]:
+    if (
+        hasattr(usage, "inference_geo")
+        and usage.inference_geo
+        and usage.inference_geo.lower() not in ["global", "not_available"]
+    ):
         model_with_prefix = f"{usage.inference_geo}/{model_with_prefix}"
-    
+
     # Then, prepend speed if it's "fast"
     if hasattr(usage, "speed") and usage.speed == "fast":
         model_with_prefix = f"fast/{model_with_prefix}"
-    
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model_with_prefix, usage=usage, custom_llm_provider="anthropic"
     )

@@ -201,7 +201,9 @@ class VertexBase:
     ) -> str:
         if api_base:
             return api_base
-        return get_vertex_base_url(vertex_location or self.get_default_vertex_location())
+        return get_vertex_base_url(
+            vertex_location or self.get_default_vertex_location()
+        )
 
     @staticmethod
     def create_vertex_url(

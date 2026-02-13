@@ -97,7 +97,7 @@ async def new_tag(
     - description: Optional[str] - Description of what this tag represents
     - models: List[str] - List of either 'model_id' or 'model_name' allowed for this tag
     - budget_id: Optional[str] - The id for a budget (tpm/rpm/max budget) for the tag
-    
+
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
     - tpm_limit: Optional[int] - Max tpm limit for tag
@@ -209,7 +209,7 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
         if db_model is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Model {deployment.model_info.id} not found in database"
+                detail=f"Model {deployment.model_info.id} not found in database",
             )
 
         # Prisma returns litellm_params as dict (already parsed from JSON)
@@ -253,7 +253,7 @@ async def update_tag(
     - description: Optional[str] - Updated description
     - models: List[str] - Updated list of allowed LLM models
     - budget_id: Optional[str] - The id for a budget to associate with the tag
-    
+
     ### BUDGET UPDATE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
     - tpm_limit: Optional[int] - Max tpm limit for tag
@@ -296,7 +296,7 @@ async def update_tag(
             "models": tag.models or [],
             "model_info": json.dumps(model_info),
         }
-        
+
         # Add budget_id if it changed
         if budget_id != existing_tag.budget_id:
             update_data["budget_id"] = budget_id
@@ -384,7 +384,10 @@ async def info_tag(
             }
 
             # Add budget info if available
-            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
+            if (
+                hasattr(tag_record, "litellm_budget_table")
+                and tag_record.litellm_budget_table
+            ):
                 tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
 
             requested_tags[tag_record.tag_name] = tag_dict
@@ -439,7 +442,10 @@ async def list_tags(
             }
 
             # Add budget info if available
-            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
+            if (
+                hasattr(tag_record, "litellm_budget_table")
+                and tag_record.litellm_budget_table
+            ):
                 tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
 
             list_of_tags.append(tag_dict)

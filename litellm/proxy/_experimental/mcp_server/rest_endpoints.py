@@ -438,21 +438,24 @@ if MCP_AVAILABLE:
             tool_arguments = data.get("arguments")
 
             proxy_base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-            data, logging_obj = (
-                await proxy_base_llm_response_processor.common_processing_pre_call_logic(
-                    request=request,
-                    user_api_key_dict=user_api_key_dict,
-                    proxy_config=proxy_config,
-                    route_type=CallTypes.call_mcp_tool.value,
-                    proxy_logging_obj=proxy_logging_obj,
-                    general_settings=general_settings,
-                )
+            (
+                data,
+                logging_obj,
+            ) = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=proxy_config,
+                route_type=CallTypes.call_mcp_tool.value,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
             )
 
             # Extract MCP auth headers from request and add to data dict
-            mcp_auth_header, mcp_server_auth_headers, raw_headers_from_request = (
-                _extract_mcp_headers_from_request(request, MCPRequestHandler)
-            )
+            (
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                raw_headers_from_request,
+            ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
             if mcp_auth_header:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
@@ -541,7 +544,9 @@ if MCP_AVAILABLE:
         client_id: Optional[str] = creds.get("client_id")
         client_secret: Optional[str] = creds.get("client_secret")
         scopes_raw = creds.get("scopes")
-        scopes: Optional[List[str]] = scopes_raw if isinstance(scopes_raw, list) else None
+        scopes: Optional[List[str]] = (
+            scopes_raw if isinstance(scopes_raw, list) else None
+        )
         return client_id, client_secret, scopes
 
     async def _execute_with_mcp_client(
