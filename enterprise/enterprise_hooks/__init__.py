@@ -1,9 +1,6 @@
 from typing import Dict, Literal, Type, Union
 
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
-from litellm_enterprise.proxy.hooks.managed_vector_store_files import (
-    _PROXY_LiteLLMManagedVectorStoreFiles,
-)
 from litellm_enterprise.proxy.hooks.managed_vector_stores import (
     _PROXY_LiteLLMManagedVectorStores,
 )
@@ -13,7 +10,6 @@ from litellm.integrations.custom_logger import CustomLogger
 ENTERPRISE_PROXY_HOOKS: Dict[str, Type[CustomLogger]] = {
     "managed_files": _PROXY_LiteLLMManagedFiles,
     "managed_vector_stores": _PROXY_LiteLLMManagedVectorStores,
-    "managed_vector_store_files": _PROXY_LiteLLMManagedVectorStoreFiles,
 }
 
 
@@ -22,7 +18,6 @@ def get_enterprise_proxy_hook(
         Literal[
             "managed_files",
             "managed_vector_stores",
-            "managed_vector_store_files",
             "max_parallel_requests",
         ],
         str,
