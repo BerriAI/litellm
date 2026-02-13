@@ -1937,7 +1937,21 @@ class ProxyLogging:
                 data=data, llm_router=llm_router
             )
 
+            # Post-call ordering guarantee: all non-output_parse_pii guardrails run
+            # first, then output_parse_pii guardrails run last. This is intentional
+            # so request-token unmasking cannot be overwritten by later post-call
+            # guardrails (for example apply_to_output masking the response again).
+            # As a result, any post-call audit/logging guardrail that is not
+            # output_parse_pii will observe the pre-unmask response unless it opts
+            # into output_parse_pii behavior itself.
+            output_parse_callbacks = []
+            other_guardrail_callbacks = []
             for callback in guardrail_callbacks:
+                if getattr(callback, "output_parse_pii", False):
+                    output_parse_callbacks.append(callback)
+                else:
+                    other_guardrail_callbacks.append(callback)
+            for callback in other_guardrail_callbacks + output_parse_callbacks:
                 # Main - V2 Guardrails implementation
 
                 if (
