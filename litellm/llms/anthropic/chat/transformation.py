@@ -206,26 +206,36 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
-        
+
         Anthropic's output_format doesn't support certain JSON schema properties:
-        - maxItems: Not supported for array types
-        - minItems: Not supported for array types
-        
+        - maxItems/minItems: Not supported for array types
+        - minimum/maximum: Not supported for integer/number types
+        - exclusiveMinimum/exclusiveMaximum: Not supported for integer/number types
+
         This function recursively removes these unsupported fields while preserving
         all other valid schema properties.
-        
+
         Args:
             schema: The JSON schema dictionary to filter
-            
+
         Returns:
             A new dictionary with unsupported fields removed
-            
-        Related issue: https://github.com/BerriAI/litellm/issues/19444
+
+        Related issues:
+            https://github.com/BerriAI/litellm/issues/19444
+            https://github.com/BerriAI/litellm/issues/21016
         """
         if not isinstance(schema, dict):
             return schema
 
-        unsupported_fields = {"maxItems", "minItems"}
+        unsupported_fields = {
+            "maxItems",
+            "minItems",
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+        }
 
         result: Dict[str, Any] = {}
         for key, value in schema.items():

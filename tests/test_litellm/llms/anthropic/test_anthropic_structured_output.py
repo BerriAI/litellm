@@ -128,42 +128,121 @@ class TestAnthropicStructuredOutput:
             if "properties" in nested_item_schema and "tags" in nested_item_schema["properties"]:
                 assert "maxItems" not in nested_item_schema["properties"]["tags"]
 
-    def test_other_constraints_preserved(self):
+    def test_string_constraints_preserved(self):
         """
-        Test that other valid constraints are preserved.
+        Test that string constraints (maxLength, minLength) are preserved
+        since Anthropic supports these.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-        
+
         class ResponseModel(BaseModel):
             name: str = Field(max_length=100, min_length=1, description="Name")
-            age: int = Field(ge=0, le=150, description="Age")
             items: List[str] = Field(description="Items list")
-        
+
         config = AnthropicConfig()
         json_schema = config.get_json_schema_from_pydantic_object(ResponseModel)
-        
+
         response_format = {
             "type": "json_schema",
             "json_schema": json_schema["json_schema"]
         }
-        
+
         output_format = config.map_response_format_to_anthropic_output_format(
             response_format
         )
-        
+
         assert output_format is not None
         transformed_schema = output_format["schema"]
-        
+
         # String constraints should be preserved
         name_schema = transformed_schema["properties"]["name"]
         assert "maxLength" in name_schema
         assert "minLength" in name_schema
         assert name_schema["maxLength"] == 100
         assert name_schema["minLength"] == 1
-        
-        # Number constraints should be preserved
+
+    def test_numeric_ge_le_constraints_filtered(self):
+        """
+        Test that ge/le constraints (minimum/maximum) are filtered out.
+
+        Pydantic's ge/le generate minimum/maximum in JSON schema, but Anthropic
+        rejects these with validation errors.
+
+        Related issue: https://github.com/BerriAI/litellm/issues/21016
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        class ResponseModel(BaseModel):
+            age: int = Field(ge=0, le=150, description="Age")
+            score: float = Field(ge=0.0, le=1.0, description="Score")
+
+        config = AnthropicConfig()
+        json_schema = config.get_json_schema_from_pydantic_object(ResponseModel)
+
+        # Verify Pydantic generates minimum/maximum in the raw schema
+        raw_schema = json_schema["json_schema"]["schema"]
+        assert "minimum" in raw_schema["properties"]["age"]
+        assert "maximum" in raw_schema["properties"]["age"]
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": json_schema["json_schema"]
+        }
+
+        output_format = config.map_response_format_to_anthropic_output_format(
+            response_format
+        )
+
+        assert output_format is not None
+        transformed_schema = output_format["schema"]
+
+        # minimum/maximum should be removed for Anthropic
         age_schema = transformed_schema["properties"]["age"]
-        assert "minimum" in age_schema
-        assert "maximum" in age_schema
-        assert age_schema["minimum"] == 0
-        assert age_schema["maximum"] == 150
+        assert "minimum" not in age_schema
+        assert "maximum" not in age_schema
+        # But type and description should remain
+        assert "description" in age_schema
+
+        score_schema = transformed_schema["properties"]["score"]
+        assert "minimum" not in score_schema
+        assert "maximum" not in score_schema
+
+    def test_numeric_gt_lt_constraints_filtered(self):
+        """
+        Test that gt/lt constraints (exclusiveMinimum/exclusiveMaximum) are filtered out.
+
+        Pydantic's gt/lt generate exclusiveMinimum/exclusiveMaximum in JSON schema,
+        which Anthropic also doesn't support.
+
+        Related issue: https://github.com/BerriAI/litellm/issues/21016
+        """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        class ResponseModel(BaseModel):
+            temperature: float = Field(gt=0.0, lt=2.0, description="Temperature")
+
+        config = AnthropicConfig()
+        json_schema = config.get_json_schema_from_pydantic_object(ResponseModel)
+
+        # Verify Pydantic generates exclusiveMinimum/exclusiveMaximum in raw schema
+        raw_schema = json_schema["json_schema"]["schema"]
+        assert "exclusiveMinimum" in raw_schema["properties"]["temperature"]
+        assert "exclusiveMaximum" in raw_schema["properties"]["temperature"]
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": json_schema["json_schema"]
+        }
+
+        output_format = config.map_response_format_to_anthropic_output_format(
+            response_format
+        )
+
+        assert output_format is not None
+        transformed_schema = output_format["schema"]
+
+        # exclusiveMinimum/exclusiveMaximum should be removed
+        temp_schema = transformed_schema["properties"]["temperature"]
+        assert "exclusiveMinimum" not in temp_schema
+        assert "exclusiveMaximum" not in temp_schema
+        assert "description" in temp_schema
