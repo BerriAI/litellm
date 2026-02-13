@@ -155,10 +155,14 @@ class HighflameGuardrail(CustomGuardrail):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=guardrail_json_response,
                 request_data=clean_request_data,
+            end_time = datetime.now()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=guardrail_json_response,
+                request_data=clean_request_data,
                 guardrail_status=status,
                 start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),
-                duration=(datetime.now() - start_time).total_seconds(),
+                end_time=end_time.timestamp(),
+                duration=(end_time - start_time).total_seconds(),
                 event_type=event_type,
             )
 
