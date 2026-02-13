@@ -1,12 +1,10 @@
 import React from "react";
-import { Card, Typography, Select, Table, Tag, Collapse } from "antd";
+import { Card, Typography, Select, Table, Tag, Collapse, Button } from "antd";
 import { DeleteOutlined, PlusOutlined, FileTextOutlined } from "@ant-design/icons";
-import { Button } from "@tremor/react";
 import { getCategoryYaml } from "../../networking";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
-const { Panel } = Collapse;
 
 interface ContentCategory {
   name: string;
@@ -191,10 +189,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       width: 80,
       render: (_: any, record: SelectedCategory) => (
         <Button
-          icon={DeleteOutlined}
+          icon={<DeleteOutlined />}
           onClick={() => onCategoryRemove(record.id)}
-          variant="secondary"
-          size="xs"
+          size="small"
         >
           Remove
         </Button>
@@ -244,9 +241,10 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           ))}
         </Select>
         <Button
+          type="primary"
           onClick={handleAddCategory}
           disabled={!selectedCategoryName}
-          icon={PlusOutlined}
+          icon={<PlusOutlined />}
         >
           Add
         </Button>
@@ -308,7 +306,6 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
               activeKey={expandedYamlCategories}
               onChange={(keys) => {
                 const keyArray = Array.isArray(keys) ? keys : keys ? [keys] : [];
-                const newExpanded = new Set(keyArray as string[]);
                 const oldExpanded = new Set(expandedYamlCategories);
                 
                 // Find newly expanded categories and fetch their YAML
@@ -322,44 +319,40 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                 setExpandedYamlCategories(keyArray as string[]);
               }}
               ghost
-            >
-              {selectedCategories.map((category) => (
-                <Panel
-                  header={
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <FileTextOutlined />
-                      <span>View YAML for {category.display_name}</span>
-                    </div>
-                  }
-                  key={category.category}
-                >
-                  {loadingYaml[category.category] ? (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      Loading YAML...
-                    </div>
-                  ) : categoryYaml[category.category] ? (
-                    <pre
-                      style={{
-                        background: "#f5f5f5",
-                        padding: "16px",
-                        borderRadius: "4px",
-                        overflow: "auto",
-                        maxHeight: "400px",
-                        fontSize: "12px",
-                        lineHeight: "1.5",
-                        margin: 0,
-                      }}
-                    >
-                      <code>{categoryYaml[category.category]}</code>
-                    </pre>
-                  ) : (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      YAML will load when expanded
-                    </div>
-                  )}
-                </Panel>
-              ))}
-            </Collapse>
+              items={selectedCategories.map((category) => ({
+                key: category.category,
+                label: (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <FileTextOutlined />
+                    <span>View YAML for {category.display_name}</span>
+                  </div>
+                ),
+                children: loadingYaml[category.category] ? (
+                  <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
+                    Loading YAML...
+                  </div>
+                ) : categoryYaml[category.category] ? (
+                  <pre
+                    style={{
+                      background: "#f5f5f5",
+                      padding: "16px",
+                      borderRadius: "4px",
+                      overflow: "auto",
+                      maxHeight: "400px",
+                      fontSize: "12px",
+                      lineHeight: "1.5",
+                      margin: 0,
+                    }}
+                  >
+                    <code>{categoryYaml[category.category]}</code>
+                  </pre>
+                ) : (
+                  <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
+                    YAML will load when expanded
+                  </div>
+                ),
+              }))}
+            />
           </div>
         </>
       ) : (

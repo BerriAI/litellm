@@ -2283,7 +2283,7 @@ class Router:
         item = FlowItem(
             priority=priority,  # 👈 SET PRIORITY FOR REQUEST
             request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name="gpt-3.5-turbo",  # 👈 SAME as 'Router'
+            model_name=model,  # 👈 SAME as 'Router'
         )
         ### [fin] ###
 
@@ -2325,6 +2325,10 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            # Clean up the request from the scheduler queue also before raising the timeout exception
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,
@@ -2386,6 +2390,10 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            # Clean up the request from the scheduler queue also before raising the timeout exception
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,
@@ -5039,7 +5047,7 @@ class Router:
                     else:
                         _healthy_deployments = []
                     _timeout = self._time_to_sleep_before_retry(
-                        e=original_exception,
+                        e=e,
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
                         healthy_deployments=_healthy_deployments,

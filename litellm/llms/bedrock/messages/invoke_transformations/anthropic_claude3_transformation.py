@@ -12,9 +12,6 @@ from typing import (
 
 import httpx
 
-from litellm.anthropic_beta_headers_manager import (
-    filter_and_transform_beta_headers,
-)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -249,6 +246,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.5",
             "sonnet-4-5",
             "sonnet_4_5",
+            # Opus 4.6
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
