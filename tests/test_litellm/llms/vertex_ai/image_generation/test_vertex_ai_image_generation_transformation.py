@@ -28,6 +28,11 @@ class TestVertexAIGeminiImageGenerationConfig:
         supported = self.config.get_supported_openai_params("gemini-2.5-flash-image")
         assert "n" in supported
         assert "size" in supported
+        # Native Gemini image config params should also be supported
+        assert "aspectRatio" in supported
+        assert "aspect_ratio" in supported
+        assert "imageSize" in supported
+        assert "image_size" in supported
 
     def test_map_openai_params_n(self):
         """Test mapping n parameter to candidate_count"""
@@ -55,6 +60,48 @@ class TestVertexAIGeminiImageGenerationConfig:
             non_default_params, optional_params, "gemini-2.5-flash-image", False
         )
         assert result.get("aspectRatio") == "16:9"
+
+    def test_map_openai_params_native_aspect_ratio(self):
+        """Test that native aspectRatio param passes through to optional_params.
+
+        Related issue: https://github.com/BerriAI/litellm/issues/21070
+        """
+        non_default_params = {"aspectRatio": "16:9"}
+        optional_params = {}
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, "gemini-2.5-flash-image", False
+        )
+        assert result.get("aspectRatio") == "16:9"
+
+    def test_map_openai_params_native_aspect_ratio_snake_case(self):
+        """Test that native aspect_ratio (snake_case) param passes through."""
+        non_default_params = {"aspect_ratio": "9:16"}
+        optional_params = {}
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, "gemini-2.5-flash-image", False
+        )
+        assert result.get("aspect_ratio") == "9:16"
+
+    def test_map_openai_params_native_image_size(self):
+        """Test that native imageSize param passes through to optional_params.
+
+        Related issue: https://github.com/BerriAI/litellm/issues/21070
+        """
+        non_default_params = {"imageSize": "4K"}
+        optional_params = {}
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, "gemini-3-pro-image-preview", False
+        )
+        assert result.get("imageSize") == "4K"
+
+    def test_map_openai_params_native_image_size_snake_case(self):
+        """Test that native image_size (snake_case) param passes through."""
+        non_default_params = {"image_size": "4K"}
+        optional_params = {}
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, "gemini-3-pro-image-preview", False
+        )
+        assert result.get("image_size") == "4K"
 
     def test_map_size_to_aspect_ratio(self):
         """Test size to aspect ratio mapping"""
