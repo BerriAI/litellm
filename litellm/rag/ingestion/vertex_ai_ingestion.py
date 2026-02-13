@@ -361,7 +361,6 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             "metadata": (None, json.dumps(metadata), "application/json"),
             "file": (filename, file_content, content_type or "application/octet-stream"),
         }
-        print(f"🔥files: {files}")
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 300.0},  # Longer timeout for large files
