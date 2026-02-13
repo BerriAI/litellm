@@ -1,30 +1,28 @@
-import pytest
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
-def test_anthropic_to_openai_strict_transformation():
+def test_anthropic_openai_nested_strict_schema():
+    """Verify recursive injection of additionalProperties: false in nested schemas."""
     adapter = LiteLLMAnthropicMessagesAdapter()
     
-    # Mock Anthropic output_format
-    anthropic_format = {
+    # A nested schema to test recursion
+    output_format = {
         "type": "json_schema",
         "schema": {
             "type": "object",
             "properties": {
-                "answer": {"type": "string"}
-            },
-            "required": ["answer"]
+                "user": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}}
+                }
+            }
         }
     }
     
-    # Run transformation
-    openai_format = adapter.translate_anthropic_output_format_to_openai(anthropic_format)
+    result = adapter.translate_anthropic_output_format_to_openai(output_format)
+    schema = result["json_schema"]["schema"]
     
-    # Assertions
-    assert openai_format["json_schema"]["strict"] is True
-    # Verify the fix: additionalProperties should have been injected by _ensure_strict_json_schema
-    assert "additionalProperties" in openai_format["json_schema"]["schema"]
-    assert openai_format["json_schema"]["schema"]["additionalProperties"] is False
-    print("\n✅ Success: additionalProperties: False injected into schema!")
-
-if __name__ == "__main__":
-    test_anthropic_to_openai_strict_transformation()
+    # Check root level
+    assert schema["additionalProperties"] is False
+    # Check nested object level
+    assert schema["properties"]["user"]["additionalProperties"] is False
+    print("\n✅ Success: Recursive strict schema verified for nested objects!")

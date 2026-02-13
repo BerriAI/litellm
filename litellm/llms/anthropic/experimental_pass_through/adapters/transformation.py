@@ -1,6 +1,6 @@
+import copy
 import hashlib
 import json
-import copy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -13,7 +13,6 @@ from typing import (
     Union,
     cast,
 )
-from openai.lib._pydantic import _ensure_strict_json_schema
 
 # OpenAI has a 64-character limit for function/tool names
 # Anthropic does not have this limit, so we need to truncate long names
