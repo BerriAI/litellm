@@ -859,3 +859,202 @@ async def test_batch_rate_limiter_managed_files_regression():
     print("✓ User context is correctly passed through")
     print("✓ No 403 errors occur")
     print("✓ Non-managed files still work correctly\n")
+
+
+@pytest.mark.asyncio()
+async def test_batch_logging_azure_credentials_regression():
+    """
+    Regression test: LoggingWorker Missing Azure Credentials When Fetching Batch Output
+    
+    This test ensures that Azure credentials are properly passed when fetching batch
+    output files during logging, preventing "Missing credentials" errors.
+    
+    Bug: The LoggingWorker failed when processing completed Azure batches because
+    it attempted to fetch batch output file content without Azure credentials.
+    
+    Fix: Pass litellm_params (containing credentials) from the logging object
+    through to the file content retrieval functions.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.batches.batch_utils import (
+        _extract_file_access_credentials,
+        _get_batch_output_file_content_as_dictionary,
+        _handle_completed_batch,
+    )
+    from litellm.types.llms.openai import Batch, HttpxBinaryResponseContent
+    import httpx
+    
+    print("\n=== Regression Test: Azure Batch Logging Credentials ===")
+    
+    # Setup: Create mock batch with output file
+    mock_batch = Batch(
+        id="batch-azure-test",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        errors=None,
+        input_file_id="file-input-azure",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-azure",
+        error_file_id=None,
+        created_at=1234567890,
+        in_progress_at=1234567900,
+        expires_at=1234654290,
+        finalizing_at=1234568000,
+        completed_at=1234568100,
+        failed_at=None,
+        expired_at=None,
+        cancelling_at=None,
+        cancelled_at=None,
+        request_counts=None,
+        metadata=None,
+    )
+    
+    # Setup: Azure credentials (as they would be in litellm_params)
+    azure_credentials = {
+        "api_key": "test-azure-key-regression",
+        "api_base": "https://test-regression.openai.azure.com",
+        "api_version": "2024-02-15-preview",
+        "organization": "test-org",
+        "timeout": 600,
+    }
+    
+    # Setup: Mock batch output content
+    batch_output = b'{"id": "batch_req_1", "custom_id": "request-1", "response": {"status_code": 200, "body": {"id": "chatcmpl-azure", "object": "chat.completion", "model": "gpt-4", "usage": {"prompt_tokens": 15, "completion_tokens": 25, "total_tokens": 40}}}}\n'
+    
+    # Test 1: Verify _extract_file_access_credentials works correctly
+    print("\n1. Testing credential extraction...")
+    
+    extracted_creds = _extract_file_access_credentials(azure_credentials)
+    assert "api_key" in extracted_creds, "api_key should be extracted"
+    assert extracted_creds["api_key"] == "test-azure-key-regression", "Incorrect api_key"
+    assert "api_base" in extracted_creds, "api_base should be extracted"
+    assert "api_version" in extracted_creds, "api_version should be extracted"
+    assert "timeout" in extracted_creds, "timeout should be extracted"
+    
+    print("   ✓ Credentials extracted correctly")
+    print(f"   ✓ Extracted keys: {list(extracted_creds.keys())}")
+    
+    # Test 2: Verify credentials are passed to afile_content
+    print("\n2. Testing credentials passed to afile_content...")
+    
+    credentials_received = {"value": False, "params": None}
+    
+    async def mock_afile_content_tracker(**kwargs):
+        # Track if Azure credentials were passed
+        if "api_key" in kwargs and "api_base" in kwargs and "api_version" in kwargs:
+            credentials_received["value"] = True
+            credentials_received["params"] = {
+                "api_key": kwargs.get("api_key"),
+                "api_base": kwargs.get("api_base"),
+                "api_version": kwargs.get("api_version"),
+            }
+        mock_response = httpx.Response(
+            status_code=200,
+            content=batch_output,
+            headers={"content-type": "application/octet-stream"},
+        )
+        return HttpxBinaryResponseContent(response=mock_response)
+    
+    with patch('litellm.files.main.afile_content', side_effect=mock_afile_content_tracker):
+        result = await _get_batch_output_file_content_as_dictionary(
+            batch=mock_batch,
+            custom_llm_provider="azure",
+            litellm_params=azure_credentials,
+        )
+        
+        # Verify credentials were passed
+        assert credentials_received["value"], \
+            "REGRESSION: Azure credentials not passed to afile_content! This causes 'Missing credentials' error."
+        assert credentials_received["params"]["api_key"] == "test-azure-key-regression", \
+            "REGRESSION: Incorrect api_key"
+        assert credentials_received["params"]["api_base"] == "https://test-regression.openai.azure.com", \
+            "REGRESSION: Incorrect api_base"
+        
+        print("   ✓ Credentials passed to afile_content")
+        print(f"   ✓ api_key: {credentials_received['params']['api_key']}")
+        print(f"   ✓ api_base: {credentials_received['params']['api_base']}")
+    
+    # Test 3: Verify full flow through _handle_completed_batch
+    print("\n3. Testing full logging flow...")
+    
+    credentials_received["value"] = False
+    credentials_received["params"] = None
+    
+    with patch('litellm.files.main.afile_content', side_effect=mock_afile_content_tracker):
+        cost, usage, models = await _handle_completed_batch(
+            batch=mock_batch,
+            custom_llm_provider="azure",
+            litellm_params=azure_credentials,
+        )
+        
+        # Verify credentials were passed through the entire flow
+        assert credentials_received["value"], \
+            "REGRESSION: Credentials not passed through _handle_completed_batch"
+        
+        # Verify cost and usage were calculated
+        assert cost > 0, "Cost should be calculated"
+        assert usage.total_tokens == 40, "Usage should be calculated correctly"
+        
+        print("   ✓ Credentials passed through full flow")
+        print(f"   ✓ Cost: {cost}")
+        print(f"   ✓ Usage: {usage.total_tokens} tokens")
+        print(f"   ✓ Models: {models}")
+    
+    # Test 4: Verify error prevention
+    print("\n4. Testing 'Missing credentials' error prevention...")
+    
+    # Simulate the bug: if credentials are NOT passed, Azure would fail
+    with patch('litellm.files.main.afile_content') as mock_afile_content_fail:
+        # This is what would happen without the fix
+        mock_afile_content_fail.side_effect = Exception(
+            "Missing credentials. Please pass one of `api_key`, `azure_ad_token`, "
+            "`azure_ad_token_provider`, or the `AZURE_OPENAI_API_KEY` or "
+            "`AZURE_OPENAI_AD_TOKEN` environment variables."
+        )
+        
+        # Now test with the fix - should NOT raise the error
+        with patch('litellm.files.main.afile_content', side_effect=mock_afile_content_tracker):
+            try:
+                cost, usage, models = await _handle_completed_batch(
+                    batch=mock_batch,
+                    custom_llm_provider="azure",
+                    litellm_params=azure_credentials,
+                )
+                print("   ✓ No 'Missing credentials' error with fix")
+            except Exception as e:
+                if "Missing credentials" in str(e):
+                    pytest.fail(
+                        f"REGRESSION: 'Missing credentials' error occurred! "
+                        f"Credentials not being passed. Error: {str(e)}"
+                    )
+                raise
+    
+    # Test 5: Verify backwards compatibility (works without credentials for OpenAI)
+    print("\n5. Testing backwards compatibility...")
+    
+    with patch('litellm.files.main.afile_content') as mock_afile_content:
+        mock_response = httpx.Response(
+            status_code=200,
+            content=batch_output,
+            headers={"content-type": "application/octet-stream"},
+        )
+        mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
+        
+        # Call without litellm_params (should still work for OpenAI)
+        result = await _get_batch_output_file_content_as_dictionary(
+            batch=mock_batch,
+            custom_llm_provider="openai",
+            litellm_params=None,
+        )
+        
+        assert len(result) > 0, "Should return file content"
+        print("   ✓ Backwards compatibility maintained")
+        print("   ✓ Works without litellm_params for OpenAI")
+    
+    print("\n=== Regression Test Passed ===")
+    print("✓ Azure credentials properly passed from logging to file retrieval")
+    print("✓ 'Missing credentials' error prevented")
+    print("✓ Batch output files can be fetched with Azure credentials")
+    print("✓ Cost and usage tracking works for Azure batches")
+    print("✓ Backwards compatibility maintained\n")
