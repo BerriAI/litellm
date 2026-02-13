@@ -446,6 +446,29 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def is_claude_4_5_on_bedrock(model: str) -> bool:
+    """
+    Check if the model is a Claude 4.5 model on Bedrock.
+    Claude 4.5 models support prompt caching with '5m' and '1h' TTL on Bedrock.
+    """
+    model_lower = model.lower()
+    claude_4_5_patterns = [
+        "sonnet-4.5",
+        "sonnet_4.5",
+        "sonnet-4-5",
+        "sonnet_4_5",
+        "haiku-4.5",
+        "haiku_4.5",
+        "haiku-4-5",
+        "haiku_4_5",
+        "opus-4.5",
+        "opus_4.5",
+        "opus-4-5",
+        "opus_4_5",
+    ]
+    return any(pattern in model_lower for pattern in claude_4_5_patterns)
+
+
 # Import after standalone functions to avoid circular imports
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 
@@ -815,21 +838,23 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     # If it's already a list, return it
     if isinstance(anthropic_beta_header, list):
         return anthropic_beta_header
-    
+
     # Try to parse as JSON array first (e.g., '["interleaved-thinking-2025-05-14", "claude-code-20250219"]')
     if isinstance(anthropic_beta_header, str):
         anthropic_beta_header = anthropic_beta_header.strip()
-        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
+        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith(
+            "]"
+        ):
             try:
                 parsed = json.loads(anthropic_beta_header)
                 if isinstance(parsed, list):
                     return [str(beta).strip() for beta in parsed]
             except json.JSONDecodeError:
                 pass  # Fall through to comma-separated parsing
-        
+
         # Fall back to comma-separated values
         return [beta.strip() for beta in anthropic_beta_header.split(",")]
-    
+
     return []
 
 

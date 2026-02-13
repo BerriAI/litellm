@@ -3714,6 +3714,60 @@ def test_vertex_schema_test():
     print(response)
 
 
+def test_gemini_nullable_object_tool_schema_httpx():
+    """
+    Ensure nullable object tool params preserve nested properties in Vertex schema conversion.
+    """
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+
+    tools = [{
+            "type": "function",
+            "strict": True,
+            "function": {
+                "name": "create_support_ticket",
+                "description": "Create a paid user support ticket",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["ticket_id", "customer_context"],
+                    "properties": {
+                        "ticket_id": {
+                            "type": "string",
+                            "description": "Unique identifier for the support ticket"
+                        },
+                        "customer_context": {
+                            "type": ["object", "null"],
+                            "description": "Context about the paid customer, if available",
+                            "additionalProperties": False,
+                            "required": ["user_id", "plan"],
+                            "properties": {
+                                "user_id": {
+                                    "type": "string",
+                                    "description": "Internal user identifier"
+                                },
+                                "plan": {
+                                    "type": "string",
+                                    "description": "Subscription plan name (e.g. pro, enterprise)"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }]
+
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=tools,
+        tool_choice="required",
+    )
+
+    print(response)
+
+
 def test_vertex_ai_response_id():
     """Test that litellm preserves the response ID from Vertex AI's API for non-streaming responses"""
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

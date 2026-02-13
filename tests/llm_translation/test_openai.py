@@ -519,7 +519,7 @@ async def test_openai_codex_stream(sync_mode):
     from litellm.main import stream_chunk_builder
 
     kwargs = {
-        "model": "openai/codex-mini-latest",
+        "model": "openai/gpt-5-codex-mini",
         "messages": [{"role": "user", "content": "Hey!"}],
         "stream": True,
     }
@@ -549,16 +549,16 @@ async def test_openai_codex(sync_mode):
     router = Router(
         model_list=[
             {
-                "model_name": "openai-codex-mini-latest",
+                "model_name": "openai-gpt-5-codex-mini",
                 "litellm_params": {
-                    "model": "openai/codex-mini-latest",
+                    "model": "openai/gpt-5-codex-mini",
                 },
             }
         ]
     )
 
     kwargs = {
-        "model": "openai-codex-mini-latest",
+        "model": "openai-gpt-5-codex-mini",
         "messages": [{"role": "user", "content": "Hey!"}],
     }
 

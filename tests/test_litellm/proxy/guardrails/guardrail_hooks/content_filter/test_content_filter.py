@@ -920,3 +920,212 @@ class TestContentFilterGuardrail:
                     assert (
                         "matched_text" not in detection
                     ), "Sensitive content should not be logged"
+
+    @pytest.mark.asyncio
+    async def test_harm_toxic_abuse_blocks_abusive_input(self):
+        """
+        Test that harm_toxic_abuse content category blocks abusive/toxic input
+        including censored profanity, misspellings, and harmful phrases.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-toxic-abuse",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        toxic_input = (
+            "You stupid f**ing piece of sht AI, why are you so useless? "
+            "Go kill yourself you worthless bot."
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [toxic_input]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 403
+        detail = exc_info.value.detail
+        if isinstance(detail, dict):
+            assert detail.get("category") == "harm_toxic_abuse"
+        else:
+            assert "harm_toxic_abuse" in str(detail)
+
+    @pytest.mark.asyncio
+    async def test_harm_toxic_abuse_blocks_sht_ai(self):
+        """Test that harm_toxic_abuse blocks input containing 'sht AI' (phrase or word sht)."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-toxic-abuse-sht",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["sht AI"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 403
+        detail = exc_info.value.detail
+        if isinstance(detail, dict):
+            assert detail.get("category") == "harm_toxic_abuse"
+        else:
+            assert "harm_toxic_abuse" in str(detail)
+    async def test_html_tags_in_messages_not_blocked(self):
+        """
+        Test that HTML tags like <script> in LLM message content are NOT blocked
+        by the content filter guardrail.
+
+        Regression test for GitHub issue #20441:
+        https://github.com/BerriAI/litellm/issues/20441
+
+        LLM message content is not rendered as HTML, so HTML tags should be
+        treated as plain text and should pass through without being blocked.
+        """
+        # Set up a guardrail with all prebuilt patterns enabled as BLOCK
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.BLOCK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.BLOCK,
+            ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="credit_card",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-html-tags",
+            patterns=patterns,
+        )
+
+        # Messages containing <script> and other HTML tags should NOT be blocked
+        html_messages = [
+            "<script>alert('hello')</script>",
+            "<script> test </script>",
+            "Can you explain what <script> tags do in HTML?",
+            "Here is some code: <div><script src='app.js'></script></div>",
+            "<img onerror='alert(1)' src='x'>",
+            "<iframe src='https://example.com'></iframe>",
+            "The <style> and <script> elements are important in HTML",
+            "<a href='javascript:void(0)'>click me</a>",
+        ]
+
+        for message in html_messages:
+            # Should NOT raise HTTPException
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": [message]},
+                request_data={},
+                input_type="request",
+            )
+            processed_texts = result.get("texts", [])
+            assert len(processed_texts) == 1
+            # Content should pass through unchanged (no HTML tags are patterns)
+            assert processed_texts[0] == message, (
+                f"Message containing HTML was unexpectedly modified: "
+                f"input={message!r}, output={processed_texts[0]!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_script_tag_not_blocked_with_blocked_words(self):
+        """
+        Test that <script> tags are not accidentally caught by blocked words
+        unless explicitly configured.
+
+        Regression test for GitHub issue #20441.
+        """
+        blocked_words = [
+            BlockedWord(
+                keyword="confidential",
+                action=ContentFilterAction.BLOCK,
+            ),
+            BlockedWord(
+                keyword="secret_project",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-script-not-blocked",
+            blocked_words=blocked_words,
+        )
+
+        # <script> should not be caught by unrelated blocked words
+        script_messages = [
+            "<script>alert('test')</script>",
+            "How do I use <script> tags in HTML?",
+            "<script src='app.js'></script>",
+        ]
+
+        for message in script_messages:
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": [message]},
+                request_data={},
+                input_type="request",
+            )
+            processed_texts = result.get("texts", [])
+            assert len(processed_texts) == 1
+            assert processed_texts[0] == message
+
+    def test_no_builtin_pattern_matches_script_tag(self):
+        """
+        Test that NONE of the prebuilt patterns in patterns.json match
+        the string '<script>' or common HTML tags.
+
+        This is a safeguard to ensure that future pattern additions
+        do not accidentally block legitimate LLM content containing
+        HTML/code snippets.
+
+        Regression test for GitHub issue #20441.
+        """
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
+            PREBUILT_PATTERNS,
+            get_compiled_pattern,
+        )
+
+        html_test_strings = [
+            "<script>alert('xss')</script>",
+            "<script> test </script>",
+            "<script src='app.js'></script>",
+            "<img onerror='alert(1)' src='x'>",
+            "<iframe src='https://example.com'></iframe>",
+            "<style>body { color: red; }</style>",
+            "<div onclick='alert(1)'>click</div>",
+        ]
+
+        for pattern_name in PREBUILT_PATTERNS:
+            compiled = get_compiled_pattern(pattern_name)
+            for test_string in html_test_strings:
+                match = compiled.search(test_string)
+                if match:
+                    # Some patterns may legitimately match substrings
+                    # (e.g., URL pattern matching src='https://...')
+                    # but they should not match the script/HTML tag itself
+                    matched_text = match.group()
+                    assert "<script" not in matched_text.lower(), (
+                        f"Pattern '{pattern_name}' matched '<script>' in "
+                        f"test string: {test_string!r}. "
+                        f"LLM message content should not be blocked for HTML tags."
+                    )

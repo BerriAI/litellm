@@ -24,9 +24,12 @@ async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
         print(f"userIDPInfo: {userIDPInfo}")  # noqa
 
         if userIDPInfo.id is None:
-            raise ValueError(
-                f"No ID found for user. userIDPInfo.id is None {userIDPInfo}"
-            )
+            raise ValueError(f"No ID found for user. userIDPInfo.id is None {userIDPInfo}")
+
+        # Access extra fields from the IDP response (requires GENERIC_USER_EXTRA_ATTRIBUTES env var)
+        # Example: Set GENERIC_USER_EXTRA_ATTRIBUTES="group,NTID,domain" to capture these fields
+        # extra_fields = getattr(userIDPInfo, 'extra_fields', None) or {}
+        # user_groups = extra_fields.get("group", [])
 
         # check if user exists in litellm proxy DB
         _user_info = await user_info(user_id=userIDPInfo.id)

@@ -1317,6 +1317,133 @@ async def test_delete_pass_through_endpoint_not_found():
 
 
 @pytest.mark.asyncio
+async def test_get_pass_through_endpoints_includes_config_and_db():
+    """
+    Test that get_pass_through_endpoints returns both config-defined and DB endpoints,
+    with correct is_from_config flag. Config-only endpoints have is_from_config=True,
+    DB endpoints have is_from_config=False. When same path exists in both, DB overrides.
+    """
+    from litellm.proxy._types import (
+        PassThroughEndpointResponse,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        get_pass_through_endpoints,
+    )
+
+    # Config-defined endpoints (from config file)
+    config_endpoints = [
+        {
+            "path": "/v1/rerank",
+            "target": "https://api.cohere.com/v1/rerank",
+            "headers": {"content-type": "application/json"},
+        },
+        {
+            "path": "/v1/config-only",
+            "target": "https://config.example.com/api",
+            "headers": {},
+        },
+    ]
+
+    # DB endpoints (one overlaps with config path, one is DB-only)
+    db_endpoints = [
+        {
+            "id": "db-endpoint-1",
+            "path": "/v1/rerank",  # Same as config - DB should override
+            "target": "https://db-override.com/v1/rerank",
+            "headers": {},
+            "include_subpath": False,
+        },
+        {
+            "id": "db-endpoint-2",
+            "path": "/db/only",
+            "target": "https://db-only.example.com/api",
+            "headers": {},
+            "include_subpath": False,
+        },
+    ]
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+    ):
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._get_pass_through_endpoints_from_db",
+            new_callable=AsyncMock,
+        ) as mock_get_db:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints._get_pass_through_endpoints_from_config"
+            ) as mock_get_config:
+                db_objects = [
+                    PassThroughGenericEndpoint(**ep, is_from_config=False)
+                    for ep in db_endpoints
+                ]
+                config_objects = [
+                    PassThroughGenericEndpoint(**ep, is_from_config=True)
+                    for ep in config_endpoints
+                ]
+                mock_get_db.return_value = db_objects
+                mock_get_config.return_value = config_objects
+
+                mock_user = MagicMock(spec=UserAPIKeyAuth)
+
+                result = await get_pass_through_endpoints(
+                    endpoint_id=None,
+                    user_api_key_dict=mock_user,
+                    team_id=None,
+                )
+
+    assert isinstance(result, PassThroughEndpointResponse)
+    # config_only: /v1/config-only (not in db_paths)
+    # db: /v1/rerank (overrides config), /db/only
+    # So we should have: /v1/config-only (from config) + /v1/rerank + /db/only (from db)
+    assert len(result.endpoints) == 3
+
+    # Check is_from_config values
+    by_path = {ep.path: ep for ep in result.endpoints}
+    assert by_path["/v1/config-only"].is_from_config is True
+    assert by_path["/v1/rerank"].is_from_config is False  # DB overrides
+    assert by_path["/db/only"].is_from_config is False
+
+    # Verify DB override: /v1/rerank should have DB target
+    assert by_path["/v1/rerank"].target == "https://db-override.com/v1/rerank"
+
+
+def test_get_pass_through_endpoints_from_config_skips_malformed():
+    """
+    Test that _get_pass_through_endpoints_from_config skips malformed endpoints
+    and returns only valid ones, without raising.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _get_pass_through_endpoints_from_config,
+    )
+
+    # Mix of valid and malformed config endpoints
+    config_passthrough_endpoints = [
+        {"path": "/valid/1", "target": "https://valid1.example.com"},
+        {},  # Missing required path and target
+        {"path": "/missing-target"},  # Missing required target
+        {"target": "https://example.com"},  # Missing required path
+        {"path": "/valid/2", "target": "https://valid2.example.com", "headers": {}},
+    ]
+
+    with patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints",
+        config_passthrough_endpoints,
+    ):
+        result = _get_pass_through_endpoints_from_config()
+
+    # Only the 2 valid endpoints should be returned
+    assert len(result) == 2
+    paths = {ep.path for ep in result}
+    assert "/valid/1" in paths
+    assert "/valid/2" in paths
+    for ep in result:
+        assert ep.is_from_config is True
+
+
+@pytest.mark.asyncio
 async def test_delete_pass_through_endpoint_empty_list():
     """
     Test deleting from an empty endpoint list raises HTTPException

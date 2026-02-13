@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import sys
-import pkg_resources
+
 import requests
+from packaging.requirements import Requirement
 from pathlib import Path
 import json
 from typing import Dict, List, Optional, Set, Tuple
@@ -213,7 +214,7 @@ class LicenseChecker:
         try:
             with open(requirements_file) as f:
                 requirements = [
-                    pkg_resources.Requirement.parse(line)
+                    Requirement(line.strip())
                     for line in f
                     if line.strip() and not line.startswith("#")
                 ]
@@ -225,8 +226,10 @@ class LicenseChecker:
 
         for req in requirements:
             try:
-                version = next(iter(req.specs))[1] if req.specs else None
-            except Exception:
+                version = (
+                    next(iter(req.specifier)).version if req.specifier else None
+                )
+            except StopIteration:
                 version = None
 
             if not self.check_package(req.name, version):

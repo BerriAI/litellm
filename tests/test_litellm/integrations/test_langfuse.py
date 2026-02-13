@@ -256,9 +256,22 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         Test that _log_langfuse_v2 correctly handles None values in the usage object
         by converting them to 0, preventing validation errors.
         """
-        # Reset mock call counts to ensure clean state
-        self.mock_langfuse_trace.reset_mock()
-        self.mock_langfuse_client.reset_mock()
+        # Create fresh mocks for this test to avoid state pollution from setUp's side_effect
+        # The setUp configures trace.side_effect which can interfere with return_value
+        mock_trace = MagicMock()
+        mock_generation = MagicMock()
+        mock_generation.trace_id = "test-trace-id"
+        mock_span = MagicMock()
+        mock_span.end = MagicMock()
+        
+        mock_trace.generation.return_value = mock_generation
+        mock_trace.span.return_value = mock_span
+        
+        mock_client = MagicMock()
+        mock_client.trace.return_value = mock_trace
+        
+        # Use our fresh mock client
+        self.logger.Langfuse = mock_client
         
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -294,13 +307,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             # Use fixed timestamps to avoid timing-related flakiness
             fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
             
-            # Ensure the mock trace is properly set up before the call
-            # Re-setup the trace chain to ensure it's fresh
-            self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-            self.mock_langfuse_trace.span.return_value = self.mock_langfuse_span
-            self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
-            self.logger.Langfuse = self.mock_langfuse_client
-            
             # Call the method under test
             try:
                 self.logger._log_langfuse_v2(
@@ -321,11 +327,11 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 self.fail(f"_log_langfuse_v2 raised an exception: {e}")
             
             # Verify that trace was called first
-            self.mock_langfuse_client.trace.assert_called()
+            mock_client.trace.assert_called()
             
             #  Check the arguments passed to the mocked langfuse generation call
-            self.mock_langfuse_trace.generation.assert_called_once()
-            call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
+            mock_trace.generation.assert_called_once()
+            call_args, call_kwargs = mock_trace.generation.call_args
 
             #  Inspect the usage and usage_details dictionaries
             usage_arg = call_kwargs.get("usage")

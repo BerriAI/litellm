@@ -1,21 +1,20 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { Form, Typography, Select, Modal, Tag, Steps } from "antd";
-import { Button, TextInput } from "@tremor/react";
-import {
-  guardrail_provider_map,
-  shouldRenderPIIConfigSettings,
-  shouldRenderContentFilterConfigSettings,
-  guardrailLogoMap,
-  populateGuardrailProviders,
-  populateGuardrailProviderMap,
-  getGuardrailProviders,
-} from "./guardrail_info_helpers";
-import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from "../networking";
-import PiiConfiguration from "./pii_configuration";
-import GuardrailProviderFields from "./guardrail_provider_fields";
-import GuardrailOptionalParams from "./guardrail_optional_params";
+import { Button, Form, Input, Modal, Select, Steps, Tag, Typography } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
+import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
+import {
+  getGuardrailProviders,
+  guardrail_provider_map,
+  guardrailLogoMap,
+  populateGuardrailProviderMap,
+  populateGuardrailProviders,
+  shouldRenderContentFilterConfigSettings,
+  shouldRenderPIIConfigSettings,
+} from "./guardrail_info_helpers";
+import GuardrailOptionalParams from "./guardrail_optional_params";
+import GuardrailProviderFields from "./guardrail_provider_fields";
+import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, {
   ToolPermissionConfig,
 } from "./tool_permission/ToolPermissionRulesEditor";
@@ -457,7 +456,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           label="Guardrail Name"
           rules={[{ required: true, message: "Please enter a guardrail name" }]}
         >
-          <TextInput placeholder="Enter a name for this guardrail" />
+          <Input placeholder="Enter a name for this guardrail" />
         </Form.Item>
 
         <Form.Item
@@ -547,41 +546,41 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 </div>
               </Option>
             )) || (
-              <>
-                <Option value="pre_call" label="pre_call">
-                  <div>
+                <>
+                  <Option value="pre_call" label="pre_call">
                     <div>
-                      <strong>pre_call</strong> <Tag color="green">Recommended</Tag>
+                      <div>
+                        <strong>pre_call</strong> <Tag color="green">Recommended</Tag>
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.pre_call}</div>
                     </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.pre_call}</div>
-                  </div>
-                </Option>
-                <Option value="during_call" label="during_call">
-                  <div>
+                  </Option>
+                  <Option value="during_call" label="during_call">
                     <div>
-                      <strong>during_call</strong>
+                      <div>
+                        <strong>during_call</strong>
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.during_call}</div>
                     </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.during_call}</div>
-                  </div>
-                </Option>
-                <Option value="post_call" label="post_call">
-                  <div>
+                  </Option>
+                  <Option value="post_call" label="post_call">
                     <div>
-                      <strong>post_call</strong>
+                      <div>
+                        <strong>post_call</strong>
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.post_call}</div>
                     </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.post_call}</div>
-                  </div>
-                </Option>
-                <Option value="logging_only" label="logging_only">
-                  <div>
+                  </Option>
+                  <Option value="logging_only" label="logging_only">
                     <div>
-                      <strong>logging_only</strong>
+                      <div>
+                        <strong>logging_only</strong>
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.logging_only}</div>
                     </div>
-                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.logging_only}</div>
-                  </div>
-                </Option>
-              </>
-            )}
+                  </Option>
+                </>
+              )}
           </Select>
         </Form.Item>
 
@@ -721,21 +720,21 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const renderStepButtons = () => {
     const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 4 : 2;
     const isLastStep = currentStep === totalSteps - 1;
-    
+
     return (
       <div className="flex justify-end space-x-2 mt-4">
         {currentStep > 0 && (
-          <Button variant="secondary" onClick={prevStep}>
+          <Button onClick={prevStep}>
             Previous
           </Button>
         )}
-        {!isLastStep && <Button onClick={nextStep}>Next</Button>}
+        {!isLastStep && <Button type="primary" onClick={nextStep}>Next</Button>}
         {isLastStep && (
-          <Button onClick={handleSubmit} loading={loading}>
+          <Button type="primary" onClick={handleSubmit} loading={loading}>
             Create Guardrail
           </Button>
         )}
-        <Button variant="secondary" onClick={handleClose}>
+        <Button onClick={handleClose}>
           Cancel
         </Button>
       </div>

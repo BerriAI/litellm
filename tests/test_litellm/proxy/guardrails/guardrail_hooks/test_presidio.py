@@ -6,6 +6,7 @@ Tests PII detection and masking for different message formats
 import asyncio
 import os
 import sys
+from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,8 +19,39 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
+from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
+
+
+def _make_mock_session_iterator(json_response):
+    """Create a mock _get_session_iterator that yields a session returning json_response."""
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            async def json(self):
+                return json_response
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        class MockSession:
+            def post(self, *args, **kwargs):
+                return MockResponse()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        yield MockSession()
+
+    return mock_iterator
 
 
 @pytest.fixture
@@ -889,37 +921,132 @@ async def test_analyze_text_error_dict_handling():
         output_parse_pii=False,
     )
 
-    # Mock the HTTP response to return error dict
-    class MockResponse:
-        async def json(self):
-            return {"error": "No text provided"}
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-    class MockSession:
-        def post(self, *args, **kwargs):
-            return MockResponse()
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-    with patch("aiohttp.ClientSession", return_value=MockSession()):
+    with patch.object(
+        presidio,
+        "_get_session_iterator",
+        _make_mock_session_iterator({"error": "No text provided"}),
+    ):
         result = await presidio.analyze_text(
             text="some text",
             presidio_config=None,
             request_data={},
         )
-        # Should return empty list when error dict is received
-        assert result == [], "Error dict should be handled gracefully"
+    assert result == [], "Error dict should be handled gracefully"
 
     print("✓ analyze_text error dict handling test passed")
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_string_response_handling():
+    """
+    Test that analyze_text handles string responses from Presidio API.
+
+    When Presidio returns a string (e.g. error message from websearch/hosted models),
+    should handle gracefully instead of crashing with TypeError about mapping vs str.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+    )
+
+    with patch.object(
+        presidio,
+        "_get_session_iterator",
+        _make_mock_session_iterator("Internal Server Error"),
+    ):
+        result = await presidio.analyze_text(
+            text="some text",
+            presidio_config=None,
+            request_data={},
+        )
+    assert result == [], "String response should be handled gracefully"
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_invalid_response_raises_when_block_configured():
+    """
+    When pii_entities_config has BLOCK and Presidio returns invalid response,
+    should raise GuardrailRaisedException (fail-closed) rather than silently allowing content.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK},
+    )
+
+    with patch.object(
+        presidio,
+        "_get_session_iterator",
+        _make_mock_session_iterator("Internal Server Error"),
+    ):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await presidio.analyze_text(
+                text="some text",
+                presidio_config=None,
+                request_data={},
+            )
+    assert "BLOCK" in str(exc_info.value) or "Presidio" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_invalid_response_raises_when_mask_configured():
+    """
+    When pii_entities_config has MASK and Presidio returns invalid response,
+    should raise GuardrailRaisedException (fail-closed) because PII masking is expected.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.MASK},
+    )
+
+    with patch.object(
+        presidio,
+        "_get_session_iterator",
+        _make_mock_session_iterator("Internal Server Error"),
+    ):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await presidio.analyze_text(
+                text="some text",
+                presidio_config=None,
+                request_data={},
+            )
+    assert "PII protection is configured" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_list_with_non_dict_items():
+    """
+    Test that analyze_text skips non-dict items in the result list.
+
+    When Presidio returns a list containing strings (malformed response),
+    should skip invalid items and return parsed valid ones.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+    )
+
+    json_response = [
+        {"entity_type": "PERSON", "start": 0, "end": 5, "score": 0.9},
+        "invalid_string_item",
+        {"entity_type": "EMAIL", "start": 10, "end": 25, "score": 0.85},
+    ]
+    with patch.object(
+        presidio, "_get_session_iterator", _make_mock_session_iterator(json_response)
+    ):
+        result = await presidio.analyze_text(
+            text="some text",
+            presidio_config=None,
+            request_data={},
+        )
+    assert len(result) == 2, "Should parse 2 valid dict items and skip the string"
+    assert result[0].get("entity_type") == "PERSON"
+    assert result[1].get("entity_type") == "EMAIL"
 
 
 @pytest.mark.asyncio

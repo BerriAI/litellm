@@ -341,10 +341,10 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 1
-    assert result[0].type == "tool_use"
-    assert result[0].id == "call_empty_args"
-    assert result[0].name == "test_function"
-    assert result[0].input == {}, "Empty function arguments should result in empty dict"
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "call_empty_args"
+    assert result[0]["name"] == "test_function"
+    assert result[0]["input"] == {}, "Empty function arguments should result in empty dict"
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
@@ -372,12 +372,12 @@ def test_translate_openai_content_to_anthropic_text_and_tool_calls():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 2
-    assert result[0].type == "text"
-    assert result[0].text == "Calling get_weather now."
-    assert result[1].type == "tool_use"
-    assert result[1].id == "call_weather"
-    assert result[1].name == "get_weather"
-    assert result[1].input == {"location": "Boston"}
+    assert result[0]["type"] == "text"
+    assert result[0]["text"] == "Calling get_weather now."
+    assert result[1]["type"] == "tool_use"
+    assert result[1]["id"] == "call_weather"
+    assert result[1]["name"] == "get_weather"
+    assert result[1]["input"] == {"location": "Boston"}
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
@@ -414,11 +414,11 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     anthropic_content = anthropic_response.get("content")
     assert anthropic_content is not None
     assert len(anthropic_content) == 2
-    assert cast(Any, anthropic_content[0]).type == "text"
-    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
-    assert cast(Any, anthropic_content[1]).type == "tool_use"
-    assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
-    assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
+    assert anthropic_content[0]["type"] == "text"
+    assert anthropic_content[0]["text"] == "Let me grab the current weather."
+    assert anthropic_content[1]["type"] == "tool_use"
+    assert anthropic_content[1]["id"] == "call_tool_combo"
+    assert anthropic_content[1]["input"] == {"location": "Paris"}
     assert anthropic_response.get("stop_reason") == "tool_use"
 
 
@@ -484,11 +484,11 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 2
-    assert result[0].type == "thinking"
-    assert result[0].thinking == "I need to summar"
-    assert result[0].signature == "sigsig"
-    assert result[1].type == "redacted_thinking"
-    assert result[1].data == "REDACTED"
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "I need to summar"
+    assert result[0]["signature"] == "sigsig"
+    assert result[1]["type"] == "redacted_thinking"
+    assert result[1]["data"] == "REDACTED"
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
@@ -1443,13 +1443,13 @@ def test_translate_openai_content_to_anthropic_reasoning_content_without_thinkin
 
     assert len(result) == 2
     # First block should be thinking block with reasoning_content
-    assert result[0].type == "thinking"
-    assert "Considering Letter Frequency" in result[0].thinking
-    assert "Calculating the Count" in result[0].thinking
-    assert result[0].signature is None
+    assert result[0]["type"] == "thinking"
+    assert "Considering Letter Frequency" in result[0]["thinking"]
+    assert "Calculating the Count" in result[0]["thinking"]
+    assert result[0]["signature"] is None
     # Second block should be text block with content
-    assert result[1].type == "text"
-    assert result[1].text == "There are **3** \"r\"s in the word strawberry."
+    assert result[1]["type"] == "text"
+    assert result[1]["text"] == "There are **3** \"r\"s in the word strawberry."
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without_thinking_blocks():
@@ -1522,13 +1522,13 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     assert len(anthropic_content) == 2
     
     # First block should be thinking
-    assert cast(Any, anthropic_content[0]).type == "thinking"
-    assert "Considering Letter Frequency" in cast(Any, anthropic_content[0]).thinking
-    assert cast(Any, anthropic_content[0]).signature is None
+    assert anthropic_content[0]["type"] == "thinking"
+    assert "Considering Letter Frequency" in anthropic_content[0]["thinking"]
+    assert anthropic_content[0].get("signature") is None
     
     # Second block should be text
-    assert cast(Any, anthropic_content[1]).type == "text"
-    assert cast(Any, anthropic_content[1]).text == "There are **3** \"r\"s in the word strawberry."
+    assert anthropic_content[1]["type"] == "text"
+    assert anthropic_content[1]["text"] == "There are **3** \"r\"s in the word strawberry."
     
     assert anthropic_response.get("stop_reason") == "end_turn"
 
@@ -1702,7 +1702,7 @@ def test_translate_openai_response_restores_tool_names():
     )
 
     # Find the tool_use block in the response
-    tool_use_blocks = [c for c in result["content"] if getattr(c, "type", None) == "tool_use"]
+    tool_use_blocks = [c for c in result["content"] if c.get("type") == "tool_use"]
     assert len(tool_use_blocks) == 1
     # Name should be restored to original
-    assert getattr(tool_use_blocks[0], "name", None) == original_name
+    assert tool_use_blocks[0]["name"] == original_name

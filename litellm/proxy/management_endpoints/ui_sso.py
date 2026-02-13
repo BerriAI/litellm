@@ -171,36 +171,92 @@ def process_sso_jwt_access_token(
     access_token_str: Optional[str],
     sso_jwt_handler: Optional[JWTHandler],
     result: Union[OpenID, dict, None],
+    role_mappings: Optional["RoleMappings"] = None,
 ) -> None:
     """
-    Process SSO JWT access token and extract team IDs if available.
+    Process SSO JWT access token and extract team IDs and user role if available.
 
-    This function decodes the JWT access token and extracts team IDs using the
-    sso_jwt_handler, then sets the team_ids attribute on the result object.
+    This function decodes the JWT access token and extracts team IDs and user
+    role, then sets them on the result object. Role extraction from the access
+    token is needed because some SSO providers (e.g., Keycloak) do not include
+    role claims in the UserInfo endpoint response.
 
     Args:
         access_token_str: The JWT access token string
         sso_jwt_handler: SSO-specific JWT handler for team ID extraction
-        result: The SSO result object to update with team IDs
+        result: The SSO result object to update with team IDs and role
+        role_mappings: Optional role mappings configuration for group-based role determination
     """
-    if access_token_str and sso_jwt_handler and result:
+    if access_token_str and result:
         import jwt
 
-        access_token_payload = jwt.decode(
-            access_token_str, options={"verify_signature": False}
-        )
+        try:
+            access_token_payload = jwt.decode(
+                access_token_str, options={"verify_signature": False}
+            )
+        except jwt.exceptions.DecodeError:
+            verbose_proxy_logger.debug(
+                "Access token is not a valid JWT (possibly an opaque token), skipping JWT-based extraction"
+            )
+            return
 
-        # Handle both dict and object result types
-        if isinstance(result, dict):
-            result_team_ids: Optional[List[str]] = result.get("team_ids", [])
-            if not result_team_ids:
-                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
-                result["team_ids"] = team_ids
-        else:
-            result_team_ids = getattr(result, "team_ids", []) if result else []
-            if not result_team_ids:
-                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
-                setattr(result, "team_ids", team_ids)
+        # Extract team IDs from access token if sso_jwt_handler is available
+        if sso_jwt_handler:
+            if isinstance(result, dict):
+                result_team_ids: Optional[List[str]] = result.get("team_ids", [])
+                if not result_team_ids:
+                    team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                    result["team_ids"] = team_ids
+            else:
+                result_team_ids = getattr(result, "team_ids", []) if result else []
+                if not result_team_ids:
+                    team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                    setattr(result, "team_ids", team_ids)
+
+        # Extract user role from access token if not already set from UserInfo
+        existing_role = result.get("user_role") if isinstance(result, dict) else getattr(result, "user_role", None)
+        if existing_role is None:
+            user_role: Optional[LitellmUserRoles] = None
+
+            # Try role_mappings first (group-based role determination)
+            if role_mappings is not None and role_mappings.roles:
+                group_claim = role_mappings.group_claim
+                user_groups_raw: Any = get_nested_value(access_token_payload, group_claim)
+
+                user_groups: List[str] = []
+                if isinstance(user_groups_raw, list):
+                    user_groups = [str(g) for g in user_groups_raw]
+                elif isinstance(user_groups_raw, str):
+                    user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
+                elif user_groups_raw is not None:
+                    user_groups = [str(user_groups_raw)]
+
+                if user_groups:
+                    user_role = determine_role_from_groups(user_groups, role_mappings)
+                    verbose_proxy_logger.debug(
+                        f"Determined role '{user_role}' from access token groups '{user_groups}' using role_mappings"
+                    )
+                elif role_mappings.default_role:
+                    user_role = role_mappings.default_role
+
+            # Fallback: try GENERIC_USER_ROLE_ATTRIBUTE on the access token payload
+            if user_role is None:
+                generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
+                user_role_from_token = get_nested_value(access_token_payload, generic_user_role_attribute_name)
+                if user_role_from_token is not None:
+                    user_role = get_litellm_user_role(user_role_from_token)
+                    verbose_proxy_logger.debug(
+                        f"Extracted role '{user_role}' from access token field '{generic_user_role_attribute_name}'"
+                    )
+
+            if user_role is not None:
+                if isinstance(result, dict):
+                    result["user_role"] = user_role
+                else:
+                    setattr(result, "user_role", user_role)
+                verbose_proxy_logger.debug(
+                    f"Set user_role='{user_role}' from JWT access token"
+                )
 
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
@@ -351,6 +407,8 @@ def generic_response_convertor(
 
     generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
 
+    generic_user_extra_attributes = os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
+
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
     )
@@ -423,6 +481,14 @@ def generic_response_convertor(
                     f"Found valid LitellmUserRoles '{role.value}' from SSO attribute '{generic_user_role_attribute_name}'"
                 )
 
+    # Build extra_fields dict from GENERIC_USER_EXTRA_ATTRIBUTES if specified
+    extra_fields: Optional[Dict[str, Any]] = None
+    if generic_user_extra_attributes:
+        extra_fields = {}
+        for attr_name in generic_user_extra_attributes.split(","):
+            attr_name = attr_name.strip()
+            extra_fields[attr_name] = get_nested_value(response, attr_name)
+
     return CustomOpenID(
         id=get_nested_value(response, generic_user_id_attribute_name),
         display_name=get_nested_value(
@@ -434,6 +500,7 @@ def generic_response_convertor(
         provider=get_nested_value(response, generic_provider_attribute_name),
         team_ids=all_teams,
         user_role=user_role,
+        extra_fields=extra_fields,
     )
 
 
@@ -688,7 +755,7 @@ async def get_generic_sso_response(
         )
 
         access_token_str: Optional[str] = generic_sso.access_token
-        process_sso_jwt_access_token(access_token_str, sso_jwt_handler, result)
+        process_sso_jwt_access_token(access_token_str, sso_jwt_handler, result, role_mappings=role_mappings)
 
     except Exception as e:
         verbose_proxy_logger.exception(

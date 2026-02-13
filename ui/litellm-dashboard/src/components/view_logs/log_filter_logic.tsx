@@ -8,7 +8,7 @@ import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
 
-export const FILTER_KEYS = {
+const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
@@ -96,6 +96,7 @@ export function useLogFilterLogic({
           filters[FILTER_KEYS.USER_ID] || undefined,
           filters[FILTER_KEYS.END_USER] || undefined,
           filters[FILTER_KEYS.STATUS] || undefined,
+          undefined,
           filters[FILTER_KEYS.MODEL] || undefined,
           filters[FILTER_KEYS.KEY_ALIAS] || undefined,
           filters[FILTER_KEYS.ERROR_CODE] || undefined,
