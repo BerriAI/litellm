@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
@@ -119,6 +121,7 @@ async def test_async_realtime_success():
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+    shared_context = get_shared_realtime_ssl_context()
     with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
@@ -165,6 +168,7 @@ async def test_async_realtime_url_contains_model():
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+    shared_context = get_shared_realtime_ssl_context()
     with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
         
@@ -191,10 +195,13 @@ async def test_async_realtime_url_contains_model():
         
         # Verify proper headers were set
         called_kwargs = mock_ws_connect.call_args[1]
-        assert "extra_headers" in called_kwargs
-        extra_headers = called_kwargs["extra_headers"]
-        assert extra_headers["Authorization"] == f"Bearer {api_key}"
-        assert extra_headers["OpenAI-Beta"] == "realtime=v1"
+        assert "additional_headers" in called_kwargs
+        additional_headers = called_kwargs["additional_headers"]
+        assert additional_headers["Authorization"] == f"Bearer {api_key}"
+        assert additional_headers["OpenAI-Beta"] == "realtime=v1"
+        # Verify SSL is configured (should be an SSLContext or True, not None or False)
+        assert called_kwargs["ssl"] is not None
+        assert called_kwargs["ssl"] is not False
         
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
@@ -230,6 +237,7 @@ async def test_async_realtime_uses_max_size_parameter():
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+    shared_context = get_shared_realtime_ssl_context()
     with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
         
@@ -253,8 +261,69 @@ async def test_async_realtime_uses_max_size_parameter():
         # Verify max_size is set (default None for unlimited, matching OpenAI's SDK)
         assert "max_size" in called_kwargs
         assert called_kwargs["max_size"] is None
+        # Verify SSL is configured (should be an SSLContext or True, not None or False)
+        assert called_kwargs["ssl"] is not None
+        assert called_kwargs["ssl"] is not False
         # Default should be None (unlimited) to match OpenAI's official agents SDK
         # https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
 
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_ws_url_has_no_ssl():
+    """
+    Test that when using http:// api_base (converted to ws://), the ssl argument
+    is set to None. The websockets library doesn't accept ssl argument for ws:// URIs.
+
+    This verifies the fix for: https://github.com/BerriAI/litellm/issues/19222
+    """
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+    from litellm.types.realtime import RealtimeQueryParams
+
+    handler = OpenAIRealtime()
+    api_base = "http://localhost:8113"  # Non-SSL local server
+    api_key = "test-key"
+    model = "test-model"
+    query_params: RealtimeQueryParams = {"model": model}
+
+    dummy_websocket = AsyncMock()
+    dummy_logging_obj = MagicMock()
+    mock_backend_ws = AsyncMock()
+
+    class DummyAsyncContextManager:
+        def __init__(self, value):
+            self.value = value
+        async def __aenter__(self):
+            return self.value
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
+         patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+
+        mock_streaming_instance = MagicMock()
+        mock_realtime_streaming.return_value = mock_streaming_instance
+        mock_streaming_instance.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model=model,
+            websocket=dummy_websocket,
+            logging_obj=dummy_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            query_params=query_params,
+        )
+
+        # Verify websockets.connect was called
+        mock_ws_connect.assert_called_once()
+        called_url = mock_ws_connect.call_args[0][0]
+        called_kwargs = mock_ws_connect.call_args[1]
+
+        # Verify URL was converted from http:// to ws://
+        assert called_url.startswith("ws://localhost:8113/v1/realtime?")
+        assert f"model={model}" in called_url
+
+        # Verify ssl is None for ws:// URLs (the fix for issue #19222)
+        assert called_kwargs["ssl"] is None

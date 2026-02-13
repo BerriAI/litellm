@@ -28,6 +28,41 @@ else:
 
 
 class ArizeLogger(OpenTelemetry):
+    """
+    Arize logger that sends traces to an Arize endpoint.
+
+    Creates its own dedicated TracerProvider so it can coexist with the
+    generic ``otel`` callback (or any other OTEL-based integration) without
+    fighting over the global ``opentelemetry.trace`` TracerProvider singleton.
+    """
+
+    def _init_tracing(self, tracer_provider):
+        """
+        Override to always create a *private* TracerProvider for Arize.
+
+        See ArizePhoenixLogger._init_tracing for full rationale.
+        """
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.trace import SpanKind
+
+        if tracer_provider is not None:
+            self.tracer = tracer_provider.get_tracer("litellm")
+            self.span_kind = SpanKind
+            return
+
+        provider = TracerProvider(resource=self._get_litellm_resource(self.config))
+        provider.add_span_processor(self._get_span_processor())
+        self.tracer = provider.get_tracer("litellm")
+        self.span_kind = SpanKind
+
+    def _init_otel_logger_on_litellm_proxy(self):
+        """
+        Override: Arize should NOT overwrite the proxy's
+        ``open_telemetry_logger``.  That attribute is reserved for the
+        primary ``otel`` callback which handles proxy-level parent spans.
+        """
+        pass
+
     def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
         return
@@ -48,8 +83,10 @@ class ArizeLogger(OpenTelemetry):
         Raises:
             ValueError: If required environment variables are not set.
         """
+        space_id = os.environ.get("ARIZE_SPACE_ID")
         space_key = os.environ.get("ARIZE_SPACE_KEY")
         api_key = os.environ.get("ARIZE_API_KEY")
+        project_name = os.environ.get("ARIZE_PROJECT_NAME")
 
         grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
         http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
@@ -68,10 +105,12 @@ class ArizeLogger(OpenTelemetry):
             endpoint = "https://otlp.arize.com/v1"
 
         return ArizeConfig(
+            space_id=space_id,
             space_key=space_key,
             api_key=api_key,
             protocol=protocol,
             endpoint=endpoint,
+            project_name=project_name,
         )
 
     async def async_service_success_hook(
@@ -97,13 +136,13 @@ class ArizeLogger(OpenTelemetry):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
         pass
 
-    def create_litellm_proxy_request_started_span(
-        self,
-        start_time: datetime,
-        headers: dict,
-    ):
-        """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
-        pass
+    # def create_litellm_proxy_request_started_span(
+    #     self,
+    #     start_time: datetime,
+    #     headers: dict,
+    # ):
+    #     """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
+    #     pass
 
     async def async_health_check(self):
         """
@@ -115,10 +154,10 @@ class ArizeLogger(OpenTelemetry):
         try:
             config = self.get_arize_config()
 
-            if not config.space_key:
+            if not config.space_id and not config.space_key:
                 return {
                     "status": "unhealthy",
-                    "error_message": "ARIZE_SPACE_KEY environment variable not set",
+                    "error_message": "ARIZE_SPACE_ID or ARIZE_SPACE_KEY environment variable not set",
                 }
 
             if not config.api_key:

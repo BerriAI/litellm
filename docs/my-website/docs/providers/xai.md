@@ -11,6 +11,68 @@ https://docs.x.ai/docs
 
 :::
 
+## Supported Models
+
+
+
+**Latest Release** - Grok 4.1 Fast: Optimized for high-performance agentic tool calling with 2M context and prompt caching.
+
+| Model | Context | Features |
+|-------|---------|----------|
+| `xai/grok-4-1-fast-reasoning` | 2M tokens | **Reasoning**, Function calling, Vision, Audio, Web search, Caching |
+| `xai/grok-4-1-fast-non-reasoning` | 2M tokens | Function calling, Vision, Audio, Web search, Caching |
+
+**When to use:**
+- ✅ **Reasoning model**: Complex analysis, planning, multi-step reasoning problems
+- ✅ **Non-reasoning model**: Simple queries, faster responses, lower token usage
+
+**Example:**
+```python
+from litellm import completion
+
+# With reasoning
+response = completion(
+    model="xai/grok-4-1-fast-reasoning",
+    messages=[{"role": "user", "content": "Analyze this problem step by step..."}]
+)
+
+# Without reasoning
+response = completion(
+    model="xai/grok-4-1-fast-non-reasoning",
+    messages=[{"role": "user", "content": "What's 2+2?"}]
+)
+```
+
+---
+
+### All Available Models
+
+| Model Family | Model | Context | Features |
+|--------------|-------|---------|----------|
+| **Grok 4.1** | `xai/grok-4-1-fast-reasoning` | 2M | **Reasoning**, Tools, Vision, Audio, Web search, Caching |
+| | `xai/grok-4-1-fast-non-reasoning` | 2M | Tools, Vision, Audio, Web search, Caching |
+| **Grok 4** | `xai/grok-4` | 256K | Tools, Web search |
+| | `xai/grok-4-0709` | 256K | Tools, Web search |
+| | `xai/grok-4-fast-reasoning` | 2M | **Reasoning**, Tools, Web search |
+| | `xai/grok-4-fast-non-reasoning` | 2M | Tools, Web search |
+| **Grok 3** | `xai/grok-3` | 131K | Tools, Web search |
+| | `xai/grok-3-mini` | 131K | Tools, Web search |
+| | `xai/grok-3-fast-beta` | 131K | Tools, Web search |
+| **Grok Code** | `xai/grok-code-fast` | 256K | **Reasoning**, Tools, Code generation, Caching |
+| **Grok 2** | `xai/grok-2` | 131K | Tools, **Vision** |
+| | `xai/grok-2-vision-latest` | 32K | Tools, **Vision** |
+
+**Features:**
+- **Reasoning** = Chain-of-thought reasoning with reasoning tokens
+- **Tools** = Function calling / Tool use
+- **Web search** = Live internet search
+- **Vision** = Image understanding
+- **Audio** = Audio input support
+- **Caching** = Prompt caching for cost savings
+- **Code generation** = Optimized for code tasks
+
+**Pricing:** See [xAI's pricing page](https://docs.x.ai/docs/models) for current rates.
+
 ## API Key
 ```python
 # env variable

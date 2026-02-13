@@ -582,7 +582,8 @@ def test_eks_irsa_ambient_credentials_used():
         )
         
         # Should create STS client without explicit credentials (using ambient credentials)
-        mock_boto3_client.assert_called_once_with("sts")
+        # Note: verify parameter is passed for SSL verification
+        mock_boto3_client.assert_called_once_with("sts", verify=True)
         
         # Should call assume_role
         mock_sts_client.assume_role.assert_called_once_with(
@@ -637,11 +638,13 @@ def test_explicit_credentials_used_when_provided():
         )
         
         # Should create STS client with explicit credentials
+        # Note: verify parameter is passed for SSL verification
         mock_boto3_client.assert_called_once_with(
             "sts",
             aws_access_key_id="explicit-access-key",
             aws_secret_access_key="explicit-secret-key",
             aws_session_token="assumed-session-token",
+            verify=True,
         )
         
         # Should call assume_role
@@ -701,6 +704,7 @@ def test_partial_credentials_still_use_ambient():
             aws_access_key_id="AKIAEXAMPLE",
             aws_secret_access_key=None,
             aws_session_token=None,
+            verify=True,
         )
         
         # Should still call assume_role
@@ -748,7 +752,7 @@ def test_cross_account_role_assumption():
         )
         
         # Should use ambient credentials
-        mock_boto3_client.assert_called_once_with("sts")
+        mock_boto3_client.assert_called_once_with("sts", verify=True)
         
         # Should call assume_role with cross-account role
         mock_sts_client.assume_role.assert_called_once_with(
@@ -849,29 +853,99 @@ def test_role_assumption_ttl_calculation():
         assert 3500 <= ttl <= 3600  # Allow some variance for test execution time
 
 
-def test_role_assumption_error_handling():
+def test_role_assumption_access_denied_falls_back_when_same_role():
     """
-    Test that role assumption errors are properly propagated.
+    Test that when AssumeRole fails with AccessDenied AND the caller is confirmed
+    to already be running as the target role, we fall back to ambient credentials.
     """
     base_aws_llm = BaseAWSLLM()
-    
-    # Mock the boto3 STS client to raise an exception
+
+    # Mock the boto3 STS client to raise AccessDenied
     mock_sts_client = MagicMock()
-    mock_sts_client.assume_role.side_effect = Exception("AccessDenied: User is not authorized to perform sts:AssumeRole")
-    
+    mock_sts_client.assume_role.side_effect = Exception(
+        "An error occurred (AccessDenied) when calling the AssumeRole operation: "
+        "Roles may not be assumed by root accounts."
+    )
+
+    # Mock _auth_with_env_vars to return fallback credentials
+    mock_creds = MagicMock()
+    mock_creds.access_key = "fallback-access-key"
+    mock_creds.secret_key = "fallback-secret-key"
+
     with patch("boto3.client", return_value=mock_sts_client):
-        
-        # Should raise the exception
+        with patch.object(
+            base_aws_llm, "_auth_with_env_vars", return_value=(mock_creds, None)
+        ) as mock_env_auth:
+            # _is_already_running_as_role returns True => fallback allowed
+            with patch.object(
+                base_aws_llm, "_is_already_running_as_role", return_value=True
+            ):
+                credentials, ttl = base_aws_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_session_token=None,
+                    aws_role_name="arn:aws:iam::1111111111111:role/UnauthorizedRole",
+                    aws_session_name="error-test-session",
+                )
+
+                # Should have fallen back to env vars
+                mock_env_auth.assert_called_once()
+                assert credentials.access_key == "fallback-access-key"
+
+
+def test_role_assumption_access_denied_raises_when_different_role():
+    """
+    Test that when AssumeRole fails with AccessDenied but the caller is NOT
+    the same role, the error is re-raised (genuine permission failure).
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.side_effect = Exception(
+        "An error occurred (AccessDenied) when calling the AssumeRole operation: "
+        "User is not authorized to perform sts:AssumeRole"
+    )
+
+    with patch("boto3.client", return_value=mock_sts_client):
+        # _is_already_running_as_role returns False => do NOT fallback
+        with patch.object(
+            base_aws_llm, "_is_already_running_as_role", return_value=False
+        ):
+            with pytest.raises(Exception) as exc_info:
+                base_aws_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_session_token=None,
+                    aws_role_name="arn:aws:iam::999999999999:role/CrossAccountRole",
+                    aws_session_name="error-test-session",
+                )
+
+            assert "AccessDenied" in str(exc_info.value)
+
+
+def test_role_assumption_non_access_denied_error_propagated():
+    """
+    Test that non-AccessDenied errors from AssumeRole are still propagated.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    # Mock the boto3 STS client to raise a non-AccessDenied exception
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.side_effect = Exception(
+        "An error occurred (MalformedPolicyDocument) when calling the AssumeRole operation"
+    )
+
+    with patch("boto3.client", return_value=mock_sts_client):
         with pytest.raises(Exception) as exc_info:
             base_aws_llm._auth_with_aws_role(
                 aws_access_key_id=None,
                 aws_secret_access_key=None,
                 aws_session_token=None,
-                aws_role_name="arn:aws:iam::1111111111111:role/UnauthorizedRole",
-                aws_session_name="error-test-session"
+                aws_role_name="arn:aws:iam::1111111111111:role/BadPolicyRole",
+                aws_session_name="error-test-session",
             )
-        
-        assert "AccessDenied" in str(exc_info.value)
+
+        assert "MalformedPolicyDocument" in str(exc_info.value)
 
 
 def test_multiple_role_assumptions_in_sequence():
@@ -1191,3 +1265,251 @@ def test_converse_handler_external_id_extraction():
                             assert hasattr(mock_get_credentials, 'called_kwargs')
                             assert "aws_external_id" in mock_get_credentials.called_kwargs
                             assert mock_get_credentials.called_kwargs["aws_external_id"] == "TestExternalID123"
+
+
+def test_is_already_running_as_role_irsa_same_role():
+    """Test IRSA fast path: when AWS_ROLE_ARN matches target role."""
+    base_aws_llm = BaseAWSLLM()
+
+    with patch.dict(os.environ, {
+        "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/MyRole",
+        "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/token",
+    }):
+        assert base_aws_llm._is_already_running_as_role(
+            "arn:aws:iam::123456789012:role/MyRole"
+        ) is True
+
+
+def test_is_already_running_as_role_irsa_different_role():
+    """Test IRSA fast path: when AWS_ROLE_ARN does NOT match target role."""
+    base_aws_llm = BaseAWSLLM()
+
+    with patch.dict(os.environ, {
+        "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/MyRole",
+        "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/token",
+    }):
+        assert base_aws_llm._is_already_running_as_role(
+            "arn:aws:iam::999999999999:role/OtherRole"
+        ) is False
+
+
+def test_is_already_running_as_role_ecs_task_role():
+    """Test ECS/EC2 path: GetCallerIdentity shows assumed-role matching target."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyEcsTaskRole/ecs-task-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        # Ensure no IRSA env vars
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::123456789012:role/MyEcsTaskRole"
+                ) is True
+
+
+def test_is_already_running_as_role_ecs_different_role():
+    """Test ECS/EC2 path: GetCallerIdentity shows a different role."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyEcsTaskRole/ecs-task-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::999999999999:role/DifferentRole"
+                ) is False
+
+
+def test_is_already_running_as_role_ecs_role_with_path():
+    """Test ECS path with role that has a path prefix (e.g., /service-role/MyRole)."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyEcsTaskRole/ecs-task-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                # Role ARN with path
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::123456789012:role/service-role/MyEcsTaskRole"
+                ) is True
+
+
+def test_is_already_running_as_role_get_caller_identity_fails():
+    """Test that when GetCallerIdentity fails, we return False (don't crash)."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.side_effect = Exception("No credentials found")
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::123456789012:role/SomeRole"
+                ) is False
+
+
+def test_get_credentials_ecs_same_role_skips_assume_role():
+    """
+    End-to-end test: when running on ECS with the same role as aws_role_name,
+    get_credentials should use ambient credentials and NOT call AssumeRole.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    mock_creds = MagicMock()
+    mock_creds.access_key = "ecs-access-key"
+    mock_creds.secret_key = "ecs-secret-key"
+    mock_creds.token = "ecs-session-token"
+
+    with patch.object(
+        base_aws_llm,
+        "_is_already_running_as_role",
+        return_value=True,
+    ):
+        with patch.object(
+            base_aws_llm,
+            "_auth_with_env_vars",
+            return_value=(mock_creds, None),
+        ) as mock_env_auth:
+            with patch.object(
+                base_aws_llm,
+                "_auth_with_aws_role",
+            ) as mock_role_auth:
+                credentials = base_aws_llm.get_credentials(
+                    aws_role_name="arn:aws:iam::123456789012:role/MyEcsTaskRole",
+                    aws_region_name="us-east-1",
+                )
+
+                # Should use env vars, NOT role assumption
+                mock_env_auth.assert_called_once()
+                mock_role_auth.assert_not_called()
+                assert credentials.access_key == "ecs-access-key"
+
+
+def test_parse_arn_account_and_role_name():
+    """Test the ARN parser helper for various ARN formats."""
+    parse = BaseAWSLLM._parse_arn_account_and_role_name
+
+    # Standard IAM role ARN
+    assert parse("arn:aws:iam::123456789012:role/MyRole") == (
+        "aws", "123456789012", "MyRole"
+    )
+
+    # IAM role ARN with path
+    assert parse("arn:aws:iam::123456789012:role/service-role/MyRole") == (
+        "aws", "123456789012", "MyRole"
+    )
+
+    # Assumed-role ARN (from GetCallerIdentity)
+    assert parse("arn:aws:sts::123456789012:assumed-role/MyRole/session-id") == (
+        "aws", "123456789012", "MyRole"
+    )
+
+    # China partition
+    assert parse("arn:aws-cn:iam::123456789012:role/MyRole") == (
+        "aws-cn", "123456789012", "MyRole"
+    )
+
+    # GovCloud partition
+    assert parse("arn:aws-us-gov:iam::123456789012:role/MyRole") == (
+        "aws-us-gov", "123456789012", "MyRole"
+    )
+
+    # Invalid ARNs
+    assert parse("not-an-arn") is None
+    assert parse("arn:aws:iam::123456789012:user/MyUser") is None
+    assert parse("") is None
+
+
+def test_is_already_running_as_role_cross_account_same_name():
+    """
+    Test that same role NAME in different accounts does NOT match.
+    This is the cross-account false-match prevention.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    # Caller is in account 111111111111
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::111111111111:assumed-role/MyRole/session-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                # Target is same role name but in account 222222222222
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::222222222222:role/MyRole"
+                ) is False
+
+
+def test_is_already_running_as_role_cross_partition():
+    """
+    Test that same role name + account but different partition does NOT match.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyRole/session-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client):
+                # Same account and role but aws-cn partition
+                assert base_aws_llm._is_already_running_as_role(
+                    "arn:aws-cn:iam::123456789012:role/MyRole"
+                ) is False
+
+
+def test_is_already_running_as_role_invalid_target_arn():
+    """
+    Test that an unparseable target ARN returns False immediately.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    # Should return False without making any API calls
+    assert base_aws_llm._is_already_running_as_role("not-a-valid-arn") is False
+
+
+def test_is_already_running_as_role_ssl_verify_passed():
+    """
+    Test that ssl_verify parameter is correctly passed to the STS client.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/MyRole/session-id"
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+                base_aws_llm._is_already_running_as_role(
+                    "arn:aws:iam::123456789012:role/MyRole",
+                    ssl_verify="/path/to/ca-bundle.crt",
+                )
+                mock_boto3_client.assert_called_once_with(
+                    "sts", verify="/path/to/ca-bundle.crt"
+                )

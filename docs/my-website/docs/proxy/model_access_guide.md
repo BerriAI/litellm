@@ -86,3 +86,8 @@ litellm_settings:
 ```
 
 Fallbacks are done sequentially, so the first model group in the list will be tried first. If it fails, the next model group will be tried.
+
+
+## Advanced: Model Access Groups
+
+For advanced use cases, use [Model Access Groups](./model_access_groups) to dynamically group multiple models and manage access without restarting the proxy.

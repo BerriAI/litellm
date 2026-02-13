@@ -51,6 +51,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.utils import get_server_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -197,6 +198,15 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        # Check key-specific aliases
+        if (
+            isinstance(data["model"], str)
+            and user_api_key_dict.aliases
+            and isinstance(user_api_key_dict.aliases, dict)
+            and data["model"] in user_api_key_dict.aliases
+        ):
+            data["model"] = user_api_key_dict.aliases[data["model"]]
+
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
@@ -217,12 +227,6 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(
-                llm_router.aadapter_completion(**data, specific_deployment=True)
-            )
         elif llm_router is not None and llm_router.has_model_id(
             data["model"]
         ):  # model in router model list
@@ -230,9 +234,18 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
-            and llm_router.default_deployment is not None
-        ):  # model in router deployments, calling a specific deployment on the router
+            and (
+                llm_router.default_deployment is not None
+                or len(llm_router.pattern_router.patterns) > 0
+            )
+        ):  # check for wildcard routes or default deployment before checking deployment_names
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+        elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
+            llm_response = asyncio.create_task(
+                llm_router.aadapter_completion(**data, specific_deployment=True)
+            )
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
@@ -433,10 +446,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[field_name] = (
-                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                        upload_file=field_value
-                    )
+                files[
+                    field_name
+                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                    upload_file=field_value
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -521,6 +534,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                     "url": str(request.url),
                     "method": request.method,
                     "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
+                    "headers": request.headers,
                 },
             },
             "call_type": "pass_through_endpoint",
@@ -528,9 +542,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "passthrough_logging_payload": passthrough_logging_payload,
         }
 
-        logging_obj.model_call_details["passthrough_logging_payload"] = (
-            passthrough_logging_payload
-        )
+        logging_obj.model_call_details[
+            "passthrough_logging_payload"
+        ] = passthrough_logging_payload
 
         return kwargs
 
@@ -589,6 +603,7 @@ async def pass_through_request(  # noqa: PLR0915
     stream: Optional[bool] = None,
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
+    guardrails_config: Optional[dict] = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -604,8 +619,13 @@ async def pass_through_request(  # noqa: PLR0915
         query_params: The query params
         stream: Whether to stream the response
         cost_per_request: Optional field - cost per request to the target endpoint
+        custom_llm_provider: Optional field - custom LLM provider for the endpoint
+        guardrails_config: Optional field - guardrails configuration for passthrough endpoint
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
+        PassthroughGuardrailHandler,
+    )
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     #########################################################
@@ -654,6 +674,45 @@ async def pass_through_request(  # noqa: PLR0915
             )
         )
 
+        ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
+        # Passthrough endpoints are opt-in only for guardrails
+        # When enabled, collect guardrails from org/team/key levels + passthrough-specific
+        guardrails_to_run = PassthroughGuardrailHandler.collect_guardrails(
+            user_api_key_dict=user_api_key_dict,
+            passthrough_guardrails_config=guardrails_config,
+        )
+
+        # Add guardrails to metadata if any should run
+        if guardrails_to_run and len(guardrails_to_run) > 0:
+            if _parsed_body is None:
+                _parsed_body = {}
+            if "metadata" not in _parsed_body:
+                _parsed_body["metadata"] = {}
+            _parsed_body["metadata"]["guardrails"] = guardrails_to_run
+            verbose_proxy_logger.debug(
+                f"Added guardrails to passthrough request metadata: {guardrails_to_run}"
+            )
+
+        ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
+        start_time = datetime.now()
+        logging_obj = Logging(
+            model="unknown",
+            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=start_time,
+            litellm_call_id=litellm_call_id,
+            function_id="1245",
+        )
+
+        # Store passthrough guardrails config on logging_obj for field targeting
+        logging_obj.passthrough_guardrails_config = guardrails_config
+
+        # Store logging_obj in data so guardrails can access it
+        if _parsed_body is None:
+            _parsed_body = {}
+        _parsed_body["litellm_logging_obj"] = logging_obj
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -665,18 +724,6 @@ async def pass_through_request(  # noqa: PLR0915
             params={"timeout": 600},
         )
         async_client = async_client_obj.client
-
-        # create logging object
-        start_time = datetime.now()
-        logging_obj = Logging(
-            model="unknown",
-            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
-            stream=False,
-            call_type="pass_through_endpoint",
-            start_time=start_time,
-            litellm_call_id=litellm_call_id,
-            function_id="1245",
-        )
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
@@ -691,6 +738,13 @@ async def pass_through_request(  # noqa: PLR0915
             request=request,
             logging_obj=logging_obj,
         )
+
+        # Store custom_llm_provider in kwargs and logging object if provided
+        if custom_llm_provider:
+            logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+            logging_obj.model_call_details["litellm_params"] = kwargs.get(
+                "litellm_params", {}
+            )
 
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
@@ -880,6 +934,16 @@ async def pass_through_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+
+        if (
+            "model" not in request_payload
+            and _parsed_body
+            and isinstance(_parsed_body, dict)
+        ):
+            request_payload["model"] = _parsed_body.get("model", "")
+        if "custom_llm_provider" not in request_payload and custom_llm_provider:
+            request_payload["custom_llm_provider"] = custom_llm_provider
+
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -914,11 +978,26 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     """
     If tags are in the request headers, add them to the metadata
 
-    Used for google and vertex JS SDKs
+    Used for google and vertex JS SDKs, and Azure passthrough
+    Checks both 'tags' and 'x-litellm-tags' headers
     """
+    tags_to_add = []
+
+    # Check for 'tags' header first
     _tags = request.headers.get("tags")
     if _tags:
-        metadata["tags"] = _tags.split(",")
+        tags_to_add.extend([tag.strip() for tag in _tags.split(",")])
+
+    _tags = request.headers.get("x-litellm-tags")
+    if _tags:
+        tags_to_add.extend([tag.strip() for tag in _tags.split(",")])
+
+    # Only add tags key if there are tags to add
+    if tags_to_add:
+        if "tags" not in metadata:
+            metadata["tags"] = []
+        metadata["tags"].extend(tags_to_add)
+
     return metadata
 
 
@@ -1001,6 +1080,7 @@ def create_pass_through_route(
     custom_llm_provider: Optional[str] = None,
     is_streaming_request: Optional[bool] = False,
     query_params: Optional[dict] = None,
+    guardrails: Optional[Dict[str, Any]] = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1069,6 +1149,7 @@ def create_pass_through_route(
                 "forward_headers": _forward_headers,
                 "merge_query_params": _merge_query_params,
                 "cost_per_request": cost_per_request,
+                "guardrails": None,
             }
 
             if passthrough_params is not None:
@@ -1086,6 +1167,7 @@ def create_pass_through_route(
             param_cost_per_request = target_params.get(
                 "cost_per_request", cost_per_request
             )
+            param_guardrails = target_params.get("guardrails", None)
 
             # Construct the full target URL with subpath if needed
             full_target = (
@@ -1125,6 +1207,7 @@ def create_pass_through_route(
                 custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
+                guardrails_config=cast(Optional[dict], param_guardrails),
             )
 
     return endpoint_func
@@ -1369,9 +1452,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                                             )
                                             if extracted_model:
                                                 kwargs["model"] = extracted_model
-                                                kwargs["custom_llm_provider"] = (
-                                                    "vertex_ai-language-models"
-                                                )
+                                                kwargs[
+                                                    "custom_llm_provider"
+                                                ] = "vertex_ai-language-models"
                                                 # Update logging object with correct model
                                                 logging_obj.model = extracted_model
                                                 logging_obj.model_call_details[
@@ -1437,9 +1520,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                             # Update logging object with correct model
                             logging_obj.model = extracted_model
                             logging_obj.model_call_details["model"] = extracted_model
-                            logging_obj.model_call_details["custom_llm_provider"] = (
-                                "vertex_ai_language_models"
-                            )
+                            logging_obj.model_call_details[
+                                "custom_llm_provider"
+                            ] = "vertex_ai_language_models"
                             verbose_proxy_logger.debug(
                                 f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from server setup response"
                             )
@@ -1759,6 +1842,7 @@ class InitPassThroughEndpointHelpers:
         dependencies: Optional[List],
         cost_per_request: Optional[float],
         endpoint_id: str,
+        guardrails: Optional[dict] = None,
     ):
         """Add exact path route for pass-through endpoint"""
         route_key = f"{endpoint_id}:exact:{path}"
@@ -1766,10 +1850,9 @@ class InitPassThroughEndpointHelpers:
         # Check if this exact route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
-                "Skipping duplicate exact pass through endpoint: %s (already registered)",
+                "Updating duplicate exact pass through endpoint: %s (already registered)",
                 path,
             )
-            return
 
         verbose_proxy_logger.debug(
             "adding exact pass through endpoint: %s, dependencies: %s",
@@ -1778,7 +1861,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        was_added = SafeRouteAdder.add_api_route_if_not_exists(
+        SafeRouteAdder.add_api_route_if_not_exists(
             app=app,
             path=path,
             endpoint=create_pass_through_route(  # type: ignore
@@ -1789,26 +1872,27 @@ class InitPassThroughEndpointHelpers:
                 merge_query_params,
                 dependencies,
                 cost_per_request=cost_per_request,
+                guardrails=guardrails,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
 
-        # Register the route to prevent duplicates only if it was added
-        if was_added:
-            _registered_pass_through_routes[route_key] = {
-                "endpoint_id": endpoint_id,
-                "path": path,
-                "type": "exact",
-                "passthrough_params": {
-                    "target": target,
-                    "custom_headers": custom_headers,
-                    "forward_headers": forward_headers,
-                    "merge_query_params": merge_query_params,
-                    "dependencies": dependencies,
-                    "cost_per_request": cost_per_request,
-                },
-            }
+        # Always register/update the route metadata (headers, target) even if FastAPI route exists
+        _registered_pass_through_routes[route_key] = {
+            "endpoint_id": endpoint_id,
+            "path": path,
+            "type": "exact",
+            "passthrough_params": {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": forward_headers,
+                "merge_query_params": merge_query_params,
+                "dependencies": dependencies,
+                "cost_per_request": cost_per_request,
+                "guardrails": guardrails,
+            },
+        }
 
     @staticmethod
     def add_subpath_route(
@@ -1821,6 +1905,7 @@ class InitPassThroughEndpointHelpers:
         dependencies: Optional[List],
         cost_per_request: Optional[float],
         endpoint_id: str,
+        guardrails: Optional[dict] = None,
     ):
         """Add wildcard route for sub-paths"""
         wildcard_path = f"{path}/{{subpath:path}}"
@@ -1829,10 +1914,9 @@ class InitPassThroughEndpointHelpers:
         # Check if this subpath route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
-                "Skipping duplicate wildcard pass through endpoint: %s (already registered)",
+                "Updating duplicate wildcard pass through endpoint: %s (already registered)",
                 wildcard_path,
             )
-            return
 
         verbose_proxy_logger.debug(
             "adding wildcard pass through endpoint: %s, dependencies: %s",
@@ -1841,7 +1925,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        was_added = SafeRouteAdder.add_api_route_if_not_exists(
+        SafeRouteAdder.add_api_route_if_not_exists(
             app=app,
             path=wildcard_path,
             endpoint=create_pass_through_route(  # type: ignore
@@ -1853,26 +1937,27 @@ class InitPassThroughEndpointHelpers:
                 dependencies,
                 include_subpath=True,
                 cost_per_request=cost_per_request,
+                guardrails=guardrails,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
 
         # Register the route to prevent duplicates only if it was added
-        if was_added:
-            _registered_pass_through_routes[route_key] = {
-                "endpoint_id": endpoint_id,
-                "path": path,
-                "type": "subpath",
-                "passthrough_params": {
-                    "target": target,
-                    "custom_headers": custom_headers,
-                    "forward_headers": forward_headers,
-                    "merge_query_params": merge_query_params,
-                    "dependencies": dependencies,
-                    "cost_per_request": cost_per_request,
-                },
-            }
+        _registered_pass_through_routes[route_key] = {
+            "endpoint_id": endpoint_id,
+            "path": path,
+            "type": "subpath",
+            "passthrough_params": {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": forward_headers,
+                "merge_query_params": merge_query_params,
+                "dependencies": dependencies,
+                "cost_per_request": cost_per_request,
+                "guardrails": guardrails,
+            },
+        }
 
     @staticmethod
     def remove_endpoint_routes(endpoint_id: str):
@@ -1894,9 +1979,25 @@ class InitPassThroughEndpointHelpers:
         _registered_pass_through_routes.clear()
 
     @staticmethod
-    def get_registered_pass_through_endpoints_keys() -> List[str]:
+    def get_all_registered_pass_through_routes() -> List[str]:
         """Get all registered pass-through endpoints from the registry"""
         return list(_registered_pass_through_routes.keys())
+
+    @staticmethod
+    def _build_full_path_with_root(path: str) -> str:
+        """
+        Build full path by prepending server root path if needed.
+
+        Args:
+            path: The relative path to build
+
+        Returns:
+            Full path with server root prepended (if root is not "/")
+        """
+        root_path = get_server_root_path()
+        if root_path == "/":
+            return path
+        return f"{root_path}{path}"
 
     @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
@@ -1924,7 +2025,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -1942,7 +2045,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
 
                 if route_type == "exact" and route == registered_path:
                     return _registered_pass_through_routes[key]
@@ -2006,7 +2111,7 @@ async def initialize_pass_through_endpoints(
     # mark the ones that are visited in the list
     # remove the ones that are not visited from the list
     registered_pass_through_endpoints = (
-        InitPassThroughEndpointHelpers.get_registered_pass_through_endpoints_keys()
+        InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
     )
 
     visited_endpoints = set()
@@ -2047,6 +2152,9 @@ async def initialize_pass_through_endpoints(
         if _target is None:
             continue
 
+        # Get guardrails config if present
+        _guardrails = endpoint.get("guardrails", None)
+
         # Add exact path route
         verbose_proxy_logger.debug(
             "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint_id
@@ -2061,6 +2169,7 @@ async def initialize_pass_through_endpoints(
             dependencies=_dependencies,
             cost_per_request=endpoint.get("cost_per_request", None),
             endpoint_id=endpoint_id,
+            guardrails=_guardrails,
         )
 
         visited_endpoints.add(f"{endpoint_id}:exact:{_path}")
@@ -2077,6 +2186,7 @@ async def initialize_pass_through_endpoints(
                 dependencies=_dependencies,
                 cost_per_request=endpoint.get("cost_per_request", None),
                 endpoint_id=endpoint_id,
+                guardrails=_guardrails,
             )
 
             visited_endpoints.add(f"{endpoint_id}:subpath:{_path}")
@@ -2089,6 +2199,41 @@ async def initialize_pass_through_endpoints(
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
             InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
+
+
+def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:
+    """
+    Get pass-through endpoints defined in the config file.
+    These are read-only and cannot be edited via the UI.
+    Malformed endpoints are logged and skipped; they do not crash the function.
+    """
+    from pydantic import ValidationError
+
+    from litellm.proxy.proxy_server import config_passthrough_endpoints
+
+    if config_passthrough_endpoints is None or len(config_passthrough_endpoints) == 0:
+        return []
+
+    returned_endpoints: List[PassThroughGenericEndpoint] = []
+    for endpoint in config_passthrough_endpoints:
+        try:
+            if isinstance(endpoint, dict):
+                endpoint_dict = dict(endpoint)
+                endpoint_dict["is_from_config"] = True
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+            elif isinstance(endpoint, PassThroughGenericEndpoint):
+                # Create a copy with is_from_config=True
+                endpoint_dict = endpoint.model_dump()
+                endpoint_dict["is_from_config"] = True
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+        except ValidationError as e:
+            verbose_proxy_logger.warning(
+                "Skipping malformed pass-through endpoint from config: %s",
+                e,
+                exc_info=False,
+            )
+
+    return returned_endpoints
 
 
 async def _get_pass_through_endpoints_from_db(
@@ -2113,17 +2258,27 @@ async def _get_pass_through_endpoints_from_db(
 
     returned_endpoints: List[PassThroughGenericEndpoint] = []
     if endpoint_id is None:
-        # Return all endpoints
+        # Return all endpoints from DB, mark as not from config
         for endpoint in pass_through_endpoint_data:
             if isinstance(endpoint, dict):
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint))
+                endpoint_dict = dict(endpoint)
+                endpoint_dict["is_from_config"] = False
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
             elif isinstance(endpoint, PassThroughGenericEndpoint):
-                returned_endpoints.append(endpoint)
+                endpoint_dict = endpoint.model_dump()
+                endpoint_dict["is_from_config"] = False
+                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
     else:
         # Find specific endpoint by ID
         found_endpoint = _find_endpoint_by_id(pass_through_endpoint_data, endpoint_id)
         if found_endpoint is not None:
-            returned_endpoints.append(found_endpoint)
+            endpoint_dict = (
+                found_endpoint.model_dump()
+                if isinstance(found_endpoint, PassThroughGenericEndpoint)
+                else dict(found_endpoint)
+            )
+            endpoint_dict["is_from_config"] = False
+            returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
 
     return returned_endpoints
 
@@ -2202,9 +2357,24 @@ async def get_pass_through_endpoints(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    pass_through_endpoints = await _get_pass_through_endpoints_from_db(
+    # Get endpoints from DB (editable via UI)
+    db_endpoints = await _get_pass_through_endpoints_from_db(
         endpoint_id=endpoint_id, user_api_key_dict=user_api_key_dict
     )
+
+    # Get endpoints from config file (read-only, not editable via UI)
+    config_endpoints = _get_pass_through_endpoints_from_config()
+
+    # Merge: config endpoints not in DB + all DB endpoints (DB overrides config for same path)
+    db_paths = {ep.path for ep in db_endpoints}
+    config_only_endpoints = [
+        ep for ep in config_endpoints if ep.path not in db_paths
+    ]
+    if endpoint_id is not None:
+        # When filtering by endpoint_id, only return if found in DB (config endpoints use generated IDs)
+        pass_through_endpoints = db_endpoints
+    else:
+        pass_through_endpoints = config_only_endpoints + db_endpoints
 
     if team_id is not None:
         pass_through_endpoints = await _filter_endpoints_by_team_allowed_routes(
@@ -2223,6 +2393,7 @@ async def get_pass_through_endpoints(
 async def update_pass_through_endpoints(
     endpoint_id: str,
     data: PassThroughGenericEndpoint,
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -2281,7 +2452,8 @@ async def update_pass_through_endpoints(
         )
 
     # Get the update data as dict, excluding None values for partial updates
-    update_data = data.model_dump(exclude_none=True)
+    # Exclude is_from_config as it's a response-only field (computed at read time)
+    update_data = data.model_dump(exclude_none=True, exclude={"is_from_config"})
 
     # Start with existing endpoint data
     endpoint_dict = found_endpoint.model_dump()
@@ -2292,6 +2464,9 @@ async def update_pass_through_endpoints(
     # Preserve existing ID if not provided in update and endpoint has ID
     if "id" not in update_data and found_endpoint.id is not None:
         endpoint_dict["id"] = found_endpoint.id
+
+    # Remove is_from_config before saving - it's a response-only field (computed at read time)
+    endpoint_dict.pop("is_from_config", None)
 
     # Create updated endpoint object
     updated_endpoint = PassThroughGenericEndpoint(**endpoint_dict)
@@ -2313,6 +2488,37 @@ async def update_pass_through_endpoints(
         data=updated_data, user_api_key_dict=user_api_key_dict
     )
 
+    # Re-register the route with updated headers
+    _custom_headers: Optional[dict] = updated_endpoint.headers or {}
+    _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
+
+    if updated_endpoint.include_subpath:
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=request.app,
+            path=updated_endpoint.path,
+            target=updated_endpoint.target,
+            custom_headers=_custom_headers,
+            forward_headers=None,  # Defaults not available in model? assuming None logic handles it
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=updated_endpoint.cost_per_request,
+            endpoint_id=updated_endpoint.id or endpoint_id or "",
+            guardrails=getattr(updated_endpoint, "guardrails", None),
+        )
+    else:
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=request.app,
+            path=updated_endpoint.path,
+            target=updated_endpoint.target,
+            custom_headers=_custom_headers,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=updated_endpoint.cost_per_request,
+            endpoint_id=updated_endpoint.id or endpoint_id or "",
+            guardrails=getattr(updated_endpoint, "guardrails", None),
+        )
+
     return PassThroughEndpointResponse(
         endpoints=[updated_endpoint] if updated_endpoint else []
     )
@@ -2324,6 +2530,7 @@ async def update_pass_through_endpoints(
 )
 async def create_pass_through_endpoints(
     data: PassThroughGenericEndpoint,
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -2347,7 +2554,8 @@ async def create_pass_through_endpoints(
         )
 
     ## Auto-generate ID if not provided
-    data_dict = data.model_dump()
+    # Exclude is_from_config as it's a response-only field (computed at read time)
+    data_dict = data.model_dump(exclude={"is_from_config"})
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
@@ -2368,6 +2576,38 @@ async def create_pass_through_endpoints(
 
     # Return the created endpoint with the generated ID
     created_endpoint = PassThroughGenericEndpoint(**data_dict)
+
+    # Register the new route
+    _custom_headers: Optional[dict] = created_endpoint.headers or {}
+    _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
+
+    if created_endpoint.include_subpath:
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=request.app,
+            path=created_endpoint.path,
+            target=created_endpoint.target,
+            custom_headers=_custom_headers,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=created_endpoint.cost_per_request,
+            endpoint_id=created_endpoint.id or "",
+            guardrails=getattr(created_endpoint, "guardrails", None),
+        )
+    else:
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=request.app,
+            path=created_endpoint.path,
+            target=created_endpoint.target,
+            custom_headers=_custom_headers,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=created_endpoint.cost_per_request,
+            endpoint_id=created_endpoint.id or "",
+            guardrails=getattr(created_endpoint, "guardrails", None),
+        )
+
     return PassThroughEndpointResponse(endpoints=[created_endpoint])
 
 

@@ -432,3 +432,27 @@ async def test_strip_base64_recursive_redaction():
             s = json.dumps(c).lower()
             # allow "[base64_redacted]" but nothing else
             assert "base64," not in s, f"Found real base64 blob in: {s}"
+
+
+@pytest.mark.asyncio
+async def test_async_health_check_healthy(monkeypatch):
+    monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
+    monkeypatch.setattr(asyncio, "create_task", MagicMock())
+    logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
+    logger.async_send_message = AsyncMock(return_value=None)
+
+    result = await logger.async_health_check()
+    assert result["status"] == "healthy"
+    assert result.get("error_message") is None
+
+
+@pytest.mark.asyncio
+async def test_async_health_check_unhealthy(monkeypatch):
+    monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
+    monkeypatch.setattr(asyncio, "create_task", MagicMock())
+    logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
+    logger.async_send_message = AsyncMock(side_effect=Exception("boom"))
+
+    result = await logger.async_health_check()
+    assert result["status"] == "unhealthy"
+    assert "boom" in (result.get("error_message") or "")

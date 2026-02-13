@@ -341,7 +341,7 @@ async def test_get_users(prisma_client):
     # Create some test users
     test_users = [
         NewUserRequest(
-            user_id=f"test_user_{i}",
+            user_id=f"test_user_{i}_{uuid.uuid4()}",
             user_role=(
                 LitellmUserRoles.INTERNAL_USER.value
                 if i % 2 == 0
@@ -473,18 +473,41 @@ async def test_get_users_key_count(prisma_client):
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
-    # Get initial user list and select the first user
-    initial_users = await get_users(role=None, page=1, page_size=20)
+    # Create a test user with no initial keys to ensure deterministic behavior
+    test_user_id = f"test_user_key_count-{uuid.uuid4()}"
+    test_user_request = NewUserRequest(
+        user_id=test_user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        auto_create_key=False,  # Ensure we start with 0 keys
+    )
+
+    await new_user(
+        test_user_request,
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    # Get initial key count for the test user
+    initial_users = await get_users(
+        user_ids=test_user_id,
+        role=None,
+        page=1,
+        page_size=20,
+    )
     print("initial_users", initial_users)
-    assert len(initial_users["users"]) > 0, "No users found to test with"
-
+    assert len(initial_users["users"]) == 1, "Test user should be found"
     test_user = initial_users["users"][0]
+    assert test_user.user_id == test_user_id
     initial_key_count = test_user.key_count
+    assert initial_key_count == 0, f"Expected initial key count to be 0, but got {initial_key_count}"
 
-    # Create a new key for the selected user
+    # Create a new key for the test user
     new_key = await generate_key_fn(
         data=GenerateKeyRequest(
-            user_id=test_user.user_id,
+            user_id=test_user_id,
             key_alias=f"test_key_{uuid.uuid4()}",
             models=["fake-model"],
         ),
@@ -496,18 +519,25 @@ async def test_get_users_key_count(prisma_client):
     )
 
     # Get updated user list and check key count
-    updated_users = await get_users(role=None, page=1, page_size=20)
+    updated_users = await get_users(
+        user_ids=test_user_id,
+        role=None,
+        page=1,
+        page_size=20,
+    )
     print("updated_users", updated_users)
-    updated_key_count = None
-    for user in updated_users["users"]:
-        if user.user_id == test_user.user_id:
-            updated_key_count = user.key_count
-            break
+    assert len(updated_users["users"]) == 1, "Test user should still be found"
+    updated_user = updated_users["users"][0]
+    updated_key_count = updated_user.key_count
 
-    assert updated_key_count is not None, "Test user not found in updated users list"
     assert (
         updated_key_count == initial_key_count + 1
     ), f"Expected key count to increase by 1, but got {updated_key_count} (was {initial_key_count})"
+
+    # Clean up test user and keys
+    await prisma_client.db.litellm_usertable.delete(
+        where={"user_id": test_user_id}
+    )
 
 
 async def cleanup_existing_teams(prisma_client):
@@ -1061,6 +1091,7 @@ async def test_list_key_helper(prisma_client):
                 api_key="sk-1234",
                 user_id="admin",
             ),
+            litellm_changed_by=None,
         )
 
 
@@ -1181,6 +1212,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
                     api_key="sk-1234",
                     user_id="admin",
                 ),
+                litellm_changed_by=None,
             )
 
 

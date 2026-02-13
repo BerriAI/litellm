@@ -150,6 +150,111 @@ async def test_list_guardrails_v2_with_db_and_config(
 
 
 @pytest.mark.asyncio
+async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
+    """Test that sensitive litellm_params are masked for DB guardrails in list response"""
+    db_guardrail_with_secrets = {
+        "guardrail_id": "secret-db-guardrail",
+        "guardrail_name": "DB Guardrail with Secrets",
+        "litellm_params": {
+            "guardrail": "azure/text_moderations",
+            "mode": "pre_call",
+            "api_key": "sk-1234567890abcdef",
+            "api_base": "https://api.secret.example.com",
+        },
+        "guardrail_info": {"description": "Test guardrail"},
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[db_guardrail_with_secrets]
+    )
+
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = []
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails_v2()
+
+    assert len(response.guardrails) == 1
+    guardrail = response.guardrails[0]
+    litellm_params = guardrail.litellm_params
+    if isinstance(litellm_params, dict):
+        params = litellm_params
+    else:
+        params = litellm_params.model_dump() if hasattr(litellm_params, "model_dump") else dict(litellm_params)
+
+    # Sensitive keys (containing "key", "secret", "token", etc.) should be masked
+    assert params["api_key"] != "sk-1234567890abcdef"
+    assert "****" in str(params["api_key"])
+    # Non-sensitive keys should remain unchanged
+    assert params["guardrail"] == "azure/text_moderations"
+    assert params["mode"] == "pre_call"
+    assert params["api_base"] == "https://api.secret.example.com"
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mocker):
+    """Test that sensitive litellm_params are masked for in-memory/config guardrails in list response"""
+    config_guardrail_with_secrets = {
+        "guardrail_id": "secret-config-guardrail",
+        "guardrail_name": "Config Guardrail with Secrets",
+        "litellm_params": {
+            "guardrail": "bedrock",
+            "mode": "during_call",
+            "api_key": "my-secret-bedrock-key",
+            "vertex_credentials": "{sensitive_creds}",
+        },
+        "guardrail_info": {"description": "Test guardrail from config"},
+    }
+
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[]
+    )
+
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = [
+        config_guardrail_with_secrets
+    ]
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails_v2()
+
+    assert len(response.guardrails) == 1
+    guardrail = response.guardrails[0]
+    litellm_params = guardrail.litellm_params
+    if isinstance(litellm_params, dict):
+        params = litellm_params
+    else:
+        params = litellm_params.model_dump() if hasattr(litellm_params, "model_dump") else dict(litellm_params)
+
+    # Sensitive keys should be masked
+    assert params["api_key"] != "my-secret-bedrock-key"
+    assert "****" in str(params["api_key"])
+    assert params["vertex_credentials"] != "{sensitive_creds}"
+    assert "****" in str(params["vertex_credentials"])
+    # Non-sensitive keys should remain unchanged
+    assert params["guardrail"] == "bedrock"
+    assert params["mode"] == "during_call"
+
+
+@pytest.mark.asyncio
 async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
     """Test getting guardrail info from DB"""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -495,13 +600,13 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     mock_response = Mock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"action": "NONE", "outputs": []}
-    guardrail_hook.async_handler.post = AsyncMock(return_value=mock_response)
     
     test_request_data = {
         "api_key": "test-api-key-789"
     }
     
-    with patch.object(guardrail_hook, "_load_credentials") as mock_load_creds, \
+    with patch.object(guardrail_hook.async_handler, "post", AsyncMock(return_value=mock_response)), \
+         patch.object(guardrail_hook, "_load_credentials") as mock_load_creds, \
          patch.object(guardrail_hook, "convert_to_bedrock_format") as mock_convert, \
          patch.object(guardrail_hook, "get_guardrail_dynamic_request_body_params") as mock_get_params, \
          patch.object(guardrail_hook, "add_standard_logging_guardrail_information_to_request_data"), \

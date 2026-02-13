@@ -150,6 +150,251 @@ class TestOCIChatConfig:
         assert transformed_request["chatRequest"]["tools"][0]["description"] == "Get the current weather in a given location"
         assert transformed_request["chatRequest"]["tools"][0]["parameters"] is not None
 
+    def test_transform_request_dedicated_mode_with_endpoint_id(self):
+        """
+        Tests if a request with DEDICATED serving mode and explicit oci_endpoint_id is transformed correctly.
+        """
+        config = OCIChatConfig()
+        test_endpoint_id = "ocid1.generativeaiendpoint.oc1.us-chicago-1.xxxxxx"
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "oci_serving_mode": "DEDICATED",
+            "oci_endpoint_id": test_endpoint_id,
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES, # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        expected_serving_mode = {
+            "servingType": "DEDICATED",
+            "endpointId": test_endpoint_id,
+        }
+        assert transformed_request["servingMode"] == expected_serving_mode
+        assert transformed_request["compartmentId"] == TEST_COMPARTMENT_ID
+
+    def test_transform_request_dedicated_mode_without_endpoint_id(self):
+        """
+        Tests if a request with DEDICATED serving mode falls back to model name when oci_endpoint_id is not provided.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "oci_serving_mode": "DEDICATED",
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES, # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # Should use model name as endpoint ID when oci_endpoint_id is not provided
+        expected_serving_mode = {
+            "servingType": "DEDICATED",
+            "endpointId": TEST_MODEL_NAME,
+        }
+        assert transformed_request["servingMode"] == expected_serving_mode
+        assert transformed_request["compartmentId"] == TEST_COMPARTMENT_ID
+
+    def test_transform_request_on_demand_mode(self):
+        """
+        Tests if a request with ON_DEMAND serving mode uses modelId correctly.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "oci_serving_mode": "ON_DEMAND",
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES, # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        expected_serving_mode = {
+            "servingType": "ON_DEMAND",
+            "modelId": TEST_MODEL_NAME,
+        }
+        assert transformed_request["servingMode"] == expected_serving_mode
+        assert transformed_request["compartmentId"] == TEST_COMPARTMENT_ID
+
+    def test_transform_request_invalid_serving_mode(self):
+        """
+        Tests if an invalid serving mode raises an exception.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "oci_serving_mode": "INVALID_MODE",
+        }
+
+        with pytest.raises(Exception) as excinfo:
+            config.transform_request(
+                model=TEST_MODEL_NAME,
+                messages=TEST_MESSAGES, # type: ignore
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+
+        assert "must be either 'ON_DEMAND' or 'DEDICATED'" in str(excinfo.value)
+
+    def test_transform_request_dedicated_cohere_with_endpoint_id(self):
+        """
+        Tests that Cohere vendor detection works correctly with DEDICATED mode and oci_endpoint_id.
+        This is critical because the model parameter determines the API format even when using oci_endpoint_id.
+        """
+        config = OCIChatConfig()
+        cohere_model = "cohere.command-latest"
+        test_endpoint_id = "ocid1.generativeaiendpoint.oc1.us-chicago-1.xxxxxx"
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "oci_serving_mode": "DEDICATED",
+            "oci_endpoint_id": test_endpoint_id,
+        }
+
+        messages = [
+            {"role": "user", "content": "What is quantum computing?"},
+        ]
+
+        transformed_request = config.transform_request(
+            model=cohere_model,
+            messages=messages, # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify DEDICATED mode with correct endpoint ID
+        assert transformed_request["servingMode"]["servingType"] == "DEDICATED"
+        assert transformed_request["servingMode"]["endpointId"] == test_endpoint_id
+
+        # Verify Cohere API format is used (not GENERIC)
+        assert transformed_request["chatRequest"]["apiFormat"] == "COHERE"
+
+        # Verify Cohere-specific request structure
+        assert "message" in transformed_request["chatRequest"]  # Cohere uses "message"
+        assert "chatHistory" in transformed_request["chatRequest"]  # Cohere uses "chatHistory"
+        assert "messages" not in transformed_request["chatRequest"]  # Generic uses "messages"
+
+        # Verify the message content
+        assert transformed_request["chatRequest"]["message"] == "What is quantum computing?"
+
+    def test_transform_request_response_format_json_object(self):
+        """
+        Tests that response_format type 'json_object' is uppercased to 'JSON_OBJECT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json_object"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_request_response_format_text(self):
+        """
+        Tests that response_format type 'text' is uppercased to 'TEXT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "text"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "TEXT"
+
+    def test_transform_request_response_format_json_shorthand(self):
+        """
+        Tests that response_format type 'json' is mapped to 'JSON_OBJECT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_response_without_token_details(self):
+        """
+        Tests that responses missing completionTokensDetails and promptTokensDetails
+        are handled correctly (fields are optional).
+        """
+        config = OCIChatConfig()
+        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        mock_oci_response = {
+            "modelId": TEST_MODEL_NAME,
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "Hello!"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 5,
+                    "completionTokens": 10,
+                    "totalTokens": 15,
+                },
+            },
+        }
+        response = httpx.Response(
+            status_code=200, json=mock_oci_response, headers={"Content-Type": "application/json"}
+        )
+        result = config.transform_response(
+            model=TEST_MODEL_NAME,
+            raw_response=response,
+            model_response=ModelResponse(),
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == "Hello!"
+        assert result.usage.prompt_tokens == 5  # type: ignore
+        assert result.usage.completion_tokens == 10  # type: ignore
+        assert result.usage.total_tokens == 15  # type: ignore
+
     def test_transform_response_simple_text(self):
         """
         Tests if a simple text response is transformed correctly.

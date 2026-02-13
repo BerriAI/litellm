@@ -12,10 +12,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    try:
-        from litellm_enterprise.integrations.prometheus import PrometheusLogger
-    except Exception:
-        PrometheusLogger = None
+    from litellm.integrations.prometheus import PrometheusLogger
 else:
     LitellmRouter = Any
     PrometheusLogger = Any
@@ -62,9 +59,9 @@ async def router_cooldown_event_callback(
         pass
 
     # get the prometheus logger from in memory loggers
-    prometheusLogger: Optional[
-        PrometheusLogger
-    ] = _get_prometheus_logger_from_callbacks()
+    prometheusLogger: Optional[PrometheusLogger] = (
+        _get_prometheus_logger_from_callbacks()
+    )
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
@@ -89,10 +86,7 @@ def _get_prometheus_logger_from_callbacks() -> Optional[PrometheusLogger]:
     """
     Checks if prometheus is a initalized callback, if yes returns it
     """
-    try:
-        from litellm_enterprise.integrations.prometheus import PrometheusLogger
-    except Exception:
-        PrometheusLogger = None
+    from litellm.integrations.prometheus import PrometheusLogger
 
     if PrometheusLogger is None:
         return None

@@ -173,6 +173,17 @@ class ResponsesIDSecurity(CustomLogger):
                 return response_id, None, None
         return response_id, None, None
 
+    def _get_signing_key(self) -> Optional[str]:
+        """Get the signing key for encryption/decryption."""
+        import os
+
+        from litellm.proxy.proxy_server import master_key
+
+        salt_key = os.getenv("LITELLM_SALT_KEY", None)
+        if salt_key is None:
+            salt_key = master_key
+        return salt_key
+
     def _encrypt_response_id(
         self,
         response: BaseLiteLLMOpenAIResponseObject,
@@ -180,6 +191,18 @@ class ResponsesIDSecurity(CustomLogger):
     ) -> BaseLiteLLMOpenAIResponseObject:
         # encrypt the response id using the symmetric key
         # encrypt the response id, and encode the user id and response id in base64
+
+        # Check if signing key is available
+        signing_key = self._get_signing_key()
+        if signing_key is None:
+            verbose_proxy_logger.debug(
+                "Response ID encryption is enabled but no signing key is configured. "
+                "Please set LITELLM_SALT_KEY environment variable or configure a master_key. "
+                "Skipping response ID encryption. "
+                "See: https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+            )
+            return response
+
         response_id = getattr(response, "id", None)
         response_obj = getattr(response, "response", None)
 

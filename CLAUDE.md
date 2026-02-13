@@ -25,6 +25,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `poetry run pytest tests/path/to/test_file.py -v` - Run specific test file
 - `poetry run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
 
+### Running Scripts
+- `poetry run python script.py` - Run Python scripts (use for non-test files)
+
+### GitHub Issue & PR Templates
+When contributing to the project, use the appropriate templates:
+
+**Bug Reports** (`.github/ISSUE_TEMPLATE/bug_report.yml`):
+- Describe what happened vs. what you expected
+- Include relevant log output
+- Specify your LiteLLM version
+
+**Feature Requests** (`.github/ISSUE_TEMPLATE/feature_request.yml`):
+- Describe the feature clearly
+- Explain the motivation and use case
+
+**Pull Requests** (`.github/pull_request_template.md`):
+- Add at least 1 test in `tests/litellm/`
+- Ensure `make test-unit` passes
+
 ## Architecture Overview
 
 LiteLLM is a unified interface for 100+ LLM providers with two main components:
@@ -71,6 +90,7 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Pydantic v2 for data validation
 - Async/await patterns throughout
 - Type hints required for all public APIs
+- **Avoid imports within methods** — place all imports at the top of the file (module-level). Inline imports inside functions/methods make dependencies harder to trace and hurt readability. The only exception is avoiding circular imports where absolutely necessary.
 
 ### Testing Strategy
 - Unit tests in `tests/test_litellm/`

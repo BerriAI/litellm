@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 
@@ -38,6 +38,18 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
     mask_response_content: bool = Field(
         default=False,
         description="Apply masking to responses that would be blocked. When True, masked content is returned to the user instead of blocking the response.",
+    )
+
+    fallback_on_error: Literal["block", "allow"] = Field(
+        default="block",
+        description="Action when PANW API is unavailable (timeout, rate limit, network error): 'block' (default, maximum security) rejects requests; 'allow' (high availability) proceeds without scanning. Authentication and configuration errors always block.",
+    )
+
+    timeout: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description="PANW API call timeout in seconds (1-60).",
     )
 
     @staticmethod

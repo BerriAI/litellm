@@ -21,11 +21,13 @@ from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_UserTable,
     LiteLLM_TeamTable,
+    Litellm_EntityType,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     _virtual_key_soft_budget_check,
+    _team_soft_budget_check,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
@@ -478,6 +480,84 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
 
 
+@pytest.mark.parametrize(
+    "spend, soft_budget, expect_alert, metadata, expected_alert_emails",
+    [
+        (100, 50, False, None, None),  # Over soft budget, no metadata - no alert_emails configured, so no alert
+        (50, 50, False, None, None),  # At soft budget, no metadata - no alert_emails configured, so no alert
+        (25, 50, False, None, None),  # Under soft budget
+        (100, None, False, None, None),  # No soft budget set
+        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with list of emails
+        (100, 50, True, {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with comma-separated emails
+        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "", "  ", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with empty strings filtered
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata, expected_alert_emails):
+    """
+    Test cases for _team_soft_budget_check:
+    1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
+    2. Spend at soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
+    3. Spend under soft budget - should not trigger alert
+    4. No soft budget set - should not trigger alert
+    5. Team with alert emails in metadata (list) - should include alert_emails in CallInfo
+    6. Team with alert emails in metadata (comma-separated string) - should parse and include alert_emails
+    7. Team with alert emails containing empty strings - should filter them out
+    """
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+            assert type == "soft_budget"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+        team_alias="test-team-alias",
+        key_alias="test-key",
+    )
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        spend=spend,
+        soft_budget=soft_budget,
+        max_budget=100.0,
+        metadata=metadata,
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _team_soft_budget_check(
+        team_object=team_object,
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    await asyncio.sleep(0.1)  # Allow time for the alert task to complete
+
+    assert (
+        alert_triggered == expect_alert
+    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+    if expect_alert:
+        assert captured_call_info is not None
+        assert captured_call_info.team_id == "test-team"
+        assert captured_call_info.spend == spend
+        assert captured_call_info.soft_budget == soft_budget
+        assert captured_call_info.event_group == Litellm_EntityType.TEAM
+        # Verify alert_emails if expected
+        if expected_alert_emails is not None:
+            assert captured_call_info.alert_emails == expected_alert_emails
+        else:
+            assert captured_call_info.alert_emails is None or captured_call_info.alert_emails == []
+
+
 @pytest.mark.asyncio
 async def test_can_user_call_model():
     from litellm.proxy.auth.auth_checks import can_user_call_model
@@ -584,7 +664,7 @@ async def test_get_fuzzy_user_object():
     )
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": "test@example.com"},
+        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
         include={"organization_memberships": True},
     )
 
@@ -612,7 +692,7 @@ async def test_get_fuzzy_user_object():
     )
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": "test@example.com"},
+        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
         include={"organization_memberships": True},
     )
 

@@ -1,4 +1,4 @@
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip } from "antd";
 import { Accordion, AccordionBody, AccordionHeader, Text, TextInput } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import {
@@ -9,11 +9,12 @@ import {
 import NumericalInput from "@/components/shared/numerical_input";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
+import AgentSelector from "@/components/agent_management/AgentSelector";
 import PremiumLoggingSettings from "@/components/common_components/PremiumLoggingSettings";
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchMCPAccessGroups, getGuardrailsList, Organization, Team, teamCreateCall } from "@/components/networking";
+import { fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, Organization, Team, teamCreateCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 
@@ -75,6 +76,7 @@ const CreateTeamModal = ({
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
@@ -135,7 +137,22 @@ const CreateTeamModal = ({
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        if (accessToken == null) {
+          return;
+        }
+
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPolicies();
   }, [accessToken]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -178,6 +195,20 @@ const CreateTeamModal = ({
           formValues.metadata = JSON.stringify(metadata);
         }
 
+        if (formValues.secret_manager_settings) {
+          if (typeof formValues.secret_manager_settings === "string") {
+            if (formValues.secret_manager_settings.trim() === "") {
+              delete formValues.secret_manager_settings;
+            } else {
+              try {
+                formValues.secret_manager_settings = JSON.parse(formValues.secret_manager_settings);
+              } catch (e) {
+                throw new Error("Failed to parse secret manager settings: " + e);
+              }
+            }
+          }
+        }
+
         // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
@@ -209,6 +240,21 @@ const CreateTeamModal = ({
             }
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
+          }
+
+          // Handle agent permissions
+          if (formValues.allowed_agents_and_groups) {
+            const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+            if (!formValues.object_permission) {
+              formValues.object_permission = {};
+            }
+            if (agents && agents.length > 0) {
+              formValues.object_permission.agents = agents;
+            }
+            if (accessGroups && accessGroups.length > 0) {
+              formValues.object_permission.agent_access_groups = accessGroups;
+            }
+            delete formValues.allowed_agents_and_groups;
           }
         }
 
@@ -423,6 +469,36 @@ const CreateTeamModal = ({
                 <Input.TextArea rows={4} />
               </Form.Item>
               <Form.Item
+                label="Secret Manager Settings"
+                name="secret_manager_settings"
+                help={
+                  premiumUser
+                    ? "Enter secret manager configuration as a JSON object."
+                    : "Premium feature - Upgrade to manage secret manager settings."
+                }
+                rules={[
+                  {
+                    validator: async (_, value) => {
+                      if (!value) {
+                        return Promise.resolve();
+                      }
+                      try {
+                        JSON.parse(value);
+                        return Promise.resolve();
+                      } catch (error) {
+                        return Promise.reject(new Error("Please enter valid JSON"));
+                      }
+                    },
+                  },
+                ]}
+              >
+                <Input.TextArea
+                  rows={4}
+                  placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                  disabled={!premiumUser}
+                />
+              </Form.Item>
+              <Form.Item
                 label={
                   <span>
                     Guardrails{" "}
@@ -447,6 +523,55 @@ const CreateTeamModal = ({
                   style={{ width: "100%" }}
                   placeholder="Select or enter guardrails"
                   options={guardrailsList.map((name) => ({
+                    value: name,
+                    label: name,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <span>
+                    Disable Global Guardrails{" "}
+                    <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="disable_global_guardrails"
+                className="mt-4"
+                valuePropName="checked"
+                help="Bypass global guardrails for this team"
+              >
+                <Switch
+                  checkedChildren="Yes"
+                  unCheckedChildren="No"
+                />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <span>
+                    Policies{" "}
+                    <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                      <a
+                        href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      </a>
+                    </Tooltip>
+                  </span>
+                }
+                name="policies"
+                className="mt-8"
+                help="Select existing policies or enter new ones"
+              >
+                <Select2
+                  mode="tags"
+                  style={{ width: "100%" }}
+                  placeholder="Select or enter policies"
+                  options={policiesList.map((name) => ({
                     value: name,
                     label: name,
                   }))}
@@ -523,6 +648,34 @@ const CreateTeamModal = ({
                     />
                   </div>
                 )}
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Agent Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Agents{" "}
+                    <Tooltip title="Select which agents or access groups this team can access">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="allowed_agents_and_groups"
+                className="mt-4"
+                help="Select agents or access groups this team can access"
+              >
+                <AgentSelector
+                  onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                  value={form.getFieldValue("allowed_agents_and_groups")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select agents or access groups (optional)"
+                />
               </Form.Item>
             </AccordionBody>
           </Accordion>
