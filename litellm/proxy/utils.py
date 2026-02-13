@@ -1912,7 +1912,15 @@ class ProxyLogging:
                     ############## Handle Guardrails ########################################
                     #############################################################################
 
-            for callback in guardrail_callbacks:
+            # Run output_parse_pii (unmask) callbacks last so unmasking is not overwritten
+            # by other guardrails (e.g. apply_to_output that masks the response again).
+            output_parse_callbacks = [
+                c for c in guardrail_callbacks if getattr(c, "output_parse_pii", False)
+            ]
+            other_guardrail_callbacks = [
+                c for c in guardrail_callbacks if c not in output_parse_callbacks
+            ]
+            for callback in other_guardrail_callbacks + output_parse_callbacks:
                 # Main - V2 Guardrails implementation
 
                 if (

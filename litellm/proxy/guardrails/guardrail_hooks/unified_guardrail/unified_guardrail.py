@@ -203,7 +203,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         from litellm.types.guardrails import GuardrailEventHooks
 
-        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: Optional[CustomGuardrail] = data.get("guardrail_to_apply", None)
+        if guardrail_to_apply is not None:
+            data.pop("guardrail_to_apply", None)
 
         if guardrail_to_apply is None:
             return
@@ -219,6 +221,24 @@ class UnifiedLLMGuardrails(CustomLogger):
         verbose_proxy_logger.debug(
             "async_post_call_success_hook response: %s", response
         )
+
+        # Presidio (and similar) with output_parse_pii: unmask tokens in response
+        # using request-scoped pii_tokens. Must call the guardrail's hook directly
+        # with full data; process_output_response would mask output again.
+        if getattr(guardrail_to_apply, "output_parse_pii", False):
+            if hasattr(guardrail_to_apply, "async_post_call_success_hook"):
+                response = await guardrail_to_apply.async_post_call_success_hook(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    response=response,
+                )
+                if response is not None:
+                    add_guardrail_to_applied_guardrails_header(
+                        request_data=data,
+                        guardrail_name=guardrail_to_apply.guardrail_name,
+                    )
+                    return response
+            # fall through if hook returned None
 
         call_type: Optional[CallTypesLiteral] = None
         if user_api_key_dict.request_route is not None:
