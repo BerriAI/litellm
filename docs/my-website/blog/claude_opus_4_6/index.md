@@ -389,6 +389,10 @@ Compaction blocks are also supported in streaming mode. You'll receive:
 
 ### Adaptive Thinking
 
+:::note
+When using `reasoning_effort` with Claude Opus 4.6, all values (`low`, `medium`, `high`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets with `type: "enabled"`, pass the native `thinking` parameter directly (see "Native thinking param" tab below).
+:::
+
 <Tabs>
 <TabItem value="completions" label="/chat/completions">
 
@@ -432,6 +436,21 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
         }
     ]
 }'
+```
+
+</TabItem>
+<TabItem value="native" label="Native thinking param">
+
+Use the `thinking` parameter directly for adaptive thinking via the SDK:
+
+```python
+import litellm
+
+response = litellm.completion(
+  model="anthropic/claude-opus-4-6",
+  messages=[{"role": "user", "content": "Solve this complex problem: What is the optimal strategy for..."}],
+  thinking={"type": "adaptive"},
+)
 ```
 
 </TabItem>
