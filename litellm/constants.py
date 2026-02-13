@@ -101,6 +101,11 @@ MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE = int(
 MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
     os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600")
 )
+
+# Default npm cache directory for STDIO MCP servers.
+# npm/npx needs a writable cache dir; in containers the default (~/.npm)
+# may not exist or be read-only. /tmp is always writable.
+MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
     os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
 )
@@ -1310,6 +1315,9 @@ DEFAULT_SLACK_ALERTING_THRESHOLD = int(
     os.getenv("DEFAULT_SLACK_ALERTING_THRESHOLD", 300)
 )
 MAX_TEAM_LIST_LIMIT = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
+MAX_POLICY_ESTIMATE_IMPACT_ROWS = int(
+    os.getenv("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000)
+)
 DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(
     os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7)
 )

@@ -175,6 +175,7 @@ _async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # Custo
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+standard_logging_payload_excluded_fields: Optional[List[str]] = None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -1155,6 +1156,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     BadGatewayError,

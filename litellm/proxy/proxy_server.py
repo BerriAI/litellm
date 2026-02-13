@@ -338,7 +338,10 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (
+    admin_can_invite_user,
+    _user_has_admin_privileges,
+)
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
 )
@@ -390,6 +393,9 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
+from litellm.proxy.management_endpoints.access_group_endpoints import (
+    router as access_group_router,
+)
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team,
@@ -427,6 +433,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
+from litellm.proxy.policy_engine.policy_resolve_endpoints import (
+    router as policy_resolve_router,
+)
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -1045,98 +1054,236 @@ try:
         except FileNotFoundError:
             return False
 
+    def _validate_ui_directory(ui_path: str) -> bool:
+        """
+        Verify UI directory has minimum required structure.
+
+        Checks for:
+        - Directory exists
+        - Has index.html (main entry point)
+        - Has _next directory (Next.js assets)
+
+        Returns True if UI directory appears valid and servable.
+        """
+        if not os.path.isdir(ui_path):
+            return False
+
+        # Must have main index.html
+        if not os.path.exists(os.path.join(ui_path, "index.html")):
+            return False
+
+        # Must have _next directory with Next.js assets
+        next_dir = os.path.join(ui_path, "_next")
+        if not os.path.isdir(next_dir):
+            return False
+
+        return True
+
+    def _is_ui_pre_restructured(ui_dir: str) -> bool:
+        """
+        Detect if UI directory is already pre-restructured and ready to serve.
+
+        Returns True if:
+        1. Marker file .litellm_ui_ready exists (created by Dockerfile), OR
+        2. Restructuring pattern detected (subdirectories with index.html inside)
+
+        This allows skipping copy/restructure operations on read-only filesystems.
+        """
+        if not os.path.isdir(ui_dir):
+            return False
+
+        # Primary signal: marker file created by Dockerfile
+        marker_file = os.path.join(ui_dir, ".litellm_ui_ready")
+        if os.path.exists(marker_file):
+            verbose_proxy_logger.debug(f"Found UI ready marker: {marker_file}")
+            return True
+
+        # Fallback signal: Detect restructuring pattern
+        # After restructuring, routes exist as directories with index.html inside
+        # (e.g., login/index.html instead of login.html)
+        # Check for main index.html first (basic UI structure requirement)
+        if not os.path.exists(os.path.join(ui_dir, "index.html")):
+            return False
+
+        # Look for ANY subdirectory with index.html (proves restructuring happened)
+        # Ignore directories starting with _ (Next.js internals like _next)
+        try:
+            for entry in os.scandir(ui_dir):
+                if entry.is_dir() and not entry.name.startswith("_"):
+                    index_path = os.path.join(entry.path, "index.html")
+                    if os.path.exists(index_path):
+                        # Found at least one restructured route - this proves the pattern
+                        verbose_proxy_logger.debug(
+                            f"Detected restructured UI via pattern: found {entry.name}/index.html"
+                        )
+                        return True
+        except (PermissionError, OSError) as e:
+            verbose_proxy_logger.debug(
+                f"Could not scan {ui_dir} for restructuring detection: {e}"
+            )
+            return False
+
+        # No restructured routes found
+        return False
+
+    def _try_populate_ui_directory(
+        source_path: str, target_path: str
+    ) -> tuple[bool, str]:
+        """
+        Attempt to populate target UI directory from source.
+
+        Returns: (success: bool, error_message: str)
+        """
+        try:
+            os.makedirs(target_path, exist_ok=True)
+            if not _dir_has_content(target_path) and _dir_has_content(source_path):
+                shutil.copytree(
+                    source_path,
+                    target_path,
+                    dirs_exist_ok=True,
+                )
+                verbose_proxy_logger.info(f"Successfully populated UI at {target_path}")
+                return True, ""
+            else:
+                return False, "Source or target directory state invalid"
+        except (PermissionError, OSError) as e:
+            return False, str(e)
+
     # Use a writable runtime UI directory whenever possible.
     # This prevents mutating the packaged UI directory (e.g. site-packages or the repo checkout)
     # and ensures extensionless routes like /ui/login work via <route>/index.html.
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
 
-    # Only use runtime UI path in Docker/non-root environments
-    # In local development, use the packaged UI directly
+    # Determine runtime UI path
+    # Priority: LITELLM_UI_PATH env var > default path based on is_non_root
     if is_non_root:
-        # Use /var/lib/litellm/ui for Docker (more secure than /tmp)
-        runtime_ui_path = "/var/lib/litellm/ui"
+        default_runtime_ui_path = "/var/lib/litellm/ui"
+    else:
+        default_runtime_ui_path = packaged_ui_path
 
-        if _dir_has_content(runtime_ui_path):
+    runtime_ui_path = os.getenv("LITELLM_UI_PATH", default_runtime_ui_path)
+
+    # Validate packaged UI before proceeding
+    if not _validate_ui_directory(packaged_ui_path):
+        verbose_proxy_logger.error(
+            f"Packaged UI at {packaged_ui_path} is invalid or incomplete. "
+            f"UI may not function correctly."
+        )
+
+    # Decision tree for UI path selection:
+    # 1. If runtime path == packaged path: use packaged UI directly
+    # 2. If runtime UI exists and is pre-restructured: use it
+    # 3. If runtime UI exists but not restructured: use it (will restructure later)
+    # 4. If runtime UI missing: try to populate from packaged UI
+    #    4a. If population succeeds: use runtime UI
+    #    4b. If population fails: fall back to packaged UI
+
+    should_use_runtime_path = runtime_ui_path != packaged_ui_path
+
+    if should_use_runtime_path:
+        is_pre_restructured = _is_ui_pre_restructured(runtime_ui_path)
+        has_content = _dir_has_content(runtime_ui_path)
+
+        # Case 2: Runtime UI exists and is ready
+        if has_content and is_pre_restructured:
             verbose_proxy_logger.info(
-                f"Using pre-built UI for non-root Docker: {runtime_ui_path}"
+                f"Using pre-restructured UI at {runtime_ui_path}"
             )
             ui_path = runtime_ui_path
+
+        # Case 3: Runtime UI exists but needs restructuring
+        elif has_content and not is_pre_restructured:
+            verbose_proxy_logger.warning(
+                f"UI at {runtime_ui_path} has content but is not properly restructured. "
+                f"Will attempt to restructure in place."
+            )
+            ui_path = runtime_ui_path
+
+        # Case 4: Runtime UI missing - try to populate
         else:
-            verbose_proxy_logger.error(
-                f"UI not found at {runtime_ui_path}. Attempting to populate it from packaged UI."
-            )
-            verbose_proxy_logger.error(
-                f"Path exists: {os.path.exists(runtime_ui_path)}, Has content: {_dir_has_content(runtime_ui_path)}"
+            verbose_proxy_logger.info(
+                f"UI not found at {runtime_ui_path}. Attempting to populate from packaged UI."
             )
 
-            try:
-                os.makedirs(runtime_ui_path, exist_ok=True)
-                if not _dir_has_content(runtime_ui_path) and _dir_has_content(
-                    packaged_ui_path
-                ):
-                    shutil.copytree(
-                        packaged_ui_path,
-                        runtime_ui_path,
-                        dirs_exist_ok=True,
-                    )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    f"Failed to populate runtime UI directory {runtime_ui_path} from {packaged_ui_path}: {e}"
-                )
+            success, error = _try_populate_ui_directory(
+                packaged_ui_path, runtime_ui_path
+            )
+
+            if success:
+                # Case 4a: Population succeeded
+                ui_path = runtime_ui_path
             else:
-                if _dir_has_content(runtime_ui_path):
-                    verbose_proxy_logger.info(
-                        f"Using populated UI for non-root Docker: {runtime_ui_path}"
-                    )
-                    ui_path = runtime_ui_path
+                # Case 4b: Population failed - fall back to packaged UI
+                verbose_proxy_logger.warning(
+                    f"Failed to populate UI at {runtime_ui_path}: {error}. "
+                    f"Falling back to packaged UI at {packaged_ui_path}. "
+                    f"For read-only deployments, pre-build UI in Dockerfile "
+                    f"or set LITELLM_UI_PATH to a writable emptyDir volume."
+                )
+                ui_path = packaged_ui_path
     else:
-        # Local development: use packaged UI directly, no runtime copy needed
-        verbose_proxy_logger.info(
-            f"Using packaged UI directory for local development: {packaged_ui_path}"
-        )
+        # Case 1: Using packaged UI directly (local development)
+        verbose_proxy_logger.info(f"Using packaged UI directory: {packaged_ui_path}")
         ui_path = packaged_ui_path
-    # Only modify files if a custom server root path is set
+
+    # Validate final UI path
+    if not _validate_ui_directory(ui_path):
+        verbose_proxy_logger.error(
+            f"Selected UI path {ui_path} is invalid or incomplete. UI may not work correctly."
+        )
+
+    # Only modify files if a custom server root path is set AND filesystem is writable
     if server_root_path and server_root_path != "/":
-        # Iterate through files in the UI directory
-        for root, dirs, files in os.walk(ui_path):
-            for filename in files:
-                file_path = os.path.join(root, filename)
-                # Skip binary files and files that don't need path replacement
-                if filename.endswith(
-                    (
-                        ".png",
-                        ".jpg",
-                        ".jpeg",
-                        ".gif",
-                        ".ico",
-                        ".woff",
-                        ".woff2",
-                        ".ttf",
-                        ".eot",
-                    )
-                ):
-                    continue
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
+        # Check if UI path is writable
+        is_writable = os.access(ui_path, os.W_OK)
 
-                    # Replace the asset prefix with the server root path
-                    modified_content = content.replace(
-                        f"{litellm_asset_prefix}",
-                        f"{server_root_path}",
-                    )
+        if not is_writable:
+            verbose_proxy_logger.warning(
+                f"Cannot apply server_root_path replacements to UI at {ui_path}: "
+                f"path is not writable. Ensure server_root_path is '/' or pre-process "
+                f"UI files in Dockerfile with custom server_root_path."
+            )
+        else:
+            # Iterate through files in the UI directory
+            for root, dirs, files in os.walk(ui_path):
+                for filename in files:
+                    file_path = os.path.join(root, filename)
+                    # Skip binary files and files that don't need path replacement
+                    if filename.endswith(
+                        (
+                            ".png",
+                            ".jpg",
+                            ".jpeg",
+                            ".gif",
+                            ".ico",
+                            ".woff",
+                            ".woff2",
+                            ".ttf",
+                            ".eot",
+                        )
+                    ):
+                        continue
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
 
-                    # Replace the /.well-known/litellm-ui-config with the server root path
-                    modified_content = modified_content.replace(
-                        "/litellm/.well-known/litellm-ui-config",
-                        f"{server_root_path}/.well-known/litellm-ui-config",
-                    )
+                        # Replace the asset prefix with the server root path
+                        modified_content = content.replace(
+                            f"{litellm_asset_prefix}",
+                            f"{server_root_path}",
+                        )
 
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(modified_content)
-                except UnicodeDecodeError:
-                    # Skip binary files that can't be decoded
-                    continue
+                        # Replace the /.well-known/litellm-ui-config with the server root path
+                        modified_content = modified_content.replace(
+                            "/litellm/.well-known/litellm-ui-config",
+                            f"{server_root_path}/.well-known/litellm-ui-config",
+                        )
+
+                        with open(file_path, "w", encoding="utf-8") as f:
+                            f.write(modified_content)
+                    except (UnicodeDecodeError, PermissionError, OSError):
+                        # Skip binary files or files we can't write to
+                        continue
 
     # # Mount the _next directory at the root level
     app.mount(
@@ -1180,14 +1327,22 @@ try:
                     continue
 
     # Handle HTML file restructuring
-    # Always restructure the directory we actually serve.
-    # This is critical for extensionless routes like /ui/login (expects login/index.html).
-    # In development, we restructure directly in _experimental/out.
-    # In non-root Docker, we restructure in /var/lib/litellm/ui.
+    # Only restructure if:
+    # 1. UI is not already pre-restructured
+    # 2. Filesystem is writable
     try:
-        if is_non_root and ui_path == "/var/lib/litellm/ui":
+        is_pre_restructured = _is_ui_pre_restructured(ui_path)
+        is_writable = os.access(ui_path, os.W_OK)
+
+        if is_pre_restructured:
             verbose_proxy_logger.info(
-                f"Skipping runtime UI restructuring for non-root Docker. UI at {ui_path} is pre-restructured."
+                f"Skipping UI restructuring: {ui_path} is already pre-restructured"
+            )
+        elif not is_writable:
+            verbose_proxy_logger.warning(
+                f"Cannot restructure UI at {ui_path}: path is not writable. "
+                f"UI may not work correctly for extensionless routes. "
+                f"Pre-build and restructure UI in Dockerfile for read-only deployments."
             )
         else:
             _restructure_ui_html_files(ui_path)
@@ -4603,11 +4758,16 @@ async def initialize(  # noqa: PLR0915
             elif litellm_log_setting.upper() == "DEBUG":
                 import logging
 
-                from litellm._logging import verbose_proxy_logger, verbose_router_logger
+                from litellm._logging import (
+                    verbose_logger,
+                    verbose_proxy_logger,
+                    verbose_router_logger,
+                )
 
+                verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
                 verbose_router_logger.setLevel(
                     level=logging.DEBUG
-                )  # set router logs to info
+                )  # set router logs to debug
                 verbose_proxy_logger.setLevel(
                     level=logging.DEBUG
                 )  # set proxy logs to debug
@@ -4705,8 +4865,10 @@ async def async_assistants_data_generator(
         if isinstance(e, HTTPException):
             raise e
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Only include the error message, not the traceback.
+            # The traceback is already logged above via verbose_proxy_logger.exception().
+            # Including it in the SSE response leaks internal details to clients.
+            error_msg = str(e)
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),
@@ -4753,7 +4915,7 @@ def _restamp_streaming_chunk_model(
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
     if not model_mismatch_logged and downstream_model != requested_model_from_client:
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.debug(
             "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
             request_data.get("litellm_call_id"),
             requested_model_from_client,
@@ -4856,8 +5018,10 @@ async def async_data_generator(
         elif isinstance(e, StreamingCallbackError):
             error_msg = str(e)
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Only include the error message, not the traceback.
+            # The traceback is already logged above via verbose_proxy_logger.exception().
+            # Including it in the SSE response leaks internal details to clients.
+            error_msg = str(e)
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),
@@ -10283,18 +10447,34 @@ async def get_image():
     default_site_logo = os.path.join(current_dir, "logo.jpg")
 
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
 
-    if is_non_root:
-        os.makedirs(assets_dir, exist_ok=True)
+    # Determine assets directory
+    # Priority: LITELLM_ASSETS_PATH env var > default based on is_non_root
+    default_assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
+    assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
 
+    # Try to create assets_dir if it doesn't exist (simple try/except approach)
+    if not os.path.exists(assets_dir):
+        try:
+            os.makedirs(assets_dir, exist_ok=True)
+            verbose_proxy_logger.debug(f"Created assets directory at {assets_dir}")
+        except (PermissionError, OSError) as e:
+            verbose_proxy_logger.warning(
+                f"Cannot create assets directory at {assets_dir}: {e}. "
+                f"Logo caching may not work. Using current directory for assets."
+            )
+            assets_dir = current_dir
+
+    # Determine default logo path
     default_logo = (
-        os.path.join(assets_dir, "logo.jpg") if is_non_root else default_site_logo
+        os.path.join(assets_dir, "logo.jpg")
+        if assets_dir != current_dir
+        else default_site_logo
     )
-    if is_non_root and not os.path.exists(default_logo):
+    if assets_dir != current_dir and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
-    cache_dir = assets_dir if is_non_root else current_dir
+    cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
     cache_path = os.path.join(cache_dir, "cached_logo.jpg")
 
     # [OPTIMIZATION] Check if the cached image exists first
@@ -10372,7 +10552,17 @@ async def new_invitation(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Allow proxy admins and org/team admins (admin status from DB via get_user_object)
+        has_access = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or await _user_has_admin_privileges(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )
+        if not has_access:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -10382,6 +10572,23 @@ async def new_invitation(
                     )
                 },
             )
+
+        # Org/team admins can only invite users within their org/team
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            can_invite = await admin_can_invite_user(
+                target_user_id=data.user_id,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if not can_invite:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "You can only create invitations for users in your organization or team."
+                    },
+                )
 
         response = await create_invitation_for_user(
             data=data,
@@ -10535,7 +10742,16 @@ async def invitation_delete(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Proxy admins can delete any invitation; org admins only their own
+    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_other_admin = await _user_has_admin_privileges(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    if not is_proxy_admin and not is_other_admin:
         raise HTTPException(
             status_code=400,
             detail={
@@ -10545,6 +10761,24 @@ async def invitation_delete(
                 )
             },
         )
+
+    # Org admins can only delete invitations they created
+    if is_other_admin and not is_proxy_admin:
+        invitation = await prisma_client.db.litellm_invitationlink.find_unique(
+            where={"id": data.invitation_id}
+        )
+        if invitation is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invitation id does not exist in the database."},
+            )
+        if invitation.created_by != user_api_key_dict.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Organization admins can only delete invitations they created."
+                },
+            )
 
     response = await prisma_client.db.litellm_invitationlink.delete(
         where={"id": data.invitation_id}
@@ -11746,6 +11980,7 @@ app.include_router(analytics_router)
 app.include_router(guardrails_router)
 app.include_router(policy_router)
 app.include_router(policy_crud_router)
+app.include_router(policy_resolve_router)
 app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
@@ -11766,6 +12001,7 @@ app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_endpoints_router)
 app.include_router(a2a_router)
+app.include_router(access_group_router)
 ########################################################
 # MCP Server
 ########################################################

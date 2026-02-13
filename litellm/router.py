@@ -58,7 +58,6 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -619,11 +618,12 @@ class Router:
                 self.retry_policy = RetryPolicy(**retry_policy)
             elif isinstance(retry_policy, RetryPolicy):
                 self.retry_policy = retry_policy
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
-                    self.retry_policy.model_dump(exclude_none=True)
+            if self.retry_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
+                        self.retry_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.model_group_retry_policy: Optional[
             Dict[str, RetryPolicy]
@@ -636,11 +636,12 @@ class Router:
             elif isinstance(allowed_fails_policy, AllowedFailsPolicy):
                 self.allowed_fails_policy = allowed_fails_policy
 
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
-                    self.allowed_fails_policy.model_dump(exclude_none=True)
+            if self.allowed_fails_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
+                        self.allowed_fails_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.alerting_config: Optional[AlertingConfig] = alerting_config
 
@@ -1269,13 +1270,16 @@ class Router:
 
             if silent_model is not None:
                 # Mirroring traffic to a secondary model
-                # Use shared thread pool for background calls
-                executor.submit(
-                    self._silent_experiment_completion,
-                    silent_model,
-                    messages,
-                    **kwargs,
+                # Use threading.Thread (not ThreadPoolExecutor) - executor.submit()
+                # requires pickling args, which fails when kwargs contain unpicklable
+                # objects (e.g. _thread.RLock from OTEL spans, loggers) in deployment.
+                thread = threading.Thread(
+                    target=self._silent_experiment_completion,
+                    args=(silent_model, messages),
+                    kwargs=kwargs,
+                    daemon=True,
                 )
+                thread.start()
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
@@ -2279,7 +2283,7 @@ class Router:
         item = FlowItem(
             priority=priority,  # 👈 SET PRIORITY FOR REQUEST
             request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name="gpt-3.5-turbo",  # 👈 SAME as 'Router'
+            model_name=model,  # 👈 SAME as 'Router'
         )
         ### [fin] ###
 
@@ -2321,6 +2325,10 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            # Clean up the request from the scheduler queue also before raising the timeout exception
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,
@@ -2382,6 +2390,10 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            # Clean up the request from the scheduler queue also before raising the timeout exception
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,
@@ -5035,7 +5047,7 @@ class Router:
                     else:
                         _healthy_deployments = []
                     _timeout = self._time_to_sleep_before_retry(
-                        e=original_exception,
+                        e=e,
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
                         healthy_deployments=_healthy_deployments,

@@ -259,6 +259,7 @@ export interface LiteLLMWellKnownUiConfig {
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
+  sso_configured: boolean;
 }
 
 export interface CredentialsResponse {
@@ -5654,6 +5655,68 @@ export const getResolvedGuardrails = async (accessToken: string, policyId: strin
   }
 };
 
+export const resolvePoliciesCall = async (
+  accessToken: string,
+  context: { team_alias?: string; key_alias?: string; model?: string; tags?: string[] }
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/resolve`
+      : `/policies/resolve`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(context),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to resolve policies:", error);
+    throw error;
+  }
+};
+
+export const estimateAttachmentImpactCall = async (
+  accessToken: string,
+  attachmentData: any
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/attachments/estimate-impact`
+      : `/policies/attachments/estimate-impact`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(attachmentData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to estimate attachment impact:", error);
+    throw error;
+  }
+};
+
 export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
@@ -7870,6 +7933,48 @@ export const getRemainingUsers = async (
     return data;
   } catch (error) {
     console.error("Failed to fetch remaining users:", error);
+    throw error;
+  }
+};
+
+export interface LicenseInfo {
+  has_license: boolean;
+  license_type: string | null;
+  expiration_date: string | null;
+  allowed_features: string[];
+  limits: {
+    max_users: number | null;
+    max_teams: number | null;
+  };
+}
+
+export const getLicenseInfo = async (
+  accessToken: string,
+): Promise<LicenseInfo | null> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/health/license` : `/health/license`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      // if 404 - return null (endpoint not available)
+      if (response.status === 404) {
+        return null;
+      }
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch license info:", error);
     throw error;
   }
 };

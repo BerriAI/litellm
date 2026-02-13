@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
-from litellm.exceptions import BlockedPiiEntityError
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -232,6 +232,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """Cleanup: we try to close, but doing async cleanup in __del__ is risky."""
         pass
 
+    def _has_block_action(self) -> bool:
+        """Return True if pii_entities_config has any BLOCK action (fail-closed on analyzer errors)."""
+        if not self.pii_entities_config:
+            return False
+        return any(
+            action == PiiAction.BLOCK for action in self.pii_entities_config.values()
+        )
+
     def _get_presidio_analyze_request_payload(
         self,
         text: str,
@@ -316,13 +324,30 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                 # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
                 # Presidio may return a dict instead of a list when errors occur
+                def _fail_on_invalid_response(
+                    reason: str,
+                ) -> List[PresidioAnalyzeResponseItem]:
+                    should_fail_closed = (
+                        bool(self.pii_entities_config)
+                        or self.output_parse_pii
+                        or self.apply_to_output
+                    )
+                    if should_fail_closed:
+                        raise GuardrailRaisedException(
+                            guardrail_name=self.guardrail_name,
+                            message=f"Presidio analyzer returned invalid response; cannot verify PII when PII protection is configured: {reason}",
+                            should_wrap_with_default_message=False,
+                        )
+                    verbose_proxy_logger.warning(
+                        "Presidio analyzer %s, returning empty list", reason
+                    )
+                    return []
+
                 if isinstance(analyze_results, dict):
                     if "error" in analyze_results:
-                        verbose_proxy_logger.warning(
-                            "Presidio analyzer returned error: %s, returning empty list",
-                            analyze_results.get("error"),
+                        return _fail_on_invalid_response(
+                            f"error: {analyze_results.get('error')}"
                         )
-                        return []
                     # If it's a dict but not an error, try to process it as a single item
                     verbose_proxy_logger.debug(
                         "Presidio returned dict (not list), attempting to process as single item"
@@ -330,23 +355,33 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     try:
                         return [PresidioAnalyzeResponseItem(**analyze_results)]
                     except Exception as e:
-                        verbose_proxy_logger.warning(
-                            "Failed to parse Presidio dict response: %s, returning empty list",
-                            e,
+                        return _fail_on_invalid_response(
+                            f"failed to parse dict response: {e}"
                         )
-                        return []
+
+                # Handle unexpected types (str, None, etc.) - e.g. from malformed/error
+                if not isinstance(analyze_results, list):
+                    return _fail_on_invalid_response(
+                        f"unexpected type {type(analyze_results).__name__} (expected list or dict), response: {str(analyze_results)[:200]}"
+                    )
 
                 # Normal case: list of results
                 final_results = []
                 for item in analyze_results:
+                    if not isinstance(item, dict):
+                        verbose_proxy_logger.warning(
+                            "Skipping invalid Presidio result item (expected dict, got %s): %s",
+                            type(item).__name__,
+                            str(item)[:100],
+                        )
+                        continue
                     try:
                         final_results.append(PresidioAnalyzeResponseItem(**item))
-                    except TypeError as te:
-                        # Handle case where item is not a dict (shouldn't happen, but be defensive)
+                    except Exception as e:
                         verbose_proxy_logger.warning(
-                            "Skipping invalid Presidio result item: %s (error: %s)",
+                            "Failed to parse Presidio result item: %s (error: %s)",
                             item,
-                            te,
+                            e,
                         )
                         continue
                 return final_results
