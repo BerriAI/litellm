@@ -2,7 +2,8 @@
 Tests for MCPDebug — MCP OAuth2 debug response headers.
 """
 
-import pytest
+import asyncio
+from unittest.mock import MagicMock
 
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_DEBUG_REQUEST_HEADER,
@@ -159,3 +160,93 @@ class TestBuildDebugHeaders:
             "x-mcp-debug-server-auth-type",
         }
         assert set(headers.keys()) == expected_keys
+
+
+class TestResolveAuthResolution:
+    def _make_server(self, **kwargs):
+        server = MagicMock()
+        server.alias = kwargs.get("alias", "test")
+        server.server_name = kwargs.get("server_name", "test")
+        server.has_client_credentials = kwargs.get("has_client_credentials", False)
+        server.authentication_token = kwargs.get("authentication_token", None)
+        server.auth_type = kwargs.get("auth_type", None)
+        return server
+
+    def test_per_request_header(self):
+        server = self._make_server()
+        result = MCPDebug.resolve_auth_resolution(
+            server, mcp_auth_header="Bearer xxx", mcp_server_auth_headers=None, oauth2_headers=None
+        )
+        assert result == "per-request-header"
+
+    def test_server_specific_header(self):
+        server = self._make_server(alias="atlas")
+        result = MCPDebug.resolve_auth_resolution(
+            server, mcp_auth_header=None,
+            mcp_server_auth_headers={"atlas": {"Authorization": "Bearer xxx"}},
+            oauth2_headers=None,
+        )
+        assert result == "per-request-header"
+
+    def test_m2m(self):
+        server = self._make_server(has_client_credentials=True)
+        result = MCPDebug.resolve_auth_resolution(
+            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+        )
+        assert result == "m2m-client-credentials"
+
+    def test_static_token(self):
+        server = self._make_server(authentication_token="static-tok")
+        result = MCPDebug.resolve_auth_resolution(
+            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+        )
+        assert result == "static-token"
+
+    def test_oauth2_passthrough(self):
+        server = self._make_server(auth_type="oauth2")
+        result = MCPDebug.resolve_auth_resolution(
+            server, mcp_auth_header=None, mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer eyJ..."},
+        )
+        assert result == "oauth2-passthrough"
+
+    def test_no_auth(self):
+        server = self._make_server()
+        result = MCPDebug.resolve_auth_resolution(
+            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+        )
+        assert result == "no-auth"
+
+
+class TestWrapSendWithDebugHeaders:
+    def test_injects_headers(self):
+        captured = []
+
+        async def mock_send(message):
+            captured.append(message)
+
+        wrapped = MCPDebug.wrap_send_with_debug_headers(
+            mock_send, {"x-mcp-debug-test": "value123"}
+        )
+
+        message = {"type": "http.response.start", "status": 200, "headers": []}
+        asyncio.get_event_loop().run_until_complete(wrapped(message))
+
+        assert len(captured) == 1
+        headers = dict(captured[0]["headers"])
+        assert headers[b"x-mcp-debug-test"] == b"value123"
+
+    def test_body_messages_unchanged(self):
+        captured = []
+
+        async def mock_send(message):
+            captured.append(message)
+
+        wrapped = MCPDebug.wrap_send_with_debug_headers(
+            mock_send, {"x-mcp-debug-test": "value"}
+        )
+
+        body_msg = {"type": "http.response.body", "body": b"hello"}
+        asyncio.get_event_loop().run_until_complete(wrapped(body_msg))
+
+        assert captured[0] == body_msg
