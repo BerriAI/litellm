@@ -1123,7 +1123,7 @@ class RedisCache(BaseCache):
             redis_client = redis_async.Redis(**self.redis_kwargs)
             
             # Test the connection
-            ping_result = await redis_client.ping()
+            ping_result = await redis_client.ping()  # type: ignore[misc]
 
             # Close the connection
             await redis_client.aclose()  # type: ignore[attr-defined]

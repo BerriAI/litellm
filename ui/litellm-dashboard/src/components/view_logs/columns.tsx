@@ -5,6 +5,8 @@ import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { TimeCell } from "./time_cell";
+import { MCP_CALL_TYPES } from "./constants";
+import { LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (row: LogEntry, provider: string) => {
@@ -44,55 +46,55 @@ export type LogEntry = {
   session_id?: string;
   status?: string;
   duration?: number;
+  session_total_count?: number;
+  session_total_spend?: number;
+  mcp_tool_call_count?: number;
+  mcp_tool_call_spend?: number;
+  session_llm_count?: number;
+  session_mcp_count?: number;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
 
 export const columns: ColumnDef<LogEntry>[] = [
   {
-    id: "expander",
-    header: () => null,
-    cell: ({ row }) => {
-      // Convert the cell function to a React component to properly use hooks
-      const ExpanderCell = () => {
-        const [localExpanded, setLocalExpanded] = React.useState(row.getIsExpanded());
-
-        // Memoize the toggle handler to prevent unnecessary re-renders
-        const toggleHandler = React.useCallback(() => {
-          setLocalExpanded((prev) => !prev);
-          row.getToggleExpandedHandler()();
-        }, [row]);
-
-        return row.getCanExpand() ? (
-          <button
-            onClick={toggleHandler}
-            style={{ cursor: "pointer" }}
-            aria-label={localExpanded ? "Collapse row" : "Expand row"}
-            className="w-6 h-6 flex items-center justify-center focus:outline-none"
-          >
-            <svg
-              className={`w-4 h-4 transform transition-transform duration-75 ${localExpanded ? "rotate-90" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        ) : (
-          <span className="w-6 h-6 flex items-center justify-center">●</span>
-        );
-      };
-
-      // Return the component
-      return <ExpanderCell />;
-    },
-  },
-  {
     header: "Time",
     accessorKey: "startTime",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+  },
+  {
+    header: "Type",
+    id: "type",
+    cell: (info: any) => {
+      const row = info.row.original;
+      const sessionCount = row.session_total_count || 1;
+      const isMcp = MCP_CALL_TYPES.includes(row.call_type);
+      const sessionLlmCount = row.session_llm_count ?? (isMcp ? 0 : sessionCount);
+      const sessionMcpCount = row.session_mcp_count ?? (isMcp ? sessionCount : 0);
+
+      if (isMcp) return <McpBadge />;
+      if (sessionCount <= 1) return <LlmBadge />;
+
+      // Multi-call session — show total count, plus MCP indicator when mixed.
+      const sessionTypeBadge = (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-[11px] font-medium whitespace-nowrap">
+          <SparkleIcon />
+          <span>{sessionCount}</span>
+          {sessionMcpCount > 0 && (
+            <>
+              <span className="text-blue-300">·</span>
+              <WrenchIcon />
+            </>
+          )}
+        </span>
+      );
+
+      return (
+        <Tooltip title={`${sessionLlmCount} LLM • ${sessionMcpCount} MCP`}>
+          {sessionTypeBadge}
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Status",
@@ -145,11 +147,24 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Cost",
     accessorKey: "spend",
-    cell: (info: any) => (
-      <Tooltip title={`$${String(info.getValue() || 0)} `}>
-        <span>{getSpendString(info.getValue() || 0)}</span>
-      </Tooltip>
-    ),
+    cell: (info: any) => {
+      const row = info.row.original;
+      const mcpCount = row.mcp_tool_call_count || 0;
+      const mcpSpend = row.mcp_tool_call_spend || 0;
+
+      return (
+        <div className="flex flex-col">
+          <Tooltip title={`$${String(info.getValue() || 0)}`}>
+            <span>{getSpendString(info.getValue() || 0)}</span>
+          </Tooltip>
+          {mcpCount > 0 && mcpSpend > 0 && (
+            <span className="text-[10px] text-amber-600">
+              incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
+            </span>
+          )}
+        </div>
+      );
+    },
   },
   {
     header: "Duration (s)",

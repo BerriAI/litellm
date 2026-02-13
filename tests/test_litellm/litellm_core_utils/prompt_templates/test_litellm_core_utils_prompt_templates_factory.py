@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
+    _convert_to_bedrock_tool_call_invoke,
     ollama_pt,
 )
 
@@ -1138,6 +1139,73 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
 
+def test_bedrock_nova_web_search_options_mapping():
+    """
+    Test that web_search_options is correctly mapped to Nova grounding.
+
+    This follows the LiteLLM pattern for web search where:
+    - Vertex AI maps web_search_options to {"googleSearch": {}}
+    - Anthropic maps web_search_options to {"type": "web_search_20250305", ...}
+    - Nova should map web_search_options to {"systemTool": {"name": "nova_grounding"}}
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    # Test basic mapping for Nova model
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    # Test with search_context_size (should be ignored for Nova)
+    result2 = config._map_web_search_options(
+        {"search_context_size": "high"},
+        "us.amazon.nova-premier-v1:0"
+    )
+
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"
+    # Nova doesn't support search_context_size, so it's just ignored
+
+def test_bedrock_tools_pt_does_not_handle_system_tool():
+    """
+    Verify that _bedrock_tools_pt does NOT handle system_tool format.
+
+    System tools (nova_grounding) should be added via web_search_options,
+    not via the tools parameter directly.
+    """
+    
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    # Regular function tools should still work
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools=tools)
+
+    assert len(result) == 1
+    tool_spec = result[0].get("toolSpec")
+    assert tool_spec is not None
+    assert tool_spec["name"] == "get_weather"
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
@@ -1305,12 +1373,12 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
     assert result["content"][0]["cache_control"]["type"] == "ephemeral"
 def test_anthropic_messages_pt_server_tool_use_passthrough():
     """
-    Test that anthropic_messages_pt passes through server_tool_use and 
+    Test that anthropic_messages_pt passes through server_tool_use and
     tool_search_tool_result blocks in assistant message content.
-    
+
     These are Anthropic-native content types used for tool search functionality
     that need to be preserved when reconstructing multi-turn conversations.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
     """
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -1359,15 +1427,15 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify we have 3 messages (user, assistant, user)
     assert len(result) == 3
-    
+
     # Verify the assistant message content
     assistant_msg = result[1]
     assert assistant_msg["role"] == "assistant"
     assert isinstance(assistant_msg["content"], list)
-    
+
     # Find the different content block types
     content_types = [block.get("type") for block in assistant_msg["content"]]
-    
+
     # Verify server_tool_use block is preserved
     assert "server_tool_use" in content_types
     server_tool_use_block = next(
@@ -1376,7 +1444,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
     assert server_tool_use_block["name"] == "tool_search_tool_regex"
     assert server_tool_use_block["input"] == {"query": ".*time.*"}
-    
+
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
     tool_result_block = next(
@@ -1385,7 +1453,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
     assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
-    
+
     # Verify text block is also preserved
     assert "text" in content_types
     text_block = next(
@@ -1523,3 +1591,153 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     # Verify $defs have been removed (Bedrock doesn't support them)
     tool_schema = result[0]["toolSpec"].get("inputSchema", {}).get("json", {})
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
+
+
+# ── _convert_to_bedrock_tool_call_invoke tests ──
+
+
+def test_bedrock_tool_call_invoke_normal_single_tool():
+    """Normal single tool call with valid JSON arguments."""
+    tool_calls = [
+        {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston, MA"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["toolUseId"] == "call_abc123"
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    assert result[0]["toolUse"]["input"] == {"location": "Boston, MA"}
+
+
+def test_bedrock_tool_call_invoke_empty_arguments():
+    """Tool call with empty arguments produces an empty dict input."""
+    tool_calls = [
+        {
+            "id": "call_empty",
+            "type": "function",
+            "function": {"name": "do_something", "arguments": ""},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_concatenated_json():
+    """
+    Tool call whose arguments contain multiple concatenated JSON objects
+    (the bug from issue #20543) is split into separate Bedrock toolUse blocks.
+
+    Bedrock Claude Sonnet 4.5 sometimes returns multiple tool call arguments
+    concatenated in a single string like:
+        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
+    """
+    tool_calls = [
+        {
+            "id": "tooluse_L7I3TewYAUhoheJZQEuwVN",
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "arguments": (
+                    '{"command": ["curl", "-i", "http://localhost:9009", "-m", "10"]}'
+                    '{"command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]}'
+                    '{"command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]}'
+                ),
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    # Should produce 3 separate toolUse blocks
+    assert len(result) == 3
+
+    # First block keeps original tool id
+    assert result[0]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN"
+    assert result[0]["toolUse"]["name"] == "shell"
+    assert result[0]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009", "-m", "10"]
+    }
+
+    # Subsequent blocks get suffixed ids
+    assert result[1]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_1"
+    assert result[1]["toolUse"]["name"] == "shell"
+    assert result[1]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]
+    }
+
+    assert result[2]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_2"
+    assert result[2]["toolUse"]["name"] == "shell"
+    assert result[2]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]
+    }
+
+
+def test_bedrock_tool_call_invoke_concatenated_json_with_cache_control():
+    """
+    When a tool call has cache_control AND concatenated JSON arguments,
+    the cachePoint block is appended after the last split block.
+    """
+    tool_calls = [
+        {
+            "id": "call_cached",
+            "type": "function",
+            "cache_control": {"type": "default"},
+            "function": {
+                "name": "shell",
+                "arguments": '{"a": 1}{"b": 2}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    # 2 toolUse blocks + 1 cachePoint block
+    assert len(result) == 3
+    assert "toolUse" in result[0]
+    assert "toolUse" in result[1]
+    assert "cachePoint" in result[2]
+
+
+def test_bedrock_tool_call_invoke_non_dict_arguments():
+    """Arguments that parse to a non-dict (e.g. '""') produce empty dict input."""
+    tool_calls = [
+        {
+            "id": "call_non_dict",
+            "type": "function",
+            "function": {"name": "tool", "arguments": '""'},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_multiple_normal_tools():
+    """Multiple separate tool calls (normal parallel calling) work correctly."""
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "NYC"}',
+            },
+        },
+        {
+            "id": "call_2",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "LA"}',
+            },
+        },
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 2
+    assert result[0]["toolUse"]["toolUseId"] == "call_1"
+    assert result[1]["toolUse"]["toolUseId"] == "call_2"

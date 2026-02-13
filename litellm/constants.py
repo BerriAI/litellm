@@ -2,6 +2,8 @@ import os
 import sys
 from typing import List, Literal
 
+from litellm.litellm_core_utils.env_utils import get_env_int
+
 DEFAULT_HEALTH_CHECK_PROMPT = str(
     os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm")
 )
@@ -46,6 +48,14 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
     os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
+
+# Model cost map validation constants
+MODEL_COST_MAP_MIN_MODEL_COUNT = int(
+    os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
+)  # Minimum number of models a fetched cost map must contain to be considered valid
+MODEL_COST_MAP_MAX_SHRINK_RATIO = float(
+    os.getenv("MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5)
+)  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
 DEFAULT_IMAGE_WIDTH = int(os.getenv("DEFAULT_IMAGE_WIDTH", 300))
 DEFAULT_IMAGE_HEIGHT = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
@@ -67,6 +77,44 @@ DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
 )
 
+# MCP Semantic Tool Filter Defaults
+DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_MCP_SEMANTIC_FILTER_TOP_K = int(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_TOP_K", 10)
+)
+DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
+)
+MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
+    os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
+# MCP OAuth2 Client Credentials Defaults
+MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200")
+)
+MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600")
+)
+
+# Default npm cache directory for STDIO MCP servers.
+# npm/npx needs a writable cache dir; in containers the default (~/.npm)
+# may not exist or be read-only. /tmp is always writable.
+MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
+MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
+    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
+)
+
+LITELLM_UI_ALLOW_HEADERS = [
+    "x-litellm-semantic-filter",
+    "x-litellm-semantic-filter-tools",
+]
+
 # Gemini model-specific minimal thinking budget constants
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", 1)
@@ -80,10 +128,18 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
     )
 )
 
+# Maximum number of callbacks that can be registered
+# This prevents callbacks from exponentially growing and consuming CPU resources
+# Override with LITELLM_MAX_CALLBACKS env var for large deployments (e.g., many teams with guardrails)
+MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 30)
+
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
 )
+
+# Provider-specific API base URLs
+XAI_API_BASE = "https://api.x.ai/v1"
 
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
@@ -162,6 +218,10 @@ REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_bu
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
+# Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
+LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(
+    os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000)
+)
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -284,6 +344,22 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+# Patterns that indicate a localhost/internal URL in A2A agent cards that should be
+# replaced with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
@@ -943,14 +1019,18 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 
 BEDROCK_CONVERSE_MODELS = [
     "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-coder-next",
     "qwen.qwen3-235b-a22b-2507-v1:0",
     "qwen.qwen3-coder-30b-a3b-v1:0",
     "qwen.qwen3-32b-v1:0",
     "deepseek.v3-v1:0",
+    "deepseek.v3.2",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-6-v1:0",
+    "anthropic.claude-opus-4-6-v1",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -983,9 +1063,12 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-90b-instruct-v1:0",
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
+    "amazon.nova-2-pro-preview-20251202-v1:0",
     "amazon.nova-pro-v1:0",
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
+    "minimax.minimax-m2.1",
+    "moonshotai.kimi-k2.5",
 ]
 
 
@@ -1168,7 +1251,12 @@ LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
-CLI_JWT_EXPIRATION_HOURS = int(os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", 24))
+# Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
+CLI_JWT_EXPIRATION_HOURS = int(
+    os.getenv("CLI_JWT_EXPIRATION_HOURS") 
+    or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS") 
+    or 24
+)
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
@@ -1234,6 +1322,9 @@ DEFAULT_SLACK_ALERTING_THRESHOLD = int(
     os.getenv("DEFAULT_SLACK_ALERTING_THRESHOLD", 300)
 )
 MAX_TEAM_LIST_LIMIT = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
+MAX_POLICY_ESTIMATE_IMPACT_ROWS = int(
+    os.getenv("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000)
+)
 DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(
     os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7)
 )
@@ -1329,6 +1420,13 @@ COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
 ########################### RAG Text Splitter Constants ###########################
 DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+
+########################### S3 Vectors RAG Constants ###########################
+S3_VECTORS_DEFAULT_DIMENSION = int(os.getenv("S3_VECTORS_DEFAULT_DIMENSION", 1024))
+S3_VECTORS_DEFAULT_DISTANCE_METRIC = str(
+    os.getenv("S3_VECTORS_DEFAULT_DISTANCE_METRIC", "cosine")
+)
+S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS = ["source_text"]
 
 ########################### Microsoft SSO Constants ###########################
 MICROSOFT_USER_EMAIL_ATTRIBUTE = str(

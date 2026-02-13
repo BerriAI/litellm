@@ -131,6 +131,67 @@ class BaseAnthropicMessagesTest:
 
 
     @pytest.mark.asyncio
+    async def test_response_format_consistency(self):
+        """
+        Test that response content blocks are consistently dicts (not Pydantic objects).
+        
+        This ensures that code like response["content"][0]["type"] works 
+        regardless of the target provider.
+        
+        Issue: https://github.com/BerriAI/litellm/issues/20342
+        """
+        litellm._turn_on_debug()
+        
+        request_params = self.model_config
+        
+        # Set up test parameters
+        messages = [{"role": "user", "content": "Say hi"}]
+        
+        # Prepare call arguments
+        call_args = {
+            "messages": messages,
+            "max_tokens": 100,
+        }
+        
+        # Add any additional config from subclass
+        call_args.update(request_params)
+        
+        # Call the handler
+        response = await litellm.anthropic.messages.acreate(**call_args)
+        
+        print(f"Response for {request_params['model']}: {json.dumps(response, indent=2, default=str)}")
+        
+        # Verify response structure
+        assert "content" in response, "Response should have 'content' field"
+        assert len(response["content"]) > 0, "Response content should not be empty"
+        
+        # Get the first content block
+        block = response["content"][0]
+        
+        # Check that the block is a dict, not a Pydantic object
+        assert isinstance(block, dict), (
+            f"Content block should be a dict, but got {type(block)}. "
+            f"This means response format is inconsistent across providers."
+        )
+        
+        # Verify we can access fields using dict syntax (not object attributes)
+        try:
+            block_type = block["type"]
+            print(f"✓ Successfully accessed block['type']: {block_type}")
+        except TypeError as e:
+            pytest.fail(
+                f"Cannot access content block using dict syntax: {e}. "
+                f"Block type: {type(block)}"
+            )
+        
+        # Verify the block has expected structure
+        assert "type" in block, "Content block should have 'type' field"
+        if block["type"] == "text":
+            assert "text" in block, "Text content block should have 'text' field"
+        
+        print(f"✓ Response format consistency test passed for {request_params['model']}")
+
+    @pytest.mark.asyncio
     async def test_anthropic_messages_litellm_router_streaming_with_logging(self):
         """
         Test that logging and cost tracking works for anthropic_messages with streaming request

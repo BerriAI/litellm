@@ -74,6 +74,144 @@ export const convertToDotPrompt = (prompt: PromptType): string => {
   return result.trim();
 };
 
+type ParsedFrontmatter = {
+  model?: string;
+  config: {
+    temperature?: number;
+    max_tokens?: number;
+    top_p?: number;
+  };
+  tools: Tool[];
+};
+
+const parseNumber = (raw: string): number | undefined => {
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+};
+
+const parseToolsFromFrontmatter = (lines: string[]): Tool[] => {
+  const tools: Tool[] = [];
+  let inToolsBlock = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!inToolsBlock) {
+      if (trimmed === "tools:" || trimmed.startsWith("tools:")) {
+        inToolsBlock = true;
+      }
+      continue;
+    }
+
+    // New top-level key ends the tools block
+    if (line.length > 0 && !/^\s/.test(line) && trimmed !== "-" && !trimmed.startsWith("-")) {
+      break;
+    }
+
+    const match = trimmed.match(/^-+\s*(.+)$/);
+    if (!match) continue;
+
+    const rawJson = match[1].trim();
+    if (!rawJson) continue;
+
+    try {
+      const toolObj = JSON.parse(rawJson);
+      tools.push({
+        name: toolObj?.function?.name || "Unnamed Tool",
+        description: toolObj?.function?.description || "",
+        json: JSON.stringify(toolObj, null, 2),
+      });
+    } catch {
+    }
+  }
+
+  return tools;
+};
+
+const parseDotpromptFrontmatter = (frontmatter: string): ParsedFrontmatter => {
+  const result: ParsedFrontmatter = { config: {}, tools: [] };
+  const lines = frontmatter.split("\n");
+
+  result.tools = parseToolsFromFrontmatter(lines);
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) continue;
+
+    // Skip known nested yaml sections and list items.
+    if (
+      trimmedLine.startsWith("input:") ||
+      trimmedLine.startsWith("output:") ||
+      trimmedLine.startsWith("schema:") ||
+      trimmedLine.startsWith("format:") ||
+      trimmedLine.startsWith("tools:") ||
+      trimmedLine.startsWith("-")
+    ) {
+      continue;
+    }
+
+    const colonIndex = trimmedLine.indexOf(":");
+    if (colonIndex <= 0) continue;
+
+    const key = trimmedLine.substring(0, colonIndex).trim();
+    const value = trimmedLine.substring(colonIndex + 1).trim();
+
+    if (key === "model") {
+      result.model = value;
+      continue;
+    }
+
+    if (key === "temperature") result.config.temperature = parseNumber(value);
+    if (key === "max_tokens") result.config.max_tokens = parseNumber(value);
+    if (key === "top_p") result.config.top_p = parseNumber(value);
+  }
+
+  return result;
+};
+
+type ParsedBody = { developerMessage: string; messages: Message[] };
+
+const parseDotpromptBody = (body: string): ParsedBody => {
+  const roleHeader = /^(System|Developer|User|Assistant):(?:\s(.*)|\s*)$/;
+  const messages: Message[] = [];
+  let developerMessage = "";
+
+  let currentRole: string | null = null;
+  let buffer: string[] = [];
+
+  const commit = () => {
+    if (!currentRole) return;
+
+    const content = buffer.join("\n").trim();
+    if (currentRole === "developer") {
+      if (content) {
+        developerMessage = developerMessage ? `${developerMessage}\n\n${content}` : content;
+      }
+    } else if (content) {
+      messages.push({ role: currentRole, content });
+    } else {
+      messages.push({ role: currentRole, content: "" });
+    }
+  };
+
+  for (const line of body.split("\n")) {
+    const match = line.match(roleHeader);
+    if (match) {
+      commit();
+      currentRole = match[1].toLowerCase();
+      buffer = [match[2] ?? ""];
+      continue;
+    }
+
+    if (!currentRole) continue;
+    buffer.push(line);
+  }
+
+  commit();
+
+  return { developerMessage, messages };
+};
+
 export const parseExistingPrompt = (apiResponse: any): PromptType => {
   // Extract dotprompt_content from litellm_params
   const dotpromptContent = apiResponse?.prompt_spec?.litellm_params?.dotprompt_content || "";
@@ -88,63 +226,11 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
     throw new Error("Invalid dotprompt format");
   }
 
-  // Parse YAML frontmatter (parts[1])
   const frontmatter = parts[1];
   const content = parts.slice(2).join("---").trim();
 
-  // Extract metadata from frontmatter
-  const metadata: any = {};
-  frontmatter.split("\n").forEach((line: string) => {
-    const trimmedLine = line.trim();
-    if (trimmedLine && !trimmedLine.startsWith("input:") && !trimmedLine.startsWith("output:") && !trimmedLine.startsWith("schema:") && !trimmedLine.startsWith("format:")) {
-      const colonIndex = trimmedLine.indexOf(":");
-      if (colonIndex > 0) {
-        const key = trimmedLine.substring(0, colonIndex).trim();
-        const value = trimmedLine.substring(colonIndex + 1).trim();
-        if (key === "temperature" || key === "max_tokens" || key === "top_p") {
-          metadata[key] = parseFloat(value);
-        } else if (key === "model") {
-          metadata[key] = value;
-        }
-      }
-    }
-  });
-
-  // Parse content to extract developer message and user messages
-  let developerMessage = "";
-  const messages: Message[] = [];
-  const lines = content.split("\n");
-  let currentRole: "user" | "assistant" | null = null;
-  let currentContent = "";
-
-  for (const line of lines) {
-    if (line.startsWith("Developer:")) {
-      developerMessage = line.substring("Developer:".length).trim();
-    } else if (line.startsWith("User:")) {
-      if (currentRole && currentContent) {
-        messages.push({ role: currentRole, content: currentContent.trim() });
-      }
-      currentRole = "user";
-      currentContent = line.substring("User:".length).trim();
-    } else if (line.startsWith("Assistant:")) {
-      if (currentRole && currentContent) {
-        messages.push({ role: currentRole, content: currentContent.trim() });
-      }
-      currentRole = "assistant";
-      currentContent = line.substring("Assistant:".length).trim();
-    } else if (line.trim() && currentRole) {
-      currentContent += "\n" + line.trim();
-    }
-  }
-
-  // Add the last message
-  if (currentRole && currentContent) {
-    messages.push({ role: currentRole, content: currentContent.trim() });
-  }
-
-  // Parse tools from frontmatter if present
-  const tools: Tool[] = [];
-  // TODO: Add tool parsing if needed
+  const parsedFrontmatter = parseDotpromptFrontmatter(frontmatter);
+  const parsedBody = parseDotpromptBody(content);
 
   // Strip version suffix from prompt name for display
   const promptId = apiResponse?.prompt_spec?.prompt_id || "Unnamed Prompt";
@@ -152,15 +238,14 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
 
   return {
     name: baseName,
-    model: metadata.model || "gpt-4o",
-    config: {
-      temperature: metadata.temperature,
-      max_tokens: metadata.max_tokens,
-      top_p: metadata.top_p,
-    },
-    tools: tools,
-    developerMessage: developerMessage,
-    messages: messages.length > 0 ? messages : [{ role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
+    model: parsedFrontmatter.model || "gpt-4o",
+    config: parsedFrontmatter.config,
+    tools: parsedFrontmatter.tools,
+    developerMessage: parsedBody.developerMessage,
+    messages:
+      parsedBody.messages.length > 0
+        ? parsedBody.messages
+        : [{ role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
   };
 };
 

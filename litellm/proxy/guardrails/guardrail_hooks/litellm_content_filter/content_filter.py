@@ -6,6 +6,7 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import json
 import os
 import re
 from datetime import datetime
@@ -50,6 +51,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterDetection,
     PatternDetection,
 )
+
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS = 1
@@ -146,6 +148,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             categories: List of category configurations with enabled/action/severity settings
             severity_threshold: Minimum severity to block ("high", "medium", "low")
         """
+
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=[
@@ -168,13 +171,19 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[
-            str, Tuple[str, str, ContentFilterAction]
-        ] = {}  # keyword -> (category, severity, action)
+        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
+            {}
+        )  # keyword -> (category, severity, action)
 
         # Load categories if provided
         if categories:
             self._load_categories(categories)
+        else:
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail has no content categories configured. "
+                "Toxic/abuse and other category-based keyword filtering will not run. "
+                "Add categories (e.g. harm_toxic_abuse) in the guardrail config to enable them."
+            )
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
         normalized_patterns: List[ContentFilterPattern] = []
@@ -197,6 +206,15 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.compiled_patterns: List[Dict[str, Any]] = []
         for pattern_config in normalized_patterns:
             self._add_pattern(pattern_config)
+
+        # Warn if using during_call with MASK action (unstable)
+        if self.event_hook == GuardrailEventHooks.during_call and any(
+            p["action"] == ContentFilterAction.MASK for p in self.compiled_patterns
+        ):
+            verbose_proxy_logger.warning(
+                f"ContentFilterGuardrail '{self.guardrail_name}': 'during_call' mode with 'MASK' action is unstable due to race conditions. "
+                "Use 'pre_call' mode for reliable request masking."
+            )
 
         # Load blocked words - always initialize as dict
         self.blocked_words: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
@@ -263,9 +281,15 @@ class ContentFilterGuardrail(CustomGuardrail):
             if custom_file:
                 category_file_path = custom_file
             else:
-                category_file_path = os.path.join(
-                    categories_dir, f"{category_name}.yaml"
-                )
+                # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
+                yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
+                json_path = os.path.join(categories_dir, f"{category_name}.json")
+                if os.path.exists(yaml_path):
+                    category_file_path = yaml_path
+                elif os.path.exists(json_path):
+                    category_file_path = json_path
+                else:
+                    category_file_path = yaml_path  # will trigger "not found" below
 
             if not os.path.exists(category_file_path):
                 verbose_proxy_logger.warning(
@@ -306,23 +330,67 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _load_category_file(self, file_path: str) -> CategoryConfig:
         """
-        Load a category definition from a YAML file.
+        Load a category definition from a YAML or JSON file.
+
+        YAML format: category_name, description, default_action, keywords (list of
+        {keyword, severity}), exceptions.
+        JSON format: list of {id, match, tags, severity}; match is pipe-separated
+        phrases; severity 1-4 mapped to low/medium/high. Used for harm_toxic_abuse.
 
         Args:
-            file_path: Path to category YAML file
+            file_path: Path to category YAML or JSON file
 
         Returns:
             CategoryConfig object
         """
+        if file_path.lower().endswith(".json"):
+            return self._load_category_file_json(file_path)
         with open(file_path, "r") as f:
             data = yaml.safe_load(f)
-
         return CategoryConfig(
             category_name=data.get("category_name", "unknown"),
             description=data.get("description", ""),
             default_action=ContentFilterAction(data.get("default_action", "BLOCK")),
             keywords=data.get("keywords", []),
             exceptions=data.get("exceptions", []),
+        )
+
+    def _load_category_file_json(self, file_path: str) -> CategoryConfig:
+        """
+        Load a category from the harm_toxic_abuse-style JSON format.
+
+        Each entry has: id, match (pipe-separated phrases), tags, severity (1-4).
+        Severity mapping: 4,3 -> high; 2 -> medium; 1 -> low.
+        """
+        with open(file_path, "r") as f:
+            entries = json.load(f)
+        if not isinstance(entries, list):
+            entries = [entries]
+        # Derive category name from filename (e.g. harm_toxic_abuse.json -> harm_toxic_abuse)
+        category_name = os.path.splitext(os.path.basename(file_path))[0]
+        severity_map = {4: "high", 3: "high", 2: "medium", 1: "low"}
+        keywords: List[Dict[str, str]] = []
+        seen = set()
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            match_str = item.get("match") or ""
+            raw_severity = item.get("severity", 2)
+            severity = severity_map.get(
+                raw_severity if isinstance(raw_severity, int) else 2, "medium"
+            )
+            for phrase in match_str.split("|"):
+                phrase = phrase.strip().lower()
+                if not phrase or phrase in seen:
+                    continue
+                seen.add(phrase)
+                keywords.append({"keyword": phrase, "severity": severity})
+        return CategoryConfig(
+            category_name=category_name,
+            description="Detects harmful, toxic, or abusive language and content",
+            default_action=ContentFilterAction("BLOCK"),
+            keywords=keywords,
+            exceptions=[],
         )
 
     def _should_apply_severity(self, severity: str, threshold: str) -> bool:
@@ -905,11 +973,15 @@ class ContentFilterGuardrail(CustomGuardrail):
                 elif isinstance(e.detail, str):
                     e.detail = e.detail + " (Image description): " + description
                 else:
-                    e.detail = "Content blocked: Image description detected" + description
+                    e.detail = (
+                        "Content blocked: Image description detected" + description
+                    )
                 raise e
 
     def _count_masked_entities(
-        self, detections: List[ContentFilterDetection], masked_entity_count: Dict[str, int]
+        self,
+        detections: List[ContentFilterDetection],
+        masked_entity_count: Dict[str, int],
     ) -> None:
         """
         Count masked entities by type from detections.
@@ -964,9 +1036,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             dict(detection) for detection in detections
         ]
         if status != "success":
-            guardrail_json_response = exception_str if exception_str else [
-                dict(detection) for detection in detections
-            ]
+            guardrail_json_response = (
+                exception_str
+                if exception_str
+                else [dict(detection) for detection in detections]
+            )
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
@@ -1066,99 +1140,84 @@ class ContentFilterGuardrail(CustomGuardrail):
         Process streaming response chunks and check for blocked content.
 
         For BLOCK action: Raises HTTPException immediately when blocked content is detected.
-        For MASK action: Content passes through (masking streaming responses is not supported).
+        For MASK action: Content is buffered to handle patterns split across chunks.
         """
+        accumulated_full_text = ""
+        yielded_masked_text_len = 0
+        buffer_size = 50  # Increased buffer to catch patterns split across many chunks
 
-        # Accumulate content as we iterate through chunks
-        accumulated_content = ""
+        verbose_proxy_logger.info(
+            f"ContentFilterGuardrail: Starting robust streaming masking for model {request_data.get('model')}"
+        )
 
         async for item in response:
-            # Accumulate content from this chunk before checking
             if isinstance(item, ModelResponseStream) and item.choices:
+                delta_content = ""
+                is_final = False
                 for choice in item.choices:
                     if hasattr(choice, "delta") and choice.delta:
                         content = getattr(choice.delta, "content", None)
                         if content and isinstance(content, str):
-                            accumulated_content += content
+                            delta_content += content
+                    if getattr(choice, "finish_reason", None):
+                        is_final = True
 
-                # Check accumulated content for blocked patterns/keywords after processing all choices
-                # Only check for BLOCK actions, not MASK (masking streaming is not supported)
-                if accumulated_content:
-                    try:
-                        # Check patterns
-                        pattern_match = self._check_patterns(accumulated_content)
-                        if pattern_match:
-                            matched_text, pattern_name, action = pattern_match
-                            if action == ContentFilterAction.BLOCK:
-                                error_msg = (
-                                    f"Content blocked: {pattern_name} pattern detected"
-                                )
-                                verbose_proxy_logger.warning(error_msg)
-                                raise HTTPException(
-                                    status_code=403,
-                                    detail={
-                                        "error": error_msg,
-                                        "pattern": pattern_name,
-                                    },
-                                )
+                accumulated_full_text += delta_content
 
-                        # Check blocked words
-                        blocked_word_match = self._check_blocked_words(
-                            accumulated_content
-                        )
-                        if blocked_word_match:
-                            keyword, action, description = blocked_word_match
-                            if action == ContentFilterAction.BLOCK:
-                                error_msg = (
-                                    f"Content blocked: keyword '{keyword}' detected"
-                                )
-                                if description:
-                                    error_msg += f" ({description})"
-                                verbose_proxy_logger.warning(error_msg)
-                                raise HTTPException(
-                                    status_code=403,
-                                    detail={
-                                        "error": error_msg,
-                                        "keyword": keyword,
-                                        "description": description,
-                                    },
-                                )
+                # Check for blocking or apply masking
+                # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
+                text_to_check = accumulated_full_text
+                if is_final:
+                    text_to_check += " "
 
-                        # Check category keywords
-                        all_exceptions = []
-                        for category in self.loaded_categories.values():
-                            all_exceptions.extend(category.exceptions)
-                        category_match = self._check_category_keywords(
-                            accumulated_content, all_exceptions
-                        )
-                        if category_match:
-                            keyword, category_name, severity, action = category_match
-                            if action == ContentFilterAction.BLOCK:
-                                error_msg = (
-                                    f"Content blocked: {category_name} category keyword '{keyword}' detected "
-                                    f"(severity: {severity})"
-                                )
-                                verbose_proxy_logger.warning(error_msg)
-                                raise HTTPException(
-                                    status_code=403,
-                                    detail={
-                                        "error": error_msg,
-                                        "category": category_name,
-                                        "keyword": keyword,
-                                        "severity": severity,
-                                    },
-                                )
-                    except HTTPException:
-                        # Re-raise HTTPException (blocked content detected)
-                        raise
-                    except Exception as e:
-                        # Log other exceptions but don't block the stream
-                        verbose_proxy_logger.warning(
-                            f"Error checking content filter in streaming: {e}"
-                        )
+                try:
+                    masked_text = self._filter_single_text(text_to_check)
+                    if is_final and masked_text.endswith(" "):
+                        masked_text = masked_text[:-1]
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        f"ContentFilterGuardrail: Error in masking: {e}"
+                    )
+                    masked_text = text_to_check  # Fallback to current text
 
-            # Yield the chunk (only if no exception was raised above)
-            yield item
+                # Determine how much can be safely yielded
+                if is_final:
+                    safe_to_yield_len = len(masked_text)
+                else:
+                    safe_to_yield_len = max(0, len(masked_text) - buffer_size)
+
+                if safe_to_yield_len > yielded_masked_text_len:
+                    new_masked_content = masked_text[
+                        yielded_masked_text_len:safe_to_yield_len
+                    ]
+                    # Modify the chunk to contain only the new masked content
+                    if (
+                        item.choices
+                        and hasattr(item.choices[0], "delta")
+                        and item.choices[0].delta
+                    ):
+                        item.choices[0].delta.content = new_masked_content
+                        yielded_masked_text_len = safe_to_yield_len
+                        yield item
+                else:
+                    # Hold content by yielding empty content chunk (keeps metadata/structure)
+                    if (
+                        item.choices
+                        and hasattr(item.choices[0], "delta")
+                        and item.choices[0].delta
+                    ):
+                        item.choices[0].delta.content = ""
+                    yield item
+            else:
+                # Not a ModelResponseStream or no choices - yield as is
+                yield item
+
+        # Any remaining content (should have been handled by is_final, but just in case)
+        if yielded_masked_text_len < len(accumulated_full_text):
+            # We already reached the end of the generator
+            pass
 
     @staticmethod
     def get_config_model():

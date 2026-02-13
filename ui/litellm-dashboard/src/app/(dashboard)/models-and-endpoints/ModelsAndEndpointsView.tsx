@@ -26,7 +26,7 @@ import ModelGroupAliasSettings from "../../../components/model_group_alias_setti
 import ModelInfoView from "../../../components/model_info_view";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
 import PassThroughSettings from "../../../components/pass_through_settings";
-import TeamInfoView from "../../../components/team/team_info";
+import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
 interface ModelDashboardProps {
@@ -400,6 +400,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     all_models_on_proxy={allModelsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
+                    teams={teams}
                   />
                 </TabPanel>
                 <ModelRetrySettingsTab

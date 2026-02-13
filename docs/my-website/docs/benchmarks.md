@@ -5,6 +5,13 @@ import Image from '@theme/IdealImage';
 
 Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpoint.
 
+## Setting Up a Fake OpenAI Endpoint
+
+For load testing and benchmarking, you can use a fake OpenAI proxy server. LiteLLM provides:
+
+1. **Hosted endpoint**: Use our free hosted fake endpoint at `https://exampleopenaiendpoint-production.up.railway.app/`
+2. **Self-hosted**: Set up your own fake OpenAI proxy server using [github.com/BerriAI/example_openai_endpoint](https://github.com/BerriAI/example_openai_endpoint)
+
 Use this config for testing:
 
 ```yaml
@@ -12,7 +19,7 @@ model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
       model: openai/any
-      api_base: https://your-fake-openai-endpoint.com/chat/completions
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/  # or your self-hosted endpoint
       api_key: "test"
 ```
 
@@ -47,6 +54,28 @@ In these tests the baseline latency characteristics are measured against a fake-
 - Doubling from 2 to 4 LiteLLM instances halves median latency: 200 ms → 100 ms.
 - High-percentile latencies drop significantly: P95 630 ms → 150 ms, P99 1,200 ms → 240 ms.
 - Setting workers equal to CPU count gives optimal performance.
+
+## `/realtime` API Benchmarks
+
+End-to-end latency benchmarks for the `/realtime` endpoint tested against a fake realtime endpoint.
+
+### Performance Metrics
+
+| Metric          | Value      |
+| --------------- | ---------- |
+| Median latency  | 59 ms      |
+| p95 latency     | 67 ms      |
+| p99 latency     | 99 ms      |
+| Average latency | 63 ms      |
+| RPS             | 1,207      |
+
+### Test Setup
+
+| Category | Specification |
+|----------|---------------|
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
 
 ## Machine Spec used for testing
 

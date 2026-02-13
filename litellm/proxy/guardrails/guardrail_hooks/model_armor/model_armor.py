@@ -330,6 +330,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[dict] = None,
     ):
         """
         Override to store only the Model Armor API response, not the entire data dict.
@@ -421,6 +422,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     )
                     else "success"
                 )
+
+            # Add guardrail to applied_guardrails BEFORE potential blocking
+            # This ensures guardrail is recorded even when it blocks the request
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
+
             # Check if content should be blocked
             if self._should_block_content(
                 armor_response, allow_sanitization=self.mask_request_content
@@ -455,11 +463,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             # Depending on configuration, either fail or continue
             if self.optional_params.get("fail_on_error", True):
                 raise
-
-        # Add guardrail to headers
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
 
         return data
 
@@ -517,6 +520,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     else "success"
                 )
 
+            # Add guardrail to applied_guardrails BEFORE potential blocking
+            # This ensures guardrail is recorded even when it blocks the request
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
+
             # Check if content should be blocked
             if self._should_block_content(
                 armor_response, allow_sanitization=self.mask_request_content
@@ -549,11 +558,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             if self.optional_params.get("fail_on_error", True):
                 raise
-
-        # Add guardrail to headers
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
 
         return data
 
@@ -622,6 +626,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     guardrail_response=standard_logging_guardrail_information,
                 )
 
+            # Add guardrail to applied_guardrails BEFORE potential blocking
+            # This ensures guardrail is recorded even when it blocks the request
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
+
             # Check if content should be blocked
             if self._should_block_content(
                 armor_response, allow_sanitization=self.mask_response_content
@@ -653,11 +663,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             if self.optional_params.get("fail_on_error", True):
                 raise
-
-        # Add guardrail to headers
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
 
         return response
 
@@ -702,6 +707,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                             if self._should_block_content(armor_response)
                             else "success"
                         )
+
+                    # Add guardrail to applied_guardrails BEFORE potential blocking
+                    # This ensures guardrail is recorded even when it blocks the request
+                    from litellm.proxy.common_utils.callback_utils import (
+                        add_guardrail_to_applied_guardrails_header,
+                    )
+
+                    add_guardrail_to_applied_guardrails_header(
+                        request_data=request_data, guardrail_name=self.guardrail_name
+                    )
 
                     # Check if blocked
                     if self._should_block_content(armor_response):

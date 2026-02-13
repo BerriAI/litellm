@@ -685,6 +685,7 @@ async def new_team(  # noqa: PLR0915
     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
@@ -760,6 +761,22 @@ async def new_team(  # noqa: PLR0915
                 status_code=400,
                 detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
             )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
+        
+        if data.soft_budget is not None:
+            if data.max_budget is not None:
+                # If max_budget is set, soft_budget must be strictly lower than max_budget
+                if data.soft_budget >= data.max_budget:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({data.max_budget})"
+                        }
+                    )
 
         # Check if license is over limit
         total_teams = await prisma_client.db.litellm_teamtable.count()
@@ -1226,6 +1243,7 @@ async def update_team(   # noqa: PLR0915
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
@@ -1302,6 +1320,11 @@ async def update_team(   # noqa: PLR0915
                 status_code=400,
                 detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
             )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
 
         existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
             where={"team_id": data.team_id}
@@ -1312,6 +1335,29 @@ async def update_team(   # noqa: PLR0915
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
+        
+        if data.soft_budget is not None:
+            max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
+            if max_budget_to_check is not None:
+                if data.soft_budget >= max_budget_to_check:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({max_budget_to_check})"
+                        }
+                    )
+        
+        if data.max_budget is not None:
+            existing_soft_budget = getattr(existing_team_row, 'soft_budget', None)
+            soft_budget_to_check = data.soft_budget if data.soft_budget is not None else existing_soft_budget
+            if soft_budget_to_check is not None and isinstance(soft_budget_to_check, (int, float)):
+                if data.max_budget <= soft_budget_to_check:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"max_budget ({data.max_budget}) must be strictly greater than soft_budget ({soft_budget_to_check})"
+                        }
+                    )
 
         if (
             data.organization_id is not None and len(data.organization_id) > 0
@@ -1771,6 +1817,113 @@ async def _add_team_members_to_team(
     return updated_team, updated_users, updated_team_memberships
 
 
+async def _validate_and_populate_member_user_info(
+    member: Member,
+    prisma_client: PrismaClient,
+) -> Member:
+    """
+    Validate and populate user_email/user_id for a member.
+    
+    Logic:
+    1. If both user_email and user_id are provided, verify they belong to the same user (use user_email as source of truth)
+    2. If only user_email is provided, populate user_id from DB
+    3. If only user_id is provided, populate user_email from DB (if user exists)
+    4. If only user_id is provided and doesn't exist, allow it to pass with user_email as None (will be upserted later)
+    5. If user_email and user_id mismatch, throw error
+    
+    Returns a Member with user_email and user_id populated (user_email may be None if only user_id provided and user doesn't exist).
+    """
+    if member.user_email is None and member.user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Either user_id or user_email must be provided"},
+        )
+    
+    # Case 1: Both user_email and user_id provided - verify they match
+    if member.user_email is not None and member.user_id is not None:
+        # Use user_email as source of truth
+        # Check for multiple users with same email first
+        users_by_email = await prisma_client.get_data(
+            key_val={"user_email": member.user_email},
+            table_name="user",
+            query_type="find_all",
+        )
+        
+        if users_by_email is None or (
+            isinstance(users_by_email, list) and len(users_by_email) == 0
+        ):
+            # User doesn't exist yet - this is fine, will be created later
+            return member
+        
+        if isinstance(users_by_email, list) and len(users_by_email) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Multiple users found with email '{member.user_email}'. Please use 'user_id' instead."
+                },
+            )
+        
+        # Get the single user
+        user_by_email = users_by_email[0]
+        
+        # Verify the user_id matches
+        if user_by_email.user_id != member.user_id:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"user_email '{member.user_email}' and user_id '{member.user_id}' do not belong to the same user."
+                },
+            )
+        
+        # Both match, return as is
+        return member
+    
+    # Case 2: Only user_email provided - populate user_id from DB
+    if member.user_email is not None and member.user_id is None:
+        user_by_email = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": {"equals": member.user_email, "mode": "insensitive"}}
+        )
+        
+        if user_by_email is None:
+            # User doesn't exist yet - this is fine, will be created later
+            return member
+        
+        # Check for multiple users with same email
+        users_by_email = await prisma_client.get_data(
+            key_val={"user_email": member.user_email},
+            table_name="user",
+            query_type="find_all",
+        )
+        
+        if users_by_email and isinstance(users_by_email, list) and len(users_by_email) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Multiple users found with email '{member.user_email}'. Please use 'user_id' instead."
+                },
+            )
+        
+        # Populate user_id
+        member.user_id = user_by_email.user_id
+        return member
+    
+    # Case 3: Only user_id provided - populate user_email from DB if user exists
+    if member.user_id is not None and member.user_email is None:
+        user_by_id = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": member.user_id}
+        )
+        
+        if user_by_id is None:
+            # User doesn't exist yet - allow it to pass with user_email as None
+            # Will be upserted later with just user_id and null email
+            return member
+        
+        # Populate user_email
+        member.user_email = user_by_id.user_email
+        return member
+    
+    return member
+
 @router.post(
     "/team/member_add",
     tags=["team management"],
@@ -1845,6 +1998,19 @@ async def team_member_add(
         user_api_key_dict=user_api_key_dict,
         complete_team_data=complete_team_data,
     )
+
+    # Validate and populate user_email/user_id for members before processing
+    if isinstance(data.member, Member):
+        await _validate_and_populate_member_user_info(
+            member=data.member,
+            prisma_client=prisma_client,
+        )
+    elif isinstance(data.member, List):
+        for m in data.member:
+            await _validate_and_populate_member_user_info(
+                member=m,
+                prisma_client=prisma_client,
+            )
 
     updated_team, updated_users, updated_team_memberships = (
         await _add_team_members_to_team(
@@ -2929,12 +3095,7 @@ async def list_available_teams(
         ),
     )
     if available_teams is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No available teams for user to join. See how to set available teams here: https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
-            },
-        )
+        return []
 
     # filter out teams that the user is already a member of
     user_info = await prisma_client.db.litellm_usertable.find_unique(

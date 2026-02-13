@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
+from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.proxy._types import CommonProxyErrors
@@ -41,7 +42,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
-        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue()  # type: ignore[assignment]
+        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(  # type: ignore[assignment]
+            maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
+        )
         asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 
@@ -69,6 +72,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
+            # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
+            if self.log_queue.full():
+                await self.flush_queue()
             await self.log_queue.put(
                 GCSLogQueueItem(
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
@@ -91,9 +97,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-            # Add to logging queue - this will be flushed periodically
-            # Use asyncio.Queue.put() for thread-safe concurrent access
-            # If queue is full, this will block until space is available (backpressure)
+            # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
+            if self.log_queue.full():
+                await self.flush_queue()
             await self.log_queue.put(
                 GCSLogQueueItem(
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
