@@ -45,7 +45,6 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             return result
         elif isinstance(obj, BaseModel):
             dumped = obj.model_dump()
-            seen.add(id(obj))
             result = _serialize(dumped, seen, depth + 1)
             seen.remove(id(obj))
             return result
