@@ -151,6 +151,7 @@ class ProxyInitializationHelpers:
         port: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        ssl_keyfile_password: Optional[str] = None,
         ciphers: Optional[str] = None,
     ):
         """
@@ -173,6 +174,8 @@ class ProxyInitializationHelpers:
             )
             config.certfile = ssl_certfile_path
             config.keyfile = ssl_keyfile_path
+            if ssl_keyfile_password is not None:
+                config.keyfile_password = ssl_keyfile_password
             if ciphers is not None:
                 config.ciphers = ciphers
 
@@ -187,6 +190,7 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        ssl_keyfile_password: Optional[str] = None,
         max_requests_before_restart: Optional[int] = None,
     ):
         """
@@ -278,6 +282,8 @@ class ProxyInitializationHelpers:
             )
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
+            if ssl_keyfile_password is not None:
+                gunicorn_options["keyfile_password"] = ssl_keyfile_password
 
         StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
@@ -468,6 +474,13 @@ class ProxyInitializationHelpers:
     envvar="SSL_CERTFILE_PATH",
 )
 @click.option(
+    "--ssl_keyfile_password",
+    default=None,
+    type=str,
+    help="Password for the SSL keyfile. Use this when your SSL keyfile is encrypted with a passphrase.",
+    envvar="SSL_KEYFILE_PASSWORD",
+)
+@click.option(
     "--ciphers",
     default=None,
     type=str,
@@ -533,6 +546,7 @@ def run_server(  # noqa: PLR0915
     run_hypercorn,
     ssl_keyfile_path,
     ssl_certfile_path,
+    ssl_keyfile_password,
     ciphers,
     log_config,
     use_prisma_db_push: bool,
@@ -842,6 +856,8 @@ def run_server(  # noqa: PLR0915
                 )
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
+                if ssl_keyfile_password is not None:
+                    uvicorn_args["ssl_keyfile_password"] = ssl_keyfile_password
 
             loop_type = ProxyInitializationHelpers._get_loop_type()
             if loop_type:
@@ -859,6 +875,7 @@ def run_server(  # noqa: PLR0915
                 num_workers=num_workers,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                ssl_keyfile_password=ssl_keyfile_password,
                 max_requests_before_restart=max_requests_before_restart,
             )
         elif run_hypercorn is True:
@@ -868,6 +885,7 @@ def run_server(  # noqa: PLR0915
                 port=port,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                ssl_keyfile_password=ssl_keyfile_password,
                 ciphers=ciphers,
             )
 
