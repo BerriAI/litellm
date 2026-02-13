@@ -1,0 +1,278 @@
+[
+  {
+    "id": "advanced-au-pii-protection",
+    "title": "Advanced PII Protection (Australia)",
+    "description": "Comprehensive PII detection and masking for Australia. Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-purple-500",
+    "iconBg": "bg-purple-50",
+    "guardrails": [
+      "au-pii-tax-identifiers",
+      "au-pii-passports",
+      "international-pii-identifiers",
+      "contact-information-pii",
+      "financial-pii",
+      "credentials-api-keys",
+      "network-infrastructure-pii",
+      "protected-class-information"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "au-pii-tax-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_tfn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_abn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_medicare",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Australian Tax File Numbers, Business Numbers, and Medicare Numbers"
+        }
+      },
+      {
+        "guardrail_name": "au-pii-passports",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_australia",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[PASSPORT_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Australian passport numbers"
+        }
+      },
+      {
+        "guardrail_name": "international-pii-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "us_ssn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "us_ssn_no_dash", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_us", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_uk", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_germany", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_france", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_netherlands", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "nl_bsn_contextual", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_china", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_india", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_japan", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_canada", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cpf", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cpf_unformatted", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_rg", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cnpj", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks international PII identifiers including passports and national IDs"
+        }
+      },
+      {
+        "guardrail_name": "contact-information-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "us_phone", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_phone_landline", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_phone_mobile", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "street_address", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cep", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks contact information including emails, phone numbers, and addresses"
+        }
+      },
+      {
+        "guardrail_name": "financial-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "amex", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "discover", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks financial information including credit cards and bank account numbers"
+        }
+      },
+      {
+        "guardrail_name": "credentials-api-keys",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Blocks requests containing API keys and credentials (AWS, GitHub, Slack)"
+        }
+      },
+      {
+        "guardrail_name": "network-infrastructure-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "ipv4", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "ipv6", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[INTERNAL_IP_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks IP addresses in requests"
+        }
+      },
+      {
+        "guardrail_name": "protected-class-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "gender_sexual_orientation", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "race_ethnicity_national_origin", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "religion", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "age_discrimination", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "disability", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "marital_family_status", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "military_status", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "public_assistance", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[PROTECTED_CLASS_INFO_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks protected class information for HR compliance and anti-discrimination"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "advanced-pii-protection-australia",
+      "description": "Comprehensive PII detection and masking policy for Australia. Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
+      "guardrails_add": [
+        "au-pii-tax-identifiers",
+        "au-pii-passports",
+        "international-pii-identifiers",
+        "contact-information-pii",
+        "financial-pii",
+        "credentials-api-keys",
+        "network-infrastructure-pii",
+        "protected-class-information"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "baseline-pii-protection",
+    "title": "Baseline PII Protection",
+    "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only. Suitable for non-sensitive internal use.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-blue-500",
+    "iconBg": "bg-blue-50",
+    "guardrails": [
+      "au-pii-tax-identifiers",
+      "credentials-api-keys",
+      "financial-pii"
+    ],
+    "complexity": "Low",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "au-pii-tax-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "au_tfn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "au_abn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "au_medicare", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Masks Australian Tax File Numbers, Business Numbers, and Medicare Numbers"}
+      },
+      {
+        "guardrail_name": "credentials-api-keys",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Blocks requests containing API keys and credentials (AWS, GitHub, Slack)"}
+      },
+      {
+        "guardrail_name": "financial-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "amex", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "discover", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Masks financial information including credit cards and bank account numbers"}
+      }
+    ],
+    "templateData": {
+      "policy_name": "baseline-pii-protection",
+      "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only.",
+      "guardrails_add": [
+        "au-pii-tax-identifiers",
+        "credentials-api-keys",
+        "financial-pii"
+      ],
+      "guardrails_remove": []
+    }
+  }
+]
