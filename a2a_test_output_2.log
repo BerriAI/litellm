@@ -1,0 +1,218 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.6.0 -- /home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/bin/python
+cachedir: .pytest_cache
+rootdir: /home/lucky_2004/repos/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.21.2, respx-0.22.0, retry-1.7.0, anyio-4.11.0, xdist-3.8.0, requests-mock-1.12.1, mock-3.15.1
+asyncio: mode=Mode.AUTO
+collecting ... collected 1 item
+
+tests/test_litellm/a2a/test_a2a_url_override.py::test_create_a2a_client_url_override RETRY [100%]
+tests/test_litellm/a2a/test_a2a_url_override.py::test_create_a2a_client_url_override FAILED [100%]
+
+=================================== FAILURES ===================================
+_____________________ test_create_a2a_client_url_override ______________________
+
+    @pytest.mark.asyncio
+    async def test_create_a2a_client_url_override():
+        """
+        Test that create_a2a_client passes the base_url as an override to the A2A SDK's A2AClient.
+        This ensures that the registered URL is used even if the agent card reports a different one.
+        """
+        base_url = "http://my-registered-agent:8080"
+        broken_card_url = "http://[::]:8081/invoke"
+    
+        # Mock agent card
+        mock_agent_card = MagicMock()
+        mock_agent_card.url = broken_card_url
+        mock_agent_card.name = "test-agent"
+    
+        # Mock A2ACardResolver
+        with patch("litellm.a2a_protocol.main.A2ACardResolver") as mock_resolver_cls:
+            mock_resolver = mock_resolver_cls.return_value
+            mock_resolver.get_agent_card = AsyncMock(return_value=mock_agent_card)
+    
+            # Mock _A2AClient (the SDK client)
+            with patch("litellm.a2a_protocol.main._A2AClient") as mock_sdk_client_cls:
+                # Mock successful import if not available
+                with patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True):
+                    client = await create_a2a_client(base_url=base_url)
+    
+                    # Verify SDK client was initialized with the override URL
+                    mock_sdk_client_cls.assert_called_once_with(
+>                       httpx_client=pytest.any_any, # We don't care about the exact client here
+                        agent_card=mock_agent_card,
+                        url=base_url # THIS IS THE CRITICAL ASSERTION
+                    )
+
+tests/test_litellm/a2a/test_a2a_url_override.py:32: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+name = 'any_any'
+
+    def __getattr__(name: str) -> object:
+        if name == "Instance":
+            # The import emits a deprecation warning.
+            from _pytest.python import Instance
+    
+            return Instance
+>       raise AttributeError(f"module {__name__} has no attribute {name}")
+E       AttributeError: module pytest has no attribute any_any
+
+../../.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest/__init__.py:171: AttributeError
+---------------------------- Captured stdout setup -----------------------------
+<module 'litellm' from '/home/lucky_2004/repos/litellm/litellm/__init__.py'>
+
+======================= the following tests were retried =======================
+	test_create_a2a_client_url_override failed on attempt 1! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 2! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 3! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 4! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 5! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 6! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 7! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 8! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 9! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 10! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 11! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 12! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 13! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 14! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 15! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 16! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 17! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 18! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 19! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed on attempt 20! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+	test_create_a2a_client_url_override failed after 21 attempts!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	AttributeError: module pytest has no attribute any_any
+
+=========================== end of test retry report ===========================
+
+=========================== short test summary info ============================
+FAILED tests/test_litellm/a2a/test_a2a_url_override.py::test_create_a2a_client_url_override
+=================== 1 failed, 1 retried in 100.90s (0:01:40) ===================

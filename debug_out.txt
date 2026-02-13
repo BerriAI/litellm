@@ -1,0 +1,4 @@
+﻿publicai in _custom_providers: False
+p_info: None
+config: <litellm.llms.openai_like.chat.transformation.OpenAILikeChatConfig object at 0x0000017383BD92B0>
+config.get_provider_info: {'supports_function_calling': True, 'supports_tool_choice': True}

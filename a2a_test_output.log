@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.6.0 -- /home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/bin/python
+cachedir: .pytest_cache
+rootdir: /home/lucky_2004/repos/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.21.2, respx-0.22.0, retry-1.7.0, anyio-4.11.0, xdist-3.8.0, requests-mock-1.12.1, mock-3.15.1
+asyncio: mode=Mode.AUTO
+collecting ... collected 0 items / 1 error
+
+==================================== ERRORS ====================================
+_______ ERROR collecting tests/test_litellm/a2a/test_a2a_url_override.py _______
+tests/test_litellm/a2a/test_a2a_url_override.py:3: in <module>
+    from litellm.a2a_protocol.main import create_a2a_client
+litellm/a2a_protocol/__init__.py:48: in <module>
+    from litellm.a2a_protocol.main import (
+litellm/a2a_protocol/main.py:46: in <module>
+    from litellm.a2a_protocol.card_resolver import LiteLLMA2ACardResolver
+litellm/a2a_protocol/card_resolver.py:76: in <module>
+    class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
+E   TypeError: NoneType takes no arguments
+=========================== short test summary info ============================
+ERROR tests/test_litellm/a2a/test_a2a_url_override.py - TypeError: NoneType t...
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+=============================== 1 error in 0.09s ===============================
