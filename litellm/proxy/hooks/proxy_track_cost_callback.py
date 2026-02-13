@@ -202,8 +202,8 @@ class _ProxyDBLogger(CustomLogger):
                         max_budget=end_user_max_budget,
                     )
             else:
-                if kwargs["stream"] is not True or (
-                    kwargs["stream"] is True and "complete_streaming_response" in kwargs
+                if kwargs.get("stream") is not True or (
+                    kwargs.get("stream") is True and "complete_streaming_response" in kwargs
                 ):
                     if sl_object is not None:
                         cost_tracking_failure_debug_info: Union[dict, str] = (
