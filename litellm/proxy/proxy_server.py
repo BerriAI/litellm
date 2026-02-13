@@ -8139,17 +8139,26 @@ def _add_team_models_to_all_models(
                     if can_add_model:
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
+            model_access_groups = (
+                llm_router.get_model_access_groups(team_id=team_object.team_id)
+                if llm_router
+                else {}
+            )
             for model_name in team_object.models:
-                _models = llm_router.get_model_list(
-                    model_name=model_name, team_id=team_object.team_id
-                )
-                if _models is not None:
-                    for model in _models:
-                        model_id = model.get("model_info", {}).get("id", None)
-                        if model_id is not None:
-                            team_models.setdefault(model_id, set()).add(
-                                team_object.team_id
-                            )
+                names_to_resolve = [model_name]
+                if model_name in model_access_groups:
+                    names_to_resolve = model_access_groups[model_name]
+                for name in names_to_resolve:
+                    _models = llm_router.get_model_list(
+                        model_name=name, team_id=team_object.team_id
+                    )
+                    if _models is not None:
+                        for model in _models:
+                            model_id = model.get("model_info", {}).get("id", None)
+                            if model_id is not None:
+                                team_models.setdefault(model_id, set()).add(
+                                    team_object.team_id
+                                )
     return team_models
 
 
@@ -8702,18 +8711,25 @@ async def _filter_models_by_team_id(
                 if can_add_model:
                     team_accessible_model_ids.add(model_id)
     else:
-        # Team has access to specific models
+        # Team has access to specific models (or model access group names like "on-prem")
+        model_access_groups = (
+            llm_router.get_model_access_groups(team_id=team_id) if llm_router else {}
+        )
         for model_name in team_object.models:
-            _models = (
-                llm_router.get_model_list(model_name=model_name, team_id=team_id)
-                if llm_router
-                else []
-            )
-            if _models is not None:
-                for model in _models:
-                    model_id = model.get("model_info", {}).get("id", None)
-                    if model_id is not None:
-                        team_accessible_model_ids.add(model_id)
+            names_to_resolve = [model_name]
+            if model_name in model_access_groups:
+                names_to_resolve = model_access_groups[model_name]
+            for name in names_to_resolve:
+                _models = (
+                    llm_router.get_model_list(model_name=name, team_id=team_id)
+                    if llm_router
+                    else []
+                )
+                if _models is not None:
+                    for model in _models:
+                        model_id = model.get("model_info", {}).get("id", None)
+                        if model_id is not None:
+                            team_accessible_model_ids.add(model_id)
 
     # Also search database for models accessible to this team
     # This complements the config search done above

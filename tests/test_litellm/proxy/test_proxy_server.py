@@ -896,6 +896,37 @@ def test_add_team_models_to_all_models():
     assert result == {"gpt-4-model-2": {"team1"}}
 
 
+def test_add_team_models_to_all_models_resolves_access_groups():
+    """
+    Team with models = ["on-prem"] (access group name) should get model ids
+    for models in that access group.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-1"
+    team.models = ["on-prem"]
+
+    llm_router = MagicMock()
+    llm_router.get_model_access_groups.return_value = {
+        "on-prem": ["gemma3-4b", "qwen3-embedding-8b"],
+    }
+    llm_router.get_model_list.side_effect = lambda model_name, team_id: [
+        {"model_info": {"id": f"id-{model_name}", "team_id": None}},
+    ]
+
+    result = _add_team_models_to_all_models(
+        team_db_objects_typed=[team],
+        llm_router=llm_router,
+    )
+
+    assert result == {
+        "id-gemma3-4b": {"team-1"},
+        "id-qwen3-embedding-8b": {"team-1"},
+    }
+
+
 @pytest.mark.asyncio
 async def test_delete_deployment_type_mismatch():
     """
