@@ -1196,6 +1196,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
             "IMAGE_SAFETY": "The token generation was stopped as the response was flagged for image safety reasons.",
+            "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
     @staticmethod
@@ -1218,6 +1219,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "SPII": "content_filter",
             "MALFORMED_FUNCTION_CALL": "malformed_function_call",  # openai doesn't have a way of representing this
             "IMAGE_SAFETY": "content_filter",
+            "IMAGE_PROHIBITED_CONTENT": "content_filter",
         }
 
     def translate_exception_str(self, exception_string: str):
