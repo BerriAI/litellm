@@ -2026,68 +2026,18 @@ if MCP_AVAILABLE:
                         headers={"www-authenticate": authorization_uri},
                     )
 
-            # --- MCP Debug Headers ---
-            # When client sends x-litellm-mcp-debug: true, inject masked
-            # diagnostic headers into the response for client-side debugging.
-            _debug_headers: Dict[str, str] = {}
-            if raw_headers and MCPDebug.is_debug_enabled(raw_headers):
-                # Determine auth resolution and server info for the first server
-                _debug_server_url: Optional[str] = None
-                _debug_server_auth_type: Optional[str] = None
-                _debug_auth_resolution = "no-auth"
-
-                for _sn in mcp_servers or []:
-                    _srv = global_mcp_server_manager.get_mcp_server_by_name(
-                        _sn, client_ip=_client_ip
-                    )
-                    if _srv:
-                        _debug_server_url = _srv.url
-                        _debug_server_auth_type = _srv.auth_type
-
-                        # Determine which auth priority will be used
-                        _has_server_specific = bool(
-                            mcp_server_auth_headers
-                            and (
-                                mcp_server_auth_headers.get(_srv.alias or "")
-                                or mcp_server_auth_headers.get(_srv.server_name or "")
-                            )
-                        )
-                        if _has_server_specific or mcp_auth_header:
-                            _debug_auth_resolution = "per-request-header"
-                        elif _srv.has_client_credentials:
-                            _debug_auth_resolution = "m2m-client-credentials"
-                        elif _srv.authentication_token:
-                            _debug_auth_resolution = "static-token"
-                        elif oauth2_headers and _srv.auth_type == MCPAuth.oauth2:
-                            _debug_auth_resolution = "oauth2-passthrough"
-                        break
-
-                _litellm_key = MCPRequestHandler.get_litellm_api_key_from_headers(
-                    MCPRequestHandler._safe_get_headers_from_scope(scope)
-                )
-
-                _debug_headers = MCPDebug.build_debug_headers(
-                    inbound_headers=raw_headers,
-                    oauth2_headers=oauth2_headers,
-                    litellm_api_key=_litellm_key,
-                    auth_resolution=_debug_auth_resolution,
-                    server_url=_debug_server_url,
-                    server_auth_type=_debug_server_auth_type,
-                )
-
-            # Wrap send to inject debug headers into the response
+            # Inject masked debug headers when client sends x-litellm-mcp-debug: true
+            _debug_headers = MCPDebug.maybe_build_debug_headers(
+                raw_headers=raw_headers,
+                scope=scope,
+                mcp_servers=mcp_servers,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                client_ip=_client_ip,
+            )
             if _debug_headers:
-                _original_send = send
-
-                async def _debug_send(message):
-                    if message["type"] == "http.response.start":
-                        headers = list(message.get("headers", []))
-                        for k, v in _debug_headers.items():
-                            headers.append((k.encode(), v.encode()))
-                        message = {**message, "headers": headers}
-                    await _original_send(message)
-
-                send = _debug_send  # type: ignore[assignment]
+                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
 
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
