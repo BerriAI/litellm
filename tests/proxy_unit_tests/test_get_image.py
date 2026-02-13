@@ -1,33 +1,30 @@
 import pytest
 from fastapi.testclient import TestClient
 from litellm.proxy.proxy_server import app
-import os
 
-def test_get_image_redirect_behavior():
+client = TestClient(app)
+
+def test_get_image_redirect_behavior(monkeypatch):
     """
-    Update existing tests to verify the new Redirect behavior for remote URLs.
+    Test that remote URLs in UI_LOGO_PATH trigger a 307 Redirect.
     """
-    client = TestClient(app)
+    test_url = "http://example.com/logo.png"
+    monkeypatch.setenv("UI_LOGO_PATH", test_url)
     
-    # Test case: Remote URL should 307 Redirect
-    os.environ["UI_LOGO_PATH"] = "http://example.com/logo.png"
-    
-    # Ensure no stale cache interferes
-    if os.path.exists("cached_logo.jpg"):
-        os.remove("cached_logo.jpg")
-        
+    # We set follow_redirects=False to catch the 307 itself
     response = client.get("/get_image", follow_redirects=False)
+    
     assert response.status_code == 307
-    assert response.headers["location"] == "http://example.com/logo.png"
+    assert response.headers["location"] == test_url
 
-def test_get_image_local_fallback():
+def test_get_image_local_fallback(monkeypatch):
     """
-    Verify that if no URL is provided, it still returns a 200 for local files.
+    Test that local paths return a 200 FileResponse.
     """
-    client = TestClient(app)
-    os.environ.pop("UI_LOGO_PATH", None)
+    # Ensure no remote URL is set
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
     
     response = client.get("/get_image")
-    # This should return the default logo (200 OK)
+    
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/jpeg"

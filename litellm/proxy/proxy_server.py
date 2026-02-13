@@ -10290,35 +10290,16 @@ async def get_image():
     """Get logo to show on admin UI"""
     logo_path = os.getenv("UI_LOGO_PATH", "")
 
-    # Check if the logo path is an HTTP/HTTPS URL first to avoid stale cache bugs
+    # NEW: Immediately redirect for HTTP/HTTPS to avoid mixed-content and stale cache bugs
     if logo_path.startswith(("http://", "https://")):
         return RedirectResponse(url=logo_path)
 
     # Local file handling logic
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    default_site_logo = os.path.join(current_dir, "logo.jpg")
-
-    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
-
-    if is_non_root:
-        os.makedirs(assets_dir, exist_ok=True)
-
-    default_logo = (
-        os.path.join(assets_dir, "logo.jpg") if is_non_root else default_site_logo
-    )
-    if is_non_root and not os.path.exists(default_logo):
-        default_logo = default_site_logo
-
-    cache_dir = assets_dir if is_non_root else current_dir
-    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-
-    # Optimization: Check if the cached image exists for local files
-    if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
-
+    
+    # If no path is provided, use the default internal logo
     if not logo_path:
-        logo_path = default_logo
+        logo_path = os.path.join(current_dir, "logo.jpg")
 
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
     return FileResponse(logo_path, media_type="image/jpeg")
