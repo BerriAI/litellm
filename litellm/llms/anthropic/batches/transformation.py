@@ -42,18 +42,19 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         """Validate and prepare environment-specific headers and parameters."""
+        from ..common_utils import set_anthropic_headers
+
         # Resolve api_key from environment if not provided
         api_key = api_key or self.anthropic_model_info.get_api_key()
         if api_key is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
-        _headers = {
+        _headers = set_anthropic_headers(api_key, {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
-            "x-api-key": api_key,
-        }
+        })
         # Add beta header for message batches
         if "anthropic-beta" not in headers:
             headers["anthropic-beta"] = "message-batches-2024-09-24"
