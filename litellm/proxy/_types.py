@@ -3952,6 +3952,18 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
 
 
+class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
+    """Table for managing vector stores with target_model_names support."""
+    unified_resource_id: str
+    resource_object: Optional[Any] = None  # VectorStoreCreateResponse
+    model_mappings: Dict[str, str]
+    flat_model_resource_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
+    storage_backend: Optional[str] = None
+    storage_url: Optional[str] = None
+
+
 class EnterpriseLicenseData(TypedDict, total=False):
     expiration_date: str
     user_id: str
