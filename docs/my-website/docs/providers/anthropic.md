@@ -4,8 +4,10 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-opus-4-6-20260205` / `claude-opus-4-6`
 - `claude-sonnet-4-5-20250929`
 - `claude-opus-4-5-20251101`
+- `claude-haiku-4-5-20251001`
 - `claude-opus-4-1-20250805`
 - `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
 - `claude-3.7` (`claude-3-7-sonnet-20250219`)
@@ -50,7 +52,7 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 **Notes:**
 - Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
 - `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
-- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5, and to thinking/effort for Claude Opus 4.6 (see [Effort Parameter](./anthropic_effort.md)). For Claude Opus 4.6 only, `reasoning_effort="max"` enables maximum capability with no constraints on token spending.
 
 :::
 
@@ -63,7 +65,8 @@ LiteLLM supports Anthropic's [structured outputs feature](https://platform.claud
 ### Supported Models
 - `sonnet-4-5` or `sonnet-4.5` (all Sonnet 4.5 variants)
 - `opus-4-1` or `opus-4.1` (all Opus 4.1 variants)
-  - `opus-4-5` or `opus-4.5` (all Opus 4.5 variants)
+- `opus-4-5` or `opus-4.5` (all Opus 4.5 variants)
+- `opus-4-6` or `opus-4.6` (all Opus 4.6 variants)
   
 ### Example Usage
 
@@ -415,7 +418,10 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-opus-4-6  | `completion('claude-opus-4-6-20260205', messages)` or `completion('claude-opus-4-6', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-sonnet-4-5  | `completion('claude-sonnet-4-5-20250929', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-opus-4-5  | `completion('claude-opus-4-5-20251101', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-haiku-4-5  | `completion('claude-haiku-4-5-20251001', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-opus-4  | `completion('claude-opus-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-sonnet-4  | `completion('claude-sonnet-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3.7  | `completion('claude-3-7-sonnet-20250219', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
@@ -1472,9 +1478,10 @@ LiteLLM translates OpenAI's `reasoning_effort` to Anthropic's `thinking` paramet
 | "low"            | "budget_tokens": 1024 |
 | "medium"         | "budget_tokens": 2048 |
 | "high"           | "budget_tokens": 4096 |
+| "max"            | **Claude Opus 4.6 only** — maps to `output_config={"effort": "max"}` for absolute maximum capability with no token constraints |
 
 :::note
-For Claude Opus 4.6, all `reasoning_effort` values (`low`, `medium`, `high`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets, pass the native `thinking` parameter directly:
+For Claude Opus 4.6, `reasoning_effort` values (`low`, `medium`, `high`) are mapped to `thinking: {type: "adaptive"}`. Use `reasoning_effort="max"` for the highest capability (4.6 only). To use explicit thinking budgets, pass the native `thinking` parameter directly:
 
 ```python
 from litellm import completion
