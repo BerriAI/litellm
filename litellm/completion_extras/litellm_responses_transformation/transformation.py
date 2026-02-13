@@ -227,6 +227,38 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return input_items, instructions
 
+    def _map_optional_params_to_responses_api(
+        self,
+        optional_params: dict,
+        responses_api_request: ResponsesAPIOptionalRequestParams,
+    ) -> None:
+        """Map chat completion optional parameters to responses API request format."""
+        for key, value in optional_params.items():
+            if value is None:
+                continue
+            if key in ("max_tokens", "max_completion_tokens"):
+                responses_api_request["max_output_tokens"] = value
+            elif key == "tools" and value is not None:
+                responses_api_request[
+                    "tools"
+                ] = self._convert_tools_to_responses_format(
+                    cast(List[Dict[str, Any]], value)
+                )
+            elif key == "response_format":
+                text_format = self._transform_response_format_to_text_format(value)
+                if text_format:
+                    responses_api_request["text"] = text_format  # type: ignore
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
+                responses_api_request[key] = value  # type: ignore
+            elif key == "metadata":
+                responses_api_request["metadata"] = value
+            elif key == "previous_response_id":
+                responses_api_request["previous_response_id"] = value
+            elif key == "reasoning_effort":
+                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+            elif key == "web_search_options":
+                self._add_web_search_tool(responses_api_request, value)
+
     def transform_request(
         self,
         model: str,
@@ -252,33 +284,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             responses_api_request["instructions"] = instructions
 
         # Map optional parameters
-        for key, value in optional_params.items():
-            if value is None:
-                continue
-            if key in ("max_tokens", "max_completion_tokens"):
-                responses_api_request["max_output_tokens"] = value
-            elif key == "tools" and value is not None:
-                # Convert chat completion tools to responses API tools format
-                responses_api_request[
-                    "tools"
-                ] = self._convert_tools_to_responses_format(
-                    cast(List[Dict[str, Any]], value)
-                )
-            elif key == "response_format":
-                # Convert response_format to text.format
-                text_format = self._transform_response_format_to_text_format(value)
-                if text_format:
-                    responses_api_request["text"] = text_format  # type: ignore
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
-                responses_api_request[key] = value  # type: ignore
-            elif key == "metadata":
-                responses_api_request["metadata"] = value
-            elif key == "previous_response_id":
-                responses_api_request["previous_response_id"] = value
-            elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
-            elif key == "web_search_options":
-                self._add_web_search_tool(responses_api_request, value)
+        self._map_optional_params_to_responses_api(
+            optional_params, responses_api_request
+        )
 
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -291,21 +299,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Handle session management if previous_response_id is provided
         previous_response_id = optional_params.get("previous_response_id")
         if previous_response_id:
-            # Use the existing session handler for responses API
             verbose_logger.debug(
                 f"Chat provider: Warning ignoring previous response ID: {previous_response_id}"
             )
-
-        # Convert back to responses API format for the actual request
-
-        api_model = model
 
         from litellm.types.utils import CallTypes
 
         setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
 
         request_data = {
-            "model": api_model,
+            "model": model,
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **litellm_params,
@@ -313,7 +316,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         }
 
         verbose_logger.debug(
-            f"Chat provider: Final request model={api_model}, input_items={len(input_items)}"
+            f"Chat provider: Final request model={model}, input_items={len(input_items)}"
         )
 
         # Add non-None values from responses_api_request
