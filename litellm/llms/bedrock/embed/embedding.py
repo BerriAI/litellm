@@ -27,6 +27,7 @@ from litellm.types.utils import EmbeddingResponse, LlmProviders
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
+from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
     AmazonTitanMultimodalEmbeddingG1Config,
@@ -175,6 +176,12 @@ class BedrockEmbedding(BaseAWSLLM):
                         response=response_list[0], model=model
                     )
                 )
+            elif provider == "nova":
+                returned_response = (
+                    AmazonNovaEmbeddingConfig()._transform_async_invoke_response(
+                        response=response_list[0], model=model
+                    )
+                )
             else:
                 # For other providers, create a generic async response
                 invocation_arn = response_list[0].get("invocationArn", "")
@@ -221,6 +228,10 @@ class BedrockEmbedding(BaseAWSLLM):
                     TwelveLabsMarengoEmbeddingConfig()._transform_response(
                         response_list=response_list, model=model
                     )
+                )
+            elif provider == "nova":
+                returned_response = AmazonNovaEmbeddingConfig()._transform_response(
+                    response_list=response_list, model=model
                 )
 
         ##########################################################
@@ -275,11 +286,12 @@ class BedrockEmbedding(BaseAWSLLM):
                     "headers": prepped.headers,
                 },
             )
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
             response = self._make_sync_call(
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=prepped.headers,  # type: ignore
+                headers=headers_for_request,
                 data=data,
             )
 
@@ -341,11 +353,14 @@ class BedrockEmbedding(BaseAWSLLM):
                     "headers": prepped.headers,
                 },
             )
+            # Convert CaseInsensitiveDict to regular dict for httpx compatibility
+            # This ensures custom headers are properly forwarded, especially with IAM roles and custom api_base
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
             response = await self._make_async_call(
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=prepped.headers,  # type: ignore
+                headers=headers_for_request,
                 data=data,
             )
 
@@ -366,7 +381,7 @@ class BedrockEmbedding(BaseAWSLLM):
             is_async_invoke=is_async_invoke,
         )
 
-    def embeddings(
+    def embeddings(  # noqa: PLR0915
         self,
         model: str,
         input: List[str],
@@ -467,6 +482,17 @@ class BedrockEmbedding(BaseAWSLLM):
                     )
                 )
                 batch_data.append(twelvelabs_request)
+        elif provider == "nova":
+            batch_data = []
+            for i in input:
+                nova_request = AmazonNovaEmbeddingConfig()._transform_request(
+                    input=i,
+                    inference_params=inference_params,
+                    async_invoke_route=has_async_invoke,
+                    model_id=modelId,
+                    output_s3_uri=inference_params.get("output_s3_uri"),
+                )
+                batch_data.append(nova_request)
 
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -540,6 +566,8 @@ class BedrockEmbedding(BaseAWSLLM):
         )
 
         ## ROUTING ##
+        # Convert CaseInsensitiveDict to regular dict for httpx compatibility
+        headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
         return cohere_embedding(
             model=model,
             input=input,
@@ -553,7 +581,7 @@ class BedrockEmbedding(BaseAWSLLM):
             aembedding=aembedding,
             timeout=timeout,
             client=client,
-            headers=prepped.headers,  # type: ignore
+            headers=headers_for_request,
         )
 
     async def _get_async_invoke_status(
@@ -581,22 +609,39 @@ class BedrockEmbedding(BaseAWSLLM):
             aws_region_name=aws_region_name,
         )
 
-        # Construct the status check URL
-        status_url = f"{endpoint_url}/async-invoke/{invocation_arn}"
 
-        # Prepare headers
+        from urllib.parse import quote
+
+        # Encode the ARN for use in URL path
+        encoded_arn = quote(invocation_arn, safe="")
+        status_url = f"{endpoint_url.rstrip('/')}/async-invoke/{encoded_arn}"
+
+        # Prepare headers for GET request
         headers = {"Content-Type": "application/json"}
 
-        # Get AWS signed headers
-        prepped = self.get_request_headers(  # type: ignore
-            credentials=credentials,
-            aws_region_name=aws_region_name,
-            extra_headers=None,
-            endpoint_url=status_url,
-            data="",  # GET request, no body
+        # Use AWSRequest directly for GET requests (get_request_headers hardcodes POST)
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+        except ImportError:
+            raise ImportError(
+                "Missing boto3 to call bedrock. Run 'pip install boto3'."
+            )
+
+        # Create AWSRequest with GET method and encoded URL
+        request = AWSRequest(
+            method="GET",
+            url=status_url,
+            data=None,  # GET request, no body
             headers=headers,
-            api_key=None,
         )
+        
+        # Sign the request - SigV4Auth will create canonical string from request URL
+        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+        sigv4.add_auth(request)
+        
+        # Prepare the request
+        prepped = request.prepare()
 
         # LOGGING
         if logging_obj is not None:

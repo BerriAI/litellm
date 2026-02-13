@@ -4,18 +4,30 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
-from datetime import timedelta
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 import httpx
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+
+streamable_http_client: Optional[Any] = None
+try:
+    import mcp.client.streamable_http as streamable_http_module  # type: ignore
+    streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
+except ImportError:
+    pass
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import TextContent
+from mcp.types import (
+    GetPromptRequestParams,
+    GetPromptResult,
+    Prompt,
+    ResourceTemplate,
+    TextContent,
+)
 from mcp.types import Tool as MCPTool
+from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
@@ -32,6 +44,9 @@ from litellm.types.mcp import (
 def to_basic_auth(auth_value: str) -> str:
     """Convert auth value to Basic Auth format."""
     return base64.b64encode(auth_value.encode("utf-8")).decode()
+
+
+TSessionResult = TypeVar("TSessionResult")
 
 
 class MCPClient:
@@ -58,12 +73,6 @@ class MCPClient:
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout
         self._mcp_auth_value: Optional[Union[str, Dict[str, str]]] = None
-        self._session: Optional[ClientSession] = None
-        self._context = None
-        self._transport_ctx = None
-        self._transport = None
-        self._session_ctx = None
-        self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
@@ -71,152 +80,108 @@ class MCPClient:
         if auth_value:
             self.update_auth_value(auth_value)
 
-    async def __aenter__(self):
+    def _create_transport_context(
+        self,
+    ) -> Tuple[Any, Optional[httpx.AsyncClient]]:
         """
-        Enable async context manager support.
-          Initializes the transport and session.
-        """
-        try:
-            await self.connect()
-            return self
-        except Exception:
-            await self.disconnect()
-            raise
+        Create the appropriate transport context based on transport type.
 
-    async def connect(self):
-        """Initialize the transport and session."""
-        if self._session:
-            verbose_logger.debug(
-                f"MCP client already connected to {self.server_url or 'stdio'}"
+        Returns:
+            Tuple of (transport_context, http_client).
+            http_client is only set for HTTP transport and needs cleanup.
+        """
+        http_client: Optional[httpx.AsyncClient] = None
+
+        if self.transport_type == MCPTransport.stdio:
+            if not self.stdio_config:
+                raise ValueError("stdio_config is required for stdio transport")
+            server_params = StdioServerParameters(
+                command=self.stdio_config.get("command", ""),
+                args=self.stdio_config.get("args", []),
+                env=self.stdio_config.get("env", {}),
             )
-            return  # Already connected
+            return stdio_client(server_params), None
 
-        verbose_logger.info(
-            f"MCP client connecting to {self.server_url or 'stdio'} via {self.transport_type}"
+        if self.transport_type == MCPTransport.sse:
+            headers = self._get_auth_headers()
+            httpx_client_factory = self._create_httpx_client_factory()
+            return sse_client(
+                url=self.server_url,
+                timeout=self.timeout,
+                headers=headers,
+                httpx_client_factory=httpx_client_factory,
+            ), None
+
+        # HTTP transport (default)
+        if streamable_http_client is None:
+            raise ImportError(
+                "streamable_http_client is not available. "
+                "Please install mcp with HTTP support."
+            )
+        
+        headers = self._get_auth_headers()
+        httpx_client_factory = self._create_httpx_client_factory()
+        verbose_logger.debug(
+            "litellm headers for streamable_http_client: %s", headers
         )
+        http_client = httpx_client_factory(
+            headers=headers,
+            timeout=httpx.Timeout(self.timeout),
+        )
+        transport_ctx = streamable_http_client(
+            url=self.server_url,
+            http_client=http_client,
+        )
+        return transport_ctx, http_client
 
+    async def _execute_session_operation(
+        self,
+        transport_ctx: Any,
+        operation: Callable[[ClientSession], Awaitable[TSessionResult]],
+    ) -> TSessionResult:
+        """
+        Execute an operation within a transport and session context.
+
+        Handles entering/exiting contexts and running the operation.
+        """
+        transport = await transport_ctx.__aenter__()
         try:
-            if self.transport_type == MCPTransport.stdio:
-                # For stdio transport, use stdio_client with command-line parameters
-                if not self.stdio_config:
-                    raise ValueError("stdio_config is required for stdio transport")
+            read_stream, write_stream = transport[0], transport[1]
+            session_ctx = ClientSession(read_stream, write_stream)
+            session = await session_ctx.__aenter__()
+            try:
+                await session.initialize()
+                return await operation(session)
+            finally:
+                try:
+                    await session_ctx.__aexit__(None, None, None)
+                except BaseException as e:
+                    verbose_logger.debug(f"Error during session context exit: {e}")
+        finally:
+            try:
+                await transport_ctx.__aexit__(None, None, None)
+            except BaseException as e:
+                verbose_logger.debug(f"Error during transport context exit: {e}")
 
-                server_params = StdioServerParameters(
-                    command=self.stdio_config.get("command", ""),
-                    args=self.stdio_config.get("args", []),
-                    env=self.stdio_config.get("env", {}),
-                )
-
-                self._transport_ctx = stdio_client(server_params)
-                self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(
-                    self._transport[0], self._transport[1]
-                )
-                self._session = await self._session_ctx.__aenter__()
-                await self._session.initialize()
-                verbose_logger.info(
-                    f"MCP client successfully connected via stdio: {self.stdio_config.get('command', '')}"
-                )
-            elif self.transport_type == MCPTransport.sse:
-                headers = self._get_auth_headers()
-                httpx_client_factory = self._create_httpx_client_factory()
-                self._transport_ctx = sse_client(
-                    url=self.server_url,
-                    timeout=self.timeout,
-                    headers=headers,
-                    httpx_client_factory=httpx_client_factory,
-                )
-                self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(
-                    self._transport[0], self._transport[1]
-                )
-                self._session = await self._session_ctx.__aenter__()
-                await self._session.initialize()
-                verbose_logger.info(
-                    f"MCP client successfully connected via SSE to {self.server_url}"
-                )
-            else:  # http
-                headers = self._get_auth_headers()
-                httpx_client_factory = self._create_httpx_client_factory()
-                verbose_logger.debug(
-                    "litellm headers for streamablehttp_client: %s", headers
-                )
-                self._transport_ctx = streamablehttp_client(
-                    url=self.server_url,
-                    timeout=timedelta(seconds=self.timeout),
-                    headers=headers,
-                    httpx_client_factory=httpx_client_factory,
-                )
-                self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(
-                    self._transport[0], self._transport[1]
-                )
-                self._session = await self._session_ctx.__aenter__()
-                await self._session.initialize()
-                verbose_logger.info(
-                    f"MCP client successfully connected via HTTP to {self.server_url}"
-                )
-        except ValueError as e:
-            # Re-raise ValueError exceptions (like missing stdio_config)
-            verbose_logger.warning(f"MCP client connection failed: {str(e)}")
-            await self.disconnect()
+    async def run_with_session(
+        self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
+    ) -> TSessionResult:
+        """Open a session, run the provided coroutine, and clean up."""
+        http_client: Optional[httpx.AsyncClient] = None
+        try:
+            transport_ctx, http_client = self._create_transport_context()
+            return await self._execute_session_operation(transport_ctx, operation)
+        except Exception:
+            verbose_logger.warning(
+                "MCP client run_with_session failed for %s", self.server_url or "stdio"
+            )
             raise
-        except Exception as e:
-            verbose_logger.warning(f"MCP client connection failed: {str(e)}")
-            await self.disconnect()
-            # Don't raise other exceptions, let the calling code handle it gracefully
-            # This allows the server manager to continue with other servers
-            # Instead of raising, we'll let the calling code handle the failure
-            pass
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Cleanup when exiting context manager."""
-        await self.disconnect()
-
-    async def disconnect(self):
-        """Clean up session and connections."""
-        verbose_logger.info(
-            f"MCP client disconnecting from {self.server_url or 'stdio'}"
-        )
-
-        if self._task and not self._task.done():
-            verbose_logger.debug("MCP client cancelling background task")
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-
-        if self._session:
-            try:
-                verbose_logger.debug("MCP client closing session")
-                await self._session_ctx.__aexit__(None, None, None)  # type: ignore
-            except Exception as e:
-                verbose_logger.debug(
-                    f"Error closing MCP session: {type(e).__name__}: {str(e)}"
-                )
-                pass
-            self._session = None
-            self._session_ctx = None
-
-        if self._transport_ctx:
-            try:
-                verbose_logger.debug("MCP client closing transport")
-                await self._transport_ctx.__aexit__(None, None, None)
-            except Exception as e:
-                verbose_logger.debug(
-                    f"Error closing MCP transport: {type(e).__name__}: {str(e)}"
-                )
-                pass
-            self._transport_ctx = None
-            self._transport = None
-
-        if self._context:
-            try:
-                await self._context.__aexit__(None, None, None)  # type: ignore
-            except Exception:
-                pass
-            self._context = None
+        finally:
+            if http_client is not None:
+                try:
+                    await http_client.aclose()
+                except BaseException as e:
+                    verbose_logger.debug(f"Error during http_client cleanup: {e}")
 
     def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """
@@ -244,6 +209,8 @@ class MCPClient:
                     headers["X-API-Key"] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.authorization:
                     headers["Authorization"] = self._mcp_auth_value
+                elif self.auth_type == MCPAuth.oauth2:
+                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
 
@@ -294,24 +261,11 @@ class MCPClient:
             f"MCP client listing tools from {self.server_url or 'stdio'}"
         )
 
-        if not self._session:
-            verbose_logger.debug("MCP client session not found, attempting to connect")
-            try:
-                await self.connect()
-            except Exception as e:
-                verbose_logger.error(
-                    f"MCP client connection failed during list_tools: {type(e).__name__}: {str(e)}"
-                )
-                return []
-
-        if self._session is None:
-            verbose_logger.error(
-                "MCP client session is not initialized after connection attempt"
-            )
-            return []
+        async def _list_tools_operation(session: ClientSession):
+            return await session.list_tools()
 
         try:
-            result = await self._session.list_tools()
+            result = await self.run_with_session(_list_tools_operation)
             tool_count = len(result.tools)
             tool_names = [tool.name for tool in result.tools]
             verbose_logger.info(
@@ -320,11 +274,10 @@ class MCPClient:
             return result.tools
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
-            await self.disconnect()
             raise
         except Exception as e:
             error_type = type(e).__name__
-            verbose_logger.error(
+            verbose_logger.exception(
                 f"MCP client list_tools failed - "
                 f"Error Type: {error_type}, "
                 f"Error: {str(e)}, "
@@ -339,12 +292,13 @@ class MCPClient:
                     "the MCP server may have crashed, disconnected, or timed out"
                 )
 
-            await self.disconnect()
             # Return empty list instead of raising to allow graceful degradation
             return []
 
     async def call_tool(
-        self, call_tool_request_params: MCPCallToolRequestParams
+        self,
+        call_tool_request_params: MCPCallToolRequestParams,
+        host_progress_callback: Optional[Callable] = None
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
@@ -353,55 +307,36 @@ class MCPClient:
             f"MCP client calling tool '{call_tool_request_params.name}' with arguments: {call_tool_request_params.arguments}"
         )
 
-        if not self._session:
-            verbose_logger.warning(
-                "MCP client session not found, attempting to connect"
+        async def on_progress(progress: float, total: float | None, message: str | None):
+            percentage = (progress / total * 100) if total else 0
+            verbose_logger.info(
+                f"MCP Tool '{call_tool_request_params.name}' progress: "
+                f"{progress}/{total} ({percentage:.0f}%) - {message or ''}"
             )
-            try:
-                await self.connect()
-            except Exception as e:
-                verbose_logger.error(
-                    f"MCP client connection failed before tool call: {type(e).__name__}: {str(e)}"
-                )
-                return MCPCallToolResult(
-                    content=[TextContent(type="text", text=f"{str(e)}")], isError=True
-                )
+            
+            # Forward to Host if callback provided
+            if host_progress_callback:
+                try:
+                    await host_progress_callback(progress, total)
+                except Exception as e:
+                    verbose_logger.warning(f"Failed to forward to Host: {e}")
 
-        if self._session is None:
-            verbose_logger.error(
-                "MCP client session is not initialized after connection attempt"
-            )
-            return MCPCallToolResult(
-                content=[
-                    TextContent(
-                        type="text", text="MCP client session is not initialized"
-                    )
-                ],
-                isError=True,
-            )
-
-        # Check session and transport state before calling tool
-        verbose_logger.debug(
-            f"MCP client state before tool call - "
-            f"session: {'active' if self._session else 'none'}, "
-            f"transport: {'active' if self._transport else 'none'}, "
-            f"session_ctx: {'active' if self._session_ctx else 'none'}, "
-            f"transport_ctx: {'active' if self._transport_ctx else 'none'}"
-        )
-
-        try:
+        async def _call_tool_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending tool call to session")
-            tool_result = await self._session.call_tool(
+            return await session.call_tool(
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
+                progress_callback=on_progress,
+
             )
+        try:
+            tool_result = await self.run_with_session(_call_tool_operation)
             verbose_logger.info(
                 f"MCP client tool call '{call_tool_request_params.name}' completed successfully"
             )
             return tool_result
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client tool call was cancelled")
-            await self.disconnect()
             raise
         except Exception as e:
             import traceback
@@ -424,11 +359,9 @@ class MCPClient:
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
                     "MCP client detected broken connection/stream - "
-                    "the MCP server may have crashed, disconnected, or timed out. "
-                    "Session and transport will be disconnected."
+                    "the MCP server may have crashed, disconnected, or timed out."
                 )
 
-            await self.disconnect()
             # Return a default error result instead of raising
             return MCPCallToolResult(
                 content=[
@@ -436,3 +369,218 @@ class MCPClient:
                 ],  # Empty content for error case
                 isError=True,
             )
+
+    async def list_prompts(self) -> List[Prompt]:
+        """List available prompts from the server."""
+        verbose_logger.debug(
+            f"MCP client listing tools from {self.server_url or 'stdio'}"
+        )
+
+        async def _list_prompts_operation(session: ClientSession):
+            return await session.list_prompts()
+
+        try:
+            result = await self.run_with_session(_list_prompts_operation)
+            prompt_count = len(result.prompts)
+            prompt_names = [prompt.name for prompt in result.prompts]
+            verbose_logger.info(
+                f"MCP client listed {prompt_count} tools from {self.server_url or 'stdio'}: {prompt_names}"
+            )
+            return result.prompts
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client list_prompts was cancelled")
+            raise
+        except Exception as e:
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client list_prompts failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during list_tools - "
+                    "the MCP server may have crashed, disconnected, or timed out"
+                )
+
+            # Return empty list instead of raising to allow graceful degradation
+            return []
+
+    async def get_prompt(
+        self, get_prompt_request_params: GetPromptRequestParams
+    ) -> GetPromptResult:
+        """Fetch a prompt definition from the MCP server."""
+        verbose_logger.info(
+            f"MCP client fetching prompt '{get_prompt_request_params.name}' with arguments: {get_prompt_request_params.arguments}"
+        )
+
+        async def _get_prompt_operation(session: ClientSession):
+            verbose_logger.debug("MCP client sending get_prompt request to session")
+            return await session.get_prompt(
+                name=get_prompt_request_params.name,
+                arguments=get_prompt_request_params.arguments,
+            )
+
+        try:
+            get_prompt_result = await self.run_with_session(_get_prompt_operation)
+            verbose_logger.info(
+                f"MCP client get_prompt '{get_prompt_request_params.name}' completed successfully"
+            )
+            return get_prompt_result
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client get_prompt was cancelled")
+            raise
+        except Exception as e:
+            import traceback
+
+            error_trace = traceback.format_exc()
+            verbose_logger.debug(f"MCP client get_prompt traceback:\n{error_trace}")
+
+            # Log detailed error information
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client get_prompt failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Prompt: {get_prompt_request_params.name}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during get_prompt - "
+                    "the MCP server may have crashed, disconnected, or timed out."
+                )
+
+            raise
+
+    async def list_resources(self) -> list[Resource]:
+        """List available resources from the server."""
+        verbose_logger.debug(
+            f"MCP client listing resources from {self.server_url or 'stdio'}"
+        )
+
+        async def _list_resources_operation(session: ClientSession):
+            return await session.list_resources()
+
+        try:
+            result = await self.run_with_session(_list_resources_operation)
+            resource_count = len(result.resources)
+            resource_names = [resource.name for resource in result.resources]
+            verbose_logger.info(
+                f"MCP client listed {resource_count} resources from {self.server_url or 'stdio'}: {resource_names}"
+            )
+            return result.resources
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client list_resources was cancelled")
+            raise
+        except Exception as e:
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client list_resources failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during list_resources - "
+                    "the MCP server may have crashed, disconnected, or timed out"
+                )
+
+            # Return empty list instead of raising to allow graceful degradation
+            return []
+
+    async def list_resource_templates(self) -> list[ResourceTemplate]:
+        """List available resource templates from the server."""
+        verbose_logger.debug(
+            f"MCP client listing resource templates from {self.server_url or 'stdio'}"
+        )
+
+        async def _list_resource_templates_operation(session: ClientSession):
+            return await session.list_resource_templates()
+
+        try:
+            result = await self.run_with_session(_list_resource_templates_operation)
+            resource_template_count = len(result.resourceTemplates)
+            resource_template_names = [
+                resourceTemplate.name for resourceTemplate in result.resourceTemplates
+            ]
+            verbose_logger.info(
+                f"MCP client listed {resource_template_count} resource templates from {self.server_url or 'stdio'}: {resource_template_names}"
+            )
+            return result.resourceTemplates
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client list_resource_templates was cancelled")
+            raise
+        except Exception as e:
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client list_resource_templates failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during list_resource_templates - "
+                    "the MCP server may have crashed, disconnected, or timed out"
+                )
+
+            # Return empty list instead of raising to allow graceful degradation
+            return []
+
+    async def read_resource(self, url: AnyUrl) -> ReadResourceResult:
+        """Fetch resource contents from the MCP server."""
+        verbose_logger.info(f"MCP client fetching resource '{url}'")
+
+        async def _read_resource_operation(session: ClientSession):
+            verbose_logger.debug("MCP client sending read_resource request to session")
+            return await session.read_resource(url)
+
+        try:
+            read_resource_result = await self.run_with_session(_read_resource_operation)
+            verbose_logger.info(
+                f"MCP client read_resource '{url}' completed successfully"
+            )
+            return read_resource_result
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client read_resource was cancelled")
+            raise
+        except Exception as e:
+            import traceback
+
+            error_trace = traceback.format_exc()
+            verbose_logger.debug(f"MCP client read_resource traceback:\n{error_trace}")
+
+            # Log detailed error information
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client read_resource failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Url: {url}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during read_resource - "
+                    "the MCP server may have crashed, disconnected, or timed out."
+                )
+
+            raise

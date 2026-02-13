@@ -1,9 +1,10 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select } from "antd";
+import { Modal, Tooltip, Form, Select, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { AUTH_TYPE, MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
+import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -12,6 +13,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
+import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -26,6 +28,8 @@ interface CreateMCPServerProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
+const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userRole,
@@ -39,30 +43,145 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [formValues, setFormValues] = useState<Record<string, any>>({});
+  const [pendingRestoredValues, setPendingRestoredValues] = useState<{ values: Record<string, any>; transport?: string } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [tools, setTools] = useState<any[]>([]);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [transportType, setTransportType] = useState<string>("");
   const [searchValue, setSearchValue] = useState<string>("");
-  const [urlWarning, setUrlWarning] = useState<string>("");
+  const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
+  const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
-  // Function to check URL format based on transport type
-  const checkUrlFormat = (url: string, transport: string) => {
-    if (!url) {
-      setUrlWarning("");
+  const persistCreateUiState = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const values = form.getFieldsValue(true);
+      window.sessionStorage.setItem(
+        CREATE_OAUTH_UI_STATE_KEY,
+        JSON.stringify({
+          modalVisible: isModalVisible,
+          formValues: values,
+          transportType,
+          costConfig,
+          allowedTools,
+          searchValue,
+          aliasManuallyEdited,
+        }),
+      );
+    } catch (err) {
+      console.warn("Failed to persist MCP create state", err);
+    }
+  };
+
+  const {
+    startOAuthFlow,
+    status: oauthStatus,
+    error: oauthError,
+    tokenResponse: oauthTokenResponse,
+  } = useMcpOAuthFlow({
+    accessToken,
+    getCredentials: () => form.getFieldValue("credentials"),
+    getTemporaryPayload: () => {
+      const values = form.getFieldsValue(true);
+      const url = values.url;
+      const transport = values.transport || transportType;
+      if (!url || !transport) {
+        return null;
+      }
+      const staticHeaders = Array.isArray(values.static_headers)
+        ? values.static_headers.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = entry?.value ?? "";
+            return acc;
+          }, {})
+        : ({} as Record<string, string>);
+
+      return {
+        server_id: undefined,
+        server_name: values.server_name,
+        alias: values.alias,
+        description: values.description,
+        url,
+        transport,
+        auth_type: AUTH_TYPE.OAUTH2,
+        credentials: values.credentials,
+        authorization_url: values.authorization_url,
+        token_url: values.token_url,
+        registration_url: values.registration_url,
+        mcp_access_groups: values.mcp_access_groups,
+        static_headers: staticHeaders,
+        command: values.command,
+        args: values.args,
+        env: values.env,
+      };
+    },
+    onTokenReceived: (token) => {
+      setOauthAccessToken(token?.access_token ?? null);
+    },
+    onBeforeRedirect: persistCreateUiState,
+  });
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const storedState = window.sessionStorage.getItem(CREATE_OAUTH_UI_STATE_KEY);
+    if (!storedState) {
       return;
     }
 
-    if (transport === "sse" && !url.endsWith("/sse")) {
-      setUrlWarning("Typically MCP SSE URLs end with /sse. You can add this url but this is a warning.");
-    } else if (transport === "http" && !url.endsWith("/mcp")) {
-      setUrlWarning("Typically MCP HTTP URLs end with /mcp. You can add this url but this is a warning.");
-    } else {
-      setUrlWarning("");
+    try {
+      const parsed = JSON.parse(storedState);
+      if (parsed.modalVisible) {
+        setModalVisible(true);
+      }
+      const restoredTransport = parsed.formValues?.transport || parsed.transportType || "";
+      if (restoredTransport) {
+        setTransportType(restoredTransport);
+      }
+      if (parsed.formValues) {
+        setPendingRestoredValues({ values: parsed.formValues, transport: restoredTransport });
+      }
+      if (parsed.costConfig) {
+        setCostConfig(parsed.costConfig);
+      }
+      if (parsed.allowedTools) {
+        setAllowedTools(parsed.allowedTools);
+      }
+      if (parsed.searchValue) {
+        setSearchValue(parsed.searchValue);
+      }
+      if (typeof parsed.aliasManuallyEdited === "boolean") {
+        setAliasManuallyEdited(parsed.aliasManuallyEdited);
+      }
+    } catch (err) {
+      console.error("Failed to restore MCP create state", err);
+    } finally {
+      window.sessionStorage.removeItem(CREATE_OAUTH_UI_STATE_KEY);
     }
-  };
+  }, [form, setModalVisible]);
+
+  React.useEffect(() => {
+    if (!pendingRestoredValues) {
+      return;
+    }
+    const transportReady = transportType || pendingRestoredValues.transport || "";
+    if (pendingRestoredValues.transport && !transportType) {
+      // wait until transportType state catches up so the URL field is mounted
+      return;
+    }
+    form.setFieldsValue(pendingRestoredValues.values);
+    setFormValues(pendingRestoredValues.values);
+    setPendingRestoredValues(null);
+  }, [pendingRestoredValues, form, transportType]);
 
   const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
@@ -71,6 +190,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         static_headers: staticHeadersList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
+        allow_all_keys: allowAllKeysRaw,
+        available_on_public_internet: availableOnPublicInternetRaw,
         ...restValues
       } = values;
 
@@ -161,11 +282,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        allow_all_keys: Boolean(allowAllKeysRaw),
+        available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         static_headers: staticHeaders,
       };
 
       payload.static_headers = staticHeaders;
-      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
+      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
@@ -181,7 +304,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setCostConfig({});
         setTools([]);
         setAllowedTools([]);
-        setUrlWarning("");
         setAliasManuallyEdited(false);
         setModalVisible(false);
         onCreateSuccess(response);
@@ -199,7 +321,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setCostConfig({});
     setTools([]);
     setAllowedTools([]);
-    setUrlWarning("");
     setAliasManuallyEdited(false);
     setModalVisible(false);
   };
@@ -208,15 +329,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setTransportType(value);
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
-      form.setFieldsValue({ url: undefined, auth_type: undefined });
-      setUrlWarning("");
+      form.setFieldsValue({ url: undefined, auth_type: undefined, credentials: undefined });
     } else {
       form.setFieldsValue({ command: undefined, args: undefined, env: undefined });
-      // Check URL format for the new transport type
-      const currentUrl = form.getFieldValue("url");
-      if (currentUrl) {
-        checkUrlFormat(currentUrl, value);
-      }
     }
   };
 
@@ -314,7 +429,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   MCP Server Name
-                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead.">
+                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
@@ -335,7 +450,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   Alias
-                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name with spaces replaced by underscores.">
+                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
@@ -343,12 +458,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               name="alias"
               rules={[
                 { required: false },
-                {
-                  validator: (_, value) =>
-                    value && value.includes("-")
-                      ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                      : Promise.resolve(),
-                },
+                { validator: (_, value) => validateMCPServerName(value) },
               ]}
             >
               <TextInput
@@ -364,7 +474,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               rules={[
                 {
                   required: false,
-                  message: "Please enter a server description!!!!!!!!!",
+                  message: "Please enter a server description",
                 },
               ]}
             >
@@ -386,7 +496,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 onChange={handleTransportChange}
                 value={transportType}
               >
-                <Select.Option value="http">HTTP</Select.Option>
+                <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
               </Select>
@@ -402,14 +512,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
-                <div>
-                  <TextInput
-                    placeholder="https://your-mcp-server.com"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                    onChange={(e) => checkUrlFormat(e.target.value, transportType)}
-                  />
-                  {urlWarning && <div className="mt-1 text-red-500 text-sm font-medium">{urlWarning}</div>}
-                </div>
+                <Input
+                  placeholder="https://your-mcp-server.com"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
               </Form.Item>
             )}
 
@@ -425,6 +531,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Select.Option value="api_key">API Key</Select.Option>
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
+                  <Select.Option value="oauth2">OAuth</Select.Option>
                 </Select>
               </Form.Item>
             )}
@@ -450,6 +557,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
+            {transportType !== "stdio" && isOAuthAuthType && (
+              <OAuthFormFields
+                isM2M={isM2MFlow}
+                initialFlowType={OAUTH_FLOW.INTERACTIVE}
+                oauthFlow={{
+                  startOAuthFlow,
+                  status: oauthStatus,
+                  error: oauthError,
+                  tokenResponse: oauthTokenResponse,
+                }}
+              />
+            )}
+
             {/* Stdio Configuration - only show for stdio transport */}
             <StdioConfiguration isVisible={transportType === "stdio"} />
           </div>
@@ -467,13 +587,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
           {/* Connection Status Section */}
           <div className="mt-8 pt-6 border-t border-gray-200">
-            <MCPConnectionStatus accessToken={accessToken} formValues={formValues} onToolsLoaded={setTools} />
+            <MCPConnectionStatus
+              accessToken={accessToken}
+              oauthAccessToken={oauthAccessToken}
+              formValues={formValues}
+              onToolsLoaded={setTools}
+            />
           </div>
 
           {/* Tool Configuration Section */}
           <div className="mt-6">
             <MCPToolConfiguration
               accessToken={accessToken}
+              oauthAccessToken={oauthAccessToken}
               formValues={formValues}
               allowedTools={allowedTools}
               existingAllowedTools={null}

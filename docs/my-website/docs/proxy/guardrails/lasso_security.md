@@ -35,7 +35,7 @@ guardrails:
       guardrail: lasso
       mode: "pre_call"
       api_key: os.environ/LASSO_API_KEY
-      api_base: "https://server.lasso.security"
+      api_base: "https://server.lasso.security/gateway/v3"
   - guardrail_name: "lasso-post-guard"
     litellm_params:
       guardrail: lasso
@@ -228,7 +228,7 @@ Expected response:
 
 ## PII Masking with Lasso
 
-Lasso supports automatic PII detection and masking using the `/gateway/v1/classifix` endpoint. When enabled, sensitive information like emails, phone numbers, and other PII will be automatically masked with appropriate placeholders.
+Lasso supports automatic PII detection and masking using the `/classifix` endpoint. When enabled, sensitive information like emails, phone numbers, and other PII will be automatically masked with appropriate placeholders.
 
 ### Enabling PII Masking
 
@@ -357,6 +357,25 @@ guardrails:
       api_key: os.environ/LASSO_API_KEY
       lasso_user_id: os.environ/LASSO_USER_ID
 ```
+
+### Alternative Configuration: Generic Guardrail API
+
+Lasso can also be configured using the [Generic Guardrail API](/docs/adding_provider/generic_guardrail_api) format:
+
+```yaml
+guardrails:
+  - guardrail_name: "lasso-api-post-guard"
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: post_call
+      api_base: https://server.lasso.security/gateway/v3
+      api_key: os.environ/LASSO_API_KEY
+      additional_provider_specific_params:
+        mask: false  # Set to true to enable PII masking
+```
+
+**Parameters:**
+- **`mask`**: Boolean flag to enable/disable PII masking (default: `false`)
 
 ## Security Features
 

@@ -16,6 +16,25 @@ get_secret_str_pattern = re.compile(
 # Set to store unique keys from the code
 env_keys = set()
 
+# Terminal/environment detection variables that should not be documented
+# These are internal variables used for terminal detection, not user-configurable settings
+EXCLUDED_TERMINAL_VARS = {
+    "TERM",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERM_SESSION_ID",
+    "VTE_VERSION",
+    "KITTY_WINDOW_ID",
+    "KONSOLE_VERSION",
+    "ITERM_PROFILE",
+    "ITERM_PROFILE_NAME",
+    "ITERM_SESSION_ID",
+    "WEZTERM_VERSION",
+    "WT_SESSION",
+    "GNOME_TERMINAL_SCREEN",
+    "ALACRITTY_SOCKET",
+}
+
 # Walk through all files in the litellm repo to find references of os.getenv() and litellm.get_secret()
 for root, dirs, files in os.walk(repo_base):
     for file in files:
@@ -28,7 +47,8 @@ for root, dirs, files in os.walk(repo_base):
                 getenv_matches = getenv_pattern.findall(content)
                 env_keys.update(
                     match for match in getenv_matches
-                )  # Extract only the key part
+                    if match not in EXCLUDED_TERMINAL_VARS
+                )  # Extract only the key part, excluding terminal vars
 
                 # Find all keys using litellm.get_secret()
                 get_secret_matches = get_secret_pattern.findall(content)

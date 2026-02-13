@@ -32,6 +32,7 @@ from litellm.types.llms.oci import (
     OCICompletionResponse,
     OCIContentPartUnion,
     OCIImageContentPart,
+    OCIImageUrl,
     OCIMessage,
     OCIRoles,
     OCIServingMode,
@@ -217,6 +218,7 @@ class OCIChatConfig(BaseConfig):
             "parallel_tool_calls": False,
             "audio": False,
             "web_search_options": False,
+            "response_format": "responseFormat",
         }
 
         # Cohere and Gemini use the same parameter mapping as GENERIC
@@ -267,6 +269,9 @@ class OCIChatConfig(BaseConfig):
                 continue
 
             adapted_params[alias] = value
+
+            if alias == "responseFormat":
+                adapted_params["response_format"] = value
 
         return adapted_params
 
@@ -416,15 +421,34 @@ class OCIChatConfig(BaseConfig):
                 "Please install it with: pip install cryptography"
             ) from e
 
+        # Handle oci_key - it should be a string (PEM content)
+        oci_key_content = None
+        if oci_key:
+            if isinstance(oci_key, str):
+                oci_key_content = oci_key
+                # Fix common issues with PEM content
+                # Replace escaped newlines with actual newlines
+                oci_key_content = oci_key_content.replace("\\n", "\n")
+                # Ensure proper line endings
+                if "\r\n" in oci_key_content:
+                    oci_key_content = oci_key_content.replace("\r\n", "\n")
+            else:
+                raise OCIError(
+                    status_code=400,
+                    message=f"oci_key must be a string containing the PEM private key content. "
+                    f"Got type: {type(oci_key).__name__}",
+                )
+
         private_key = (
-            load_private_key_from_str(oci_key)
-            if oci_key
+            load_private_key_from_str(oci_key_content)
+            if oci_key_content
             else load_private_key_from_file(oci_key_file) if oci_key_file else None
         )
 
         if private_key is None:
-            raise Exception(
-                "Private key is required for OCI authentication. Please provide either oci_key or oci_key_file."
+            raise OCIError(
+                status_code=400,
+                message="Private key is required for OCI authentication. Please provide either oci_key or oci_key_file.",
             )
 
         signature = private_key.sign(
@@ -653,6 +677,36 @@ class OCIChatConfig(BaseConfig):
                 selected_params["tools"] = adapt_tool_definition_to_oci_standard(  # type: ignore[assignment]
                     selected_params["tools"], vendor  # type: ignore[arg-type]
                 )
+
+        # Transform response_format type to OCI uppercase format
+        if "responseFormat" in selected_params:
+            rf = selected_params["responseFormat"]
+            if isinstance(rf, dict) and "type" in rf:
+                rf_payload = dict(rf)
+                selected_params["responseFormat"] = rf_payload
+
+                response_type = rf_payload["type"]
+                schema_payload: Optional[Any] = None
+
+                if "json_schema" in rf_payload:
+                    raw_schema_payload = rf_payload.pop("json_schema")
+                    if isinstance(raw_schema_payload, dict):
+                        schema_payload = dict(raw_schema_payload)
+                    else:
+                        schema_payload = raw_schema_payload
+
+                if schema_payload is not None:
+                    rf_payload["jsonSchema"] = schema_payload
+
+                if vendor == OCIVendors.COHERE:
+                    # Cohere expects lower-case type values
+                    rf_payload["type"] = response_type
+                else:
+                    format_type = response_type.upper()
+                    if format_type == "JSON":
+                        format_type = "JSON_OBJECT"
+                    rf_payload["type"] = format_type
+
         return selected_params
 
     def adapt_messages_to_cohere_standard(self, messages: List[AllMessageValues]) -> List[CohereMessage]:
@@ -765,9 +819,10 @@ class OCIChatConfig(BaseConfig):
             )
 
         if oci_serving_mode == "DEDICATED":
+            oci_endpoint_id = optional_params.get("oci_endpoint_id", model)
             servingMode = OCIServingMode(
                 servingType="DEDICATED",
-                endpointId=model,
+                endpointId=oci_endpoint_id,
             )
         else:
             servingMode = OCIServingMode(
@@ -783,13 +838,24 @@ class OCIChatConfig(BaseConfig):
             if not user_messages:
                 raise Exception("No user message found for Cohere model")
 
+            # Extract system messages into preambleOverride
+            system_messages = [msg for msg in messages if msg.get("role") == "system"]
+            preamble_override = None
+            if system_messages:
+                preamble = "\n".join(
+                    self._extract_text_content(msg["content"]) for msg in system_messages
+                )
+                if preamble:
+                    preamble_override = preamble
 
             # Create Cohere-specific chat request
+            optional_cohere_params = self._get_optional_params(OCIVendors.COHERE, optional_params)
             chat_request = CohereChatRequest(
                 apiFormat="COHERE",
                 message=self._extract_text_content(user_messages[-1]["content"]),
                 chatHistory=self.adapt_messages_to_cohere_standard(messages),
-                **self._get_optional_params(OCIVendors.COHERE, optional_params)
+                preambleOverride=preamble_override,
+                **optional_cohere_params
             )
 
             data = OCICompletionPayload(
@@ -1104,9 +1170,12 @@ def adapt_messages_to_generic_oci_standard_content_message(
 
         elif type == "image_url":
             image_url = content_item.get("image_url")
+            # Handle both OpenAI format (object with url) and string format
+            if isinstance(image_url, dict):
+                image_url = image_url.get("url")
             if not isinstance(image_url, str):
-                raise Exception("Prop `image_url` is not a string")
-            new_content.append(OCIImageContentPart(imageUrl=image_url))
+                raise Exception("Prop `image_url` must be a string or an object with a `url` property")
+            new_content.append(OCIImageContentPart(imageUrl=OCIImageUrl(url=image_url)))
 
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
@@ -1328,6 +1397,17 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
     def _handle_generic_stream_chunk(self, dict_chunk: dict):
         """Handle generic OCI streaming chunks."""
+        # Fix missing required fields in tool calls before Pydantic validation
+        # OCI streams tool calls progressively, so early chunks may be missing required fields
+        if dict_chunk.get("message") and dict_chunk["message"].get("toolCalls"):
+            for tool_call in dict_chunk["message"]["toolCalls"]:
+                if "arguments" not in tool_call:
+                    tool_call["arguments"] = ""
+                if "id" not in tool_call:
+                    tool_call["id"] = ""
+                if "name" not in tool_call:
+                    tool_call["name"] = ""
+
         try:
             typed_chunk = OCIStreamChunk(**dict_chunk)
         except TypeError as e:

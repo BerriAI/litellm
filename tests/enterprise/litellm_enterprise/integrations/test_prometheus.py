@@ -23,8 +23,12 @@ from prometheus_client import REGISTRY
 
 import litellm
 from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
+
 try:
-    from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger, prometheus_label_factory
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        prometheus_label_factory,
+    )
 except Exception:
     PrometheusLogger = None
     prometheus_label_factory = None
@@ -375,6 +379,7 @@ def test_basic_functionality():
 # VALIDATION TESTS - Test the new validation logic for metrics and labels
 # ==============================================================================
 
+
 def test_invalid_metric_name_validation():
     """Test that invalid metric names are caught and raise ValueError"""
     # Clear registry before test
@@ -383,7 +388,7 @@ def test_invalid_metric_name_validation():
     # Set up test configuration with invalid metric name
     test_config = [
         {
-            "group": "service_metrics", 
+            "group": "service_metrics",
             "metrics": [
                 "invalid_metric_name_that_does_not_exist",
                 "litellm_deployment_total_requests",  # valid metric
@@ -397,7 +402,7 @@ def test_invalid_metric_name_validation():
     # Creating PrometheusLogger should raise ValueError due to invalid metric
     with pytest.raises(ValueError) as exc_info:
         PrometheusLogger()
-    
+
     # Verify error message contains information about invalid metric
     assert "invalid_metric_name_that_does_not_exist" in str(exc_info.value)
     assert "Configuration validation failed" in str(exc_info.value)
@@ -426,7 +431,7 @@ def test_invalid_labels_validation():
     # Creating PrometheusLogger should raise ValueError due to invalid labels
     with pytest.raises(ValueError) as exc_info:
         PrometheusLogger()
-    
+
     # Verify error message contains information about invalid labels
     assert "invalid_label_name" in str(exc_info.value)
     assert "Configuration validation failed" in str(exc_info.value)
@@ -447,7 +452,7 @@ def test_valid_configuration_passes_validation():
             ],
             "include_labels": [
                 "litellm_model_name",
-                "api_provider", 
+                "api_provider",
                 "requested_model",
             ],
         }
@@ -460,9 +465,9 @@ def test_valid_configuration_passes_validation():
         logger = PrometheusLogger()
         # Verify the logger was created successfully
         assert logger is not None
-        assert hasattr(logger, 'enabled_metrics')
-        assert 'litellm_deployment_total_requests' in logger.enabled_metrics
-        assert 'litellm_deployment_failure_responses' in logger.enabled_metrics
+        assert hasattr(logger, "enabled_metrics")
+        assert "litellm_deployment_total_requests" in logger.enabled_metrics
+        assert "litellm_deployment_failure_responses" in logger.enabled_metrics
     except Exception as e:
         pytest.fail(f"Valid configuration should not raise exception: {e}")
 
@@ -844,56 +849,67 @@ async def test_spend_counter_semantics(mock_prometheus_logger):
 # CALLBACK FAILURE METRICS TESTS
 # ==============================================================================
 
+
 def test_callback_failure_metric_increments(prometheus_logger):
     """
     Test that the callback logging failure metric can be incremented.
-    
+
     This tests the litellm_callback_logging_failures_metric counter.
     """
     # Get initial value
     initial_value = 0
     try:
-        initial_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
-            callback_name="S3Logger"
-        )._value.get()
+        initial_value = (
+            prometheus_logger.litellm_callback_logging_failures_metric.labels(
+                callback_name="S3Logger"
+            )._value.get()
+        )
     except Exception:
         initial_value = 0
-    
+
     # Increment the metric
     prometheus_logger.increment_callback_logging_failure(callback_name="S3Logger")
-    
+
     # Verify it incremented by 1
     current_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
         callback_name="S3Logger"
     )._value.get()
-    
-    assert current_value == initial_value + 1, \
-        f"Expected callback failure metric to increment by 1, got {current_value - initial_value}"
-    
+
+    assert (
+        current_value == initial_value + 1
+    ), f"Expected callback failure metric to increment by 1, got {current_value - initial_value}"
+
     # Increment again for different callback
     prometheus_logger.increment_callback_logging_failure(callback_name="LangFuseLogger")
-    
+
     langfuse_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
         callback_name="LangFuseLogger"
     )._value.get()
-    
+
     assert langfuse_value == 1, "LangFuseLogger metric should be 1"
-    
+
     # S3Logger should still be initial + 1
     s3_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
         callback_name="S3Logger"
     )._value.get()
     assert s3_value == initial_value + 1, "S3Logger metric should not change"
-    
-    print(f"✓ Callback failure metric test passed: S3Logger={s3_value}, LangFuseLogger={langfuse_value}")
+
+    print(
+        f"✓ Callback failure metric test passed: S3Logger={s3_value}, LangFuseLogger={langfuse_value}"
+    )
 
 
 def test_callback_failure_metric_different_callbacks(prometheus_logger):
     """
     Test that different callbacks are tracked separately with their own labels.
     """
-    callbacks_to_test = ["S3Logger", "LangFuseLogger", "DataDogLogger", "CustomCallback"]
-    
+    callbacks_to_test = [
+        "S3Logger",
+        "LangFuseLogger",
+        "DataDogLogger",
+        "CustomCallback",
+    ]
+
     for callback_name in callbacks_to_test:
         # Get initial value
         initial = 0
@@ -903,19 +919,140 @@ def test_callback_failure_metric_different_callbacks(prometheus_logger):
             )._value.get()
         except Exception:
             initial = 0
-        
+
         # Increment
-        prometheus_logger.increment_callback_logging_failure(callback_name=callback_name)
-        
+        prometheus_logger.increment_callback_logging_failure(
+            callback_name=callback_name
+        )
+
         # Verify incremented
         current = prometheus_logger.litellm_callback_logging_failures_metric.labels(
             callback_name=callback_name
         )._value.get()
-        
-        assert current == initial + 1, \
-            f"{callback_name} should increment by 1"
+
+        assert current == initial + 1, f"{callback_name} should increment by 1"
+
+    print(
+        f"✓ Multiple callback tracking test passed for {len(callbacks_to_test)} callbacks"
+    )
+
+
+@pytest.mark.asyncio
+async def test_langfuse_callback_failure_metric(prometheus_logger):
+    """
+    Test that Langfuse callback failures are properly tracked in Prometheus metrics.
     
-    print(f"✓ Multiple callback tracking test passed for {len(callbacks_to_test)} callbacks")
+    This test verifies that when Langfuse logging fails, the 
+    litellm_callback_logging_failures_metric is incremented with callback_name="langfuse".
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    # Get initial value
+    initial_value = 0
+    try:
+        initial_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name="langfuse"
+        )._value.get()
+    except Exception:
+        initial_value = 0
+    
+    # Create Langfuse logger with mocked initialization
+    with patch("litellm.integrations.langfuse.langfuse_prompt_management.langfuse_client_init"):
+        langfuse_logger = LangfusePromptManagement()
+    
+    # Mock the log_event_on_langfuse to raise an exception
+    with patch(
+        "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler.get_langfuse_logger_for_request"
+    ) as mock_get_logger:
+        mock_logger = MagicMock()
+        mock_logger.log_event_on_langfuse.side_effect = Exception("Langfuse API error")
+        mock_get_logger.return_value = mock_logger
+        
+        # Mock handle_callback_failure to track calls
+        with patch.object(prometheus_logger, "increment_callback_logging_failure") as mock_increment:
+            # Inject prometheus logger into the langfuse logger
+            langfuse_logger.handle_callback_failure = lambda callback_name: mock_increment(
+                callback_name=callback_name
+            )
+            
+            # Call async_log_success_event - should catch exception and increment metric
+            await langfuse_logger.async_log_success_event(
+                kwargs={},
+                response_obj={},
+                start_time=None,
+                end_time=None,
+            )
+            
+            # Verify that increment was called with correct callback name
+            mock_increment.assert_called_once_with(callback_name="langfuse")
+    
+    print("✓ Langfuse callback failure metric test passed")
+
+
+@pytest.mark.asyncio
+async def test_langfuse_otel_callback_failure_metric(prometheus_logger):
+    """
+    Test that Langfuse OTEL callback failures are properly tracked in Prometheus metrics.
+    
+    This test verifies that when Langfuse OTEL logging fails, the 
+    litellm_callback_logging_failures_metric is incremented with callback_name="langfuse_otel".
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+
+    # Get initial value
+    initial_value = 0
+    try:
+        initial_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name="langfuse_otel"
+        )._value.get()
+    except Exception:
+        initial_value = 0
+    
+    # Create Langfuse OTEL logger with mocked initialization
+    with patch("litellm.integrations.opentelemetry.OpenTelemetry.__init__", return_value=None):
+        langfuse_otel_logger = LangfuseOtelLogger(callback_name="langfuse_otel")
+        langfuse_otel_logger.callback_name = "langfuse_otel"
+    
+    # Mock handle_callback_failure to track calls
+    with patch.object(prometheus_logger, "increment_callback_logging_failure") as mock_increment:
+        # Inject prometheus logger into the langfuse otel logger
+        langfuse_otel_logger.handle_callback_failure = lambda callback_name: mock_increment(
+            callback_name=callback_name
+        )
+        
+        # Test that the OpenTelemetry base class set_attributes exception handler works
+        # This is where langfuse_otel failures are caught and tracked
+        with patch.object(langfuse_otel_logger, "set_attributes") as mock_set_attributes:
+            # Simulate the exception handling in set_attributes
+            def set_attributes_with_error(*args, **kwargs):
+                # This simulates what happens in the real set_attributes method
+                try:
+                    raise Exception("Attribute error")
+                except Exception as e:
+                    langfuse_otel_logger.handle_callback_failure(callback_name=langfuse_otel_logger.callback_name)
+            
+            mock_set_attributes.side_effect = set_attributes_with_error
+            
+            # Call set_attributes
+            try:
+                langfuse_otel_logger.set_attributes(
+                    span=MagicMock(),
+                    kwargs={},
+                    response_obj={}
+                )
+            except Exception:
+                pass
+            
+            # Verify that increment was called with correct callback name
+            mock_increment.assert_called_with(callback_name="langfuse_otel")
+    
+    print("✓ Langfuse OTEL callback failure metric test passed")
 
 
 # ==============================================================================

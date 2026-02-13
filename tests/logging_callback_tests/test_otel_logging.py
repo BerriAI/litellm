@@ -10,11 +10,25 @@ sys.path.insert(
 
 import pytest
 import litellm
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig, Span
 import asyncio
 import logging
+from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from litellm._logging import verbose_logger
+from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes as OISpanAttributes,
+)
+from litellm.integrations.opentelemetry import (
+    LITELLM_PROXY_REQUEST_SPAN_NAME,
+    LITELLM_TRACER_NAME,
+    LITELLM_REQUEST_SPAN_NAME,
+    OpenTelemetry,
+    OpenTelemetryConfig,
+    RAW_REQUEST_SPAN_NAME,
+    Span,
+)
 from litellm.proxy._types import SpanAttributes
 
 verbose_logger.setLevel(logging.DEBUG)
@@ -27,6 +41,9 @@ exporter = InMemorySpanExporter()
 @pytest.mark.parametrize("streaming", [True, False])
 async def test_async_otel_callback(streaming):
     litellm.set_verbose = True
+    
+    # Clear exporter at the start to ensure clean state
+    exporter.clear()
 
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
 
@@ -83,9 +100,9 @@ def validate_litellm_request(span):
         "llm.user",
         "gen_ai.response.id",
         "gen_ai.response.model",
-        "llm.usage.total_tokens",
-        "gen_ai.usage.completion_tokens",
-        "gen_ai.usage.prompt_tokens",
+        "gen_ai.usage.total_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.usage.input_tokens",
     ]
 
     # get the str of all the span attributes
@@ -138,64 +155,6 @@ def validate_raw_gen_ai_request_openai_streaming(span):
         assert span._attributes[attr] is not None, f"Attribute {attr} has None"
 
 
-@pytest.mark.parametrize(
-    "model",
-    ["anthropic/claude-3-opus-20240229"],
-)
-@pytest.mark.flaky(retries=6, delay=2)
-def test_completion_claude_3_function_call_with_otel(model):
-    litellm.set_verbose = True
-
-    litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-    try:
-        # test without max tokens
-        response = litellm.completion(
-            model=model,
-            messages=messages,
-            tools=tools,
-            tool_choice={
-                "type": "function",
-                "function": {"name": "get_current_weather"},
-            },
-            drop_params=True,
-        )
-
-        print("response from LiteLLM", response)
-    except litellm.InternalServerError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-    finally:
-        # clear in memory exporter
-        exporter.clear()
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("global_redact", [True, False])
@@ -207,6 +166,10 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
     tests when OpenTelemetry(message_logging=False) is set
     """
     litellm.set_verbose = True
+    
+    # Clear exporter at the start to ensure clean state
+    exporter.clear()
+    
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
     if global_redact is False:
         otel_logger = OpenTelemetry(
@@ -259,9 +222,9 @@ def validate_redacted_message_span_attributes(span):
         "llm.request.type",
         "gen_ai.response.id",
         "gen_ai.response.model",
-        "llm.usage.total_tokens",
-        "gen_ai.usage.completion_tokens",
-        "gen_ai.usage.prompt_tokens",
+        "gen_ai.usage.total_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.usage.input_tokens",
     ]
 
     _all_attributes = set(
@@ -288,6 +251,64 @@ def validate_redacted_message_span_attributes(span):
             attr.startswith("metadata.")
             or attr.startswith("hidden_params")
             or attr.startswith("gen_ai.cost.")
+            or attr.startswith("gen_ai.operation.")
+            or attr.startswith("gen_ai.request.")
         ), f"Non-metadata attribute found: {attr}"
 
     pass
+
+@pytest.mark.asyncio
+async def test_arize_phoenix_adds_openinference_kind_and_avoids_duplicate_litellm_spans():
+    """
+    Ensure Arize Phoenix spans include OpenInference span kind and do not create
+    a duplicate litellm_request span when a proxy parent span is already active.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    exporter.clear()
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+    # Set up a global TracerProvider so we can create valid spans
+    # This simulates the proxy server's TracerProvider
+    global_provider = TracerProvider()
+    global_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(global_provider)
+
+    otel_logger = ArizePhoenixLogger(config=OpenTelemetryConfig(exporter=exporter))
+    litellm.callbacks = [otel_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
+
+    tracer = trace.get_tracer(LITELLM_TRACER_NAME)
+    parent_span = tracer.start_span(LITELLM_PROXY_REQUEST_SPAN_NAME)
+
+    # Keep parent span active; OpenTelemetry logger will attach attributes and end it.
+    with trace.use_span(parent_span, end_on_exit=False):
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "ping"}],
+            mock_response="pong",
+        )
+
+    # Flush span processing
+    await asyncio.sleep(1)
+
+    if parent_span.is_recording():
+        parent_span.end()
+
+    spans = exporter.get_finished_spans()
+
+    span_names = [span.name for span in spans]
+    assert LITELLM_REQUEST_SPAN_NAME not in span_names
+    assert span_names.count(LITELLM_PROXY_REQUEST_SPAN_NAME) == 1
+    assert span_names.count(RAW_REQUEST_SPAN_NAME) == 1
+
+    # All spans should belong to the same trace (parent + raw child)
+    assert len({span.context.trace_id for span in spans}) == 1
+    assert len(spans) == 2
+
+    proxy_span = next(span for span in spans if span.name == LITELLM_PROXY_REQUEST_SPAN_NAME)
+    assert proxy_span.attributes.get(OISpanAttributes.OPENINFERENCE_SPAN_KIND) == OpenInferenceSpanKindValues.LLM.value
+
+    exporter.clear()

@@ -101,8 +101,8 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -114,17 +114,20 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         https://www.recraft.ai/docs#image-to-image
         """
         
-        request_body: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
-            model=model,
-            prompt=prompt,
-            strength=image_edit_optional_request_params.pop("strength", self.DEFAULT_STRENGTH),
+        request_params = {
+            "model": model,
+            "strength": image_edit_optional_request_params.pop("strength", self.DEFAULT_STRENGTH),
             **image_edit_optional_request_params,
-        )
+        }
+        if prompt is not None:
+            request_params["prompt"] = prompt
+            
+        request_body = RecraftImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request_body)
         #########################################################
         # Reuse OpenAI logic: Separate images as `files` and send other parameters as `data`
         #########################################################
-        files_list = self._get_image_files_for_request(image=image)
+        files_list = self._get_image_files_for_request(image=image) if image is not None else []
         data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
         
         return data_without_images, files_list
@@ -132,7 +135,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
 
     def _get_image_files_for_request(
         self,
-        image: FileTypes,
+        image: Optional[FileTypes],
     ) -> List[Tuple[str, Any]]:
         files_list: List[Tuple[str, Any]] = []
         

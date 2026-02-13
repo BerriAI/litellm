@@ -1,9 +1,10 @@
 #### Search Endpoints #####
 
 import orjson
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -131,6 +132,34 @@ async def search(
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
 
+    if "search_tool_name" in data and data["search_tool_name"]:
+        data["model"] = data["search_tool_name"]
+        
+        if llm_router is not None and hasattr(llm_router, "search_tools"):
+            search_tool_name_value = data["search_tool_name"]
+            
+            verbose_proxy_logger.debug(
+                f"Search endpoint - Looking for search_tool_name: {search_tool_name_value}. "
+                f"Available search tools in router: {[tool.get('search_tool_name') for tool in llm_router.search_tools]}. "
+                f"Total search tools: {len(llm_router.search_tools)}"
+            )
+            
+            matching_tools = [
+                tool for tool in llm_router.search_tools
+                if tool.get("search_tool_name") == search_tool_name_value
+            ]
+            
+            if matching_tools:
+                search_tool = matching_tools[0]
+                search_provider = search_tool.get("litellm_params", {}).get("search_provider")
+                
+                if search_provider:
+                    data["custom_llm_provider"] = search_provider
+                
+                if "metadata" not in data:
+                    data["metadata"] = {}
+                data["metadata"]["model_group"] = search_tool_name_value
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -159,4 +188,76 @@ async def search(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+@router.get(
+    "/v1/search/tools",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+@router.get(
+    "/search/tools",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+async def list_search_tools(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List all available search tools configured in the router.
+    
+    This endpoint returns the search tools that are currently loaded and available
+    for use with the /v1/search endpoint.
+    
+    Example:
+    ```bash
+    curl -X GET "http://localhost:4000/v1/search/tools" \
+        -H "Authorization: Bearer sk-1234"
+    ```
+    
+    Response:
+    ```json
+    {
+        "object": "list",
+        "data": [
+            {
+                "search_tool_name": "litellm-search",
+                "search_provider": "perplexity",
+                "description": "Perplexity search tool"
+            }
+        ]
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        search_tools_list = []
+        
+        if llm_router is not None and hasattr(llm_router, "search_tools"):
+            for tool in llm_router.search_tools:
+                tool_info = {
+                    "search_tool_name": tool.get("search_tool_name"),
+                    "search_provider": tool.get("litellm_params", {}).get("search_provider"),
+                }
+                
+                # Add description if available
+                if "search_tool_info" in tool and tool["search_tool_info"]:
+                    description = tool["search_tool_info"].get("description")
+                    if description:
+                        tool_info["description"] = description
+                
+                search_tools_list.append(tool_info)
+        
+        return {
+            "object": "list",
+            "data": search_tools_list
+        }
+    except Exception as e:
+        from litellm._logging import verbose_proxy_logger
+        verbose_proxy_logger.exception(f"Error listing search tools: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 

@@ -15,6 +15,10 @@ from pydantic import BaseModel  # type: ignore
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.langsmith_mock_client import (
+    should_use_langsmith_mock,
+    create_mock_langsmith_client,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -40,14 +44,22 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
         langsmith_sampling_rate: Optional[float] = None,
+        langsmith_tenant_id: Optional[str] = None,
         **kwargs,
     ):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
+        self.is_mock_mode = should_use_langsmith_mock()
+        
+        if self.is_mock_mode:
+            create_mock_langsmith_client()
+            verbose_logger.debug("[LANGSMITH MOCK] LangSmith logger initialized in mock mode")
+        
         self.default_credentials = self.get_credentials_from_env(
             langsmith_api_key=langsmith_api_key,
             langsmith_project=langsmith_project,
             langsmith_base_url=langsmith_base_url,
+            langsmith_tenant_id=langsmith_tenant_id,
         )
         self.sampling_rate: float = (
             langsmith_sampling_rate
@@ -76,6 +88,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_key: Optional[str] = None,
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
+        langsmith_tenant_id: Optional[str] = None,
     ) -> LangsmithCredentialsObject:
         _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
         _credentials_project = (
@@ -86,11 +99,13 @@ class LangsmithLogger(CustomBatchLogger):
             or os.getenv("LANGSMITH_BASE_URL")
             or "https://api.smith.langchain.com"
         )
+        _credentials_tenant_id = langsmith_tenant_id or os.getenv("LANGSMITH_TENANT_ID")
 
         return LangsmithCredentialsObject(
             LANGSMITH_API_KEY=_credentials_api_key,
             LANGSMITH_BASE_URL=_credentials_base_url,
             LANGSMITH_PROJECT=_credentials_project,
+            LANGSMITH_TENANT_ID=_credentials_tenant_id,
         )
 
     def _prepare_log_data(
@@ -129,6 +144,13 @@ class LangsmithLogger(CustomBatchLogger):
                 "metadata"
             ]  # ensure logged metadata is json serializable
 
+            extra_metadata = dict(metadata)
+            requester_metadata = extra_metadata.get("requester_metadata")
+            if requester_metadata and isinstance(requester_metadata, dict):
+                for key in ("session_id", "thread_id", "conversation_id"):
+                    if key in requester_metadata and key not in extra_metadata:
+                        extra_metadata[key] = requester_metadata[key]
+
             data = {
                 "name": run_name,
                 "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
@@ -138,7 +160,7 @@ class LangsmithLogger(CustomBatchLogger):
                 "start_time": payload["startTime"],
                 "end_time": payload["endTime"],
                 "tags": payload["request_tags"],
-                "extra": metadata,
+                "extra": extra_metadata,
             }
 
             if payload["error_str"] is not None and payload["status"] == "failure":
@@ -365,14 +387,19 @@ class LangsmithLogger(CustomBatchLogger):
         """
         langsmith_api_base = credentials["LANGSMITH_BASE_URL"]
         langsmith_api_key = credentials["LANGSMITH_API_KEY"]
+        langsmith_tenant_id = credentials.get("LANGSMITH_TENANT_ID")
         url = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
         headers = {"x-api-key": langsmith_api_key}
+        if langsmith_tenant_id:
+            headers["x-tenant-id"] = langsmith_tenant_id
         elements_to_log = [queue_object["data"] for queue_object in queue_objects]
 
         try:
             verbose_logger.debug(
                 "Sending batch of %s runs to Langsmith", len(elements_to_log)
             )
+            if self.is_mock_mode:
+                verbose_logger.debug("[LANGSMITH MOCK] Mock mode enabled - API calls will be intercepted")
             response = await self.async_httpx_client.post(
                 url=url,
                 json={"post": elements_to_log},
@@ -385,9 +412,14 @@ class LangsmithLogger(CustomBatchLogger):
                     f"Langsmith Error: {response.status_code} - {response.text}"
                 )
             else:
-                verbose_logger.debug(
-                    f"Batch of {len(self.log_queue)} runs successfully created"
-                )
+                if self.is_mock_mode:
+                    verbose_logger.debug(
+                        f"[LANGSMITH MOCK] Batch of {len(elements_to_log)} runs successfully mocked"
+                    )
+                else:
+                    verbose_logger.debug(
+                        f"Batch of {len(self.log_queue)} runs successfully created"
+                    )
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(
                 f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}"
@@ -418,6 +450,7 @@ class LangsmithLogger(CustomBatchLogger):
                 api_key=credentials["LANGSMITH_API_KEY"],
                 project=credentials["LANGSMITH_PROJECT"],
                 base_url=credentials["LANGSMITH_BASE_URL"],
+                tenant_id=credentials.get("LANGSMITH_TENANT_ID"),
             )
 
             if key not in log_queue_by_credentials:
@@ -430,9 +463,9 @@ class LangsmithLogger(CustomBatchLogger):
         return log_queue_by_credentials
 
     def _get_sampling_rate_to_use_for_request(self, kwargs: Dict[str, Any]) -> float:
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         sampling_rate: float = self.sampling_rate
         if standard_callback_dynamic_params is not None:
             _sampling_rate = standard_callback_dynamic_params.get(
@@ -452,9 +485,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(
@@ -465,6 +498,9 @@ class LangsmithLogger(CustomBatchLogger):
                 ),
                 langsmith_base_url=standard_callback_dynamic_params.get(
                     "langsmith_base_url", None
+                ),
+                langsmith_tenant_id=standard_callback_dynamic_params.get(
+                    "langsmith_tenant_id", None
                 ),
             )
         else:
@@ -491,13 +527,16 @@ class LangsmithLogger(CustomBatchLogger):
 
     def get_run_by_id(self, run_id):
         langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
-
         langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]
+        langsmith_tenant_id = self.default_credentials.get("LANGSMITH_TENANT_ID")
 
         url = f"{langsmith_api_base}/runs/{run_id}"
+        headers = {"x-api-key": langsmith_api_key}
+        if langsmith_tenant_id:
+            headers["x-tenant-id"] = langsmith_tenant_id
         response = litellm.module_level_client.get(
             url=url,
-            headers={"x-api-key": langsmith_api_key},
+            headers=headers,
         )
 
         return response.json()

@@ -19,7 +19,7 @@ import pytest
 
 import litellm
 from litellm import get_optional_params
-from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 from litellm.types.llms.vertex_ai import BlobType
 
 
@@ -410,7 +410,6 @@ def test_multiple_function_call():
                 },
                 {"role": "user", "parts": [{"text": "tell me the results."}]},
             ],
-            "generationConfig": {},
         }
 
 
@@ -1191,46 +1190,46 @@ def test_logprobs():
         assert resp.choices[0].logprobs is not None
 
 
-def test_process_gemini_image():
-    """Test the _process_gemini_image function for different image sources"""
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+def test_process_gemini_media():
+    """Test the _process_gemini_media function for different image sources"""
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     from litellm.types.llms.vertex_ai import FileDataType
 
     # Test GCS URI
-    gcs_result = _process_gemini_image("gs://bucket/image.png")
+    gcs_result = _process_gemini_media("gs://bucket/image.png")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="gs://bucket/image.png"
     )
 
     # Test gs url with format specified
-    gcs_result = _process_gemini_image("gs://bucket/image", format="image/jpeg")
+    gcs_result = _process_gemini_media("gs://bucket/image", format="image/jpeg")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="gs://bucket/image"
     )
 
     # Test HTTPS JPG URL
-    https_result = _process_gemini_image("https://example.com/image.jpg")
+    https_result = _process_gemini_media("https://example.com/image.jpg")
     print("https_result JPG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="https://example.com/image.jpg"
     )
 
     # Test HTTPS PNG URL
-    https_result = _process_gemini_image("https://example.com/image.png")
+    https_result = _process_gemini_media("https://example.com/image.png")
     print("https_result PNG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="https://example.com/image.png"
     )
 
     # Test HTTPS VIDEO URL
-    https_result = _process_gemini_image("https://cloud-samples-data/video/animals.mp4")
+    https_result = _process_gemini_media("https://cloud-samples-data/video/animals.mp4")
     print("https_result PNG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="video/mp4", file_uri="https://cloud-samples-data/video/animals.mp4"
     )
 
     # Test HTTPS PDF URL
-    https_result = _process_gemini_image("https://cloud-samples-data/pdf/animals.pdf")
+    https_result = _process_gemini_media("https://cloud-samples-data/pdf/animals.pdf")
     print("https_result PDF", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="application/pdf",
@@ -1239,7 +1238,7 @@ def test_process_gemini_image():
 
     # Test base64 image
     base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-    base64_result = _process_gemini_image(base64_image)
+    base64_result = _process_gemini_media(base64_image)
     print("base64_result", base64_result)
     assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
@@ -1368,11 +1367,11 @@ def mock_blob():
         "http://subdomain.domain.com/path/to/image.png",
     ],
 )
-def test_process_gemini_image_http_url(
+def test_process_gemini_media_http_url(
     http_url: str, mock_convert_url_to_base64: Mock, mock_blob: Mock
 ) -> None:
     """
-    Test that _process_gemini_image correctly handles HTTP URLs.
+    Test that _process_gemini_media correctly handles HTTP URLs.
 
     Args:
         http_url: Test HTTP URL
@@ -1384,7 +1383,7 @@ def test_process_gemini_image_http_url(
     expected_image_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
     mock_convert_url_to_base64.return_value = expected_image_data
     # Act
-    result = _process_gemini_image(http_url)
+    result = _process_gemini_media(http_url)
     # assert result["file_data"]["file_uri"] == http_url
 
 

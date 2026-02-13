@@ -1,13 +1,11 @@
-import json
 from enum import Enum
-from typing import Any, List, Optional, Union
+from typing import List, Optional
 
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 
 class WatsonXAPIParams(TypedDict):
-    project_id: str
+    project_id: Optional[str]
     space_id: Optional[str]
     region_name: Optional[str]
 
@@ -16,6 +14,39 @@ class WatsonXCredentials(TypedDict):
     api_key: str
     api_base: str
     token: Optional[str]
+
+
+class WatsonXAudioTranscriptionRequestBody(TypedDict):
+    """
+    WatsonX Audio Transcription API request body.
+
+    Follows multipart/form-data format for WatsonX Whisper models.
+    See: https://cloud.ibm.com/apidocs/watsonx-ai
+    """
+
+    model: str
+    """Model name (e.g., 'whisper-large-v3-turbo')"""
+
+    project_id: NotRequired[str]
+    """WatsonX project ID (optional)"""
+
+    space_id: NotRequired[str]
+    """WatsonX space ID (optional)"""
+
+    language: NotRequired[str]
+    """Language code (e.g., 'en', 'es')"""
+
+    prompt: NotRequired[str]
+    """Optional prompt to guide transcription"""
+
+    response_format: NotRequired[str]
+    """Response format: 'json', 'text', 'srt', 'verbose_json', 'vtt'"""
+
+    temperature: NotRequired[float]
+    """Sampling temperature (0-1)"""
+
+    timestamp_granularities: NotRequired[List[str]]
+    """Timestamp granularities: ['word', 'segment']"""
 
 
 class WatsonXAIEndpoint(str, Enum):
@@ -36,6 +67,7 @@ class WatsonXAIEndpoint(str, Enum):
 
 class WatsonXModelPattern(str, Enum):
     """Model identifier patterns for WatsonX models"""
+
     GRANITE_CHAT = "granite-chat"
     IBM_MISTRAL = "ibm-mistral"
     IBM_MISTRALAI = "ibm-mistralai"

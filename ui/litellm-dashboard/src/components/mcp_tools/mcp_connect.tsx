@@ -32,7 +32,7 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   description,
   children,
   serverName,
-  accessGroups = ["dev"],
+  accessGroups = ["dev-group"],
 }) => {
   const [useServerHeader, setUseServerHeader] = useState(false);
 
@@ -42,9 +42,9 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
     };
     if (useServerHeader && serverName) {
       const formattedServerName = serverName.replace(/\s+/g, "_");
-      // Include both server name and access groups in the same header
+      // Include both server name and access groups in the same header (comma-separated string)
       const serverAndGroups = [formattedServerName, ...accessGroups].join(",");
-      headers["x-mcp-servers"] = [serverAndGroups];
+      headers["x-mcp-servers"] = serverAndGroups;
     }
     return headers;
   };
@@ -77,13 +77,13 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
               description={
                 <div>
                   <p>
-                    <strong>Option 1:</strong> Get a specific server: <code>["{serverName.replace(/\s+/g, "_")}"]</code>
+                    <strong>Option 1:</strong> Get a specific server: <code>"{serverName.replace(/\s+/g, "_")}"</code>
                   </p>
                   <p>
-                    <strong>Option 2:</strong> Get a group of MCPs: <code>["dev-group"]</code>
+                    <strong>Option 2:</strong> Get a group of MCPs: <code>"dev-group"</code>
                   </p>
                   <p className="mt-2 text-sm text-gray-600">
-                    You can also mix both: <code>["Server1,dev-group"]</code>
+                    You can also mix both: <code>"Server1,dev-group"</code>
                   </p>
                 </div>
               }
@@ -144,8 +144,8 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
       // Format server names (replace spaces with underscores)
       const formattedServers = serverHeaders[type].map((s) => s.replace(/\s+/g, "_"));
 
-      // Use comma-separated format (can include both servers and access groups)
-      headers["x-mcp-servers"] = [formattedServers.join(",")];
+      // Use comma-separated string (can include both servers and access groups)
+      headers["x-mcp-servers"] = formattedServers.join(",");
     }
 
     return headers;
@@ -220,12 +220,12 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
       <Space direction="vertical" size="large" className="w-full">
         <FeatureCard
           icon={<KeyIcon className="text-emerald-600" size={16} />}
-          title="API Key Setup"
-          description="Configure your LiteLLM Proxy API key for authentication"
+          title="Virtual Key Setup"
+          description="Configure your LiteLLM Proxy Virtual Key for authentication"
         >
           <Space direction="vertical" size="middle" className="w-full">
             <div>
-              <Text>Get your API key from your LiteLLM Proxy dashboard or contact your administrator</Text>
+              <Text>Get your Virtual Key from your LiteLLM Proxy dashboard or contact your administrator</Text>
             </div>
             <CodeBlock title="Environment Variable" code='export LITELLM_API_KEY="sk-..."' copyKey="litellm-env" />
           </Space>
@@ -244,12 +244,12 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           title="Implementation Example"
           description="Complete cURL example for using the LiteLLM Proxy Responses API"
           serverName={currentServer}
-          accessGroups={["dev"]}
+          accessGroups={["dev-group"]}
         >
           <CodeBlock
             code={`curl --location '${proxyBaseUrl}/v1/responses' \\
 --header 'Content-Type: application/json' \\
---header "Authorization: Bearer $LITELLM_API_KEY" \\
+--header "Authorization: Bearer $LITELLM_VIRTUAL_KEY" \\
 --data '{
     "model": "gpt-4",
     "tools": [
@@ -259,8 +259,8 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             "server_url": "${proxyBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": ["Zapier_MCP,dev"]
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_VIRTUAL_KEY",
+                "x-mcp-servers": "Zapier_MCP,dev-group"
             }
         }
     ],
@@ -327,7 +327,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           title="Implementation Example"
           description="Complete cURL example for using the Responses API"
           serverName="Zapier Gmail"
-          accessGroups={["dev"]}
+          accessGroups={["dev-group"]}
         >
           <CodeBlock
             code={`curl --location 'https://api.openai.com/v1/responses' \\
@@ -343,7 +343,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": ["Zapier_MCP,dev"]
+                "x-mcp-servers": "Zapier_MCP,dev-group"
             }
         }
     ],
@@ -400,16 +400,16 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
               title="Configuration"
               description="Cursor MCP configuration"
               serverName="Zapier Gmail"
-              accessGroups={["dev"]}
+              accessGroups={["dev-group"]}
             >
               <CodeBlock
                 code={`{
   "mcpServers": {
     "Zapier_MCP": {
-      "server_url": "${proxyBaseUrl}/mcp",
+      "url": "${proxyBaseUrl}/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-        "x-mcp-servers": ["Zapier_MCP,dev"]
+        "x-mcp-servers": "Zapier_MCP,dev-group"
       }
     }
   }

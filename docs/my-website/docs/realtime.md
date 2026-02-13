@@ -3,7 +3,15 @@ import TabItem from '@theme/TabItem';
 
 # /realtime
 
-Use this to loadbalance across Azure + OpenAI. 
+Use this to loadbalance across Azure + OpenAI + xAI and more. 
+
+Supported Providers:
+- OpenAI
+- Azure
+- xAI ([see full docs](/docs/providers/xai_realtime))
+- Google AI Studio (Gemini)
+- Vertex AI
+- Bedrock
 
 ## Proxy Usage
 
@@ -38,6 +46,21 @@ model_list:
       model: openai/gpt-4o-realtime-preview-2024-10-01
       api_key: os.environ/OPENAI_API_KEY
 ```
+
+</TabItem>
+<TabItem value="xai" label="xAI Grok Voice Agent">
+
+```yaml
+model_list:
+  - model_name: grok-voice-agent
+    litellm_params:
+      model: xai/grok-4-1-fast-non-reasoning
+      api_key: os.environ/XAI_API_KEY
+    model_info:
+      mode: realtime
+```
+
+**[See full xAI Realtime documentation →](/docs/providers/xai_realtime)**
 
 </TabItem>
 </Tabs>

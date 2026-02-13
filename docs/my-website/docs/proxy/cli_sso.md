@@ -9,6 +9,57 @@ Use the litellm cli to authenticate to the LiteLLM Gateway. This is great if you
 
 ## Usage 
 
+### Prerequisites - Start LiteLLM Proxy with Beta Flag
+
+:::warning[Beta Feature - Required]
+
+CLI SSO Authentication is currently in beta. You must set this environment variable **when starting up your LiteLLM Proxy**:
+
+```bash
+export EXPERIMENTAL_UI_LOGIN="True"
+litellm --config config.yaml
+```
+
+Or add it to your proxy startup command:
+
+```bash
+EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
+```
+
+:::
+
+### Configuration
+
+#### JWT Token Expiration
+
+By default, CLI authentication tokens expire after **24 hours**. You can customize this expiration time by setting the `LITELLM_CLI_JWT_EXPIRATION_HOURS` environment variable when starting your LiteLLM Proxy:
+
+```bash
+# Set CLI JWT tokens to expire after 48 hours
+export LITELLM_CLI_JWT_EXPIRATION_HOURS=48
+export EXPERIMENTAL_UI_LOGIN="True"
+litellm --config config.yaml
+```
+
+Or in a single command:
+
+```bash
+LITELLM_CLI_JWT_EXPIRATION_HOURS=48 EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
+```
+
+**Examples:**
+- `LITELLM_CLI_JWT_EXPIRATION_HOURS=12` - Tokens expire after 12 hours
+- `LITELLM_CLI_JWT_EXPIRATION_HOURS=168` - Tokens expire after 7 days (168 hours)
+- `LITELLM_CLI_JWT_EXPIRATION_HOURS=720` - Tokens expire after 30 days (720 hours)
+
+:::tip
+You can check your current token's age and expiration status using:
+```bash
+litellm-proxy whoami
+```
+:::
+
+### Steps
 
 1. **Install the CLI**
 
@@ -32,6 +83,8 @@ Use the litellm cli to authenticate to the LiteLLM Gateway. This is great if you
    ```
 
 2. **Set up environment variables**
+
+   On your local machine, set the proxy URL:
 
    ```bash
    export LITELLM_PROXY_URL=http://localhost:4000

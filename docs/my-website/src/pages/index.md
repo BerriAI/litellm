@@ -604,7 +604,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
 

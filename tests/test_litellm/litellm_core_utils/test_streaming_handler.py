@@ -691,6 +691,29 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
     )
 
 
+@pytest.mark.asyncio
+async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
+    """Ensure Vertex bad request errors surface as 400, not mid-stream fallbacks."""
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    async def _raise_bad_request(**kwargs):
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-pro-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_bad_request,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await response.__anext__()
+
+    assert getattr(excinfo.value, "status_code", None) == 400
+    assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
@@ -1078,4 +1101,87 @@ def test_has_special_delta_attribute(
     delta_with_none = MockDeltaNone()
     assert not initialized_custom_stream_wrapper._has_special_delta_attribute(
         delta_with_none, "audio"
+    )
+
+
+def test_is_chunk_non_empty_with_empty_tool_calls(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Test that is_chunk_non_empty returns False when tool_calls is an empty list.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/17425
+    Empty tool_calls in delta should not be considered non-empty chunks.
+    """
+    chunk = {
+        "id": "test-chunk-id",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "claude-sonnet-4-20250514",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "tool_calls": [],  # Empty tool_calls list
+                },
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    # Empty tool_calls should return False
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},  # completion_obj has no tool_calls
+            model_response=ModelResponseStream(**chunk),
+            response_obj={},
+        )
+        is False
+    )
+
+
+def test_is_chunk_non_empty_with_valid_tool_calls(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Test that is_chunk_non_empty returns True when tool_calls has valid entries.
+
+    Companion test for https://github.com/BerriAI/litellm/issues/17425
+    Non-empty tool_calls in delta should be considered non-empty chunks.
+    """
+    chunk = {
+        "id": "test-chunk-id",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "claude-sonnet-4-20250514",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "NYC"}',
+                            },
+                        }
+                    ],
+                },
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    # Non-empty tool_calls should return True
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},
+            model_response=ModelResponseStream(**chunk),
+            response_obj={},
+        )
+        is True
     )

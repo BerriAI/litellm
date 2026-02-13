@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # Secret Managers Overview
 
 :::info
@@ -45,3 +47,30 @@ general_settings:
     primary_secret_name: "litellm_secrets" # OPTIONAL. Read multiple keys from one JSON secret on AWS Secret Manager
 ```
 
+## Team-Level Secret Manager Settings
+
+Team-level secret manager settings let every team bring their own key-management configuration. These settings are used when creating virtual keys tied to the team.
+
+Follow these steps to configure it:
+
+1. **Create a team**  
+   Open the Teams page and click `Create Team` to launch the modal.  
+
+   <Image img={require('../../img/secret_manager_settings_create_team.png')} />
+
+2. **Expand Additional Settings**  
+   Use the `Additional Settings` toggle to reveal the advanced configuration panel.  
+   
+  <Image img={require('../../img/secret_manager_settings_additional_settings.png')} />
+
+3. **Configure the Secret Manager**  
+   In the `Secret Manager Settings` panel, paste the provider-specific JSON. Refer to each provider page (AWS, Azure, Google, Hashicorp, etc.) for the supported keys/values. JSON is required today, but we plan to add a more UI-friendly editor.  
+   
+   <Image img={require('../../img/secret_manager_settings.png')} />
+
+4. **Create the team**  
+   Review the inputs and click `Create Team` to save.  
+   
+   <Image img={require('../../img/secret_manager_settings_create_button.png')} />
+
+Once saved, LiteLLM will use this configuration.

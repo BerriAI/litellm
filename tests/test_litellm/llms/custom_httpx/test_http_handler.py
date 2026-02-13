@@ -20,31 +20,39 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_con
 
 @pytest.mark.asyncio
 async def test_ssl_security_level(monkeypatch):
-    with patch.dict(os.environ, clear=True):
-        # Set environment variable for SSL security level
-        monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+    
+    try:
+        with patch.dict(os.environ, clear=True):
+            # Set environment variable for SSL security level
+            monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
 
-        # Create async client with SSL verification disabled to isolate SSL context testing
-        client = AsyncHTTPHandler()
+            # Create async client with SSL verification disabled to isolate SSL context testing
+            client = AsyncHTTPHandler()
 
-        # Get the transport (should be LiteLLMAiohttpTransport)
-        transport = client.client._transport
-        assert isinstance(transport, LiteLLMAiohttpTransport)
+            # Get the transport (should be LiteLLMAiohttpTransport)
+            transport = client.client._transport
+            assert isinstance(transport, LiteLLMAiohttpTransport)
 
-        # Get the aiohttp ClientSession
-        client_session = transport._get_valid_client_session()
+            # Get the aiohttp ClientSession
+            client_session = transport._get_valid_client_session()
 
-        # Get the connector from the session
-        connector = client_session.connector
-        assert isinstance(connector, TCPConnector)
+            # Get the connector from the session
+            connector = client_session.connector
+            assert isinstance(connector, TCPConnector)
 
-        # Get the SSL context from the connector
-        ssl_context = connector._ssl
+            # Get the SSL context from the connector
+            ssl_context = connector._ssl
 
-        # Verify that the SSL context exists and has the correct cipher string
-        assert isinstance(ssl_context, ssl.SSLContext)
-        # Optionally, check the ciphers string if needed
-        # assert "DEFAULT@SECLEVEL=1" in ssl_context.get_ciphers()
+            # Verify that the SSL context exists and has the correct cipher string
+            assert isinstance(ssl_context, ssl.SSLContext)
+            # Optionally, check the ciphers string if needed
+            # assert "DEFAULT@SECLEVEL=1" in ssl_context.get_ciphers()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
 
 
 @pytest.mark.asyncio
@@ -106,22 +114,107 @@ async def test_ssl_verification_with_aiohttp_transport():
     """
     import aiohttp
 
-    # Create a test SSL context
-    litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+    
+    try:
+        # Create a test SSL context
+        litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
 
-    transport = litellm_async_client.client._transport
-    assert isinstance(transport, LiteLLMAiohttpTransport)
-    transport_connector = transport._get_valid_client_session().connector
-    assert isinstance(transport_connector, TCPConnector)
+        transport = litellm_async_client.client._transport
+        assert isinstance(transport, LiteLLMAiohttpTransport)
+        transport_connector = transport._get_valid_client_session().connector
+        assert isinstance(transport_connector, TCPConnector)
 
-    aiohttp_session = aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(verify_ssl=False)
-    )
-    aiohttp_connector = aiohttp_session.connector
-    assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
+        aiohttp_session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=False)
+        )
+        aiohttp_connector = aiohttp_session.connector
+        assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
 
-    # assert both litellm transport and aiohttp session have ssl_verify=False
-    assert transport_connector._ssl == aiohttp_connector._ssl
+        # assert both litellm transport and aiohttp session have ssl_verify=False
+        assert transport_connector._ssl == aiohttp_connector._ssl
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_ssl_verification_with_shared_session():
+    """
+    Test that ssl_verify=False is respected even with shared sessions.
+
+    This was a bug where shared sessions bypassed SSL configuration because
+    _create_aiohttp_transport returned immediately without passing ssl_verify
+    to the LiteLLMAiohttpTransport constructor.
+
+    The fix stores ssl_verify in the transport and passes it per-request.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a shared session (simulating what happens in production)
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and ssl_verify=False
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=False,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL setting is stored in the transport for per-request use
+            assert transport._ssl_verify is False
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_ssl_context_with_shared_session():
+    """
+    Test that ssl_context is respected even with shared sessions.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a custom SSL context
+        custom_ssl_context = ssl.create_default_context()
+
+        # Create a shared session
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and custom ssl_context
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_context=custom_ssl_context,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL context is stored in the transport for per-request use
+            assert transport._ssl_verify is custom_ssl_context
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
 
 
 @pytest.mark.asyncio
@@ -155,10 +248,17 @@ async def test_aiohttp_transport_trust_env_setting(monkeypatch):
 def test_get_ssl_configuration():
     """Test that get_ssl_configuration() returns a proper SSL context with certifi CA bundle
     when no environment variables are set."""
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+    
+    # Clear cache to ensure ssl.create_default_context is called
+    _ssl_context_cache.clear()
+    
     with patch.dict(os.environ, clear=True):
         with patch('ssl.create_default_context') as mock_create_context:
             # Mock the return value
             mock_ssl_context = MagicMock(spec=ssl.SSLContext)
+            mock_ssl_context.set_ciphers = MagicMock()
+            mock_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
             mock_create_context.return_value = mock_ssl_context
             
             # Call the static method
@@ -419,6 +519,11 @@ async def test_session_validation():
 )
 def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, monkeypatch):
     """Test SSL ECDH curve configuration with valid curves and precedence"""
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+    
+    # Clear cache to ensure fresh SSL context creation
+    _ssl_context_cache.clear()
+    
     with patch.dict(os.environ, clear=True):
         if env_curve:
             monkeypatch.setenv("SSL_ECDH_CURVE", env_curve)
@@ -427,13 +532,103 @@ def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, m
         try:
             litellm.ssl_ecdh_curve = litellm_curve
             
-            with patch.object(ssl.SSLContext, 'set_ecdh_curve') as mock_set_curve:
-                ssl_context = get_ssl_configuration()
-                
-                if should_call:
-                    mock_set_curve.assert_called_once_with(expected_curve)
-                else:
-                    mock_set_curve.assert_not_called()
-                assert isinstance(ssl_context, ssl.SSLContext)
+            # Create a real SSL context and patch set_ecdh_curve on it
+            # We need a real SSLContext instance (not a MagicMock) because _create_ssl_context
+            # calls methods like set_ciphers() and minimum_version that require a real context.
+            # We patch set_ecdh_curve specifically to verify it's called with the correct curve.
+            real_ssl_context = ssl.create_default_context()
+            with patch('ssl.create_default_context', return_value=real_ssl_context):
+                with patch.object(real_ssl_context, 'set_ecdh_curve') as mock_set_curve:
+                    ssl_context = get_ssl_configuration()
+                    
+                    if should_call:
+                        mock_set_curve.assert_called_once_with(expected_curve)
+                    else:
+                        mock_set_curve.assert_not_called()
+                    assert isinstance(ssl_context, ssl.SSLContext)
         finally:
             litellm.ssl_ecdh_curve = original_value
+
+
+def test_default_user_agent_is_litellm_version(monkeypatch):
+    from litellm._version import version
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    assert get_default_headers()["User-Agent"] == f"litellm/{version}"
+
+
+def test_user_agent_can_be_overridden_via_env_var(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    assert get_default_headers()["User-Agent"] == "Claude Code"
+
+
+def test_user_agent_env_var_can_be_empty_string(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "")
+
+    assert get_default_headers()["User-Agent"] == ""
+
+
+def test_user_agent_override_is_not_appended_to_default(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request(
+            "GET",
+            "https://example.com",
+            headers={"user-agent": "Claude Code"},
+        )
+
+        assert req.headers.get_list("User-Agent") == ["Claude Code"]
+    finally:
+        handler.close()
+
+
+def test_sync_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = AsyncHTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_httpx_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()

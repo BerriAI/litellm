@@ -1,13 +1,13 @@
 from enum import Enum
-from typing import Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import Literal, Required, TypedDict
 
 from .openai import (
     ChatCompletionCachedContent,
-    ChatCompletionThinkingBlock,
     ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
 )
 
 
@@ -17,11 +17,28 @@ class AnthropicMessagesToolChoice(TypedDict, total=False):
     disable_parallel_tool_use: bool  # default is false
 
 
-class AnthropicInputSchema(TypedDict, total=False):
-    type: Optional[str]
-    properties: Optional[dict]
-    additionalProperties: Optional[bool]
-    required: Optional[List[str]]
+AnthropicInputSchema = TypedDict(
+    "AnthropicInputSchema",
+    {
+        "type": Optional[str],
+        "properties": Optional[dict],
+        "additionalProperties": Optional[bool],
+        "required": Optional[List[str]],
+        "$defs": Optional[Dict],
+        "strict": Optional[bool],
+    },
+    total=False,
+)
+
+
+class AnthropicOutputSchema(TypedDict, total=False):
+    type: Required[Literal["json_schema"]]
+    schema: Required[dict]
+
+
+class AnthropicOutputConfig(TypedDict, total=False):
+    """Configuration for controlling Claude's output behavior."""
+    effort: Literal["high", "medium", "low"]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -30,6 +47,9 @@ class AnthropicMessagesTool(TypedDict, total=False):
     input_schema: Optional[AnthropicInputSchema]
     type: Literal["custom"]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: bool
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicComputerTool(TypedDict, total=False):
@@ -55,24 +75,78 @@ class AnthropicWebSearchTool(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     max_uses: Optional[int]
     user_location: Optional[AnthropicWebSearchUserLocation]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_editor
     type: Required[str]
     name: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicCodeExecutionTool(TypedDict, total=False):
     type: Required[str]
     name: Required[Literal["code_execution"]]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicMemoryTool(TypedDict, total=False):
     type: Required[str]
     name: Required[Literal["memory"]]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
+
+
+class AnthropicToolSearchToolRegex(TypedDict, total=False):
+    """Tool search tool using regex patterns for tool discovery."""
+    type: Required[Literal["tool_search_tool_regex_20251119"]]
+    name: Required[str]
+
+
+class AnthropicToolSearchToolBM25(TypedDict, total=False):
+    """Tool search tool using BM25 algorithm for tool discovery."""
+    type: Required[Literal["tool_search_tool_bm25_20251119"]]
+    name: Required[str]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
+
+
+class ToolReference(TypedDict, total=False):
+    """Reference to a tool that should be expanded from deferred tools."""
+    type: Required[Literal["tool_reference"]]
+    tool_name: Required[str]
+
+
+class DirectToolCaller(TypedDict, total=False):
+    """Indicates a tool was called directly by Claude."""
+    type: Required[Literal["direct"]]
+
+
+class CodeExecutionToolCaller(TypedDict, total=False):
+    """Indicates a tool was called programmatically from code execution."""
+    type: Required[Literal["code_execution_20250825"]]
+    tool_id: Required[str]  # ID of the code execution tool that made the call
+
+
+ToolCaller = Union[DirectToolCaller, CodeExecutionToolCaller]
+
+
+class AnthropicContainer(TypedDict, total=False):
+    """Container metadata for code execution."""
+    id: Required[str]
+    expires_at: Optional[str]  # ISO 8601 timestamp
 
 
 AllAnthropicToolsValues = Union[
@@ -82,6 +156,8 @@ AllAnthropicToolsValues = Union[
     AnthropicWebSearchTool,
     AnthropicCodeExecutionTool,
     AnthropicMemoryTool,
+    AnthropicToolSearchToolRegex,
+    AnthropicToolSearchToolBM25,
 ]
 
 
@@ -109,6 +185,7 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     name: str
     input: dict
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    caller: Optional[ToolCaller]
 
 
 AnthropicMessagesAssistantMessageValues = Union[
@@ -159,7 +236,11 @@ class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
     source: Required[
-        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
@@ -215,9 +296,9 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
     citations: Optional[CitationsObject]
 
 
-class AnthropicMessagesToolResultContent(TypedDict):
-    type: Literal["text"]
-    text: str
+class AnthropicMessagesToolResultContent(TypedDict, total=False):
+    type: Required[Literal["text"]]
+    text: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -274,8 +355,14 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     tool_choice: Optional[Union[AnthropicMessagesToolChoice, Dict]]
     tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
     top_k: Optional[int]
+    inference_geo: Optional[str]
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
+    context_management: Optional[Dict[str, Any]]
+    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
+    output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
+    speed: Optional[str]  # Fast mode support for Opus models
+    output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -355,6 +442,7 @@ class ToolUseBlock(TypedDict):
     name: str
 
     type: Literal["tool_use"]
+    caller: Optional[ToolCaller]
 
 
 class TextBlock(TypedDict):
@@ -391,6 +479,8 @@ class MessageDelta(TypedDict, total=False):
 class UsageDelta(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
 
 
 class MessageBlockDelta(TypedDict):
@@ -450,6 +540,9 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     id: str
     name: str
     input: dict
+    provider_specific_fields: Optional[Dict[str, Any]] = None
+
+    model_config = ConfigDict(extra="allow") # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
@@ -523,7 +616,7 @@ ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedr
 
 
 class AnthropicThinkingParam(TypedDict, total=False):
-    type: Literal["enabled"]
+    type: Literal["enabled", "adaptive"]
     budget_tokens: int
 
 
@@ -540,6 +633,23 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
     """
-
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
+    WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
+    COMPACT_2026_01_12 = "compact-2026-01-12"
+    STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
+    ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
+    FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
+
+
+# Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
+ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
+
+# Effort beta header constant
+ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+
+# OAuth constants
+ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
+ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
+
+ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER = "prompt-caching-scope-2026-01-05"

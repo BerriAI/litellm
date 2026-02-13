@@ -92,8 +92,9 @@ class RouteChecks:
             ):
                 return True
 
-        raise Exception(
-            f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
         )
 
     @staticmethod
@@ -241,6 +242,12 @@ class RouteChecks:
                     route_allowed = True
                     break
 
+                if RouteChecks._route_matches_wildcard_pattern(
+                    route=route, pattern=allowed_route
+                ):
+                    route_allowed = True
+                    break
+
             if not route_allowed:
                 RouteChecks._raise_admin_only_route_exception(
                     user_obj=user_obj, route=route
@@ -286,20 +293,50 @@ class RouteChecks:
 
         if route in LiteLLMRoutes.anthropic_routes.value:
             return True
+        
+        if route in LiteLLMRoutes.google_routes.value:
+            return True
 
         if RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
         ):
             return True
+        
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
+        ):
+            return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
-        # Check for routes with placeholders
+        # Check for routes with placeholders or wildcard patterns
         for openai_route in LiteLLMRoutes.openai_routes.value:
             # Replace placeholders with regex pattern
             # placeholders are written as "/threads/{thread_id}"
             if "{" in openai_route:
                 if RouteChecks._route_matches_pattern(
                     route=route, pattern=openai_route
+                ):
+                    return True
+            # Check for wildcard patterns like "/containers/*"
+            if RouteChecks._is_wildcard_pattern(pattern=openai_route):
+                if RouteChecks._route_matches_wildcard_pattern(
+                    route=route, pattern=openai_route
+                ):
+                    return True
+
+        # Check for Google routes with placeholders like "/v1beta/models/{model_name}:generateContent"
+        for google_route in LiteLLMRoutes.google_routes.value:
+            if "{" in google_route:
+                if RouteChecks._route_matches_pattern(
+                    route=route, pattern=google_route
+                ):
+                    return True
+
+        # Check for Anthropic routes with placeholders
+        for anthropic_route in LiteLLMRoutes.anthropic_routes.value:
+            if "{" in anthropic_route:
+                if RouteChecks._route_matches_pattern(
+                    route=route, pattern=anthropic_route
                 ):
                     return True
 
@@ -309,7 +346,6 @@ class RouteChecks:
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if _llm_passthrough_route in route:
                 return True
-
         return False
 
     @staticmethod
@@ -356,7 +392,15 @@ class RouteChecks:
         # Ensure route is a string before attempting regex matching
         if not isinstance(route, str):
             return False
-        pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
+
+        def _placeholder_to_regex(match: re.Match) -> str:
+            placeholder = match.group(0).strip("{}")
+            if placeholder.endswith(":path"):
+                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
+                return r"[^:]+"
+            return r"[^/]+"
+
+        pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
         if re.match(pattern, route):
@@ -601,6 +645,12 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
         ):
             # Allow access to admin viewer routes (read-only admin endpoints)
+            return
+        elif RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value
+        ):
+            # Allow access to global spend tracking routes (read-only spend endpoints)
+            # proxy_admin_viewer role description: "view all keys, view all spend"
             return
         else:
             # For other routes, block access

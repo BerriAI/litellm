@@ -8,7 +8,7 @@ import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
 
-export const FILTER_KEYS = {
+const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
@@ -17,6 +17,8 @@ export const FILTER_KEYS = {
   END_USER: "End User",
   STATUS: "Status",
   KEY_ALIAS: "Key Alias",
+  ERROR_CODE: "Error Code",
+  ERROR_MESSAGE: "Error Message",
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -53,6 +55,8 @@ export function useLogFilterLogic({
       [FILTER_KEYS.END_USER]: "",
       [FILTER_KEYS.STATUS]: "",
       [FILTER_KEYS.KEY_ALIAS]: "",
+      [FILTER_KEYS.ERROR_CODE]: "",
+      [FILTER_KEYS.ERROR_MESSAGE]: "",
     }),
     [],
   );
@@ -92,8 +96,11 @@ export function useLogFilterLogic({
           filters[FILTER_KEYS.USER_ID] || undefined,
           filters[FILTER_KEYS.END_USER] || undefined,
           filters[FILTER_KEYS.STATUS] || undefined,
+          undefined,
           filters[FILTER_KEYS.MODEL] || undefined,
           filters[FILTER_KEYS.KEY_ALIAS] || undefined,
+          filters[FILTER_KEYS.ERROR_CODE] || undefined,
+          filters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
         );
 
         if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -133,7 +140,9 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.KEY_HASH] ||
         filters[FILTER_KEYS.REQUEST_ID] ||
         filters[FILTER_KEYS.USER_ID] ||
-        filters[FILTER_KEYS.END_USER]
+        filters[FILTER_KEYS.END_USER] ||
+        filters[FILTER_KEYS.ERROR_CODE] ||
+        filters[FILTER_KEYS.ERROR_MESSAGE]
       ),
     [filters],
   );
@@ -180,6 +189,14 @@ export function useLogFilterLogic({
 
     if (filters[FILTER_KEYS.END_USER]) {
       filteredData = filteredData.filter((log) => log.end_user === filters[FILTER_KEYS.END_USER]);
+    }
+
+    if (filters[FILTER_KEYS.ERROR_CODE]) {
+      filteredData = filteredData.filter((log) => {
+        const metadata = log.metadata || {};
+        const errorInfo = metadata.error_information;
+        return errorInfo && errorInfo.error_code === filters[FILTER_KEYS.ERROR_CODE];
+      });
     }
 
     return {

@@ -8,6 +8,43 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.utils import CallTypesLiteral
 
+# Global counter for tracking which guardrail was called (for load balancing tests)
+guardrail_lb_call_count: Dict[str, int] = {"A": 0, "B": 0}
+
+
+class GuardrailForLBTestingA(CustomGuardrail):
+    """Guardrail A for load balancing testing."""
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> Optional[Union[Exception, str, dict]]:
+        guardrail_lb_call_count["A"] += 1
+        verbose_proxy_logger.info(
+            f"GuardrailForLBTestingA called. Total A calls: {guardrail_lb_call_count['A']}"
+        )
+        return data
+
+
+class GuardrailForLBTestingB(CustomGuardrail):
+    """Guardrail B for load balancing testing."""
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> Optional[Union[Exception, str, dict]]:
+        guardrail_lb_call_count["B"] += 1
+        verbose_proxy_logger.info(
+            f"GuardrailForLBTestingB called. Total B calls: {guardrail_lb_call_count['B']}"
+        )
+        return data
+
 
 class myCustomGuardrail(CustomGuardrail):
     def __init__(

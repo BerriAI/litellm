@@ -14,6 +14,17 @@ import TabItem from '@theme/TabItem';
 | Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models), [`/rerank`](#rerank-api) |
 
+:::tip Vertex AI vs Gemini API
+| Model Format | Provider | Auth Required |
+|-------------|----------|---------------|
+| `vertex_ai/gemini-2.0-flash` | Vertex AI | GCP credentials + project |
+| `gemini-2.0-flash` (no prefix) | Vertex AI | GCP credentials + project |
+| `gemini/gemini-2.0-flash` | Gemini API | `GEMINI_API_KEY` (simple API key) |
+
+**If you just want to use an API key** (like OpenAI), use the `gemini/` prefix instead. See [Gemini - Google AI Studio](./gemini.md).
+
+Models without a prefix default to Vertex AI which requires GCP authentication.
+:::
 
 <br />
 <br />
@@ -1390,6 +1401,77 @@ model_list:
 
 
 
+### **Workload Identity Federation**
+
+LiteLLM supports [Google Cloud Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation), which allows you to grant on-premises or multi-cloud workloads access to Google Cloud resources without using a service account key. This is the recommended approach for workloads running in other cloud environments (AWS, Azure, etc.) or on-premises.
+
+To use Workload Identity Federation, pass the path to your WIF credentials configuration file via `vertex_credentials`:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-1.5-pro",
+    messages=[{"role": "user", "content": "Hello!"}],
+    vertex_credentials="/path/to/wif-credentials.json",  # 👈 WIF credentials file
+    vertex_project="your-gcp-project-id",
+    vertex_location="us-central1"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gemini-model
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+      vertex_credentials: /path/to/wif-credentials.json  # 👈 WIF credentials file
+```
+
+Alternatively, you can create credentials in **LLM Credentials** in the LiteLLM UI and use those to authenticate your models:
+
+```yaml
+model_list:
+  - model_name: gemini-model
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+      litellm_credential_name: my-vertex-wif-credential  # 👈 Reference credential stored in UI
+```
+
+</TabItem>
+</Tabs>
+
+**WIF Credentials File Format**
+
+Your WIF credentials JSON file typically looks like this (for AWS federation):
+
+```json
+{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+  "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:generateAccessToken",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": {
+    "environment_id": "aws1",
+    "region_url": "http://169.254.169.254/latest/meta-data/placement/availability-zone",
+    "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials",
+    "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+  }
+}
+```
+
+For more details on setting up Workload Identity Federation, see [Google Cloud WIF documentation](https://cloud.google.com/iam/docs/workload-identity-federation).
+
 ### **Environment Variables**
 
 You can set:
@@ -1604,6 +1686,56 @@ litellm.vertex_location = "us-central1 # Your Location
 | gemini-2.5-flash-preview-09-2025   | `completion('gemini-2.5-flash-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-preview-09-2025', messages)` |
 | gemini-2.5-flash-lite-preview-09-2025   | `completion('gemini-2.5-flash-lite-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-lite-preview-09-2025', messages)` |
 
+## Private Service Connect (PSC) Endpoints
+
+LiteLLM supports Vertex AI models deployed to Private Service Connect (PSC) endpoints, allowing you to use custom `api_base` URLs for private deployments.
+
+### Usage
+
+```python
+from litellm import completion
+
+# Use PSC endpoint with custom api_base
+response = completion(
+    model="vertex_ai/1234567890",  # Numeric endpoint ID
+    messages=[{"role": "user", "content": "Hello!"}],
+    api_base="http://10.96.32.8",  # Your PSC endpoint
+    vertex_project="my-project-id",
+    vertex_location="us-central1",
+    use_psc_endpoint_format=True
+)
+```
+
+**Key Features:**
+- Supports both numeric endpoint IDs and custom model names
+- Works with both completion and embedding endpoints
+- Automatically constructs full PSC URL: `{api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}`
+- Compatible with streaming requests
+
+### Configuration
+
+Add PSC endpoints to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: psc-gemini
+    litellm_params:
+      model: vertex_ai/1234567890  # Numeric endpoint ID
+      api_base: "http://10.96.32.8"  # Your PSC endpoint
+      vertex_project: "my-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+      use_psc_endpoint_format: True
+  - model_name: psc-embedding
+    litellm_params:
+      model: vertex_ai/text-embedding-004
+      api_base: "http://10.96.32.8"  # Your PSC endpoint
+      vertex_project: "my-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+      use_psc_endpoint_format: True
+```
+
 ## Fine-tuned Models
 
 You can call fine-tuned Vertex AI Gemini models through LiteLLM
@@ -1741,7 +1873,7 @@ response = litellm.completion(
                           {
                               "type": "image_url",
                               "image_url": {
-                              "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                              "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                               }
                           }
                       ]
@@ -1836,6 +1968,244 @@ assert isinstance(
 
 ```
 
+## Media Resolution Control (Images & Videos)
+
+For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images and videos in your request, whether using `image_url` or `file` content types.
+
+**Supported `detail` values:**
+- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
+- `"medium"` - Maps to `media_resolution: "medium"`
+- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
+- `"ultra_high"` - Maps to `media_resolution: "ultra_high"`
+- `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="images" label="Images">
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/chart.png",
+                    "detail": "high"  # High resolution for detailed chart analysis
+                }
+            },
+            {
+                "type": "text",
+                "text": "Analyze this chart"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/icon.png",
+                    "detail": "low"  # Low resolution for simple icon
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=messages,
+)
+```
+
+</TabItem>
+<TabItem value="videos" label="Videos with Files">
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Analyze this video"
+            },
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "gs://my-bucket/video.mp4",
+                    "format": "video/mp4",
+                    "detail": "high"  # High resolution for detailed video analysis
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=messages,
+)
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+**Per-Part Resolution:** Each image or video in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature works with both `image_url` and `file` content types, and is only available for Gemini 3+ models.
+:::
+
+## Video Metadata Control
+
+For Gemini 3+ models, LiteLLM supports fine-grained video processing control through the `video_metadata` field. This allows you to specify frame extraction rates and time ranges for video analysis.
+
+**Supported `video_metadata` parameters:**
+
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `fps` | Number | Frame extraction rate (frames per second) | `5` |
+| `start_offset` | String | Start time for video clip processing | `"10s"` |
+| `end_offset` | String | End time for video clip processing | `"60s"` |
+
+:::note
+**Field Name Conversion:** LiteLLM automatically converts snake_case field names to camelCase for the Gemini API:
+- `start_offset` → `startOffset`
+- `end_offset` → `endOffset`
+- `fps` remains unchanged
+:::
+
+:::warning
+- **Gemini 3+ Only:** This feature is only available for Gemini 3.0 and newer models
+- **Video Files Recommended:** While `video_metadata` is designed for video files, error handling for other media types is delegated to the Vertex AI API
+- **File Formats Supported:** Works with `gs://`, `https://`, and base64-encoded video files
+:::
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="basic" label="Basic Video Metadata">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://my-bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "fps": 5,               # Extract 5 frames per second
+                            "start_offset": "10s",  # Start from 10 seconds
+                            "end_offset": "60s"     # End at 60 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="combined" label="Combined with Detail">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Provide detailed analysis of this video segment"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/presentation.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",  # High resolution for detailed analysis
+                        "video_metadata": {
+                            "fps": 10,              # Extract 10 frames per second
+                            "start_offset": "30s",  # Start from 30 seconds
+                            "end_offset": "90s"     # End at 90 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-3-pro
+    litellm_params:
+      model: vertex_ai/gemini-3-pro-preview
+      vertex_project: your-project
+      vertex_location: us-central1
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-3-pro",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "Analyze this video clip"},
+          {
+            "type": "file",
+            "file": {
+              "file_id": "gs://my-bucket/video.mp4",
+              "format": "video/mp4",
+              "detail": "high",
+              "video_metadata": {
+                "fps": 5,
+                "start_offset": "10s",
+                "end_offset": "60s"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## Usage - PDF / Videos / Audio etc. Files 
 
@@ -2545,355 +2915,6 @@ response = client.embeddings.create(
 )
 
 print(response)
-```
-
-</TabItem>
-</Tabs>
-
-
-## **Gemini TTS (Text-to-Speech) Audio Output**
-
-:::info
-
-LiteLLM supports Gemini TTS models on Vertex AI that can generate audio responses using the OpenAI-compatible `audio` parameter format.
-
-:::
-
-### Supported Models
-
-LiteLLM supports Gemini TTS models with audio capabilities on Vertex AI (e.g. `vertex_ai/gemini-2.5-flash-preview-tts` and `vertex_ai/gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-### Limitations
-
-:::warning
-
-**Important Limitations**:
-- Gemini TTS models only support the `pcm16` audio format
-- **Streaming support has not been added** to TTS models yet
-- The `modalities` parameter must be set to `['audio']` for TTS requests
-
-:::
-
-### Quick Start
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import json
-
-## GET CREDENTIALS
-file_path = 'path/to/vertex_ai_service_account.json'
-
-# Load the JSON file
-with open(file_path, 'r') as file:
-    vertex_credentials = json.load(file)
-
-# Convert to JSON string
-vertex_credentials_json = json.dumps(vertex_credentials)
-
-response = completion(
-    model="vertex_ai/gemini-2.5-flash-preview-tts",
-    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
-    modalities=["audio"],  # Required for TTS models
-    audio={
-        "voice": "Kore",
-        "format": "pcm16"  # Required: must be "pcm16"
-    },
-    vertex_credentials=vertex_credentials_json
-)
-
-print(response)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-  - model_name: gemini-tts-flash
-    litellm_params:
-      model: vertex_ai/gemini-2.5-flash-preview-tts
-      vertex_project: "your-project-id"
-      vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json"
-  - model_name: gemini-tts-pro
-    litellm_params:
-      model: vertex_ai/gemini-2.5-pro-preview-tts
-      vertex_project: "your-project-id"
-      vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json"
-```
-
-2. Start proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Make TTS request
-
-```bash
-curl http://0.0.0.0:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
-  -d '{
-    "model": "gemini-tts-flash",
-    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
-    "modalities": ["audio"],
-    "audio": {
-      "voice": "Kore",
-      "format": "pcm16"
-    }
-  }'
-```
-
-</TabItem>
-</Tabs>
-
-### Advanced Usage
-
-You can combine TTS with other Gemini features:
-
-```python
-response = completion(
-    model="vertex_ai/gemini-2.5-pro-preview-tts",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
-        {"role": "user", "content": "Explain quantum computing in simple terms"}
-    ],
-    modalities=["audio"],
-    audio={
-        "voice": "Charon",
-        "format": "pcm16"
-    },
-    temperature=0.7,
-    max_tokens=150,
-    vertex_credentials=vertex_credentials_json
-)
-```
-
-For more information about Gemini's TTS capabilities and available voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-## **Text to Speech APIs**
-
-:::info
-
-LiteLLM supports calling [Vertex AI Text to Speech API](https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech) in the OpenAI text to speech API format
-
-:::
-
-
-
-### Usage - Basic
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-**Sync Usage**
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-response = litellm.speech(
-    model="vertex_ai/",
-    input="hello what llm guardrail do you have",
-)
-response.stream_to_file(speech_file_path)
-```
-
-**Async Usage**
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-response = litellm.aspeech(
-    model="vertex_ai/",
-    input="hello what llm guardrail do you have",
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
-
-1. Add model to config.yaml
-```yaml
-model_list:
-  - model_name: vertex-tts
-    litellm_params:
-      model: vertex_ai/ # Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
-
-litellm_settings:
-  drop_params: True
-```
-
-2. Start Proxy 
-
-```
-$ litellm --config /path/to/config.yaml
-```
-
-3. Make Request use OpenAI Python SDK
-
-
-```python
-import openai
-
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input="the quick brown fox jumped over the lazy dogs",
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'}
-)
-print("response from proxy", response)
-```
-
-</TabItem>
-</Tabs>
-
-
-### Usage - `ssml` as input
-
-Pass your `ssml` as input to the `input` param, if it contains `<speak>`, it will be automatically detected and passed as `ssml` to the Vertex AI API
-
-If you need to force your `input` to be passed as `ssml`, set `use_ssml=True`
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-response = litellm.speech(
-    input=ssml,
-    model="vertex_ai/test",
-    voice={
-        "languageCode": "en-UK",
-        "name": "en-UK-Studio-O",
-    },
-    audioConfig={
-        "audioEncoding": "LINEAR22",
-        "speakingRate": "10",
-    },
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
-
-```python
-import openai
-
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input=ssml,
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
-)
-print("response from proxy", response)
-```
-
-</TabItem>
-</Tabs>
-
-
-### Forcing SSML Usage
-
-You can force the use of SSML by setting the `use_ssml` parameter to `True`. This is useful when you want to ensure that your input is treated as SSML, even if it doesn't contain the `<speak>` tags.
-
-Here are examples of how to force SSML usage:
-
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-response = litellm.speech(
-    input=ssml,
-    use_ssml=True,
-    model="vertex_ai/test",
-    voice={
-        "languageCode": "en-UK",
-        "name": "en-UK-Studio-O",
-    },
-    audioConfig={
-        "audioEncoding": "LINEAR22",
-        "speakingRate": "10",
-    },
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
-
-```python
-import openai
-
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input=ssml, # pass as None since OpenAI SDK requires this param
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
-    extra_body={"use_ssml": True},
-)
-print("response from proxy", response)
 ```
 
 </TabItem>

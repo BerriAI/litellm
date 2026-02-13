@@ -14,7 +14,7 @@ from litellm.utils import token_counter
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
 ) -> Tuple[float, Usage, List[str]]:
     """
@@ -37,7 +37,7 @@ async def calculate_batch_cost_and_usage(
 
 async def _handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
 ) -> Tuple[float, Usage, List[str]]:
     """Helper function to process a completed batch and handle logging"""
@@ -84,7 +84,7 @@ def _get_batch_models_from_file_content(
 
 def _batch_cost_calculator(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_name: Optional[str] = None,
 ) -> float:
     """
@@ -186,12 +186,15 @@ def calculate_vertex_ai_batch_cost_and_usage(
 
 async def _get_batch_output_file_content_as_dictionary(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
 ) -> List[dict]:
     """
     Get the batch output file content as a list of dictionaries
     """
     from litellm.files.main import afile_content
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+    )
 
     if custom_llm_provider == "vertex_ai":
         raise ValueError("Vertex AI does not support file content retrieval")
@@ -199,8 +202,17 @@ async def _get_batch_output_file_content_as_dictionary(
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
 
+    file_id = batch.output_file_id
+    is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+    if is_base64_unified_file_id:
+        try:
+            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+            verbose_logger.debug(f"Extracted LLM output file ID from unified file ID: {file_id}")
+        except (IndexError, AttributeError) as e:
+            verbose_logger.error(f"Failed to extract LLM output file ID from unified file ID: {batch.output_file_id}, error: {e}")
+
     _file_content = await afile_content(
-        file_id=batch.output_file_id,
+        file_id=file_id,
         custom_llm_provider=custom_llm_provider,
     )
     return _get_file_content_as_dictionary(_file_content.content)
@@ -225,7 +237,7 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
 
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
 ) -> float:
     """
     Get the cost of a batch job from the file content
@@ -253,7 +265,7 @@ def _get_batch_job_cost_from_file_content(
 
 def _get_batch_job_total_usage_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_name: Optional[str] = None,
 ) -> Usage:
     """

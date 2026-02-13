@@ -1,13 +1,20 @@
-import { act, fireEvent, render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { teamCreateCall } from "./networking";
+import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
+import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
 import OldTeams from "./OldTeams";
+
+const mockTeamInfoView = vi.fn();
+const mockUseOrganizations = vi.fn();
 
 vi.mock("./networking", () => ({
   teamCreateCall: vi.fn(),
   teamDeleteCall: vi.fn(),
   fetchMCPAccessGroups: vi.fn(),
   v2TeamListCall: vi.fn(),
+  getGuardrailsList: vi.fn(),
 }));
 
 vi.mock("./common_components/fetch_teams", () => ({
@@ -23,9 +30,88 @@ vi.mock("./molecules/notifications_manager", () => ({
   },
 }));
 
+vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
+  fetchAvailableModelsForTeamOrKey: vi.fn(),
+  getModelDisplayName: vi.fn((model: string) => model),
+  unfurlWildcardModelsInList: vi.fn((teamModels: string[], allModels: string[]) => {
+    const wildcardDisplayNames: string[] = [];
+    const expandedModels: string[] = [];
+
+    teamModels.forEach((teamModel) => {
+      if (teamModel.endsWith("/*")) {
+        const provider = teamModel.replace("/*", "");
+        const matchingModels = allModels.filter((model) => model.startsWith(provider + "/"));
+        expandedModels.push(...matchingModels);
+        wildcardDisplayNames.push(teamModel);
+      } else {
+        expandedModels.push(teamModel);
+      }
+    });
+
+    return [...wildcardDisplayNames, ...expandedModels].filter((item, index, array) => array.indexOf(item) === index);
+  }),
+}));
+
+vi.mock("@/components/team/TeamInfo", () => ({
+  __esModule: true,
+  default: (props: any) => {
+    mockTeamInfoView(props);
+    return <div data-testid="team-info-view" />;
+  },
+}));
+
+vi.mock("./ModelSelect/ModelSelect", () => {
+  const ModelSelect = React.forwardRef(({ value, onChange, dataTestId, id }: any, ref: any) => {
+    return (
+      <input
+        ref={ref}
+        id={id}
+        type="text"
+        data-testid={dataTestId || "model-select"}
+        value={Array.isArray(value) ? value.join(", ") : ""}
+        onChange={(e) => {
+          // Mock onChange - in real usage this would be handled by Ant Design Select
+          if (onChange) {
+            onChange(value || []);
+          }
+        }}
+        readOnly
+      />
+    );
+  });
+  ModelSelect.displayName = "ModelSelect";
+  return {
+    ModelSelect,
+  };
+});
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => mockUseOrganizations(),
+}));
+
+const createQueryClient = () => {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+};
+
+const renderWithQueryClient = (component: React.ReactElement) => {
+  const queryClient = createQueryClient();
+  return render(<QueryClientProvider client={queryClient}>{component}</QueryClientProvider>);
+};
+
 describe("OldTeams - handleCreate organization handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    mockUseOrganizations.mockReturnValue({ data: null });
   });
 
   it("should not include organization_id when it's an empty string", async () => {
@@ -236,7 +322,8 @@ describe("OldTeams - handleCreate organization handling", () => {
   });
 
   it("should clear the delete modal when the cancel button is clicked", async () => {
-    const { getByRole, getByTestId } = render(
+    mockUseOrganizations.mockReturnValue({ data: [] });
+    renderWithQueryClient(
       <OldTeams
         teams={[
           {
@@ -251,6 +338,7 @@ describe("OldTeams - handleCreate organization handling", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -261,12 +349,85 @@ describe("OldTeams - handleCreate organization handling", () => {
         organizations={[]}
       />,
     );
-    const deleteTeamButton = getByTestId("delete-team-button");
+    const deleteTeamButton = screen.getByTestId("delete-team-button");
     act(() => {
       fireEvent.click(deleteTeamButton);
     });
-    expect(getByRole("heading", { name: "Delete Team" })).toBeInTheDocument();
-    expect(getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByText("Delete Team?")).toBeInTheDocument();
+  });
+});
+
+describe("OldTeams - empty state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("should display empty state message when teams array is empty", () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.getByText("No teams found")).toBeInTheDocument();
+    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+  });
+
+  it("should display empty state message when teams is null", () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={null}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.getByText("No teams found")).toBeInTheDocument();
+    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+  });
+
+  it("should not display empty state when teams array has items", () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.queryByText("No teams found")).not.toBeInTheDocument();
+    expect(screen.queryByText("Adjust your filters or create a new team")).not.toBeInTheDocument();
+    expect(screen.getByText("Test Team")).toBeInTheDocument();
   });
 });
 
@@ -393,5 +554,354 @@ describe("OldTeams - helper functions", () => {
 
       expect(isAdmin || isOrgAdmin).toBe(false);
     });
+  });
+});
+
+describe("OldTeams - premium props", () => {
+  beforeEach(() => {
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("passes premiumUser flag to TeamInfoView", async () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "team-123456789",
+            team_alias: "Premium Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+        premiumUser={true}
+      />,
+    );
+
+    const truncatedTeamId = "team-123456789".slice(0, 7);
+    const teamButton = await screen.findByRole("button", {
+      name: new RegExp(`${truncatedTeamId}\\.\\.\\.`),
+    });
+    act(() => {
+      fireEvent.click(teamButton);
+    });
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+
+    expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ premiumUser: true }));
+  });
+});
+
+describe("OldTeams - Default Team Settings tab visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("should show Default Team Settings tab for Admin role", () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
+  });
+
+  it("should show Default Team Settings tab for proxy_admin role", () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="proxy_admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
+  });
+
+  it("should not show Default Team Settings tab for proxy_admin_viewer role", () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="proxy_admin_viewer"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
+  });
+
+  it("should not show Default Team Settings tab for Admin Viewer role", () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin Viewer"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
+  });
+});
+
+describe("OldTeams - models dropdown options", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("should not render all-proxy-models option in models select", async () => {
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+
+    renderWithQueryClient(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchAvailableModelsForTeamOrKey).toHaveBeenCalled();
+    });
+
+    const createButton = screen.getByRole("button", { name: /create new team/i });
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/models/i)).toBeInTheDocument();
+    });
+    const allProxyModelsOption = screen.queryByText("All Proxy Models");
+    expect(allProxyModelsOption).not.toBeInTheDocument();
+  });
+});
+
+describe("OldTeams - organization alias display", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("should display organization alias instead of organization id", () => {
+    const mockOrganizations = [
+      {
+        organization_id: "org-123",
+        organization_alias: "Test Organization",
+        budget_id: "budget-1",
+        metadata: {},
+        models: [],
+        spend: 0,
+        model_spend: {},
+        created_at: new Date().toISOString(),
+        created_by: "user-1",
+        updated_at: new Date().toISOString(),
+        updated_by: "user-1",
+        litellm_budget_table: null,
+        teams: null,
+        users: null,
+        members: null,
+      },
+    ];
+
+    mockUseOrganizations.mockReturnValue({ data: mockOrganizations });
+
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={mockOrganizations}
+      />,
+    );
+
+    expect(screen.getByText("Test Organization")).toBeInTheDocument();
+    expect(screen.queryByText("org-123")).not.toBeInTheDocument();
+  });
+
+  it("should display organization id when alias is not found", () => {
+    mockUseOrganizations.mockReturnValue({ data: [] });
+
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-unknown",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.getByText("org-unknown")).toBeInTheDocument();
+  });
+
+  it("should display N/A when organization_id is null", () => {
+    mockUseOrganizations.mockReturnValue({ data: [] });
+
+    renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: null as any,
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+            spend: 0,
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(screen.getByText("N/A")).toBeInTheDocument();
   });
 });

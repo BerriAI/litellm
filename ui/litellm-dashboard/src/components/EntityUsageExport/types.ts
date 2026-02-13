@@ -1,7 +1,9 @@
 import type { DateRangePickerValue } from "@tremor/react";
+import type { Team } from "@/components/key_team_helpers/key_list";
 
 export type ExportFormat = "csv" | "json";
-export type ExportScope = "daily" | "daily_with_models";
+export type ExportScope = "daily" | "daily_with_keys" | "daily_with_models";
+export type EntityType = "tag" | "team" | "organization" | "customer" | "agent";
 
 export interface EntitySpendData {
   results: any[];
@@ -17,11 +19,12 @@ export interface EntitySpendData {
 export interface EntityUsageExportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  entityType: "tag" | "team";
+  entityType: EntityType;
   spendData: EntitySpendData;
   dateRange: DateRangePickerValue;
   selectedFilters: string[];
   customTitle?: string;
+  teams?: Team[];
 }
 
 export interface ExportMetadata {
@@ -59,4 +62,3 @@ export interface EntityBreakdown {
     id: string;
   };
 }
-

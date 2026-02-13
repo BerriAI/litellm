@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
@@ -25,8 +26,10 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
+    _delete_cache_key_object,
     _get_user_role,
     _is_user_proxy_admin,
+    _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     can_key_call_model,
@@ -43,6 +46,7 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
+    normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
 )
@@ -50,10 +54,13 @@ from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+    populate_request_with_path_params,
 )
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -109,6 +116,18 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
 
     return api_key
 
@@ -122,6 +141,20 @@ def _get_bearer_token(
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
+            else:
+                api_key = ""
     else:
         api_key = ""
     return api_key
@@ -134,7 +167,7 @@ def _apply_budget_limits_to_end_user_params(
 ) -> None:
     """
     Helper function to apply budget limits to end user parameters.
-    
+
     Args:
         end_user_params: Dictionary to update with budget parameters
         budget_info: Budget table object containing limits
@@ -142,29 +175,21 @@ def _apply_budget_limits_to_end_user_params(
     """
     if budget_info.tpm_limit is not None:
         end_user_params["end_user_tpm_limit"] = budget_info.tpm_limit
-    
+
     if budget_info.rpm_limit is not None:
         end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
-    
+
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
-    
-    verbose_proxy_logger.debug(
-        f"Applied budget limits to end user {end_user_id}"
-    )
+
+    verbose_proxy_logger.debug(f"Applied budget limits to end user {end_user_id}")
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    request = Request(
-        scope={
-            "type": "http",
-            "headers": [
-                (k.lower().encode(), v.encode()) for k, v in websocket.headers.items()
-            ],
-        }
-    )
+    scope_headers = list(websocket.scope.get("headers") or [])
+    request = Request(scope={"type": "http", "headers": scope_headers})
 
     request._url = websocket.url
 
@@ -173,9 +198,7 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     model = query_params.get("model")
 
     async def return_body():
-        return_string = f'{{"model": "{model}"}}'
-        # return string as bytes
-        return return_string.encode()
+        return _realtime_request_body(model)
 
     request.body = return_body  # type: ignore
 
@@ -216,6 +239,33 @@ def update_valid_token_with_end_user_params(
     return valid_token
 
 
+# Reusable coordinator for global spend to prevent cache stampede
+_global_spend_coordinator = EventDrivenCacheCoordinator(log_prefix="[GLOBAL SPEND]")
+
+
+async def _fetch_global_spend_with_event_coordination(
+    cache_key: str,
+    user_api_key_cache: DualCache,
+    prisma_client: PrismaClient,
+) -> Optional[float]:
+    """
+    Fetch global spend with event-driven coordination to prevent cache stampede.
+    Uses EventDrivenCacheCoordinator: first request queries DB and signals others when done.
+    """
+
+    async def _load_global_spend() -> Optional[float]:
+        sql_query = """SELECT SUM(spend) AS total_spend FROM "MonthlyGlobalSpend";"""
+        response = await prisma_client.db.query_raw(query=sql_query)
+        val = response[0]["total_spend"]
+        return float(val) if val is not None else None
+
+    return await _global_spend_coordinator.get_or_load(
+        cache_key=cache_key,
+        cache=user_api_key_cache,
+        load_fn=_load_global_spend,
+    )
+
+
 async def get_global_proxy_spend(
     litellm_proxy_admin_name: str,
     user_api_key_cache: DualCache,
@@ -224,25 +274,14 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0:  # user set proxy max budget
-        # check cache
-        global_proxy_spend = await user_api_key_cache.async_get_cache(
-            key="{}:spend".format(litellm_proxy_admin_name)
+    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+        # Use event-driven coordination to prevent cache stampede
+        cache_key = "{}:spend".format(litellm_proxy_admin_name)
+        global_proxy_spend = await _fetch_global_spend_with_event_coordination(
+            cache_key=cache_key,
+            user_api_key_cache=user_api_key_cache,
+            prisma_client=prisma_client,
         )
-        if global_proxy_spend is None and prisma_client is not None:
-            # get from db
-            sql_query = (
-                """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-            )
-
-            response = await prisma_client.db.query_raw(query=sql_query)
-
-            global_proxy_spend = response[0]["total_spend"]
-
-            await user_api_key_cache.async_set_cache(
-                key="{}:spend".format(litellm_proxy_admin_name),
-                value=global_proxy_spend,
-            )
         if global_proxy_spend is not None:
             user_info = CallInfo(
                 user_id=litellm_proxy_admin_name,
@@ -520,6 +559,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                     parent_otel_span=parent_otel_span,
+                    request_headers=dict(request.headers),
                 )
 
                 is_proxy_admin = result["is_proxy_admin"]
@@ -552,6 +592,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token = UserAPIKeyAuth(
                     api_key=None,
                     team_id=team_id,
+                    team_alias=(
+                        team_object.team_alias if team_object is not None else None
+                    ),
                     team_tpm_limit=(
                         team_object.tpm_limit if team_object is not None else None
                     ),
@@ -584,7 +627,25 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         if team_membership is not None
                         else None
                     ),
+                    team_metadata=team_object.metadata
+                    if team_object is not None
+                    else None,
                 )
+                
+                # Check if model has zero cost - if so, skip all budget checks
+                model = get_model_from_request(request_data, route)
+                skip_budget_checks = False
+                if model is not None and llm_router is not None:
+                    from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                    
+                    skip_budget_checks = _is_model_cost_zero(
+                        model=model, llm_router=llm_router
+                    )
+                    if skip_budget_checks:
+                        verbose_proxy_logger.info(
+                            f"Skipping all budget checks for zero-cost model: {model}"
+                        )
+                
                 # run through common checks
                 _ = await common_checks(
                     request=request,
@@ -598,6 +659,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     llm_router=llm_router,
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
+                    skip_budget_checks=skip_budget_checks,
                 )
 
                 # return UserAPIKeyAuth object
@@ -666,9 +728,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     route=route,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -729,7 +791,29 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
-            # update end-user params on valid token
+            if valid_token.expires is not None:
+                current_time = datetime.now(timezone.utc)
+                if isinstance(valid_token.expires, datetime):
+                    expiry_time = valid_token.expires
+                else:
+                    expiry_time = datetime.fromisoformat(valid_token.expires)
+                if (
+                    expiry_time.tzinfo is None
+                    or expiry_time.tzinfo.utcoffset(expiry_time) is None
+                ):
+                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                if expiry_time < current_time:
+                    await _delete_cache_key_object(
+                        hashed_token=hash_token(api_key),
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                    raise ProxyException(
+                        message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                        type=ProxyErrorTypes.expired_key,
+                        code=400,
+                        param=abbreviate_api_key(api_key=api_key),
+                    )
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
             )
@@ -967,9 +1051,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     user_obj = None
 
-            # Check 3. Check if user is in their team budget
-            if valid_token.team_member_spend is not None:
+            # Check 2a. Check if model has zero cost - if so, skip all budget checks
+            model = get_model_from_request(request_data, route)
+            skip_budget_checks = False
+            if model is not None and llm_router is not None:
+                from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                
+                skip_budget_checks = _is_model_cost_zero(
+                    model=model, llm_router=llm_router
+                )
+                if skip_budget_checks:
+                    verbose_proxy_logger.info(
+                        f"Skipping all budget checks for zero-cost model: {model}"
+                    )
 
+            # Check 3. Check if user is in their team budget
+            if not skip_budget_checks and valid_token.team_member_spend is not None:
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
@@ -1030,52 +1127,63 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
                         code=400,
-                        param=api_key,
+                        param=abbreviate_api_key(api_key=api_key),
                     )
 
-            # Check 4. Token Spend is under budget
-            if RouteChecks.is_llm_api_route(route=route):
-                await _virtual_key_max_budget_check(
+            if not skip_budget_checks:
+                # Check 4. Token Spend is under budget
+                if RouteChecks.is_llm_api_route(route=route):
+                    await _virtual_key_max_budget_check(
+                        valid_token=valid_token,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_obj=user_obj,
+                    )
+
+                # Check 5. Max Budget Alert Check
+                await _virtual_key_max_budget_alert_check(
                     valid_token=valid_token,
                     proxy_logging_obj=proxy_logging_obj,
                     user_obj=user_obj,
                 )
 
-            # Check 5. Soft Budget Check
-            await _virtual_key_soft_budget_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-            # Check 5. Token Model Spend is under Model budget
-            max_budget_per_model = valid_token.model_max_budget
-            current_model = request_data.get("model", None)
-
-            if (
-                max_budget_per_model is not None
-                and isinstance(max_budget_per_model, dict)
-                and len(max_budget_per_model) > 0
-                and prisma_client is not None
-                and current_model is not None
-                and valid_token.token is not None
-            ):
-                ## GET THE SPEND FOR THIS MODEL
-                await model_max_budget_limiter.is_key_within_model_budget(
-                    user_api_key_dict=valid_token,
-                    model=current_model,
+                # Check 6. Soft Budget Check
+                await _virtual_key_soft_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_obj,
                 )
+
+                # Check 5. Token Model Spend is under Model budget
+                max_budget_per_model = valid_token.model_max_budget
+                current_model = request_data.get("model", None)
+
+                if (
+                    max_budget_per_model is not None
+                    and isinstance(max_budget_per_model, dict)
+                    and len(max_budget_per_model) > 0
+                    and prisma_client is not None
+                    and current_model is not None
+                    and valid_token.token is not None
+                ):
+                    ## GET THE SPEND FOR THIS MODEL
+                    await model_max_budget_limiter.is_key_within_model_budget(
+                        user_api_key_dict=valid_token,
+                        model=current_model,
+                    )
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
                     team_id=valid_token.team_id,
                     max_budget=valid_token.team_max_budget,
+                    soft_budget=valid_token.team_soft_budget,
                     spend=valid_token.team_spend,
                     tpm_limit=valid_token.team_tpm_limit,
                     rpm_limit=valid_token.team_rpm_limit,
                     blocked=valid_token.team_blocked,
                     models=valid_token.team_models,
                     metadata=valid_token.team_metadata,
+                    object_permission_id=valid_token.team_object_permission_id,
                 )
             else:
                 _team_obj = None
@@ -1088,21 +1196,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if (
                 litellm.max_budget > 0 and prisma_client is not None
             ):  # user set proxy max budget
-                # check cache
-                global_proxy_spend = await user_api_key_cache.async_get_cache(
-                    key="{}:spend".format(litellm_proxy_admin_name)
+                cache_key = "{}:spend".format(litellm_proxy_admin_name)
+                global_proxy_spend = await _fetch_global_spend_with_event_coordination(
+                    cache_key=cache_key,
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
                 )
-                if global_proxy_spend is None:
-                    # get from db
-                    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-
-                    response = await prisma_client.db.query_raw(query=sql_query)
-
-                    global_proxy_spend = response[0]["total_spend"]
-                    await user_api_key_cache.async_set_cache(
-                        key="{}:spend".format(litellm_proxy_admin_name),
-                        value=global_proxy_spend,
-                    )
 
                 if global_proxy_spend is not None:
                     call_info = CallInfo(
@@ -1131,6 +1230,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 llm_router=llm_router,
                 proxy_logging_obj=proxy_logging_obj,
                 valid_token=valid_token,
+                skip_budget_checks=skip_budget_checks,
             )
             # Token passed all checks
             if valid_token is None:
@@ -1203,8 +1303,10 @@ async def user_api_key_auth(
     """
 
     request_data = await _read_request_body(request=request)
+    request_data = populate_request_with_path_params(
+        request_data=request_data, request=request
+    )
     route: str = get_request_route(request=request)
-
     ## CHECK IF ROUTE IS ALLOWED
 
     user_api_key_auth_obj = await _user_api_key_auth_builder(
@@ -1227,8 +1329,7 @@ async def user_api_key_auth(
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
 
-    user_api_key_auth_obj.request_route = route
-
+    user_api_key_auth_obj.request_route = normalize_request_route(route)
     return user_api_key_auth_obj
 
 
@@ -1269,6 +1370,8 @@ async def _return_user_api_key_auth_obj(
             user_tpm_limit=user_obj.tpm_limit,
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
+            user_spend=getattr(user_obj, "spend", None),
+            user_max_budget=getattr(user_obj, "max_budget", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(

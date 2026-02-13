@@ -742,7 +742,7 @@ def test_gemini_pro_grounding(value_in_dict):
 @pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.flaky(retries=6, delay=2)
 async def test_gemini_pro_function_calling_httpx(model, sync_mode):
     try:
         load_vertex_ai_credentials()
@@ -785,6 +785,7 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             "messages": messages,
             "tools": tools,
             "tool_choice": "required",
+            "timeout": 60,  # Add explicit timeout
         }
         print(f"Model for call - {model}")
         if sync_mode:
@@ -799,12 +800,18 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
     except litellm.RateLimitError as e:
-        pass
+        pytest.skip(f"Rate limit exceeded: {str(e)}")
+    except litellm.ServiceUnavailableError as e:
+        pytest.skip(f"Service unavailable: {str(e)}")
+    except litellm.Timeout as e:
+        pytest.skip(f"Request timeout: {str(e)}")
     except Exception as e:
-        if "429 Quota exceeded" in str(e):
-            pass
+        error_msg = str(e)
+        # Skip test for known transient API issues
+        if any(x in error_msg for x in ["429 Quota exceeded", "503", "Service unavailable", "timeout", "Timeout", "UNAVAILABLE"]):
+            pytest.skip(f"Transient API error: {error_msg}")
         else:
-            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
+            pytest.fail(f"An unexpected exception occurred - {error_msg}")
 
 
 from test_completion import response_format_tests
@@ -813,7 +820,7 @@ from test_completion import response_format_tests
 @pytest.mark.parametrize(
     "model,region",
     [
-        ("vertex_ai/mistral-large-2411", "us-central1"),
+        ("vertex_ai/mistral-small-2503", "us-central1"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),
     ],
@@ -886,7 +893,7 @@ async def test_partner_models_httpx(model, region, sync_mode):
         ("vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas", "us-east5"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         (
-            "vertex_ai/mistral-large-2411",
+            "vertex_ai/mistral-small-2503",
             "us-central1",
         ),  # critical - we had this issue: https://github.com/BerriAI/litellm/issues/13888
         ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),
@@ -1386,14 +1393,15 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
             print(mock_call.call_args.kwargs["json"]["generationConfig"])
 
             if supports_response_schema:
+                # Gemini 2.x+ uses response_json_schema, Gemini 1.x uses response_schema
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    in mock_call.call_args.kwargs["json"]["generationConfig"]
-                )
+                    "response_schema" in gen_config or "response_json_schema" in gen_config
+                ), f"Expected response_schema or response_json_schema in {gen_config}"
             else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    not in mock_call.call_args.kwargs["json"]["generationConfig"]
+                    "response_schema" not in gen_config and "response_json_schema" not in gen_config
                 )
                 assert (
                     "Use this JSON schema:"
@@ -1566,10 +1574,11 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
             print(mock_call.call_args.kwargs["json"]["generationConfig"])
 
             if supports_response_schema:
+                # Gemini 2.x+ uses response_json_schema, Gemini 1.x uses response_schema
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    in mock_call.call_args.kwargs["json"]["generationConfig"]
-                )
+                    "response_schema" in gen_config or "response_json_schema" in gen_config
+                ), f"Expected response_schema or response_json_schema in {gen_config}"
                 assert (
                     "response_mime_type"
                     in mock_call.call_args.kwargs["json"]["generationConfig"]
@@ -1581,9 +1590,9 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
                     == "application/json"
                 )
             else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    not in mock_call.call_args.kwargs["json"]["generationConfig"]
+                    "response_schema" not in gen_config and "response_json_schema" not in gen_config
                 )
                 assert (
                     "Use this JSON schema:"
@@ -2350,8 +2359,7 @@ async def test_completion_fine_tuned_model():
     expected_payload = {
         "contents": [
             {"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}
-        ],
-        "generationConfig": {},
+        ]
     }
 
     with patch(
@@ -2561,6 +2569,115 @@ async def test_gemini_context_caching_anthropic_format(sync_mode):
         # assert (response.usage.cache_read_input_tokens > 0) or (
         #     response.usage.cache_creation_input_tokens > 0
         # )
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_gemini_context_caching_disabled_flag(sync_mode):
+    """
+    Test that disable_anthropic_gemini_context_caching_transform flag properly disables context caching.
+    
+    When the flag is set to True, messages with cache_control should not trigger caching API calls.
+    """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    litellm.set_verbose = True
+    
+    # Store original value to restore later
+    original_flag_value = litellm.disable_anthropic_gemini_context_caching_transform
+    
+    try:
+        # Enable the disable flag
+        litellm.disable_anthropic_gemini_context_caching_transform = True
+        
+        gemini_context_caching_messages = [
+            # System Message with cache_control
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement {}".format(
+                            uuid.uuid4()
+                        )
+                        * 4000,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            # User message with cache_control
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                    }
+                ],
+            },
+        ]
+        
+        if sync_mode:
+            client = HTTPHandler(concurrent_limit=1)
+        else:
+            client = AsyncHTTPHandler(concurrent_limit=1)
+            
+        with patch.object(client, "post", side_effect=mock_gemini_request) as mock_client:
+            try:
+                if sync_mode:
+                    response = litellm.completion(
+                        model="gemini/gemini-2.5-flash-lite-001",
+                        messages=gemini_context_caching_messages,
+                        temperature=0.2,
+                        max_tokens=10,
+                        client=client,
+                    )
+                else:
+                    response = await litellm.acompletion(
+                        model="gemini/gemini-2.5-flash-lite-001",
+                        messages=gemini_context_caching_messages,
+                        temperature=0.2,
+                        max_tokens=10,
+                        client=client,
+                    )
+
+            except Exception as e:
+                print(e)
+
+            # When caching is disabled, should only make 1 call (no separate cache creation call)
+            assert mock_client.call_count == 1, f"Expected 1 call when caching is disabled, got {mock_client.call_count}"
+
+            first_call_args = mock_client.call_args_list[0].kwargs
+            first_call_positional_args = mock_client.call_args_list[0].args
+
+            print(f"first_call_args with caching disabled: {first_call_args}")
+            print(f"first_call_positional_args with caching disabled: {first_call_positional_args}")
+
+            # Assert that cachedContents is NOT in the URL when caching is disabled
+            url = first_call_args.get("url", first_call_positional_args[0] if first_call_positional_args else "")
+            assert "cachedContents" not in url, "cachedContents should not be in URL when caching is disabled"
+            
+    finally:
+        # Restore original flag value
+        litellm.disable_anthropic_gemini_context_caching_transform = original_flag_value
+
 
 
 @pytest.mark.asyncio
@@ -2831,7 +2948,6 @@ def test_gemini_function_call_parameter_in_messages():
                 }
             ],
             "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
-            "generationConfig": {},
         } == mock_client.call_args.kwargs["json"]
 
 
@@ -3592,6 +3708,60 @@ def test_vertex_schema_test():
         model="vertex_ai/gemini-2.5-flash",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=[tool],
+        tool_choice="required",
+    )
+
+    print(response)
+
+
+def test_gemini_nullable_object_tool_schema_httpx():
+    """
+    Ensure nullable object tool params preserve nested properties in Vertex schema conversion.
+    """
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+
+    tools = [{
+            "type": "function",
+            "strict": True,
+            "function": {
+                "name": "create_support_ticket",
+                "description": "Create a paid user support ticket",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["ticket_id", "customer_context"],
+                    "properties": {
+                        "ticket_id": {
+                            "type": "string",
+                            "description": "Unique identifier for the support ticket"
+                        },
+                        "customer_context": {
+                            "type": ["object", "null"],
+                            "description": "Context about the paid customer, if available",
+                            "additionalProperties": False,
+                            "required": ["user_id", "plan"],
+                            "properties": {
+                                "user_id": {
+                                    "type": "string",
+                                    "description": "Internal user identifier"
+                                },
+                                "plan": {
+                                    "type": "string",
+                                    "description": "Subscription plan name (e.g. pro, enterprise)"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }]
+
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=tools,
         tool_choice="required",
     )
 

@@ -95,6 +95,181 @@ async def test_organization_update_object_permissions_existing_permission(monkey
 
 
 @pytest.mark.asyncio
+async def test_get_organization_daily_activity_admin_param_passing(monkeypatch):
+    """
+    As admin, ensure parsed params are forwarded to get_daily_activity with correct values.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Admin view -> skip membership restriction
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: True,
+    )
+
+    # Patch downstream common function and verify call args
+    mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
+    get_daily_activity_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(
+        organization_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    result = await get_organization_daily_activity(
+        organization_ids="org1,org2",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model="gpt-4",
+        api_key="test-key",
+        page=2,
+        page_size=5,
+        exclude_organization_ids="org3",
+        user_api_key_dict=auth,
+    )
+
+    # Ensure passthrough to common method with correct args
+    get_daily_activity_mock.assert_awaited_once()
+    kwargs = get_daily_activity_mock.call_args.kwargs
+    assert kwargs["table_name"] == "litellm_dailyorganizationspend"
+    assert kwargs["entity_id_field"] == "organization_id"
+    assert kwargs["entity_id"] == ["org1", "org2"]
+    assert kwargs["exclude_entity_ids"] == ["org3"]
+    assert kwargs["start_date"] == "2024-01-01"
+    assert kwargs["end_date"] == "2024-01-31"
+    assert kwargs["model"] == "gpt-4"
+    assert kwargs["api_key"] == "test-key"
+    assert kwargs["page"] == 2
+    assert kwargs["page_size"] == 5
+
+    assert result is mocked_response
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(monkeypatch):
+    """
+    Non-admin with no explicit organization_ids should default to orgs they are ORG_ADMIN of.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity,
+    )
+
+    # Mock prisma client and memberships
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value
+            ),
+            SimpleNamespace(
+                organization_id="orgB", user_role=LitellmUserRoles.ORG_ADMIN.value
+            ),
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Non-admin view
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+
+    # Patch downstream aggregator
+    mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
+    get_daily_activity_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(
+        organization_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"
+    )
+    await get_organization_daily_activity(
+        organization_ids=None,
+        start_date="2024-02-01",
+        end_date="2024-02-28",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+        exclude_organization_ids=None,
+        user_api_key_dict=auth,
+    )
+
+    kwargs = get_daily_activity_mock.call_args.kwargs
+    assert kwargs["entity_id"] == ["orgA", "orgB"]
+    assert kwargs["start_date"] == "2024-02-01"
+    assert kwargs["end_date"] == "2024-02-28"
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(monkeypatch):
+    """
+    Non-admin requesting an org they aren't ORG_ADMIN for should raise 403.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity,
+    )
+
+    # Mock prisma client and memberships (only orgA is admin)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value
+            )
+        ]
+    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Non-admin view
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await get_organization_daily_activity(
+            organization_ids="orgA,orgX",  # orgX is unauthorized
+            start_date="2024-03-01",
+            end_date="2024-03-31",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_organization_ids=None,
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 403
+
+@pytest.mark.asyncio
 async def test_organization_update_object_permissions_no_existing_permission(
     monkeypatch,
 ):
@@ -235,3 +410,128 @@ async def test_organization_update_object_permissions_missing_permission_record(
 
     # Verify upsert was called to create new record
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_list_organization_filter_by_org_id(monkeypatch):
+    """
+    Test filtering organizations by org_id query parameter.
+    
+    This test verifies that when org_id is provided, only the organization
+    with that exact organization_id is returned.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        list_organization,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    
+    # Mock organization data
+    mock_org1 = SimpleNamespace(
+        organization_id="org-123",
+        organization_alias="Test Org 1",
+        model_dump=lambda: {
+            "organization_id": "org-123",
+            "organization_alias": "Test Org 1",
+        },
+    )
+    
+    # Mock find_many to return filtered results
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[mock_org1]
+    )
+    
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Test as proxy admin
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    )
+    
+    result = await list_organization(org_id="org-123", org_alias=None, user_api_key_dict=auth)
+
+    # Verify the correct organization was returned
+    assert len(result) == 1
+    assert result[0].organization_id == "org-123"
+    assert result[0].organization_alias == "Test Org 1"
+    
+    # Verify find_many was called with correct where conditions
+    mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
+    call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
+    assert call_args.kwargs["where"] == {"organization_id": "org-123"}
+    assert call_args.kwargs["include"] == {
+        "litellm_budget_table": True,
+        "members": True,
+        "teams": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_organization_filter_by_org_alias(monkeypatch):
+    """
+    Test filtering organizations by org_alias query parameter with case-insensitive partial matching.
+    
+    This test verifies that when org_alias is provided, organizations with matching
+    organization_alias (case-insensitive partial match) are returned.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        list_organization,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    
+    # Mock organization data
+    mock_org1 = SimpleNamespace(
+        organization_id="org-123",
+        organization_alias="My Test Organization",
+        model_dump=lambda: {
+            "organization_id": "org-123",
+            "organization_alias": "My Test Organization",
+        },
+    )
+    mock_org2 = SimpleNamespace(
+        organization_id="org-456",
+        organization_alias="Another Test Org",
+        model_dump=lambda: {
+            "organization_id": "org-456",
+            "organization_alias": "Another Test Org",
+        },
+    )
+    
+    # Mock find_many to return filtered results
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[mock_org1, mock_org2]
+    )
+    
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Test as proxy admin with org_alias filter
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    )
+    
+    result = await list_organization(org_id=None, org_alias="test", user_api_key_dict=auth)
+
+    # Verify organizations with "test" in alias were returned
+    assert len(result) == 2
+    assert all("test" in org.organization_alias.lower() for org in result)
+    
+    # Verify find_many was called with correct where conditions (case-insensitive contains)
+    mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
+    call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
+    assert call_args.kwargs["where"] == {
+        "organization_alias": {"contains": "test", "mode": "insensitive"}
+    }
+    assert call_args.kwargs["include"] == {
+        "litellm_budget_table": True,
+        "members": True,
+        "teams": True,
+    }

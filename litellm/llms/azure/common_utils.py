@@ -3,7 +3,7 @@ import os
 from typing import Any, Callable, Dict, Literal, Optional, Union, cast
 
 import httpx
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 import litellm
 from litellm._logging import verbose_logger
@@ -294,20 +294,18 @@ def get_azure_ad_token(
         Azure AD token as string if successful, None otherwise
     """
     # Extract parameters
+    # Use `or` instead of default parameter to handle cases where key exists but value is None
     azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
-    azure_ad_token = litellm_params.get("azure_ad_token", None) or get_secret_str(
+    azure_ad_token = litellm_params.get("azure_ad_token") or get_secret_str(
         "AZURE_AD_TOKEN"
     )
-    tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
-    client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
-    client_secret = litellm_params.get(
-        "client_secret", os.getenv("AZURE_CLIENT_SECRET")
-    )
-    azure_username = litellm_params.get("azure_username", os.getenv("AZURE_USERNAME"))
-    azure_password = litellm_params.get("azure_password", os.getenv("AZURE_PASSWORD"))
-    scope = litellm_params.get(
-        "azure_scope",
-        os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
+    tenant_id = litellm_params.get("tenant_id") or os.getenv("AZURE_TENANT_ID")
+    client_id = litellm_params.get("client_id") or os.getenv("AZURE_CLIENT_ID")
+    client_secret = litellm_params.get("client_secret") or os.getenv("AZURE_CLIENT_SECRET")
+    azure_username = litellm_params.get("azure_username") or os.getenv("AZURE_USERNAME")
+    azure_password = litellm_params.get("azure_password") or os.getenv("AZURE_PASSWORD")
+    scope = litellm_params.get("azure_scope") or os.getenv(
+        "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"
     )
     if scope is None:
         scope = "https://cognitiveservices.azure.com/.default"
@@ -441,12 +439,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_key: Optional[str],
         api_base: Optional[str],
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
         litellm_params: Optional[dict] = None,
         _is_async: bool = False,
         model: Optional[str] = None,
-    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
-        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
+    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]]:
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None
         client_initialization_params: dict = locals()
         client_initialization_params["is_async"] = _is_async
         if client is None:
@@ -455,9 +453,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_type="azure",
             )
             if cached_client:
-                if isinstance(cached_client, AzureOpenAI) or isinstance(
-                    cached_client, AsyncAzureOpenAI
-                ):
+                if isinstance(cached_client, (AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI)):
                     return cached_client
 
             azure_client_params = self.initialize_azure_sdk_client(
@@ -468,15 +464,40 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_version=api_version,
                 is_async=_is_async,
             )
-            if _is_async is True:
-                openai_client = AsyncAzureOpenAI(**azure_client_params)
+
+            # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
+            # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
+            if self._is_azure_v1_api_version(api_version):
+                # Extract only params that OpenAI client accepts
+                # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
+                v1_params = {
+                    "api_key": azure_client_params.get("api_key"),
+                    "base_url": f"{api_base}/openai/v1/",
+                }
+                if "timeout" in azure_client_params:
+                    v1_params["timeout"] = azure_client_params["timeout"]
+                if "max_retries" in azure_client_params:
+                    v1_params["max_retries"] = azure_client_params["max_retries"]
+                if "http_client" in azure_client_params:
+                    v1_params["http_client"] = azure_client_params["http_client"]
+
+                verbose_logger.debug(f"Using Azure v1 API with base_url: {v1_params['base_url']}")
+
+                if _is_async is True:
+                    openai_client = AsyncOpenAI(**v1_params)  # type: ignore
+                else:
+                    openai_client = OpenAI(**v1_params)  # type: ignore
             else:
-                openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
+                # Traditional Azure API uses AzureOpenAI client
+                if _is_async is True:
+                    openai_client = AsyncAzureOpenAI(**azure_client_params)
+                else:
+                    openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
         else:
             openai_client = client
             if api_version is not None and isinstance(
-                openai_client._custom_query, dict
-            ):
+                openai_client, (AzureOpenAI, AsyncAzureOpenAI)
+            ) and isinstance(openai_client._custom_query, dict):
                 # set api_version to version passed by user
                 openai_client._custom_query.setdefault("api-version", api_version)
 
@@ -500,23 +521,18 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
-        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
-        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
-        client_secret = litellm_params.get(
-            "client_secret", os.getenv("AZURE_CLIENT_SECRET")
-        )
-        azure_username = litellm_params.get(
-            "azure_username", os.getenv("AZURE_USERNAME")
-        )
-        azure_password = litellm_params.get(
-            "azure_password", os.getenv("AZURE_PASSWORD")
-        )
-        scope = litellm_params.get(
-            "azure_scope",
-            os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
-        )
+
+        # litellm_params sometimes contains the key, but the value is None
+        # We should respect environment variables in this case
+        tenant_id = self._resolve_env_var(litellm_params, "tenant_id", "AZURE_TENANT_ID")
+        client_id = self._resolve_env_var(litellm_params, "client_id", "AZURE_CLIENT_ID")
+        client_secret = self._resolve_env_var(litellm_params, "client_secret", "AZURE_CLIENT_SECRET")
+        azure_username = self._resolve_env_var(litellm_params, "azure_username", "AZURE_USERNAME")
+        azure_password = self._resolve_env_var(litellm_params, "azure_password", "AZURE_PASSWORD")
+        scope = self._resolve_env_var(litellm_params, "azure_scope", "AZURE_SCOPE")
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
+
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if (
@@ -760,3 +776,16 @@ class BaseAzureLLM(BaseOpenAILLM):
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}
+
+    def _resolve_env_var(self, litellm_params: Dict[str, Any], param_key: str, env_var_key: str) -> Optional[str]:
+        """Resolve the environment variable for a given parameter key.
+        
+        The logic here is different from `params.get(key, os.getenv(env_var))` because
+        litellm_params may contain the key with a None value, in which case we want
+        to fallback to the environment variable.
+        """
+        param_value = litellm_params.get(param_key)
+        if param_value is not None:
+            return param_value
+        return os.getenv(env_var_key)
+

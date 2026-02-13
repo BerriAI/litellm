@@ -1,37 +1,40 @@
-import React, { useState, useEffect } from "react";
+import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
+  Badge,
+  Button,
+  Card,
+  Col,
+  Grid,
+  Icon,
+  Tab,
+  TabGroup,
   Table,
+  TableBody,
+  TableCell,
   TableHead,
   TableHeaderCell,
-  TableBody,
   TableRow,
-  TableCell,
-  Card,
-  Text,
-  Badge,
-  Icon,
-  Grid,
-  Col,
-  Button,
-  TabGroup,
   TabList,
-  Tab,
-  TabPanels,
   TabPanel,
+  TabPanels,
+  Text,
+  TextInput,
 } from "@tremor/react";
-import NumericalInput from "./shared/numerical_input";
-import { Input } from "antd";
-import { Modal, Form, Tooltip, Select as Select2 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { PencilAltIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { TextInput } from "@tremor/react";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import OrganizationInfoView from "./organization/organization_view";
-import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from "./networking";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import React, { useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { ModelSelect } from "./ModelSelect/ModelSelect";
 import NotificationsManager from "./molecules/notifications_manager";
+import { Organization, organizationCreateCall, organizationDeleteCall, organizationListCall } from "./networking";
+import OrganizationInfoView from "./organization/organization_view";
+import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -49,8 +52,10 @@ interface OrganizationsTableProps {
 export const fetchOrganizations = async (
   accessToken: string,
   setOrganizations: (organizations: Organization[]) => void,
+  org_id: string | null = null,
+  org_alias: string | null = null,
 ) => {
-  const organizations = await organizationListCall(accessToken);
+  const organizations = await organizationListCall(accessToken, org_id, org_alias);
   setOrganizations(organizations);
 };
 
@@ -70,15 +75,55 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const [editOrg, setEditOrg] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<FilterState>({
+    org_id: "",
+    org_alias: "",
+    sort_by: "created_at",
+    sort_order: "desc",
+  });
 
-  useEffect(() => {
+  const handleFilterChange = (key: keyof FilterState, value: string) => {
+    const newFilters = { ...filters, [key]: value };
+    setFilters(newFilters);
+    // Call organizationListCall with the new filters
     if (accessToken) {
-      fetchOrganizations(accessToken, setOrganizations);
+      organizationListCall(accessToken, newFilters.org_id || null, newFilters.org_alias || null)
+        .then((response) => {
+          if (response) {
+            setOrganizations(response);
+          }
+        })
+        .catch((error) => {
+          console.error("Error fetching organizations:", error);
+        });
     }
-  }, [accessToken]);
+  };
+
+  const handleFilterReset = () => {
+    setFilters({
+      org_id: "",
+      org_alias: "",
+      sort_by: "created_at",
+      sort_order: "desc",
+    });
+    // Reset organizations list
+    if (accessToken) {
+      organizationListCall(accessToken, null, null)
+        .then((response) => {
+          if (response) {
+            setOrganizations(response);
+          }
+        })
+        .catch((error) => {
+          console.error("Error fetching organizations:", error);
+        });
+    }
+  };
 
   const handleDelete = (orgId: string | null) => {
     if (!orgId) return;
@@ -91,15 +136,18 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     if (!orgToDelete || !accessToken) return;
 
     try {
+      setIsDeleting(true);
       await organizationDeleteCall(accessToken, orgToDelete);
       NotificationsManager.success("Organization deleted successfully");
 
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
       // Refresh organizations list
-      fetchOrganizations(accessToken, setOrganizations);
+      await fetchOrganizations(accessToken, setOrganizations, filters.org_id || null, filters.org_alias || null);
     } catch (error) {
       console.error("Error deleting organization:", error);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -142,7 +190,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       setIsOrgModalVisible(false);
       form.resetFields();
       // Refresh organizations list
-      fetchOrganizations(accessToken, setOrganizations);
+      fetchOrganizations(accessToken, setOrganizations, filters.org_id || null, filters.org_alias || null);
     } catch (error) {
       console.error("Error creating organization:", error);
     }
@@ -211,7 +259,18 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                   <Text>Click on &ldquo;Organization ID&rdquo; to view organization details.</Text>
                   <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
                     <Col numColSpan={1}>
-                      <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
+                      <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
+                        <div className="border-b px-6 py-4">
+                          <div className="flex flex-col space-y-4">
+                            <OrganizationFilters
+                              filters={filters}
+                              showFilters={showFilters}
+                              onToggleFilters={setShowFilters}
+                              onChange={handleFilterChange}
+                              onReset={handleFilterReset}
+                            />
+                          </div>
+                        </div>
                         <Table>
                           <TableHead>
                             <TableRow>
@@ -370,18 +429,18 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                       <TableCell>
                                         {userRole === "Admin" && (
                                           <>
-                                            <Icon
-                                              icon={PencilAltIcon}
-                                              size="sm"
+                                            <TableIconActionButton
+                                              variant="Edit"
+                                              tooltipText="Edit organization"
                                               onClick={() => {
                                                 setSelectedOrgId(org.organization_id);
                                                 setEditOrg(true);
                                               }}
                                             />
-                                            <Icon
+                                            <TableIconActionButton
+                                              variant="Delete"
+                                              tooltipText="Delete organization"
                                               onClick={() => handleDelete(org.organization_id)}
-                                              icon={TrashIcon}
-                                              size="sm"
                                             />
                                           </>
                                         )}
@@ -415,18 +474,12 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
             <TextInput placeholder="" />
           </Form.Item>
           <Form.Item label="Models" name="models">
-            <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-              <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                All Proxy Models
-              </Select2.Option>
-              {userModels &&
-                userModels.length > 0 &&
-                userModels.map((model) => (
-                  <Select2.Option key={model} value={model}>
-                    {getModelDisplayName(model)}
-                  </Select2.Option>
-                ))}
-            </Select2>
+            <ModelSelect
+              options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
+              value={form.getFieldValue("models")}
+              onChange={(values) => form.setFieldValue("models", values)}
+              context="organization"
+            />
           </Form.Item>
 
           <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -498,40 +551,16 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
         </Form>
       </Modal>
 
-      {isDeleteModalOpen ? (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Organization</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this organization?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <></>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Organization?"
+        message="Are you sure you want to delete this organization? This action cannot be undone."
+        resourceInformationTitle="Organization Information"
+        resourceInformation={[{ label: "Organization ID", value: orgToDelete, code: true }]}
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeleting}
+      />
     </div>
   );
 };

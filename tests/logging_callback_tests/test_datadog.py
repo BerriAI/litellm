@@ -2,6 +2,14 @@ import io
 import os
 import sys
 
+from litellm.integrations.datadog.datadog_handler import (
+  get_datadog_source,
+  get_datadog_service,
+  get_datadog_env, 
+  get_datadog_pod_name,
+  get_datadog_hostname,
+  get_datadog_tags,
+)
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -18,6 +26,7 @@ import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.datadog.datadog import *
+import litellm.integrations.datadog.datadog as datadog_module
 from datetime import datetime, timedelta
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -80,6 +89,24 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             additional_headers=None,
         ),
     )
+
+
+class _DummySpan:
+    def __init__(self, trace_id=None, span_id=None):
+        self.trace_id = trace_id
+        self.span_id = span_id
+
+
+class _DummyTracer:
+    def __init__(self, current_span=None, current_root_span=None):
+        self._current_span = current_span
+        self._current_root_span = current_root_span
+
+    def current_span(self):
+        return self._current_span
+
+    def current_root_span(self):
+        return self._current_root_span
 
 
 @pytest.mark.asyncio
@@ -211,20 +238,35 @@ async def test_datadog_logging_http_request():
 
         # Get the expected fields and their types from DatadogPayload
         expected_fields = DatadogPayload.__annotations__
-        # Assert that all elements in body have the fields of DatadogPayload with correct types
+        required_fields = {
+            "ddsource": str,
+            "ddtags": str,
+            "hostname": str,
+            "message": str,
+            "service": str,
+            "status": str,
+        }
+        optional_fields = set(expected_fields.keys()) - set(required_fields.keys())
+
+        # Assert that all elements in body have the required fields with correct types
         for log in body:
             assert isinstance(log, dict), "Each log should be a dictionary"
-            for field, expected_type in expected_fields.items():
+            for field, expected_type in required_fields.items():
                 assert field in log, f"Field '{field}' is missing from the log"
                 assert isinstance(
                     log[field], expected_type
                 ), f"Field '{field}' has incorrect type. Expected {expected_type}, got {type(log[field])}"
 
-        # Additional assertion to ensure no extra fields are present
-        for log in body:
-            assert set(log.keys()) == set(
-                expected_fields.keys()
-            ), f"Log contains unexpected fields: {set(log.keys()) - set(expected_fields.keys())}"
+            for optional_field in optional_fields:
+                if optional_field in log:
+                    assert isinstance(
+                        log[optional_field], str
+                    ), f"Optional field '{optional_field}' must be a string"
+
+            unexpected_fields = set(log.keys()) - set(expected_fields.keys())
+            assert (
+                not unexpected_fields
+            ), f"Log contains unexpected fields: {unexpected_fields}"
 
         # Parse the 'message' field as JSON and check its structure
         message = json.loads(body[0]["message"])
@@ -246,6 +288,96 @@ async def test_datadog_logging_http_request():
 
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_uses_current_span(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    tracer = _DummyTracer(current_span=_DummySpan(trace_id=123, span_id=456))
+    monkeypatch.setattr(datadog_module, "tracer", tracer)
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert payload["dd.trace_id"] == "123"
+    assert payload["dd.span_id"] == "456"
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_falls_back_to_root_span(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    tracer = _DummyTracer(
+        current_span=None,
+        current_root_span=_DummySpan(trace_id=789, span_id=None),
+    )
+    monkeypatch.setattr(datadog_module, "tracer", tracer)
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert payload["dd.trace_id"] == "789"
+    assert "dd.span_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_handles_missing_tracer(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    monkeypatch.setattr(datadog_module, "tracer", object())
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert "dd.trace_id" not in payload
+    assert "dd.span_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_ignores_span_without_trace_id(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    tracer = _DummyTracer(current_span=_DummySpan(trace_id=None, span_id=555))
+    monkeypatch.setattr(datadog_module, "tracer", tracer)
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert "dd.trace_id" not in payload
+    assert "dd.span_id" not in payload
 
 
 @pytest.mark.asyncio
@@ -452,16 +584,16 @@ def test_datadog_static_methods():
     """Test the static helper methods in DataDogLogger class"""
 
     # Test with default environment variables
-    assert DataDogLogger._get_datadog_source() == "litellm"
-    assert DataDogLogger._get_datadog_service() == "litellm-server"
-    assert DataDogLogger._get_datadog_hostname() is not None
-    assert DataDogLogger._get_datadog_env() == "unknown"
-    assert DataDogLogger._get_datadog_pod_name() == "unknown"
+    assert get_datadog_source() == "litellm"
+    assert get_datadog_service() == "litellm-server"
+    assert get_datadog_hostname() is not None
+    assert get_datadog_env() == "unknown"
+    assert get_datadog_pod_name() == "unknown"
 
     # Test tags format with default values
     assert (
-        "env:unknown,service:litellm,version:unknown,HOSTNAME:"
-        in DataDogLogger._get_datadog_tags()
+        "env:unknown,service:litellm-server,version:unknown,HOSTNAME:"
+        in get_datadog_tags()
     )
 
     # Test with custom environment variables
@@ -475,31 +607,31 @@ def test_datadog_static_methods():
     }
 
     with patch.dict(os.environ, test_env):
-        assert DataDogLogger._get_datadog_source() == "custom-source"
+        assert get_datadog_source() == "custom-source"
         print(
-            "DataDogLogger._get_datadog_source()", DataDogLogger._get_datadog_source()
+            "DataDogLogger._get_datadog_source()", get_datadog_source()
         )
-        assert DataDogLogger._get_datadog_service() == "custom-service"
+        assert get_datadog_service() == "custom-service"
         print(
-            "DataDogLogger._get_datadog_service()", DataDogLogger._get_datadog_service()
+            "DataDogLogger._get_datadog_service()", get_datadog_service()
         )
-        assert DataDogLogger._get_datadog_hostname() == "test-host"
+        assert get_datadog_hostname() == "test-host"
         print(
             "DataDogLogger._get_datadog_hostname()",
-            DataDogLogger._get_datadog_hostname(),
+            get_datadog_hostname(),
         )
-        assert DataDogLogger._get_datadog_env() == "production"
-        print("DataDogLogger._get_datadog_env()", DataDogLogger._get_datadog_env())
-        assert DataDogLogger._get_datadog_pod_name() == "pod-123"
+        assert get_datadog_env() == "production"
+        print("DataDogLogger._get_datadog_env()", get_datadog_env())
+        assert get_datadog_pod_name() == "pod-123"
         print(
             "DataDogLogger._get_datadog_pod_name()",
-            DataDogLogger._get_datadog_pod_name(),
+            get_datadog_pod_name(),
         )
 
         # Test tags format with custom values
         expected_custom_tags = "env:production,service:custom-service,version:1.0.0,HOSTNAME:test-host,POD_NAME:pod-123"
-        print("DataDogLogger._get_datadog_tags()", DataDogLogger._get_datadog_tags())
-        assert DataDogLogger._get_datadog_tags() == expected_custom_tags
+        print("DataDogLogger._get_datadog_tags()", get_datadog_tags())
+        assert get_datadog_tags() == expected_custom_tags
 
 
 @pytest.mark.asyncio
@@ -539,7 +671,7 @@ async def test_datadog_non_serializable_messages():
 def test_get_datadog_tags():
     """Test the _get_datadog_tags static method with various inputs"""
     # Test with no standard_logging_object and default env vars
-    base_tags = DataDogLogger._get_datadog_tags()
+    base_tags = get_datadog_tags()
     assert "env:" in base_tags
     assert "service:" in base_tags
     assert "version:" in base_tags
@@ -555,7 +687,7 @@ def test_get_datadog_tags():
         "POD_NAME": "pod-123",
     }
     with patch.dict(os.environ, test_env):
-        custom_tags = DataDogLogger._get_datadog_tags()
+        custom_tags = get_datadog_tags()
         assert "env:production" in custom_tags
         assert "service:custom-service" in custom_tags
         assert "version:1.0.0" in custom_tags
@@ -566,18 +698,18 @@ def test_get_datadog_tags():
     standard_logging_obj = create_standard_logging_payload()
     standard_logging_obj["request_tags"] = ["tag1", "tag2"]
 
-    tags_with_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    tags_with_request = get_datadog_tags(standard_logging_obj)
     assert "request_tag:tag1" in tags_with_request
     assert "request_tag:tag2" in tags_with_request
 
     # Test with empty request_tags
     standard_logging_obj["request_tags"] = []
-    tags_empty_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    tags_empty_request = get_datadog_tags(standard_logging_obj)
     assert "request_tag:" not in tags_empty_request
 
     # Test with None request_tags
     standard_logging_obj["request_tags"] = None
-    tags_none_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    tags_none_request = get_datadog_tags(standard_logging_obj)
     assert "request_tag:" not in tags_none_request
 
 
@@ -633,11 +765,14 @@ async def test_datadog_message_redaction():
 
 def test_datadog_agent_configuration():
     """
-    Test that DataDog logger correctly configures agent endpoint when DD_AGENT_HOST is set
+    Test that DataDog logger correctly configures agent endpoint when LITELLM_DD_AGENT_HOST is set.
+    
+    Note: We use LITELLM_DD_AGENT_HOST instead of DD_AGENT_HOST to avoid conflicts
+    with ddtrace which automatically sets DD_AGENT_HOST for APM tracing.
     """
     test_env = {
-        "DD_AGENT_HOST": "localhost",
-        "DD_AGENT_PORT": "10518",
+        "LITELLM_DD_AGENT_HOST": "localhost",
+        "LITELLM_DD_AGENT_PORT": "10518",
     }
     
     # Remove DD_SITE and DD_API_KEY to verify they're not required for agent mode
@@ -655,3 +790,39 @@ def test_datadog_agent_configuration():
         
         # Verify DD_API_KEY is optional (can be None)
         assert dd_logger.DD_API_KEY is None or isinstance(dd_logger.DD_API_KEY, str)
+
+
+def test_datadog_ignores_ddtrace_agent_host():
+    """
+    Regression test: Ensure DD_AGENT_HOST set by ddtrace doesn't interfere with LiteLLM logging.
+    
+    When users have ddtrace installed for APM tracing, it automatically sets DD_AGENT_HOST.
+    LiteLLM should ignore DD_AGENT_HOST and only use LITELLM_DD_AGENT_HOST for agent mode.
+    
+    This prevents the 404 error when ddtrace's DD_AGENT_HOST points to an APM endpoint
+    that doesn't support /api/v2/logs.
+    
+    Regression test for: https://github.com/BerriAI/litellm/issues/16379
+    """
+    test_env = {
+        # User's explicit config for LiteLLM logging (direct API)
+        "DD_API_KEY": "fake-api-key",
+        "DD_SITE": "us5.datadoghq.com",
+        # ddtrace automatically sets these for APM tracing
+        "DD_AGENT_HOST": "10.176.100.40",
+        "DD_AGENT_PORT": "8126",
+    }
+    
+    with patch.dict(os.environ, test_env, clear=False):
+        with patch("asyncio.create_task"):
+            dd_logger = DataDogLogger()
+        
+        # Verify direct API endpoint is used (DD_AGENT_HOST should be ignored)
+        expected_url = "https://http-intake.logs.us5.datadoghq.com/api/v2/logs"
+        assert dd_logger.intake_url == expected_url, (
+            f"Expected direct API URL '{expected_url}', got '{dd_logger.intake_url}'. "
+            "DD_AGENT_HOST (set by ddtrace) should be ignored - only LITELLM_DD_AGENT_HOST should trigger agent mode."
+        )
+        
+        # Verify API key is set correctly
+        assert dd_logger.DD_API_KEY == "fake-api-key"
