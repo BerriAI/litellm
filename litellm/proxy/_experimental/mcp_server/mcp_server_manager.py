@@ -156,13 +156,13 @@ class MCPServerManager:
         [
             "server-1": {
                 "name": "zapier_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
                 "transport": "sse",
                 "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
             }
         ]
         """
