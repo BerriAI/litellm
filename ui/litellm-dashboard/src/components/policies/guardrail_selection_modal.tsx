@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Checkbox, Button, Divider, Tag, Spin } from "antd";
+import { Modal, Checkbox, Button, Divider, Tag } from "antd";
 import { CheckCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
 
 interface GuardrailInfo {
@@ -232,7 +232,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
             </p>
           ) : (
             <p className="text-orange-600">
-              Select at least one guardrail to create, or click "Use Template" to proceed without creating new guardrails.
+              Select at least one guardrail to create, or click &quot;Use Template&quot; to proceed without creating new guardrails.
             </p>
           )}
         </div>
