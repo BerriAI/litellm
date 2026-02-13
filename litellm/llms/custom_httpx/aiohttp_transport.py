@@ -4,7 +4,7 @@ import os
 import ssl
 import typing
 import urllib.request
-from typing import Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -248,26 +248,25 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Only pass ssl kwarg when explicitly configured, to avoid
         # overriding the session/connector defaults with None (which is
         # not a valid value for aiohttp's ssl parameter).
-        ssl_kwargs: Dict[str, Union[bool, ssl.SSLContext]] = {}
-        if ssl_verify is not None:
-            ssl_kwargs["ssl"] = ssl_verify
-
-        response = await client_session.request(
-            method=request.method,
-            url=YarlURL(str(request.url), encoded=True),
-            headers=request.headers,
-            data=data,
-            allow_redirects=False,
-            auto_decompress=False,
-            timeout=ClientTimeout(
+        request_kwargs: Dict[str, Any] = {
+            "method": request.method,
+            "url": YarlURL(str(request.url), encoded=True),
+            "headers": request.headers,
+            "data": data,
+            "allow_redirects": False,
+            "auto_decompress": False,
+            "timeout": ClientTimeout(
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),
             ),
-            proxy=proxy,
-            server_hostname=sni_hostname,
-            **ssl_kwargs,
-        ).__aenter__()
+            "proxy": proxy,
+            "server_hostname": sni_hostname,
+        }
+        if ssl_verify is not None:
+            request_kwargs["ssl"] = ssl_verify
+
+        response = await client_session.request(**request_kwargs).__aenter__()
 
         return response
 
