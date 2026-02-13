@@ -7,7 +7,6 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
-    ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER,
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -65,10 +64,29 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         existing_beta = headers.get("anthropic-beta")
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
-        
-        # Use the helper to remove unsupported beta headers
-        self.remove_unsupported_beta(headers)
-        beta_values.discard(ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER)
+
+        # Check for context management
+        context_management_param = optional_params.get("context_management")
+        if context_management_param is not None:
+            # Check edits array for compact_20260112 type
+            edits = context_management_param.get("edits", [])
+            has_compact = False
+            has_other = False
+            
+            for edit in edits:
+                edit_type = edit.get("type", "")
+                if edit_type == "compact_20260112":
+                    has_compact = True
+                else:
+                    has_other = True
+            
+            # Add compact header if any compact edits exist
+            if has_compact:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+            
+            # Add context management header if any other edits exist
+            if has_other:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
 
         # Check for web search tool
         for tool in tools:
@@ -128,23 +146,3 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         )  # do not pass output_format in request body to vertex ai - vertex ai does not support output_format as yet
 
         return anthropic_messages_request
-    
-    def remove_unsupported_beta(self, headers: dict) -> None:
-        """
-        Helper method to remove unsupported beta headers from the beta headers.
-        Modifies headers in place.
-        """
-        unsupported_beta_headers = [
-            ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER
-        ]
-        existing_beta = headers.get("anthropic-beta")
-        if existing_beta:
-            filtered_beta = [
-                b.strip()
-                for b in existing_beta.split(",")
-                if b.strip() not in unsupported_beta_headers
-            ]
-            if filtered_beta:
-                headers["anthropic-beta"] = ",".join(filtered_beta)
-            elif "anthropic-beta" in headers:
-                del headers["anthropic-beta"]

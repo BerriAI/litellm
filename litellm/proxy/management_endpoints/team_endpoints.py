@@ -685,6 +685,7 @@ async def new_team(  # noqa: PLR0915
     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
@@ -760,6 +761,22 @@ async def new_team(  # noqa: PLR0915
                 status_code=400,
                 detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
             )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
+        
+        if data.soft_budget is not None:
+            if data.max_budget is not None:
+                # If max_budget is set, soft_budget must be strictly lower than max_budget
+                if data.soft_budget >= data.max_budget:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({data.max_budget})"
+                        }
+                    )
 
         # Check if license is over limit
         total_teams = await prisma_client.db.litellm_teamtable.count()
@@ -1226,6 +1243,7 @@ async def update_team(   # noqa: PLR0915
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
@@ -1302,6 +1320,11 @@ async def update_team(   # noqa: PLR0915
                 status_code=400,
                 detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
             )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
 
         existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
             where={"team_id": data.team_id}
@@ -1312,6 +1335,29 @@ async def update_team(   # noqa: PLR0915
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
+        
+        if data.soft_budget is not None:
+            max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
+            if max_budget_to_check is not None:
+                if data.soft_budget >= max_budget_to_check:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({max_budget_to_check})"
+                        }
+                    )
+        
+        if data.max_budget is not None:
+            existing_soft_budget = getattr(existing_team_row, 'soft_budget', None)
+            soft_budget_to_check = data.soft_budget if data.soft_budget is not None else existing_soft_budget
+            if soft_budget_to_check is not None and isinstance(soft_budget_to_check, (int, float)):
+                if data.max_budget <= soft_budget_to_check:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"max_budget ({data.max_budget}) must be strictly greater than soft_budget ({soft_budget_to_check})"
+                        }
+                    )
 
         if (
             data.organization_id is not None and len(data.organization_id) > 0
@@ -3049,12 +3095,7 @@ async def list_available_teams(
         ),
     )
     if available_teams is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No available teams for user to join. See how to set available teams here: https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
-            },
-        )
+        return []
 
     # filter out teams that the user is already a member of
     user_info = await prisma_client.db.litellm_usertable.find_unique(

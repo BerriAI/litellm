@@ -34,6 +34,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
 )
@@ -74,9 +75,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request = (
+        chat_completion_compatible_request, tool_name_mapping = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                anthropic_message_request=cast(AnthropicMessagesRequest, data)
+                # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
+                anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
             )
         )
 
@@ -84,9 +86,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tools_to_check: List[ChatCompletionToolParam] = (
-            chat_completion_compatible_request.get("tools", [])
-        )
+        tools_to_check: List[
+            ChatCompletionToolParam
+        ] = chat_completion_compatible_request.get("tools", [])
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
@@ -282,7 +284,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if hasattr(content_block, "model_dump"):
                     block_dict = content_block.model_dump()
                 else:
-                    block_dict = {"type": block_type, "text": getattr(content_block, "text", None)}
+                    block_dict = {
+                        "type": block_type,
+                        "text": getattr(content_block, "text", None),
+                    }
             else:
                 continue
 
@@ -358,30 +363,40 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
-
             # build the model response from the responses_so_far
-            model_response = cast(
-                ModelResponse,
-                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                    all_chunks=responses_so_far,
-                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
-                    model="",
-                ),
+            built_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=responses_so_far,
+                litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                model="",
             )
-            tool_calls_list = cast(Optional[List[ChatCompletionMessageToolCall]], model_response.choices[0].message.tool_calls)  # type: ignore
-            string_so_far = model_response.choices[0].message.content  # type: ignore
-            guardrail_inputs = GenericGuardrailAPIInputs()
-            if string_so_far:
-                guardrail_inputs["texts"] = [string_so_far]
-            if tool_calls_list:
-                guardrail_inputs["tool_calls"] = tool_calls_list
 
-            _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
-                inputs=guardrail_inputs,
-                request_data={},
-                input_type="response",
-                logging_obj=litellm_logging_obj,
-            )
+            # Check if model_response is valid and has choices before accessing
+            if (
+                built_response is not None
+                and hasattr(built_response, "choices")
+                and built_response.choices
+            ):
+                model_response = cast(ModelResponse, built_response)
+                first_choice = cast(Choices, model_response.choices[0])
+                tool_calls_list = cast(
+                    Optional[List[ChatCompletionMessageToolCall]],
+                    first_choice.message.tool_calls,
+                )
+                string_so_far = first_choice.message.content
+                guardrail_inputs = GenericGuardrailAPIInputs()
+                if string_so_far:
+                    guardrail_inputs["texts"] = [string_so_far]
+                if tool_calls_list:
+                    guardrail_inputs["tool_calls"] = tool_calls_list
+
+                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                    inputs=guardrail_inputs,
+                    request_data={},
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+            else:
+                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
@@ -648,7 +663,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             if isinstance(content_block, dict):
                 if content_block.get("type") == "text":
                     cast(Dict[str, Any], content_block)["text"] = guardrail_response
-            elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
+            elif (
+                hasattr(content_block, "type")
+                and getattr(content_block, "type", None) == "text"
+            ):
                 # Update Pydantic object's text attribute
                 if hasattr(content_block, "text"):
                     content_block.text = guardrail_response

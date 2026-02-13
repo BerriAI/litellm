@@ -175,6 +175,7 @@ _async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # Custo
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+standard_logging_payload_excluded_fields: Optional[List[str]] = None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -261,6 +262,8 @@ extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
+# Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
+proxy_auth: Optional[Any] = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -351,7 +354,7 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
-max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessions
+max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
@@ -1153,6 +1156,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     BadGatewayError,
@@ -1378,6 +1382,7 @@ if TYPE_CHECKING:
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
+    from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
@@ -1390,6 +1395,7 @@ if TYPE_CHECKING:
     from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
     from .llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
+    from .llms.perplexity.responses.transformation import PerplexityResponsesConfig as PerplexityResponsesConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig

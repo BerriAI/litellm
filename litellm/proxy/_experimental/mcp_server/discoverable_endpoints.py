@@ -1,6 +1,6 @@
 import json
 from typing import Optional
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -9,13 +9,15 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.proxy.utils import get_server_root_path
+from litellm.types.mcp import MCPAuth
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 router = APIRouter(
     tags=["mcp"],
@@ -124,6 +126,29 @@ def decode_state_hash(encrypted_state: str) -> dict:
     return state_data
 
 
+def _resolve_oauth2_server_for_root_endpoints(
+    client_ip: Optional[str] = None,
+) -> Optional[MCPServer]:
+    """
+    Resolve the MCP server for root-level OAuth endpoints (no server name in path).
+
+    When the MCP SDK hits root-level endpoints like /register, /authorize, /token
+    without a server name prefix, we try to find the right server automatically.
+    Returns the server if exactly one OAuth2 server is configured, else None.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    registry = global_mcp_server_manager.get_filtered_registry(client_ip=client_ip)
+    oauth2_servers = [
+        s for s in registry.values() if s.auth_type == MCPAuth.oauth2
+    ]
+    if len(oauth2_servers) == 1:
+        return oauth2_servers[0]
+    return None
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -169,7 +194,13 @@ async def authorize_with_server(
     if code_challenge_method:
         params["code_challenge_method"] = code_challenge_method
 
-    return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
+    parsed_auth_url = urlparse(mcp_server.authorization_url)
+    existing_params = dict(parse_qsl(parsed_auth_url.query))
+    existing_params.update(params)
+    final_url = urlunparse(
+        parsed_auth_url._replace(query=urlencode(existing_params))
+    )
+    return RedirectResponse(final_url)
 
 
 async def exchange_token_with_server(
@@ -300,7 +331,12 @@ async def authorize(
     )
 
     lookup_name = mcp_server_name or client_id
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        lookup_name, client_ip=client_ip
+    )
+    if mcp_server is None and mcp_server_name is None:
+        mcp_server = _resolve_oauth2_server_for_root_endpoints()
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await authorize_with_server(
@@ -342,7 +378,12 @@ async def token_endpoint(
     )
 
     lookup_name = mcp_server_name or client_id
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        lookup_name, client_ip=client_ip
+    )
+    if mcp_server is None and mcp_server_name is None:
+        mcp_server = _resolve_oauth2_server_for_root_endpoints()
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await exchange_token_with_server(
@@ -423,9 +464,19 @@ def _build_oauth_protected_resource_response(
     )
 
     request_base_url = get_request_base_url(request)
+
+    # When no server name provided, try to resolve the single OAuth2 server
+    if mcp_server_name is None:
+        resolved = _resolve_oauth2_server_for_root_endpoints()
+        if resolved:
+            mcp_server_name = resolved.server_name or resolved.name
+
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
 
     # Build resource URL based on the pattern
     if mcp_server_name:
@@ -525,6 +576,12 @@ def _build_oauth_authorization_server_response(
 
     request_base_url = get_request_base_url(request)
 
+    # When no server name provided, try to resolve the single OAuth2 server
+    if mcp_server_name is None:
+        resolved = _resolve_oauth2_server_for_root_endpoints()
+        if resolved:
+            mcp_server_name = resolved.server_name or resolved.name
+
     authorization_endpoint = (
         f"{request_base_url}/{mcp_server_name}/authorize"
         if mcp_server_name
@@ -538,7 +595,10 @@ def _build_oauth_authorization_server_response(
 
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
 
     return {
         "issuer": request_base_url,  # point to your proxy
@@ -627,9 +687,25 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         "redirect_uris": [f"{request_base_url}/callback"],
     }
     if not mcp_server_name:
+        resolved = _resolve_oauth2_server_for_root_endpoints()
+        if resolved:
+            return await register_client_with_server(
+                request=request,
+                mcp_server=resolved,
+                client_name=data.get("client_name", ""),
+                grant_types=data.get("grant_types", []),
+                response_types=data.get("response_types", []),
+                token_endpoint_auth_method=data.get(
+                    "token_endpoint_auth_method", ""
+                ),
+                fallback_client_id=resolved.server_name or resolved.name,
+            )
         return dummy_return
 
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        mcp_server_name, client_ip=client_ip
+    )
     if mcp_server is None:
         return dummy_return
     return await register_client_with_server(

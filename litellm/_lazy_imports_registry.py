@@ -213,6 +213,7 @@ LLM_CONFIG_NAMES = (
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
     "GroqChatConfig",
+    "A2AConfig",
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
@@ -225,6 +226,7 @@ LLM_CONFIG_NAMES = (
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
+    "PerplexityResponsesConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -273,6 +275,7 @@ LLM_CONFIG_NAMES = (
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
+    "PerplexityResponsesConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
     "IBMWatsonXChatConfig",
@@ -850,6 +853,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "A2AConfig": (".llms.a2a.chat.transformation", "A2AConfig"),
     "GenAIHubOrchestrationConfig": (
         ".llms.sap.chat.transformation",
         "GenAIHubOrchestrationConfig",
@@ -898,6 +902,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "ManusResponsesAPIConfig": (
         ".llms.manus.responses.transformation",
         "ManusResponsesAPIConfig",
+    ),
+    "PerplexityResponsesConfig": (
+        ".llms.perplexity.responses.transformation",
+        "PerplexityResponsesConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
