@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 from unittest.mock import MagicMock, patch
 import os
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
@@ -126,6 +125,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
 
         # Mock for stream_chunk_builder - use real litellm types so isinstance checks pass
         import litellm
+
         mock_model_response = ModelResponse(
             id="mock-response",
             model="gpt-4",
