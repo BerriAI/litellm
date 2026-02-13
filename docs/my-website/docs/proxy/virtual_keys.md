@@ -550,12 +550,12 @@ curl 'http://localhost:4000/key/sk-1234/regenerate' \
       "gpt-4",
       "gpt-3.5-turbo"
     ],
-    "grace_period_hours": 48
+    "grace_period": "48h"
   }'
 
 ```
 
-**Grace period (optional)**: Set `grace_period_hours` (e.g. 24, 48, 72) to keep the old key valid for a transitional period. Both old and new keys work until the grace period elapses, enabling seamless cutover without production downtime. Default is 0 (immediate revoke). Can also be set via `LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS` for scheduled rotations.
+**Grace period (optional)**: Set `grace_period` (e.g. `"24h"`, `"2d"`, `"1w"`) to keep the old key valid for a transitional period. Both old and new keys work until the grace period elapses, enabling seamless cutover without production downtime. Omitted or empty = immediate revoke. Can also be set via `LITELLM_KEY_ROTATION_GRACE_PERIOD` env var for scheduled rotations.
 
 **Read More**
 
@@ -643,13 +643,13 @@ Set these environment variables when starting the proxy:
 |----------|-------------|---------|
 | `LITELLM_KEY_ROTATION_ENABLED` | Enable the rotation worker | `false` |
 | `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` | How often to scan for keys to rotate (in seconds) | `86400` (24 hours) |
-| `LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS` | Hours to keep old key valid after rotation (24–72 recommended) | `0` (immediate revoke) |
+| `LITELLM_KEY_ROTATION_GRACE_PERIOD` | Duration to keep old key valid after rotation (e.g. `24h`, `2d`) | `""` (immediate revoke) |
 
 **Example:**
 ```bash
 export LITELLM_KEY_ROTATION_ENABLED=true
 export LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS=3600  # Check every hour
-export LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS=48  # Keep old key valid for 48h during cutover
+export LITELLM_KEY_ROTATION_GRACE_PERIOD=48h  # Keep old key valid for 48h during cutover
 
 litellm --config config.yaml
 ```
