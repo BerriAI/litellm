@@ -55,6 +55,104 @@ LiteLLM performs metadata discovery per the MCP spec ([section 2.3](https://mode
 - Use `curl <metadata_url>` (or similar) from the LiteLLM host to ensure the discovery document is reachable and contains the expected authorization/token endpoints.
 - Record the exact metadata URL, requested scopes, and any static client credentials so support can replay the discovery step if needed.
 
+## Debug Headers (Client-Side Diagnostics)
+
+When the LiteLLM proxy is hosted remotely and you cannot access server logs, enable **debug headers** to get masked authentication diagnostics in the HTTP response.
+
+### Enable Debug Mode
+
+Add the `x-litellm-mcp-debug: true` header to your MCP client request.
+
+**Claude Code:**
+
+```bash
+claude mcp add --transport http litellm_proxy http://proxy.example.com/atlassian_mcp/mcp \
+  --header "x-litellm-api-key: Bearer sk-..." \
+  --header "x-litellm-mcp-debug: true"
+```
+
+**curl:**
+
+```bash
+curl -X POST http://localhost:4000/atlassian_mcp/mcp \
+  -H "Content-Type: application/json" \
+  -H "x-litellm-api-key: Bearer sk-..." \
+  -H "x-litellm-mcp-debug: true" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+### Response Headers
+
+When debug mode is enabled, LiteLLM returns these response headers (all sensitive values are masked):
+
+| Header | Description | Example |
+|--------|-------------|---------|
+| `x-mcp-debug-inbound-auth` | Which inbound auth headers were present and how they were classified. | `x-litellm-api-key=Bearer****1234` |
+| `x-mcp-debug-oauth2-token` | The OAuth2 token extracted from the `Authorization` header (masked). Shows `(none)` if absent, or flags `SAME_AS_LITELLM_KEY` when the LiteLLM key is leaking to the MCP server. | `Bearer****ef01` or `(none)` |
+| `x-mcp-debug-auth-resolution` | Which auth priority was used for the outbound MCP call. | `oauth2-passthrough`, `m2m-client-credentials`, `per-request-header`, `static-token`, or `no-auth` |
+| `x-mcp-debug-outbound-url` | The upstream MCP server URL that will receive the request. | `https://mcp.atlassian.com/v1/mcp` |
+| `x-mcp-debug-server-auth-type` | The `auth_type` configured on the MCP server. | `oauth2`, `bearer_token`, or `(none)` |
+
+### Common Issues
+
+#### LiteLLM API key leaking to the MCP server
+
+**Symptom:** `x-mcp-debug-oauth2-token` shows `SAME_AS_LITELLM_KEY`.
+
+This means the `Authorization` header carries the LiteLLM API key and it's being forwarded to the upstream MCP server instead of an OAuth2 token. The OAuth2 flow never ran because the client already had an `Authorization` header set.
+
+**Fix:** Move the LiteLLM key to `x-litellm-api-key` so the `Authorization` header is free for OAuth2 discovery:
+
+```bash
+# WRONG — blocks OAuth2 discovery
+claude mcp add --transport http my_server http://proxy/mcp/server \
+    --header "Authorization: Bearer sk-..."
+
+# CORRECT — LiteLLM key in dedicated header, Authorization free for OAuth2
+claude mcp add --transport http my_server http://proxy/mcp/server \
+    --header "x-litellm-api-key: Bearer sk-..."
+```
+
+#### No OAuth2 token present
+
+**Symptom:** `x-mcp-debug-oauth2-token` shows `(none)` and `x-mcp-debug-auth-resolution` shows `no-auth`.
+
+This means the client didn't go through the OAuth2 flow. Check that:
+1. The `Authorization` header is NOT set as a static header in the client config.
+2. The `.well-known/oauth-protected-resource` endpoint returns valid metadata.
+3. The MCP server in LiteLLM config has `auth_type: oauth2`.
+
+#### M2M token used instead of user token
+
+**Symptom:** `x-mcp-debug-auth-resolution` shows `m2m-client-credentials`.
+
+This means the server has `client_id`/`client_secret`/`token_url` configured and LiteLLM is fetching a machine-to-machine token instead of using the per-user OAuth2 token. If you want per-user tokens, remove the client credentials from the server config.
+
+### Debugging with Claude Code
+
+Claude Code has a built-in debug mode for MCP connections:
+
+```bash
+# Start Claude Code with MCP debug logging
+claude --debug
+
+# Then use /mcp to inspect MCP server status
+/mcp
+```
+
+This shows the MCP connection lifecycle, including OAuth2 discovery, token exchange, and transport errors on the client side.
+
+### Debugging with MCP Python SDK
+
+Enable verbose logging in the MCP Python SDK to see HTTP-level details:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+# MCP SDK will log HTTP requests, headers (excluding secrets), and responses
+```
+
 ## Verify Connectivity
 
 Run lightweight validations before impacting production traffic.
