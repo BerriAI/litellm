@@ -1512,6 +1512,12 @@ class LiteLLMCompletionResponsesConfig:
             user=getattr(chat_completion_response, "user", None),
         )
         responses_api_response._hidden_params = getattr(chat_completion_response, "_hidden_params", {})
+
+        # Surface provider-specific fields (generic passthrough from any provider)
+        provider_fields = responses_api_response._hidden_params.get("provider_specific_fields")
+        if provider_fields:
+            responses_api_response.provider_specific_fields = provider_fields
+
         return responses_api_response
 
     @staticmethod
