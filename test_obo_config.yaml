@@ -1,0 +1,20 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+
+mcp_servers:
+  test_obo:
+    url: http://localhost:9998/mcp
+    transport: http
+    auth_type: oauth2_token_exchange
+    token_exchange_endpoint: http://localhost:9999/oauth2/token
+    audience: api://test-mcp-server
+    scopes:
+      - mcp.tools.read
+      - mcp.tools.execute
+    client_id: litellm-client
+    client_secret: litellm-secret
+
+general_settings:
+  master_key: sk-1234
