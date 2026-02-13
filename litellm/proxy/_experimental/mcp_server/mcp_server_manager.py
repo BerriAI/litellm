@@ -31,7 +31,6 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_NPM_CACHE_DIR
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
