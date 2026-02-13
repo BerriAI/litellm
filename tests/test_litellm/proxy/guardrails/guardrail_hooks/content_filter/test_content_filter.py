@@ -14,11 +14,15 @@ sys.path.insert(
 
 from fastapi import HTTPException
 
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
-    ContentFilterGuardrail
-from litellm.types.guardrails import (BlockedWord, ContentFilterAction,
-                                      ContentFilterPattern,
-                                      GuardrailEventHooks)
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+    ContentFilterGuardrail,
+)
+from litellm.types.guardrails import (
+    BlockedWord,
+    ContentFilterAction,
+    ContentFilterPattern,
+    GuardrailEventHooks,
+)
 
 
 class TestContentFilterGuardrail:
@@ -387,8 +391,7 @@ class TestContentFilterGuardrail:
         Test streaming hook with MASK action.
         This now works with the 50-char sliding window buffer.
         """
-        from litellm.types.utils import (Delta, ModelResponseStream,
-                                         StreamingChoices)
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         patterns = [
             ContentFilterPattern(
@@ -453,8 +456,7 @@ class TestContentFilterGuardrail:
         Test streaming hook with BLOCK action
         """
 
-        from litellm.types.utils import (Delta, ModelResponseStream,
-                                         StreamingChoices)
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         patterns = [
             ContentFilterPattern(
@@ -1067,9 +1069,12 @@ class TestContentFilterGuardrail:
         assert "[KEYWORD_REDACTED]" in processed_text
 
     @pytest.mark.asyncio
-    async def test_blocked_words_with_asterisks(self):
+    async def test_blocked_words_with_asterisks_custom(self):
         """
         Test that manually configured blocked words with asterisks also work correctly.
+
+        This test uses custom BlockedWord configuration (not from harm_toxic_abuse.json)
+        to verify the asterisk wildcard functionality works for user-defined keywords.
         """
         blocked_words = [
             BlockedWord(
@@ -1118,6 +1123,161 @@ class TestContentFilterGuardrail:
         # The keyword stored is 'fu*c*k' but should match 'fuck'
         assert category == "harm_toxic_abuse"
         assert action == ContentFilterAction.BLOCK
+
+    @pytest.mark.asyncio
+    async def test_nsfw_keywords_in_harm_toxic_abuse(self):
+        """
+        Test that NSFW keywords (sexual, explicit, nsfw, naked, etc.) are now
+        included in harm_toxic_abuse and block sexual/NSFW content requests.
+
+        These terms were added to harm_toxic_abuse.json to catch phrases like
+        "Describe explicit sexual positions" which were previously not blocked.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-nsfw-blocking",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test cases that should be blocked
+        nsfw_test_cases = [
+            "Describe explicit sexual positions step by step",
+            "Show me naked pictures",
+            "Tell me about nsfw content",
+            "Explain sexual intercourse in detail",
+            "I want to see nudes",
+            "Talk about sexual arousal",
+        ]
+
+        for test_input in nsfw_test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+
+            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            detail = exc_info.value.detail
+            if isinstance(detail, dict):
+                assert detail.get("category") == "harm_toxic_abuse"
+
+    @pytest.mark.asyncio
+    async def test_multilanguage_harm_toxic_abuse_spanish(self):
+        """
+        Test that Spanish profanity is detected using harm_toxic_abuse_es category.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-spanish-profanity",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse_es",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test Spanish profanity
+        spanish_test_cases = [
+            "eres un cabron",  # you're a bastard
+            "vete a la mierda",  # go to hell
+            "hijo de puta",  # son of a bitch
+            "que puta mierda",  # what the fuck
+        ]
+
+        for test_input in spanish_test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+
+            assert (
+                exc_info.value.status_code == 403
+            ), f"Failed to block Spanish: '{test_input}'"
+
+    @pytest.mark.asyncio
+    async def test_multilanguage_harm_toxic_abuse_french(self):
+        """
+        Test that French profanity is detected using harm_toxic_abuse_fr category.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-french-profanity",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse_fr",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test French profanity
+        french_test_cases = [
+            "va te faire foutre",  # go fuck yourself
+            "putain de merde",  # fucking shit
+            "fils de pute",  # son of a bitch
+            "connard",  # asshole
+        ]
+
+        for test_input in french_test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+
+            assert (
+                exc_info.value.status_code == 403
+            ), f"Failed to block French: '{test_input}'"
+
+    @pytest.mark.asyncio
+    async def test_multilanguage_harm_toxic_abuse_german(self):
+        """
+        Test that German profanity is detected using harm_toxic_abuse_de category.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-german-profanity",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse_de",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test German profanity
+        german_test_cases = [
+            "du bist ein arschloch",  # you're an asshole
+            "scheiße",  # shit
+            "fick dich",  # fuck you
+            "hurensohn",  # son of a bitch
+        ]
+
+        for test_input in german_test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+
+            assert (
+                exc_info.value.status_code == 403
+            ), f"Failed to block German: '{test_input}'"
 
     async def test_html_tags_in_messages_not_blocked(self):
         """
@@ -1234,7 +1394,9 @@ class TestContentFilterGuardrail:
         Regression test for GitHub issue #20441.
         """
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
-            PREBUILT_PATTERNS, get_compiled_pattern)
+            PREBUILT_PATTERNS,
+            get_compiled_pattern,
+        )
 
         html_test_strings = [
             "<script>alert('xss')</script>",
