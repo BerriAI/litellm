@@ -21,6 +21,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_TIMEOUT = 5
 
@@ -334,3 +335,11 @@ class ZscalerAIGuard(CustomGuardrail):
             user_facing_error = self._create_user_facing_error(f"{str(e)})")
             # This exception will be caught by the proxy and returned to the user
             raise HTTPException(status_code=500, detail=user_facing_error)
+
+    @staticmethod
+    def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import (
+            ZscalerAIGuardConfigModel,
+        )
+
+        return ZscalerAIGuardConfigModel
