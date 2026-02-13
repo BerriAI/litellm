@@ -1238,3 +1238,31 @@ def test_error_message_includes_function_args():
     assert "received_args=" in error_msg
     assert "response_object" in error_msg
     assert "response_type" in error_msg
+
+
+@pytest.mark.parametrize("falsy_id", [None, ""])
+def test_convert_to_model_response_object_falsy_id_preserves_auto_generated(falsy_id):
+    """Test that a falsy id in response_object preserves the auto-generated id."""
+    mr = ModelResponse()
+    original_id = mr.id
+    response_object = {
+        "id": falsy_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        "model": "test-model",
+    }
+    result = convert_to_model_response_object(
+        model_response_object=mr,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert result.id == original_id
+    assert result.id.startswith("chatcmpl-")
