@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
 from starlette.types import Receive, Scope, Send
+from starlette.responses import JSONResponse
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -1913,18 +1914,27 @@ if MCP_AVAILABLE:
             raw_headers,
         )
 
-    def _strip_stale_mcp_session_header(
+    async def _handle_stale_mcp_session(
         scope: Scope,
+        receive: Receive,
+        send: Send,
         mgr: "StreamableHTTPSessionManager",
-    ) -> None:
+    ) -> bool:
         """
-        Strip stale ``mcp-session-id`` headers so the session manager
-        creates a fresh session instead of returning 404 "Session not found".
+        Handle stale MCP session IDs to prevent "Session not found" errors.
 
-        When clients like VSCode reconnect after a reload they may resend a
-        session id that has already been cleaned up.  Rather than letting the
-        SDK return a 404 error loop, we detect the stale id and remove the
-        header so a brand-new session is created transparently.
+        When clients reconnect after a server restart or session cleanup, they may
+        send a session ID that no longer exists. This function handles two scenarios:
+
+        1. Non-DELETE requests: Strip the stale session ID header so the session
+           manager creates a fresh session transparently.
+
+        2. DELETE requests: Return success (200) immediately for idempotent behavior,
+           since the desired state (session doesn't exist) is already achieved.
+
+        Returns:
+            True if the request was handled (DELETE on non-existent session)
+            False if the request should continue to the session manager
 
         Fixes https://github.com/BerriAI/litellm/issues/20292
         """
@@ -1936,10 +1946,30 @@ if MCP_AVAILABLE:
                 break
 
         if _session_id is None:
-            return
+            return False
 
         known_sessions = getattr(mgr, "_server_instances", None)
-        if known_sessions is not None and _session_id not in known_sessions:
+        if known_sessions is None or _session_id in known_sessions:
+            # Session exists or we can't check - let the session manager handle it
+            return False
+
+        # Session doesn't exist - handle based on request method
+        method = scope.get("method", "").upper()
+        
+        if method == "DELETE":
+            # Idempotent DELETE: session doesn't exist, return success
+            verbose_logger.info(
+                f"DELETE request for non-existent MCP session '{_session_id}'. "
+                "Returning success (idempotent DELETE)."
+            )
+            success_response = JSONResponse(
+                status_code=200,
+                content={"message": "Session terminated successfully"}
+            )
+            await success_response(scope, receive, send)
+            return True
+        else:
+            # Non-DELETE: strip stale session ID to allow new session creation
             verbose_logger.warning(
                 "MCP session ID '%s' not found in active sessions. "
                 "Stripping stale header to force new session creation.",
@@ -1949,6 +1979,7 @@ if MCP_AVAILABLE:
                 (k, v) for k, v in scope["headers"]
                 if k != _mcp_session_header
             ]
+            return False
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
@@ -2011,7 +2042,12 @@ if MCP_AVAILABLE:
                 # Give it a moment to start up
                 await asyncio.sleep(0.1)
 
-            _strip_stale_mcp_session_header(scope, session_manager)
+            # Handle stale session IDs - either strip them for reconnection
+            # or return success for idempotent DELETE operations
+            handled = await _handle_stale_mcp_session(scope, receive, send, session_manager)
+            if handled:
+                # Request was fully handled (e.g., DELETE on non-existent session)
+                return
 
             await session_manager.handle_request(scope, receive, send)
         except HTTPException:
