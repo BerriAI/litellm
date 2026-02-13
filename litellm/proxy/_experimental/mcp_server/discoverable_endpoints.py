@@ -335,8 +335,8 @@ async def authorize(
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
         lookup_name, client_ip=client_ip
     )
-    if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints()
+    if mcp_server is None:
+        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await authorize_with_server(
@@ -382,8 +382,8 @@ async def token_endpoint(
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
         lookup_name, client_ip=client_ip
     )
-    if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints()
+    if mcp_server is None:
+        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await exchange_token_with_server(
