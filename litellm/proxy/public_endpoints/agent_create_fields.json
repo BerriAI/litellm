@@ -168,6 +168,15 @@
     }
   },
   {
+    "agent_type": "ag2",
+    "agent_type_display_name": "AG2",
+    "description": "Connect to AG2 agents via A2A protocol",
+    "logo_url": "https://mintlify.s3.us-west-1.amazonaws.com/ag2ai/logo/ag2.svg",
+    "use_a2a_form_fields": true,
+    "credential_fields": [],
+    "litellm_params_template": {}
+  },
+  {
     "agent_type": "vertex_agent_engine",
     "agent_type_display_name": "Vertex AI Agent Engine",
     "description": "Connect to Google Cloud Vertex AI Reasoning Engines",
@@ -191,4 +200,3 @@
     }
   }
 ]
-

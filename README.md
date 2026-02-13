@@ -86,7 +86,7 @@ response = client.chat.completions.create(
 <details>
 <summary><b>Agents</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
 
-[**Supported Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
+[**Supported Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - AG2, LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
 
 ### Python SDK - A2A Protocol
 
@@ -470,4 +470,3 @@ All these checks must pass before your PR can be merged.
 <a href="https://github.com/BerriAI/litellm/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
-
