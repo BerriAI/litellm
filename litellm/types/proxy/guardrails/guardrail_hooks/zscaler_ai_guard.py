@@ -98,7 +98,12 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         if policy_id is None:
             env_policy = os.getenv("ZSCALER_AI_GUARD_POLICY_ID")
             if env_policy:
-                policy_id = int(env_policy)
+                try:
+                    policy_id = int(env_policy)
+                except ValueError:
+                    verbose_proxy_logger.warning(
+                        f"ZSCALER_AI_GUARD_POLICY_ID env var is not a valid integer: {env_policy}"
+                    )
 
         # Check for configuration issues
         is_resolve_policy = api_base.endswith("/resolve-and-execute-policy")
