@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Literal, Optional
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -70,6 +73,7 @@ class ZscalerAIGuard(CustomGuardrail):
             return str(value).strip()
         return "N/A"
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -92,14 +96,34 @@ class ZscalerAIGuard(CustomGuardrail):
         Raises:
             Exception: If content is blocked by Zscaler AI Guard
         """
+
         texts = inputs.get("texts", [])
         try:
             verbose_proxy_logger.debug(f"ZscalerAIGuard: Checking {len(texts)} text(s)")
+            metadata = request_data.get("metadata", {})
 
-            custom_policy_id = request_data.get("metadata", {}).get(
-                "zguard_policy_id", self.policy_id
+            user_api_key_metadata = metadata.get("user_api_key_metadata", {}) or {}
+            team_metadata = metadata.get("team_metadata", {}) or {}
+
+            # Precedence for policy_id:
+            # 1. metadata.zguard_policy_id # request level
+            # 2. user_api_key_metadata.zguard_policy_id # Key level
+            # 3. team_metadata.zguard_policy_id # Team level
+            # 4. self.policy_id (from environment) # Global
+            policy_id = (
+                metadata.get("zguard_policy_id")
+                if "zguard_policy_id" in metadata
+                else (
+                    user_api_key_metadata.get("zguard_policy_id")
+                    if "zguard_policy_id" in user_api_key_metadata
+                    else (
+                        team_metadata.get("zguard_policy_id")
+                        if "zguard_policy_id" in team_metadata
+                        else self.policy_id
+                    )
+                )
             )
-            verbose_proxy_logger.debug(f"custom_policy_id: {custom_policy_id}")
+            verbose_proxy_logger.info(f"policy_id applied: {policy_id}")
 
             kwargs = {}
             if self.send_user_api_key_alias:
@@ -116,27 +140,27 @@ class ZscalerAIGuard(CustomGuardrail):
                 )
             verbose_proxy_logger.debug(f"inside apply_guardrail kwargs: {kwargs}")
 
-            # Check each text (Zscaler processes one at a time)
-            for text in texts:
+            zscaler_ai_guard_result = None
+            direction = "OUT" if input_type == "response" else "IN"
+            verbose_proxy_logger.debug(f"direction: {direction}")
+            # Concatenate all texts and send to Zscaler AI Guard
+            if texts:
+                concatenated_text = " ".join(texts)
                 zscaler_ai_guard_result = await self.make_zscaler_ai_guard_api_call(
                     zscaler_ai_guard_url=self.zscaler_ai_guard_url,
                     api_key=self.api_key,
-                    policy_id=self.policy_id,
-                    direction="IN",
-                    content=text,
+                    policy_id=policy_id,
+                    direction=direction,
+                    content=concatenated_text,
                     **kwargs,
                 )
-
-                if (
-                    zscaler_ai_guard_result
-                    and zscaler_ai_guard_result.get("action") == "BLOCK"
-                ):
-                    blocking_info = zscaler_ai_guard_result.get(
-                        "zscaler_ai_guard_response"
-                    )
-                    error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
-                    raise Exception(error_message)
-
+            if (
+                zscaler_ai_guard_result
+                and zscaler_ai_guard_result.get("action") == "BLOCK"
+            ):
+                blocking_info = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
+                error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
+                raise Exception(error_message)
         except Exception as e:
             verbose_proxy_logger.error(
                 "ZscalerAIGuard: Failed to apply guardrail: %s", str(e)

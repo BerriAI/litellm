@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Dropdown } from "antd";
+import { DownOutlined, PlusOutlined, CodeOutlined } from "@ant-design/icons";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
@@ -10,6 +12,7 @@ import NotificationsManager from "./molecules/notifications_manager";
 import { Guardrail, GuardrailDefinitionLocation } from "./guardrails/types";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
+import { CustomCodeModal } from "./guardrails/custom_code";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -37,6 +40,7 @@ interface GuardrailsResponse {
 const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [isCustomCodeModalVisible, setIsCustomCodeModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<Guardrail | null>(null);
@@ -74,8 +78,19 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setIsAddModalVisible(true);
   };
 
+  const handleAddCustomCodeGuardrail = () => {
+    if (selectedGuardrailId) {
+      setSelectedGuardrailId(null);
+    }
+    setIsCustomCodeModalVisible(true);
+  };
+
   const handleCloseModal = () => {
     setIsAddModalVisible(false);
+  };
+
+  const handleCloseCustomCodeModal = () => {
+    setIsCustomCodeModalVisible(false);
   };
 
   const handleSuccess = () => {
@@ -128,9 +143,30 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
         <TabPanels>
           <TabPanel>
             <div className="flex justify-between items-center mb-4">
-              <Button onClick={handleAddGuardrail} disabled={!accessToken}>
-                + Add New Guardrail
-              </Button>
+              <Dropdown
+                menu={{
+                  items: [
+                    {
+                      key: "provider",
+                      icon: <PlusOutlined />,
+                      label: "Add Provider Guardrail",
+                      onClick: handleAddGuardrail,
+                    },
+                    {
+                      key: "custom_code",
+                      icon: <CodeOutlined />,
+                      label: "Create Custom Code Guardrail",
+                      onClick: handleAddCustomCodeGuardrail,
+                    },
+                  ],
+                }}
+                trigger={["click"]}
+                disabled={!accessToken}
+              >
+                <Button disabled={!accessToken}>
+                  + Add New Guardrail <DownOutlined className="ml-2" />
+                </Button>
+              </Dropdown>
             </div>
 
             {selectedGuardrailId ? (
@@ -155,6 +191,13 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
             <AddGuardrailForm
               visible={isAddModalVisible}
               onClose={handleCloseModal}
+              accessToken={accessToken}
+              onSuccess={handleSuccess}
+            />
+
+            <CustomCodeModal
+              visible={isCustomCodeModalVisible}
+              onClose={handleCloseCustomCodeModal}
               accessToken={accessToken}
               onSuccess={handleSuccess}
             />

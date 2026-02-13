@@ -846,6 +846,16 @@ class AsyncHTTPHandler:
         if str_to_bool(os.getenv("AIOHTTP_TRUST_ENV", "False")) is True:
             trust_env = True
 
+        #########################################################
+        # Determine SSL config to pass to transport for per-request override
+        # This ensures ssl_verify works even with shared sessions
+        #########################################################
+        ssl_for_transport: Optional[Union[bool, ssl.SSLContext]] = None
+        if ssl_context is not None:
+            ssl_for_transport = ssl_context
+        elif ssl_verify is False:
+            ssl_for_transport = False
+
         verbose_logger.debug("Creating AiohttpTransport...")
 
         # Use shared session if provided and valid
@@ -853,7 +863,10 @@ class AsyncHTTPHandler:
             verbose_logger.debug(
                 f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})"
             )
-            return LiteLLMAiohttpTransport(client=shared_session)
+            return LiteLLMAiohttpTransport(
+                client=shared_session,
+                ssl_verify=ssl_for_transport,
+            )
 
         # Create new session only if none provided or existing one is invalid
         verbose_logger.debug(
@@ -877,6 +890,7 @@ class AsyncHTTPHandler:
                 connector=TCPConnector(**transport_connector_kwargs),
                 trust_env=trust_env,
             ),
+            ssl_verify=ssl_for_transport,
         )
 
     @staticmethod
@@ -1192,7 +1206,28 @@ def get_async_httpx_client(
     If not present, creates a new client
 
     Caches the new client and returns it.
+
+    Note: When shared_session is provided, the cache is bypassed to ensure
+    the user's session (with its trace_configs, connector settings, etc.)
+    is used for the request.
     """
+    # When shared_session is provided, bypass cache and create a new handler
+    # that uses the user's session directly. This preserves the user's
+    # session configuration including trace_configs for aiohttp tracing.
+    if shared_session is not None:
+        verbose_logger.debug(
+            f"shared_session provided (ID: {id(shared_session)}), bypassing client cache"
+        )
+        if params is not None:
+            handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+            handler_params["shared_session"] = shared_session
+            return AsyncHTTPHandler(**handler_params)
+        else:
+            return AsyncHTTPHandler(
+                timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+                shared_session=shared_session,
+            )
+
     _params_key_name = ""
     if params is not None:
         for key, value in params.items():
@@ -1219,12 +1254,10 @@ def get_async_httpx_client(
     if params is not None:
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
         handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
-        handler_params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0),
-            shared_session=shared_session,
         )
 
     cache.set_cache(

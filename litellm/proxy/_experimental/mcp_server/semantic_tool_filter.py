@@ -81,6 +81,9 @@ class SemanticMCPToolFilter:
 
     def _extract_tool_info(self, tool) -> tuple[str, str]:
         """Extract name and description from MCP tool or OpenAI function dict."""
+        name: str
+        description: str
+        
         if isinstance(tool, dict):
             # OpenAI function format
             name = tool.get("name", "")

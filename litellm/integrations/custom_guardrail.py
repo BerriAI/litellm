@@ -268,6 +268,7 @@ class CustomGuardrail(CustomLogger):
         """
         Returns the guardrail(s) to be run from the metadata or root
         """
+
         if "guardrails" in data:
             return data["guardrails"]
         metadata = data.get("litellm_metadata") or data.get("metadata", {})
@@ -475,11 +476,18 @@ class CustomGuardrail(CustomLogger):
                 guardrail_config: DynamicGuardrailParams = DynamicGuardrailParams(
                     **guardrail[self.guardrail_name]
                 )
+                extra_body = guardrail_config.get("extra_body", {})
                 if self._validate_premium_user() is not True:
+                    if isinstance(extra_body, dict) and extra_body:
+                        verbose_logger.warning(
+                            "Guardrail %s: ignoring dynamic extra_body keys %s because premium_user is False",
+                            self.guardrail_name,
+                            list(extra_body.keys()),
+                        )
                     return {}
 
                 # Return the extra_body if it exists, otherwise empty dict
-                return guardrail_config.get("extra_body", {})
+                return extra_body
 
         return {}
 
@@ -608,6 +616,7 @@ class CustomGuardrail(CustomLogger):
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[Dict] = None,
     ):
         """
         Add StandardLoggingGuardrailInformation to the request data
@@ -615,7 +624,20 @@ class CustomGuardrail(CustomLogger):
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
         # Convert None to empty dict to satisfy type requirements
-        guardrail_response = {} if response is None else response
+        guardrail_response: Union[Dict[str, Any], str] = (
+            {} if response is None else response
+        )
+
+        # For apply_guardrail functions in custom_code_guardrail scenario,
+        # simplify the logged response to "allow", "deny", or "mask"
+        if original_inputs is not None and isinstance(response, dict):
+            # Check if inputs were modified by comparing them
+            if self._inputs_were_modified(original_inputs, response):
+                guardrail_response = "mask"
+            else:
+                guardrail_response = "allow"
+
+        verbose_logger.debug(f"Guardrail response: {response}")
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
@@ -642,8 +664,14 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
+        # For custom_code_guardrail scenario, log as "deny" instead of full exception
+        # Check if this is from custom_code_guardrail by checking the class name
+        guardrail_response: Union[Exception, str] = e
+        if "CustomCodeGuardrail" in self.__class__.__name__:
+            guardrail_response = "deny"
+
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=e,
+            guardrail_json_response=guardrail_response,
             request_data=request_data,
             guardrail_status="guardrail_failed_to_respond",
             duration=duration,
@@ -652,6 +680,25 @@ class CustomGuardrail(CustomLogger):
             event_type=event_type,
         )
         raise e
+
+    def _inputs_were_modified(self, original_inputs: Dict, response: Dict) -> bool:
+        """
+        Compare original inputs with response to determine if content was modified.
+
+        Returns True if the inputs were modified (mask scenario), False otherwise (allow scenario).
+        """
+        # Get all keys from both dictionaries
+        all_keys = set(original_inputs.keys()) | set(response.keys())
+
+        # Compare each key's value
+        for key in all_keys:
+            original_value = original_inputs.get(key)
+            response_value = response.get(key)
+            if original_value != response_value:
+                return True
+
+        # No modifications detected
+        return False
 
     def mask_content_in_string(
         self,
@@ -760,6 +807,12 @@ def log_guardrail_information(func):
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         event_type = _infer_event_type_from_function_name(func.__name__)
+
+        # Store original inputs for comparison (for apply_guardrail functions)
+        original_inputs = None
+        if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
+            original_inputs = kwargs.get("inputs")
+
         try:
             response = await func(*args, **kwargs)
             return self._process_response(
@@ -769,6 +822,7 @@ def log_guardrail_information(func):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
+                original_inputs=original_inputs,
             )
         except Exception as e:
             return self._process_error(
@@ -786,6 +840,12 @@ def log_guardrail_information(func):
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         event_type = _infer_event_type_from_function_name(func.__name__)
+
+        # Store original inputs for comparison (for apply_guardrail functions)
+        original_inputs = None
+        if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
+            original_inputs = kwargs.get("inputs")
+
         try:
             response = func(*args, **kwargs)
             return self._process_response(
@@ -793,6 +853,7 @@ def log_guardrail_information(func):
                 request_data=request_data,
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
+                original_inputs=original_inputs,
             )
         except Exception as e:
             return self._process_error(

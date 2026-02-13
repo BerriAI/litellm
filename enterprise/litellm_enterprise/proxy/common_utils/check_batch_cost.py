@@ -53,7 +53,7 @@ class CheckBatchCost:
 
         jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
-                "status": "validating",
+                "status": {"in": ["validating", "in_progress", "finalizing"]},
                 "file_purpose": "batch",
             }
         )
