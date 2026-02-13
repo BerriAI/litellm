@@ -529,6 +529,17 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         raise e
 
 
+def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
+    """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
+    extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+    if extra_body is not None:
+        for k, v in extra_body.items():
+            if k in data and isinstance(data[k], dict) and isinstance(v, dict):
+                data[k].update(v)
+            else:
+                data[k] = v
+
+
 def _transform_request_body(
     messages: List[AllMessageValues],
     model: str,
@@ -619,6 +630,7 @@ def _transform_request_body(
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
+        _pop_and_merge_extra_body(data, optional_params)
     except Exception as e:
         raise e
 
