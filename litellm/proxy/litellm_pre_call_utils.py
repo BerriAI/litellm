@@ -252,6 +252,34 @@ def clean_headers(
     return clean_headers
 
 
+def _mask_secret_fields_for_logging(secret_fields: dict) -> dict:
+    """
+    Masks sensitive values (like JWT tokens) in secret_fields before logging.
+    Keeps the field structure intact but redacts authorization header values.
+    """
+    _sensitive_header_keys = frozenset(
+        {"authorization", "x-api-key", "api-key", "x-litellm-api-key"}
+    )
+    if not isinstance(secret_fields, dict):
+        return secret_fields
+    masked = {}
+    for field_key, field_value in secret_fields.items():
+        if isinstance(field_value, dict):
+            masked_inner = {}
+            for k, v in field_value.items():
+                if k.lower() in _sensitive_header_keys and isinstance(v, str):
+                    if len(v) > 20:
+                        masked_inner[k] = v[:10] + "****" + v[-4:]
+                    else:
+                        masked_inner[k] = "****"
+                else:
+                    masked_inner[k] = v
+            masked[field_key] = masked_inner
+        else:
+            masked[field_key] = field_value
+    return masked
+
+
 class LiteLLMProxyRequestSetup:
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> Optional[float]:
@@ -899,13 +927,19 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     ## Cache Controls
     headers = request.headers
-    verbose_proxy_logger.debug("Request Headers: %s", headers)
+    verbose_proxy_logger.debug("Request Headers: %s", clean_headers(headers))
     cache_control_header = headers.get("Cache-Control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    verbose_proxy_logger.debug("receiving data: %s", data)
+    verbose_proxy_logger.debug(
+        "receiving data: %s",
+        {
+            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+            for k, v in data.items()
+        },
+    )
 
     # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
@@ -1133,7 +1167,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s", data
+        "[PROXY] returned data from litellm_pre_call_utils: %s",
+        {
+            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+            for k, v in data.items()
+        },
     )
 
     ## ENFORCED PARAMS CHECK
