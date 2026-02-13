@@ -227,94 +227,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return input_items, instructions
 
-    def _map_optional_params_to_responses_api(
-        self,
-        optional_params: dict,
-        responses_api_request: "ResponsesAPIOptionalRequestParams",
-        instructions: Optional[str],
-    ) -> "ResponsesAPIOptionalRequestParams":
-        """
-        Map chat completion optional parameters to Responses API request format.
-        """
-        # Set instructions if we found a system message
-        if instructions:
-            responses_api_request["instructions"] = instructions
-
-        for key, value in optional_params.items():
-            if value is None:
-                continue
-            if key in ("max_tokens", "max_completion_tokens"):
-                responses_api_request["max_output_tokens"] = value
-            elif key == "tools" and value is not None:
-                responses_api_request["tools"] = (
-                    self._convert_tools_to_responses_format(
-                        cast(List[Dict[str, Any]], value)
-                    )
-                )
-            elif key == "response_format":
-                text_format = self._transform_response_format_to_text_format(value)
-                if text_format:
-                    responses_api_request["text"] = text_format  # type: ignore
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
-                responses_api_request[key] = value  # type: ignore
-            elif key == "previous_response_id":
-                responses_api_request["previous_response_id"] = value
-            elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
-            elif key == "web_search_options":
-                self._add_web_search_tool(responses_api_request, value)
-
-        return responses_api_request
-
-    @staticmethod
-    def _sanitize_litellm_params(litellm_params: dict) -> Dict[str, Any]:
-        """
-        Remove responses-API-specific keys from litellm_params and merge metadata.
-        """
-        responses_optional_param_keys = set(
-            ResponsesAPIOptionalRequestParams.__annotations__.keys()
-        )
-        sanitized: Dict[str, Any] = {
-            key: value
-            for key, value in litellm_params.items()
-            if key not in responses_optional_param_keys
-        }
-
-        legacy_metadata = litellm_params.get("metadata")
-        existing_litellm_metadata = litellm_params.get("litellm_metadata")
-        merged_litellm_metadata: Dict[str, Any] = {}
-        if isinstance(legacy_metadata, dict):
-            merged_litellm_metadata.update(legacy_metadata)
-        if isinstance(existing_litellm_metadata, dict):
-            merged_litellm_metadata.update(existing_litellm_metadata)
-        if merged_litellm_metadata:
-            sanitized["litellm_metadata"] = merged_litellm_metadata
-        else:
-            sanitized.pop("litellm_metadata", None)
-
-        return sanitized
-
-    @staticmethod
-    def _apply_responses_api_params_to_request(
-        request_data: dict,
-        responses_api_request: "ResponsesAPIOptionalRequestParams",
-        instructions: Optional[str],
-    ) -> None:
-        """
-        Merge non-None values from responses_api_request into request_data.
-        """
-        for key, value in responses_api_request.items():
-            if value is not None:
-                if key == "instructions" and instructions:
-                    request_data["instructions"] = instructions
-                elif key == "stream_options" and isinstance(value, dict):
-                    request_data["stream_options"] = value.get("include_obfuscation")
-                elif key == "user":  # string can't be longer than 64 characters
-                    if isinstance(value, str) and len(value) <= 64:
-                        request_data["user"] = value
-                else:
-                    request_data[key] = value
-
     def transform_request(
         self,
         model: str,
@@ -334,9 +246,39 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Build responses API request using the reverse transformation logic
         responses_api_request = ResponsesAPIOptionalRequestParams()
-        responses_api_request = self._map_optional_params_to_responses_api(
-            optional_params, responses_api_request, instructions
-        )
+
+        # Set instructions if we found a system message
+        if instructions:
+            responses_api_request["instructions"] = instructions
+
+        # Map optional parameters
+        for key, value in optional_params.items():
+            if value is None:
+                continue
+            if key in ("max_tokens", "max_completion_tokens"):
+                responses_api_request["max_output_tokens"] = value
+            elif key == "tools" and value is not None:
+                # Convert chat completion tools to responses API tools format
+                responses_api_request["tools"] = (
+                    self._convert_tools_to_responses_format(
+                        cast(List[Dict[str, Any]], value)
+                    )
+                )
+            elif key == "response_format":
+                # Convert response_format to text.format
+                text_format = self._transform_response_format_to_text_format(value)
+                if text_format:
+                    responses_api_request["text"] = text_format  # type: ignore
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
+                responses_api_request[key] = value  # type: ignore
+            elif key == "metadata":
+                responses_api_request["metadata"] = value
+            elif key == "previous_response_id":
+                responses_api_request["previous_response_id"] = value
+            elif key == "reasoning_effort":
+                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+            elif key == "web_search_options":
+                self._add_web_search_tool(responses_api_request, value)
 
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -349,31 +291,43 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Handle session management if previous_response_id is provided
         previous_response_id = optional_params.get("previous_response_id")
         if previous_response_id:
+            # Use the existing session handler for responses API
             verbose_logger.debug(
                 f"Chat provider: Warning ignoring previous response ID: {previous_response_id}"
             )
+
+        # Convert back to responses API format for the actual request
+
+        api_model = model
 
         from litellm.types.utils import CallTypes
 
         setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
 
-        sanitized_litellm_params = self._sanitize_litellm_params(litellm_params)
-
         request_data = {
-            "model": model,
+            "model": api_model,
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
-            **sanitized_litellm_params,
+            **litellm_params,
             "client": client,
         }
 
         verbose_logger.debug(
-            f"Chat provider: Final request model={model}, input_items={len(input_items)}"
+            f"Chat provider: Final request model={api_model}, input_items={len(input_items)}"
         )
 
-        self._apply_responses_api_params_to_request(
-            request_data, responses_api_request, instructions
-        )
+        # Add non-None values from responses_api_request
+        for key, value in responses_api_request.items():
+            if value is not None:
+                if key == "instructions" and instructions:
+                    request_data["instructions"] = instructions
+                elif key == "stream_options" and isinstance(value, dict):
+                    request_data["stream_options"] = value.get("include_obfuscation")
+                elif key == "user":  # string can't be longer than 64 characters
+                    if isinstance(value, str) and len(value) <= 64:
+                        request_data["user"] = value
+                else:
+                    request_data[key] = value
 
         if headers:
             request_data["extra_headers"] = headers
@@ -400,9 +354,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
-        from openai.types.responses.response_output_item import (
-            ResponseApplyPatchToolCall,
-        )
+        from openai.types.responses.response_output_item import ResponseApplyPatchToolCall
 
         from litellm.types.utils import Choices, Message
 
@@ -552,19 +504,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # which contain important provider information like x-request-id
         raw_response_hidden_params = getattr(raw_response, "_hidden_params", {})
         if raw_response_hidden_params:
-            if (
-                not hasattr(model_response, "_hidden_params")
-                or model_response._hidden_params is None
-            ):
+            if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
                 model_response._hidden_params = {}
             # Merge the raw_response hidden params with model_response hidden params
             # Preserve existing keys in model_response but add/override with raw_response params
             for key, value in raw_response_hidden_params.items():
                 if key == "additional_headers" and key in model_response._hidden_params:
                     # Merge additional_headers to preserve both sets
-                    existing_additional_headers = model_response._hidden_params.get(
-                        "additional_headers", {}
-                    )
+                    existing_additional_headers = model_response._hidden_params.get("additional_headers", {})
                     merged_headers = {**value, **existing_additional_headers}
                     model_response._hidden_params[key] = merged_headers
                 else:
@@ -787,31 +734,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if reasoning_effort == "none":
             return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
-            return (
-                Reasoning(effort="high", summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort="high")
-            )
+            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
         elif reasoning_effort == "xhigh":
             return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
-            return (
-                Reasoning(effort="medium", summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort="medium")
-            )
+            return Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
         elif reasoning_effort == "low":
-            return (
-                Reasoning(effort="low", summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort="low")
-            )
+            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
         elif reasoning_effort == "minimal":
-            return (
-                Reasoning(effort="minimal", summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort="minimal")
-            )
+            return Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
         return None
 
     def _add_web_search_tool(
@@ -826,10 +757,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             responses_api_request: The responses API request dict to modify
             web_search_options: Web search configuration (dict or other value)
         """
-        if (
-            "tools" not in responses_api_request
-            or responses_api_request["tools"] is None
-        ):
+        if "tools" not in responses_api_request or responses_api_request["tools"] is None:
             responses_api_request["tools"] = []
 
         # Get the tools list with proper type narrowing
@@ -919,17 +847,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     annotation_dict = annotation
                 else:
                     # Skip unsupported annotation types
-                    verbose_logger.debug(
-                        f"Skipping unsupported annotation type: {type(annotation)}"
-                    )
+                    verbose_logger.debug(f"Skipping unsupported annotation type: {type(annotation)}")
                     continue
 
                 result.append(annotation_dict)  # type: ignore
             except Exception as e:
                 # Skip malformed annotations
-                verbose_logger.debug(
-                    f"Skipping malformed annotation: {annotation}, error: {e}"
-                )
+                verbose_logger.debug(f"Skipping malformed annotation: {annotation}, error: {e}")
                 continue
 
         return result if result else None
@@ -1045,9 +969,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
 
                 if provider_specific_fields:
-                    function_chunk[
-                        "provider_specific_fields"
-                    ] = provider_specific_fields
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
 
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
@@ -1118,9 +1042,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 # Add provider_specific_fields to function if present
                 if provider_specific_fields:
-                    function_chunk[
-                        "provider_specific_fields"
-                    ] = provider_specific_fields
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
 
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
