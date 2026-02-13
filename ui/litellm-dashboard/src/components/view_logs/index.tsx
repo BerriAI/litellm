@@ -239,7 +239,7 @@ export default function SpendLogsTable({
     allTeams: hookAllTeams,
     allKeyAliases,
     handleFilterChange,
-    handleFilterReset,
+    handleFilterReset: handleFilterResetFromHook,
   } = useLogFilterLogic({
     logs: logsData,
     accessToken,
@@ -273,6 +273,16 @@ export default function SpendLogsTable({
     },
     [accessToken, currentPage, pageSize],
   );
+
+  const handleFilterReset = useCallback(() => {
+    handleFilterResetFromHook();
+    // Reset custom time range to default (last 24 hours)
+    setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
+    setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+    setIsCustomDate(false);
+    setSelectedTimeInterval({ value: 24, unit: "hours" });
+    setCurrentPage(1);
+  }, [handleFilterResetFromHook]);
 
   // Add this effect to update selected filters when filter changes
   useEffect(() => {
