@@ -2636,7 +2636,7 @@ export const uiSpendLogsCall = async ({
       if (value == null) continue;
       if (key === "min_spend" || key === "max_spend") {
         queryParams.append(key, value.toString());
-      } else if (key === "sort_order" || value !== "") {
+      } else if (typeof value === "string" && value !== "") {
         queryParams.append(key, String(value));
       }
     }
