@@ -671,6 +671,11 @@ class LiteLLMRoutes(enum.Enum):
     )
 
 
+# Pre-computed tuple for fast startswith() checks against mapped pass-through routes.
+# Defined once here and imported by auth/route_checks modules.
+MAPPED_PASS_THROUGH_PREFIXES = tuple(LiteLLMRoutes.mapped_pass_through_routes.value)
+
+
 class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
     heuristics_check: bool = False
     vector_db_check: bool = False

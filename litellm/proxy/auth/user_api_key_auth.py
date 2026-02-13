@@ -77,6 +77,9 @@ except ImportError as e:
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
+# Pre-computed constants to avoid repeated enum attribute access
+_PUBLIC_ROUTES = LiteLLMRoutes.public_routes.value
+
 custom_litellm_key_header = APIKeyHeader(
     name=SpecialHeaders.custom_litellm_api_key.value,
     auto_error=False,
@@ -355,15 +358,6 @@ def get_api_key(
         google_auth_key: str = _safe_get_request_query_params(request).get("key") or ""
         passed_in_key = google_auth_key
         api_key = google_auth_key
-    elif pass_through_endpoints is not None:
-        for endpoint in pass_through_endpoints:
-            if endpoint.get("path", "") == route:
-                headers: Optional[dict] = endpoint.get("headers", None)
-                if headers is not None:
-                    header_key: str = headers.get("litellm_user_api_key", "")
-                    if request.headers.get(header_key) is not None:
-                        api_key = request.headers.get(header_key) or ""
-                        passed_in_key = api_key
     return api_key, passed_in_key
 
 
@@ -373,29 +367,22 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     pass_through_endpoints: Optional[List[dict]],
     api_key: str,
 ) -> Union[UserAPIKeyAuth, str]:
-    is_mapped_pass_through_route: bool = False
-    for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-        if route.startswith(mapped_route):
-            is_mapped_pass_through_route = True
-    if is_mapped_pass_through_route:
-        if request.headers.get("litellm_user_api_key") is not None:
-            api_key = request.headers.get("litellm_user_api_key") or ""
+    # Fast path: nothing to check
+    is_mapped = route.startswith(MAPPED_PASS_THROUGH_PREFIXES)
+    if not is_mapped and pass_through_endpoints is None:
+        return api_key
+
+    if is_mapped:
+        value = request.headers.get("litellm_user_api_key")
+        if value is not None:
+            api_key = value
+
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
-                ## IF AUTH DISABLED
                 if endpoint.get("auth") is not True:
                     return UserAPIKeyAuth()
-                ## IF AUTH ENABLED
-                ### IF CUSTOM PARSER REQUIRED
-                if (
-                    endpoint.get("custom_auth_parser") is not None
-                    and endpoint.get("custom_auth_parser") == "langfuse"
-                ):
-                    """
-                    - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
-                    - check the langfuse public key if it contains the litellm api key
-                    """
+                if endpoint.get("custom_auth_parser") == "langfuse":
                     import base64
 
                     api_key = api_key.replace("Basic ", "").strip()
@@ -406,11 +393,10 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                     headers = endpoint.get("headers", None)
                     if headers is not None:
                         header_key = headers.get("litellm_user_api_key", "")
-                        if (
-                            isinstance(request.headers, dict)
-                            and request.headers.get(key=header_key) is not None  # type: ignore
-                        ):
-                            api_key = request.headers.get(key=header_key)  # type: ignore
+                        value = request.headers.get(header_key)
+                        if value is not None:
+                            api_key = value
+                break  # found matching endpoint, stop looping
     return api_key
 
 
@@ -423,6 +409,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     azure_apim_header: Optional[str],
     request_data: dict,
     custom_litellm_key_header: Optional[str] = None,
+    route: Optional[str] = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -441,7 +428,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
-    route: str = get_request_route(request=request)
+    if route is None:
+        route = get_request_route(request=request)
     valid_token: Optional[UserAPIKeyAuth] = None
     custom_auth_api_key: bool = False
 
@@ -480,7 +468,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             parent_otel_span = (
                 open_telemetry_logger.create_litellm_proxy_request_started_span(
                     start_time=start_time,
-                    headers=dict(request.headers),
+                    headers=_safe_get_request_headers(request),
                 )
             )
 
@@ -512,7 +500,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
         if (
-            route in LiteLLMRoutes.public_routes.value  # type: ignore
+            route in _PUBLIC_ROUTES
             or route_in_additonal_public_routes(current_route=route)
         ):
             # check if public endpoint
@@ -1319,6 +1307,7 @@ async def user_api_key_auth(
         azure_apim_header=azure_apim_header,
         request_data=request_data,
         custom_litellm_key_header=custom_litellm_key_header,
+        route=route,
     )
 
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
