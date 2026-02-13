@@ -20,12 +20,15 @@ def get_supported_openai_params(
 
     if supported_params is not None and isinstance(supported_params, list):
         try:
-            model_info = litellm.get_model_info(model)
+            from litellm.utils import _get_model_info_helper
+
+            model_info = _get_model_info_helper(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
             if model_info.get("supports_function_calling") is False:
                 supported_params = [
-                    p
-                    for p in supported_params
-                    if p not in ["functions", "function_call"]
+                    p for p in supported_params if p not in ["functions", "function_call"]
                 ]
             if model_info.get("supports_tool_choice") is False:
                 supported_params = [
