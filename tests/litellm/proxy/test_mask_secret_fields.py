@@ -71,6 +71,28 @@ class TestMaskSecretFieldsForLogging:
         result = _mask_secret_fields_for_logging(secret_fields)
         assert "****" in result["raw_headers"]["API-Key"]
 
+    def test_should_mask_google_ai_studio_key_header(self):
+        secret_fields = {
+            "raw_headers": {
+                "x-goog-api-key": "AIzaSyB-some-long-google-api-key-1234567890",
+                "host": "localhost:4000",
+            }
+        }
+        result = _mask_secret_fields_for_logging(secret_fields)
+        assert "****" in result["raw_headers"]["x-goog-api-key"]
+        assert result["raw_headers"]["host"] == "localhost:4000"
+
+    def test_should_mask_azure_apim_subscription_key_header(self):
+        secret_fields = {
+            "raw_headers": {
+                "Ocp-Apim-Subscription-Key": "abcdef1234567890abcdef1234567890",
+                "host": "localhost:4000",
+            }
+        }
+        result = _mask_secret_fields_for_logging(secret_fields)
+        assert "****" in result["raw_headers"]["Ocp-Apim-Subscription-Key"]
+        assert result["raw_headers"]["host"] == "localhost:4000"
+
     def test_should_mask_short_auth_values(self):
         secret_fields = {
             "raw_headers": {

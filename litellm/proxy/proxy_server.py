@@ -9842,17 +9842,25 @@ async def async_queue_request(
         data["proxy_server_request"] = {
             "url": str(request.url),
             "method": request.method,
-            "headers": clean_headers(request.headers),
+            "headers": clean_headers(
+                request.headers,
+                litellm_key_header_name=(
+                    general_settings.get("litellm_key_header_name")
+                    if general_settings is not None
+                    else None
+                ),
+            ),
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug(
-            "receiving data: %s",
-            {
-                k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
-                for k, v in data.items()
-            },
-        )
+        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            verbose_proxy_logger.debug(
+                "receiving data: %s",
+                {
+                    k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+                    for k, v in data.items()
+                },
+            )
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args

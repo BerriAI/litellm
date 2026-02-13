@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -916,13 +917,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    verbose_proxy_logger.debug(
-        "receiving data: %s",
-        {
-            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
-            for k, v in data.items()
-        },
-    )
+    if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+        verbose_proxy_logger.debug(
+            "receiving data: %s",
+            {
+                k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+                for k, v in data.items()
+            },
+        )
 
     # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
@@ -1149,13 +1151,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
-    verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s",
-        {
-            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
-            for k, v in data.items()
-        },
-    )
+    if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+        verbose_proxy_logger.debug(
+            "[PROXY] returned data from litellm_pre_call_utils: %s",
+            {
+                k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+                for k, v in data.items()
+            },
+        )
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param
