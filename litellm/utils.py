@@ -2372,6 +2372,9 @@ def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) ->
         verbose_logger.debug(
             f"Model not found or error in checking supports_native_streaming support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+        # Default to True: a false positive (attempting native streaming on an
+        # unsupported model) produces an explicit backend error, while a false
+        # negative silently drops function_call events via MockResponsesAPI.
         return True
 
 
