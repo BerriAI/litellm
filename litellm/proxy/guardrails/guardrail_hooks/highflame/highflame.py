@@ -130,6 +130,9 @@ class HighflameGuardrail(CustomGuardrail):
             status = "success"
             return highflame_response
         except Exception as e:
+            verbose_proxy_logger.error(
+                "Highflame Guardrail: API call failed: %s", e
+            )
             status = "guardrail_failed_to_respond"
             exception_str = str(e)
             return {"assessments": []}
@@ -152,6 +155,7 @@ class HighflameGuardrail(CustomGuardrail):
                     if k != "standard_logging_guardrail_information"
                 }
 
+            end_time = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=guardrail_json_response,
                 request_data=clean_request_data,
