@@ -629,7 +629,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
-        _masked = "{}****{}".format(data.key[:4], data.key[-4:]) if len(data.key) > 8 else "****"
+        _masked = (
+            "{}****{}".format(data.key[:4], data.key[-4:])
+            if len(data.key) > 8
+            else "****"
+        )
         raise HTTPException(
             status_code=400,
             detail={
@@ -1342,7 +1346,7 @@ async def prepare_key_update_data(
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
-    data_json.pop("grace_period_hours", None)  # Request-only param, not a DB column
+    data_json.pop("grace_period", None)  # Request-only param, not a DB column
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None
@@ -3178,6 +3182,69 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     return new_token
 
 
+async def _insert_deprecated_key(
+    prisma_client: "PrismaClient",
+    old_token_hash: str,
+    new_token_hash: str,
+    grace_period: Optional[str],
+) -> None:
+    """
+    Insert old key into deprecated table so it remains valid during grace period.
+
+    Uses upsert to handle concurrent rotations gracefully.
+
+    Parameters:
+        prisma_client: DB client
+        old_token_hash: Hash of the old key being rotated out
+        new_token_hash: Hash of the new replacement key
+        grace_period: Duration string (e.g. "24h", "2d") or None/empty for immediate revoke
+    """
+    grace_period_value = grace_period or os.getenv(
+        "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
+    )
+    if not grace_period_value:
+        return
+
+    try:
+        grace_seconds = duration_in_seconds(grace_period_value)
+    except ValueError:
+        verbose_proxy_logger.warning(
+            "Invalid grace_period format: %s. Expected format like '24h', '2d'.",
+            grace_period_value,
+        )
+        return
+
+    if grace_seconds <= 0:
+        return
+
+    try:
+        revoke_at = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
+        await prisma_client.db.litellm_deprecatedverificationtoken.upsert(
+            where={"token": old_token_hash},
+            data={
+                "create": {
+                    "token": old_token_hash,
+                    "active_token_id": new_token_hash,
+                    "revoke_at": revoke_at,
+                },
+                "update": {
+                    "active_token_id": new_token_hash,
+                    "revoke_at": revoke_at,
+                },
+            },
+        )
+        verbose_proxy_logger.debug(
+            "Deprecated key retained for %s (revoke_at: %s)",
+            grace_period_value,
+            revoke_at,
+        )
+    except Exception as deprecated_err:
+        verbose_proxy_logger.warning(
+            "Failed to insert deprecated key for grace period: %s",
+            deprecated_err,
+        )
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -3228,7 +3295,7 @@ async def regenerate_key_fn(  # noqa: PLR0915
         - permissions: Optional[dict] - Key-specific permissions
         - guardrails: Optional[List[str]] - List of active guardrails for the key
         - blocked: Optional[bool] - Whether the key is blocked
-        - grace_period_hours: Optional[int] - Hours to keep old key valid after rotation (e.g. 24, 48, 72). 0 or omitted = immediate revoke. Env: LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS
+        - grace_period: Optional[str] - Duration to keep old key valid after rotation (e.g. "24h", "2d"). Omitted = immediate revoke. Env: LITELLM_KEY_ROTATION_GRACE_PERIOD
 
 
     Returns:
@@ -3369,44 +3436,13 @@ async def regenerate_key_fn(  # noqa: PLR0915
         update_data.update(non_default_values)
         update_data = prisma_client.jsonify_object(data=update_data)
 
-        # If grace period > 0, insert deprecated key so old key remains valid
-        if data is not None and data.grace_period_hours is not None:
-            grace_period_hours = data.grace_period_hours
-        else:
-            grace_period_hours = int(
-                os.getenv("LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS", "0")
-            )
-        if grace_period_hours > 0:
-            try:
-                revoke_at = datetime.now(timezone.utc) + timedelta(
-                    hours=grace_period_hours
-                )
-                # Use upsert to handle concurrent rotations gracefully; avoids
-                # unique constraint violation if same key is rotated simultaneously
-                await prisma_client.db.litellm_deprecatedverificationtoken.upsert(
-                    where={"token": hashed_api_key},
-                    data={
-                        "create": {
-                            "token": hashed_api_key,
-                            "active_token_id": new_token_hash,
-                            "revoke_at": revoke_at,
-                        },
-                        "update": {
-                            "active_token_id": new_token_hash,
-                            "revoke_at": revoke_at,
-                        },
-                    },
-                )
-                verbose_proxy_logger.debug(
-                    "Deprecated key retained for %s hours (revoke_at: %s)",
-                    grace_period_hours,
-                    revoke_at,
-                )
-            except Exception as deprecated_err:
-                verbose_proxy_logger.warning(
-                    "Failed to insert deprecated key for grace period: %s",
-                    deprecated_err,
-                )
+        # If grace period set, insert deprecated key so old key remains valid
+        await _insert_deprecated_key(
+            prisma_client=prisma_client,
+            old_token_hash=hashed_api_key,
+            new_token_hash=new_token_hash,
+            grace_period=data.grace_period if data else None,
+        )
 
         # Update the token in the database
         updated_token = await prisma_client.db.litellm_verificationtoken.update(

@@ -37,7 +37,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         tpm_limit: selectedToken.tpm_limit,
         rpm_limit: selectedToken.rpm_limit,
         duration: selectedToken.duration || "",
-        grace_period_hours: 0,
+        grace_period: "",
       });
 
       // Initialize the current access token
@@ -225,15 +225,21 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           </div>
           {newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
           <Form.Item
-            name="grace_period_hours"
-            label="Grace Period (hours)"
-            tooltip="Keep the old key valid for this many hours after rotation. Both keys work during this period for seamless cutover. 0 = immediate revoke."
+            name="grace_period"
+            label="Grace Period (eg: 24h, 2d)"
+            tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
             className="mt-8"
+            rules={[
+              {
+                pattern: /^(\d+(s|m|h|d|w|mo))?$/,
+                message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+              },
+            ]}
           >
-            <InputNumber min={0} max={168} placeholder="0 (immediate revoke)" style={{ width: "100%" }} />
+            <TextInput placeholder="e.g. 24h, 2d (empty = immediate revoke)" />
           </Form.Item>
           <div className="mt-2 text-sm text-gray-500">
-            Recommended: 24-72 hours for production keys to allow seamless client migration.
+            Recommended: 24h to 72h for production keys to allow seamless client migration.
           </div>
         </Form>
       )}

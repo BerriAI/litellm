@@ -10,7 +10,7 @@ from typing import List
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
-    LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS,
+    LITELLM_KEY_ROTATION_GRACE_PERIOD,
 )
 from litellm.proxy._types import (
     GenerateKeyResponse,
@@ -143,7 +143,7 @@ class KeyRotationManager:
         regenerate_request = RegenerateKeyRequest(
             key=key.token or "",
             key_alias=key.key_alias,  # Pass key alias to ensure correct secret is updated in AWS Secrets Manager
-            grace_period_hours=LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS,
+            grace_period=LITELLM_KEY_ROTATION_GRACE_PERIOD or None,
         )
 
         # Create a system user for key rotation
