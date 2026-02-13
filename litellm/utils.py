@@ -7268,7 +7268,7 @@ def get_valid_models(
 
 
 _SENSITIVE_HEADER_KEYS = frozenset(
-    {"authorization", "x-api-key", "api-key", "x-litellm-api-key", "x-goog-api-key", "ocp-apim-subscription-key"}
+    {"authorization", "x-api-key", "api-key", "x-litellm-api-key", "x-goog-api-key", "ocp-apim-subscription-key", "x-mcp-auth"}
 )
 
 

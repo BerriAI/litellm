@@ -901,17 +901,18 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     ## Cache Controls
     headers = request.headers
-    verbose_proxy_logger.debug(
-        "Request Headers: %s",
-        clean_headers(
-            headers,
-            litellm_key_header_name=(
-                general_settings.get("litellm_key_header_name")
-                if general_settings is not None
-                else None
+    if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+        verbose_proxy_logger.debug(
+            "Request Headers: %s",
+            clean_headers(
+                headers,
+                litellm_key_header_name=(
+                    general_settings.get("litellm_key_header_name")
+                    if general_settings is not None
+                    else None
+                ),
             ),
-        ),
-    )
+        )
     cache_control_header = headers.get("Cache-Control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
