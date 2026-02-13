@@ -272,8 +272,8 @@ This is great for Proxy Admins who need to enforce security policies for product
 
 #### Guardrails
 
-- **[Highflame](../../docs/proxy/guardrails)**
-    - Add Highflame standalone guardrails integration for LiteLLM Proxy - [PR #14983](https://github.com/BerriAI/litellm/pull/14983)
+- **[Javelin](../../docs/proxy/guardrails)**
+    - Add Javelin standalone guardrails integration for LiteLLM Proxy - [PR #14983](https://github.com/BerriAI/litellm/pull/14983)
     - Add logging for important status fields in guardrails - [PR #15090](https://github.com/BerriAI/litellm/pull/15090)
     - Don't run post_call guardrail if no text returned from Bedrock - [PR #15106](https://github.com/BerriAI/litellm/pull/15106)
 
