@@ -225,6 +225,38 @@ async def test_policy_id_from_init(mock_api_call):
     mock_api_call.assert_called_once()
     assert mock_api_call.call_args.kwargs["policy_id"] == 100
 
+def test_event_hook_passed_through_kwargs():
+    """
+    Test that event_hook (mode) from config is correctly passed to the parent
+    CustomGuardrail class via kwargs.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20772
+    """
+    guardrail = ZscalerAIGuard(
+        api_key="test_api_key",
+        api_base="http://example.com",
+        policy_id=1,
+        event_hook="pre_call",
+        guardrail_name="zscaler-guard",
+    )
+    assert guardrail.event_hook == "pre_call"
+    assert guardrail.guardrail_name == "zscaler-guard"
+
+
+def test_event_hook_list_passed_through_kwargs():
+    """
+    Test that event_hook as a list of modes is correctly passed through.
+    """
+    guardrail = ZscalerAIGuard(
+        api_key="test_api_key",
+        api_base="http://example.com",
+        policy_id=1,
+        event_hook=["pre_call", "post_call"],
+        guardrail_name="zscaler-guard",
+    )
+    assert guardrail.event_hook == ["pre_call", "post_call"]
+
+
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
