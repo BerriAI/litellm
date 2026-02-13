@@ -248,9 +248,9 @@ class TestKeyRotationManager:
         assert call_args[1]["where"]["revoke_at"]["lt"] is not None
 
     @pytest.mark.asyncio
-    async def test_rotate_key_passes_grace_period_hours(self):
+    async def test_rotate_key_passes_grace_period(self):
         """
-        Test that _rotate_key passes grace_period_hours in RegenerateKeyRequest.
+        Test that _rotate_key passes grace_period in RegenerateKeyRequest.
         """
         mock_prisma_client = AsyncMock()
         manager = KeyRotationManager(mock_prisma_client)
@@ -281,12 +281,12 @@ class TestKeyRotationManager:
                 new_callable=AsyncMock,
             ):
                 with patch(
-                    "litellm.proxy.common_utils.key_rotation_manager.LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS",
-                    48,
+                    "litellm.proxy.common_utils.key_rotation_manager.LITELLM_KEY_ROTATION_GRACE_PERIOD",
+                    "48h",
                 ):
                     await manager._rotate_key(key_to_rotate)
 
             mock_regenerate.assert_called_once()
             call_args = mock_regenerate.call_args
             regenerate_request = call_args[1]["data"]
-            assert regenerate_request.grace_period_hours == 48
+            assert regenerate_request.grace_period == "48h"

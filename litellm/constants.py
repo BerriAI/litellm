@@ -351,6 +351,22 @@ request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in se
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes
+# Patterns that indicate a localhost/internal URL in A2A agent cards that should be
+# replaced with the original base_url. This is a common misconfiguration where
+# developers deploy agents with development URLs in their agent cards.
+LOCALHOST_URL_PATTERNS: List[str] = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "[::1]",  # IPv6 localhost
+]
+# Patterns in error messages that indicate a connection failure
+CONNECTION_ERROR_PATTERNS: List[str] = [
+    "connect",
+    "connection",
+    "network",
+    "refused",
+]
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
@@ -1245,9 +1261,9 @@ LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false"
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
     os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
 )  # 24 hours default
-LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS = int(
-    os.getenv("LITELLM_KEY_ROTATION_GRACE_PERIOD_HOURS", 0)
-)  # Hours to keep old key valid after rotation; 0 = immediate revoke (default)
+LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
+    "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
+)  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
