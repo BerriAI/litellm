@@ -628,7 +628,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 )
 
             if "id" in response_object:
-                model_response_object.id = response_object["id"]
+                model_response_object.id = response_object["id"] or model_response_object.id
 
             if "system_fingerprint" in response_object:
                 model_response_object.system_fingerprint = response_object[
