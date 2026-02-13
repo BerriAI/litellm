@@ -211,7 +211,6 @@ async def vector_store_create(
         user_temperature,
         version,
     )
-    from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 
     data = await _read_request_body(request=request)
     
