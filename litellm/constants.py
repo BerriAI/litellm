@@ -101,6 +101,11 @@ MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE = int(
 MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
     os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600")
 )
+
+# Default npm cache directory for STDIO MCP servers.
+# npm/npx needs a writable cache dir; in containers the default (~/.npm)
+# may not exist or be read-only. /tmp is always writable.
+MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
     os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
 )

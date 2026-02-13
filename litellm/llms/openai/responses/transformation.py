@@ -240,24 +240,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         event_pydantic_model = OpenAIResponsesAPIConfig.get_event_model_class(
             event_type=event_type
         )
-        # Defensive: Some OpenAI-compatible providers may send `error.code: null`.
-        # Pydantic will raise a ValidationError when it expects a string but gets None.
-        # Coalesce a None `error.code` to a stable default string so streaming
-        # iteration does not crash (see issue report). This keeps behavior similar
-        # to previous fixes (coalesce before validation) and lets higher-level
-        # handlers still receive an `ErrorEvent` object.
+        # Some OpenAI-compatible providers send error.code: null; coalesce so validation succeeds.
         try:
             error_obj = parsed_chunk.get("error")
             if isinstance(error_obj, dict) and error_obj.get("code") is None:
-                # Preserve other fields, but ensure `code` is a non-null string
                 parsed_chunk = dict(parsed_chunk)
                 parsed_chunk["error"] = dict(error_obj)
                 parsed_chunk["error"]["code"] = "unknown_error"
         except Exception:
-            # If anything unexpected happens here, fall back to attempting
-            # instantiation and let higher-level handlers manage errors.
             verbose_logger.debug("Failed to coalesce error.code in parsed_chunk")
-
         return event_pydantic_model(**parsed_chunk)
 
     @staticmethod
@@ -307,6 +298,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIStreamEvents.MCP_CALL_FAILED: MCPCallFailedEvent,
             ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE: ImageGenerationPartialImageEvent,
             ResponsesAPIStreamEvents.ERROR: ErrorEvent,
+            # Shell tool events: passthrough as GenericEvent so payload is preserved
+            ResponsesAPIStreamEvents.SHELL_CALL_IN_PROGRESS: GenericEvent,
+            ResponsesAPIStreamEvents.SHELL_CALL_COMPLETED: GenericEvent,
+            ResponsesAPIStreamEvents.SHELL_CALL_OUTPUT: GenericEvent,
         }
 
         model_class = event_models.get(cast(ResponsesAPIStreamEvents, event_type))
