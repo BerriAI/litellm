@@ -3,7 +3,7 @@ import { Modal, Tooltip, Form, Select, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -25,6 +25,8 @@ interface CreateMCPServerProps {
   isModalVisible: boolean;
   setModalVisible: (visible: boolean) => void;
   availableAccessGroups: string[];
+  prefillData?: DiscoverableMCPServer | null;
+  onBackToDiscovery?: () => void;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
@@ -38,6 +40,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   isModalVisible,
   setModalVisible,
   availableAccessGroups,
+  prefillData,
+  onBackToDiscovery,
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
@@ -182,6 +186,39 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setFormValues(pendingRestoredValues.values);
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, transportType]);
+
+  // Pre-fill form from discovery selection
+  React.useEffect(() => {
+    if (!isModalVisible || !prefillData) {
+      return;
+    }
+    // Sanitize server name: strip vendor prefix, replace hyphens with underscores
+    const sanitizedName = (prefillData.name || "")
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "");
+
+    const transport = prefillData.transport || "";
+    setTransportType(transport);
+
+    const prefillValues: Record<string, any> = {
+      server_name: sanitizedName,
+      alias: sanitizedName,
+      description: prefillData.description || "",
+      transport: transport,
+    };
+
+    if (transport === "stdio") {
+      prefillValues.command = prefillData.command || "";
+      prefillValues.args = prefillData.args || [];
+    } else if (prefillData.url) {
+      prefillValues.url = prefillData.url;
+    }
+
+    form.setFieldsValue(prefillValues);
+    setFormValues(prefillValues);
+    setAliasManuallyEdited(false);
+  }, [isModalVisible, prefillData, form]);
 
   const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
@@ -391,19 +428,29 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   return (
     <Modal
       title={
-        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-          <img
-            src={mcpLogoImg}
-            alt="MCP Logo"
-            className="w-8 h-8 object-contain"
-            style={{
-              height: "20px",
-              width: "20px",
-              marginRight: "8px",
-              objectFit: "contain",
-            }}
-          />
-          <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
+        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+          <div className="flex items-center space-x-3">
+            <img
+              src={mcpLogoImg}
+              alt="MCP Logo"
+              className="w-8 h-8 object-contain"
+              style={{
+                height: "20px",
+                width: "20px",
+                marginRight: "8px",
+                objectFit: "contain",
+              }}
+            />
+            <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
+          </div>
+          {onBackToDiscovery && (
+            <button
+              onClick={onBackToDiscovery}
+              className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none"
+            >
+              ← Browse MCP Registry
+            </button>
+          )}
         </div>
       }
       open={isModalVisible}
