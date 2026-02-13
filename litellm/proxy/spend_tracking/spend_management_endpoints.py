@@ -1857,7 +1857,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Build order clause from sort_by and sort_order
         order_column = sort_by
         order_direction = (sort_order or "desc").lower()
-        order_clause = {order_column: order_direction}
 
         # Get total count of records
         total_records = await prisma_client.db.litellm_spendlogs.count(
