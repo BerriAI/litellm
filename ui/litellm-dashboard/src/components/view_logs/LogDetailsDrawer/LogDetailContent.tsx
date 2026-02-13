@@ -135,7 +135,12 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       <MetricsSection logEntry={logEntry} metadata={metadata} />
 
       {/* Cost Breakdown */}
-      <CostBreakdownViewer costBreakdown={metadata?.cost_breakdown} totalSpend={logEntry.spend || 0} />
+      <CostBreakdownViewer
+        costBreakdown={metadata?.cost_breakdown}
+        totalSpend={logEntry.spend ?? 0}
+        promptTokens={logEntry.prompt_tokens}
+        completionTokens={logEntry.completion_tokens}
+      />
 
       {/* Tools */}
       <ToolsSection log={logEntry} />
@@ -237,9 +242,17 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
     (metadata?.additional_usage_values?.cache_read_input_tokens &&
       metadata.additional_usage_values.cache_read_input_tokens > 0);
 
+  const cacheHitValue = String(logEntry.cache_hit ?? "None");
+  const cacheHitColor =
+    cacheHitValue.toLowerCase() === "true"
+      ? "green"
+      : cacheHitValue.toLowerCase() === "false"
+        ? "red"
+        : "default";
+
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Card title="Metrics" size="small" bordered={false} style={{ marginBottom: 0 }}>
+      <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
           <Descriptions.Item label="Tokens">
             <TokenFlow
@@ -254,7 +267,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
           {hasCacheActivity && (
             <>
               <Descriptions.Item label="Cache Hit">
-                <Tag color={logEntry.cache_hit ? "green" : "default"}>{logEntry.cache_hit || "None"}</Tag>
+                <Tag color={cacheHitColor}>{cacheHitValue}</Tag>
               </Descriptions.Item>
               {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
                 <Descriptions.Item label="Cache Read Tokens">
@@ -310,12 +323,31 @@ function RequestResponseSection({
     return JSON.stringify(data, null, 2);
   };
 
-  const totalSpend = logEntry.spend || 0;
+  const totalSpend = logEntry.spend ?? 0;
   const promptTokens = logEntry.prompt_tokens || 0;
   const completionTokens = logEntry.completion_tokens || 0;
   const totalTokens = promptTokens + completionTokens;
-  const inputCost = totalTokens > 0 ? (totalSpend * promptTokens) / totalTokens : 0;
-  const outputCost = totalTokens > 0 ? (totalSpend * completionTokens) / totalTokens : 0;
+  const costBreakdown = logEntry.metadata?.cost_breakdown;
+  const useCostBreakdown =
+    totalSpend > 0 &&
+    costBreakdown?.input_cost !== undefined &&
+    costBreakdown?.output_cost !== undefined;
+  const inputCost =
+    totalSpend === 0
+      ? 0
+      : useCostBreakdown
+        ? (costBreakdown!.input_cost ?? 0)
+        : totalTokens > 0
+          ? (totalSpend * promptTokens) / totalTokens
+          : 0;
+  const outputCost =
+    totalSpend === 0
+      ? 0
+      : useCostBreakdown
+        ? (costBreakdown!.output_cost ?? 0)
+        : totalTokens > 0
+          ? (totalSpend * completionTokens) / totalTokens
+          : 0;
 
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
