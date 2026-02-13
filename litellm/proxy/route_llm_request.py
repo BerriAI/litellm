@@ -316,20 +316,19 @@ async def route_request(
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:
-            # Check wildcards before checking deployment_names
-            # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
+            # Priority: 1. Exact model_name match, 2. deployment_names match, 3. Wildcard match
             if llm_router.router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**data)
+            elif data["model"] in llm_router.deployment_names:
+                # Exact deployment match takes priority over wildcards
+                return getattr(llm_router, f"{route_type}")(
+                    **data, specific_deployment=True
+                )
             elif (
                 llm_router.default_deployment is not None
                 or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
-            elif data["model"] in llm_router.deployment_names:
-                # Only match deployment_names if no wildcard matched
-                return getattr(llm_router, f"{route_type}")(
-                    **data, specific_deployment=True
-                )
             elif route_type in [
                 "amoderation",
                 "aget_responses",
@@ -372,7 +371,7 @@ async def route_request(
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
                 )
-                
+
                 result = route_a2a_agent_request(data, route_type)
                 if result is not None:
                     return result

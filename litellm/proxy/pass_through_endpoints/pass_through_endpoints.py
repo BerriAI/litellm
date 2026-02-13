@@ -232,20 +232,20 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         ):  # model in router model list
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
         elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments — exact deployment match takes priority over wildcards
+            llm_response = asyncio.create_task(
+                llm_router.aadapter_completion(**data, specific_deployment=True)
+            )
+        elif (
             llm_router is not None
             and data["model"] not in router_model_names
             and (
                 llm_router.default_deployment is not None
                 or len(llm_router.pattern_router.patterns) > 0
             )
-        ):  # check for wildcard routes or default deployment before checking deployment_names
+        ):  # wildcard routes or default deployment (lowest priority before fallback)
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
-            llm_response = asyncio.create_task(
-                llm_router.aadapter_completion(**data, specific_deployment=True)
-            )
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
@@ -446,10 +446,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[
-                    field_name
-                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                    upload_file=field_value
+                files[field_name] = (
+                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                        upload_file=field_value
+                    )
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -542,9 +542,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "passthrough_logging_payload": passthrough_logging_payload,
         }
 
-        logging_obj.model_call_details[
-            "passthrough_logging_payload"
-        ] = passthrough_logging_payload
+        logging_obj.model_call_details["passthrough_logging_payload"] = (
+            passthrough_logging_payload
+        )
 
         return kwargs
 
@@ -1452,9 +1452,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                                             )
                                             if extracted_model:
                                                 kwargs["model"] = extracted_model
-                                                kwargs[
-                                                    "custom_llm_provider"
-                                                ] = "vertex_ai-language-models"
+                                                kwargs["custom_llm_provider"] = (
+                                                    "vertex_ai-language-models"
+                                                )
                                                 # Update logging object with correct model
                                                 logging_obj.model = extracted_model
                                                 logging_obj.model_call_details[
@@ -1520,9 +1520,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                             # Update logging object with correct model
                             logging_obj.model = extracted_model
                             logging_obj.model_call_details["model"] = extracted_model
-                            logging_obj.model_call_details[
-                                "custom_llm_provider"
-                            ] = "vertex_ai_language_models"
+                            logging_obj.model_call_details["custom_llm_provider"] = (
+                                "vertex_ai_language_models"
+                            )
                             verbose_proxy_logger.debug(
                                 f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from server setup response"
                             )
@@ -2025,8 +2025,8 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
                 if route_type == "exact" and route == registered_path:
                     return True
@@ -2045,8 +2045,8 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
 
                 if route_type == "exact" and route == registered_path:
@@ -2367,9 +2367,7 @@ async def get_pass_through_endpoints(
 
     # Merge: config endpoints not in DB + all DB endpoints (DB overrides config for same path)
     db_paths = {ep.path for ep in db_endpoints}
-    config_only_endpoints = [
-        ep for ep in config_endpoints if ep.path not in db_paths
-    ]
+    config_only_endpoints = [ep for ep in config_endpoints if ep.path not in db_paths]
     if endpoint_id is not None:
         # When filtering by endpoint_id, only return if found in DB (config endpoints use generated IDs)
         pass_through_endpoints = db_endpoints
