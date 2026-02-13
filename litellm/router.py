@@ -896,7 +896,7 @@ class Router:
 
     def _initialize_vector_store_endpoints(self):
         """Initialize vector store endpoints."""
-        from litellm.vector_stores.main import acreate, asearch, create, search
+        from litellm.vector_stores.main import asearch, create, search
 
         self.avector_store_search = self.factory_function(
             asearch, call_type="avector_store_search"
