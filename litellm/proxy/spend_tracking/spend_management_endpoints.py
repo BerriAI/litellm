@@ -1878,13 +1878,15 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 
-        return {
-            "data": data,
-            "total": total_records,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": total_pages,
-        }
+        return await _build_ui_spend_logs_response(
+            prisma_client,
+            data,
+            total_records,
+            page,
+            page_size,
+            total_pages,
+            enrich_session_counts=not is_v2,
+        )
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
         raise handle_exception_on_proxy(e)
@@ -3127,6 +3129,91 @@ async def ui_view_session_spend_logs(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e),
             )
+
+
+async def _build_ui_spend_logs_response(
+    prisma_client: "PrismaClient",
+    data: list,
+    total_records: int,
+    page: int,
+    page_size: int,
+    total_pages: int,
+    enrich_session_counts: bool = True,
+) -> dict:
+    """
+    Build the paginated response for the UI spend-logs endpoint.
+
+    When ``enrich_session_counts`` is ``True`` (the default for the v1/UI
+    endpoint), each row is enriched with ``session_total_count`` so the
+    frontend knows which sessions are expandable (multi-call sessions).
+    For every row that carries a ``session_id``, a single ``GROUP BY`` query
+    fetches the total number of logs in each referenced session.  Rows without
+    a ``session_id`` default to ``1``.
+
+    When ``enrich_session_counts`` is ``False`` (v2 endpoint), rows are
+    serialised without the extra query.
+
+    Args:
+        prisma_client: The connected Prisma client instance.
+        data: A list of Prisma model instances (must support ``.model_dump()``
+              and have a ``session_id`` attribute).
+        total_records: Total number of matching records (for pagination).
+        page: Current page number.
+        page_size: Number of items per page.
+        total_pages: Total number of pages.
+        enrich_session_counts: Whether to add ``session_total_count`` to each
+            row.  Defaults to ``True``.
+
+    Returns:
+        A dict with ``data`` (enriched rows), ``total``, ``page``,
+        ``page_size``, and ``total_pages``.
+    """
+    count_map: dict[str, int] = {}
+    if enrich_session_counts:
+        session_ids = list(
+            {row.session_id for row in data if getattr(row, "session_id", None)}
+        )
+        if session_ids:
+            # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
+            # is bounded by page_size (typically 25-50 distinct session IDs).
+            # If performance degrades at scale, consider short-lived caching or
+            # folding the count into the main query via a window function.
+            counts = await prisma_client.db.litellm_spendlogs.group_by(
+                by=["session_id"],
+                where={"session_id": {"in": session_ids}},
+                count={"session_id": True},
+            )
+            count_map = {
+                r["session_id"]: r["_count"]["session_id"]
+                for r in counts
+                if r.get("session_id")
+            }
+
+    if enrich_session_counts:
+        enriched: List[dict] = []
+        for row in data:
+            row_dict = (
+                dict(row)
+                if isinstance(row, dict)
+                else row.model_dump()
+            )
+            sid = row_dict.get("session_id")
+            row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
+            enriched.append(row_dict)
+        response_data: list = enriched
+    else:
+        # v2 path: return raw Prisma model instances so FastAPI applies its
+        # own Pydantic-aware serialisation (preserves alias handling, custom
+        # serializers, etc.).
+        response_data = data  # type: ignore[assignment]
+
+    return {
+        "data": response_data,
+        "total": total_records,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:

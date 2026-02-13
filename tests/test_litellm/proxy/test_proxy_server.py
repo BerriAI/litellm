@@ -2996,9 +2996,13 @@ async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Mock os.path operations
+    # Mock os.path operations - exists=False for assets_dir so makedirs gets called
+    def exists_side_effect(path):
+        return False if path == "/var/lib/litellm/assets" else True
+
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
-         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
          patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
@@ -3038,14 +3042,16 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
 
     def exists_side_effect(path):
         exists_calls.append(path)
-        # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
-        if "/var/lib/litellm/assets/logo.jpg" in path:
+        # Return False for /var/lib/litellm/assets* so: makedirs is called, logo fallback
+        # triggers, and we don't return early with cached file
+        if "/var/lib/litellm/assets" in path:
             return False
         return True
 
     # Mock os.path operations
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
          patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
          patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 

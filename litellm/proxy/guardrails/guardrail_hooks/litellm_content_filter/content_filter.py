@@ -29,10 +29,7 @@ from fastapi import HTTPException
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream
 
@@ -1056,7 +1053,6 @@ class ContentFilterGuardrail(CustomGuardrail):
             masked_entity_count=masked_entity_count,
         )
 
-    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
