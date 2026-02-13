@@ -1016,10 +1016,12 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 
 BEDROCK_CONVERSE_MODELS = [
     "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-coder-next",
     "qwen.qwen3-235b-a22b-2507-v1:0",
     "qwen.qwen3-coder-30b-a3b-v1:0",
     "qwen.qwen3-32b-v1:0",
     "deepseek.v3-v1:0",
+    "deepseek.v3.2",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -1062,6 +1064,8 @@ BEDROCK_CONVERSE_MODELS = [
     "amazon.nova-pro-v1:0",
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
+    "minimax.minimax-m2.1",
+    "moonshotai.kimi-k2.5",
 ]
 
 

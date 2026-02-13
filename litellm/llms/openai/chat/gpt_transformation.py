@@ -772,12 +772,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            return ModelResponseStream(
-                id=chunk["id"],
-                object="chat.completion.chunk",
-                created=chunk.get("created"),
-                model=chunk.get("model"),
-                choices=chunk.get("choices", []),
-            )
+            kwargs = {
+                "id": chunk["id"],
+                "object": "chat.completion.chunk",
+                "created": chunk.get("created"),
+                "model": chunk.get("model"),
+                "choices": chunk.get("choices", []),
+            }
+            if "usage" in chunk and chunk["usage"] is not None:
+                kwargs["usage"] = chunk["usage"]
+            return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e
