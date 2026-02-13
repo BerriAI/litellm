@@ -2331,7 +2331,7 @@ class Logging(LiteLLMLoggingBaseClass):
             result, LiteLLMBatch
         ):
             litellm_params = self.litellm_params or {}
-            litellm_metadata = litellm_params.get("litellm_metadata", {})
+            litellm_metadata = litellm_params.get("litellm_metadata") or {}
             if (
                 litellm_metadata.get("batch_ignore_default_logging", False) is True
             ):  # polling job will query these frequently, don't spam db logs
