@@ -5060,9 +5060,10 @@ class ProxyStartupEvent:
         Off by default. Enable with LITELLM_ENABLE_PYROSCOPE=true.
         Requires: pip install pyroscope-io
         Sends profiles to PYROSCOPE_SERVER_ADDRESS (default http://localhost:4040).
+        Optional: PYROSCOPE_SAMPLE_RATE (float, no default) to set the sample rate.
         """
         if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
-            print(  # noqa: T201
+            verbose_proxy_logger.info(
                 "LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
             )
             return
@@ -5087,17 +5088,31 @@ class ProxyStartupEvent:
             )
             if env_name:
                 tags["environment"] = env_name
-            pyroscope.configure(
-                app_name=app_name,
-                server_address=server_address,
-                tags=tags if tags else None,
-            )
-            print(  # noqa: T201
+            sample_rate_env = os.getenv("PYROSCOPE_SAMPLE_RATE")
+            configure_kwargs = {
+                "app_name": app_name,
+                "server_address": server_address,
+                "tags": tags if tags else None,
+            }
+            if sample_rate_env is not None:
+                try:
+                    # pyroscope-io expects sample_rate as an integer
+                    configure_kwargs["sample_rate"] = int(float(sample_rate_env))
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        "PYROSCOPE_SAMPLE_RATE must be a number, got: "
+                        f"{sample_rate_env!r}"
+                    )
+            pyroscope.configure(**configure_kwargs)
+            msg = (
                 f"LiteLLM: Pyroscope profiling started (app_name={app_name}, server_address={server_address}). "
                 f"View CPU profiles at the Pyroscope UI and select application '{app_name}'."
             )
+            if "sample_rate" in configure_kwargs:
+                msg += f" sample_rate={configure_kwargs['sample_rate']}"
+            verbose_proxy_logger.info(msg)
         except ImportError:
-            print(  # noqa: T201
+            verbose_proxy_logger.warning(
                 "LiteLLM: LITELLM_ENABLE_PYROSCOPE is set but the 'pyroscope-io' package is not installed. "
                 "Pyroscope profiling will not run. Install with: pip install pyroscope-io"
             )
