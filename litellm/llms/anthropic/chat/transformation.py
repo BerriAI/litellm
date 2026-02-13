@@ -664,35 +664,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]], 
         model: str,
     ) -> Optional[AnthropicThinkingParam]:
+        if reasoning_effort is None or reasoning_effort == "none":
+            return None
         if AnthropicConfig._is_claude_opus_4_6(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
+        elif reasoning_effort == "low":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "medium":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "high":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "minimal":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+            )
         else:
-            if reasoning_effort is None:
-                return None
-            elif reasoning_effort == "low":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "medium":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "high":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "minimal":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
-                )
-            else:
-                raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]

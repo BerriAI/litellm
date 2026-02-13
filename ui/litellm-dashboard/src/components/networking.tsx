@@ -6097,6 +6097,34 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   }
 };
 
+export const fetchDiscoverableMCPServers = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/discover`
+      : `/v1/mcp/discover`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch discoverable MCP servers:", error);
+    throw error;
+  }
+};
+
 export const fetchMCPServers = async (accessToken: string) => {
   try {
     // Construct base URL
