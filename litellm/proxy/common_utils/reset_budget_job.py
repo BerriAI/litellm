@@ -45,6 +45,9 @@ class ResetBudgetJob:
             ## Reset Team Budget
             await self.reset_budget_for_litellm_teams()
 
+            ### RESET TEAM MEMBER BUDGET (based on team budget duration) ###
+            await self.reset_budget_for_team_members_by_team()
+
             ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
             await self.reset_budget_for_litellm_budget_table()
 
@@ -480,6 +483,85 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for teams: %s", e)
+
+    async def reset_budget_for_team_members_by_team(self):
+        """
+        Resets the budget for team members based on their team's budget_duration.
+
+        This fixes issue #19105 where team member budgets don't reset because they
+        don't have their own budget_duration set - they should inherit from the team.
+        """
+        now = datetime.utcnow()
+        start_time = time.time()
+        teams_to_process: Optional[List[LiteLLM_TeamTable]] = None
+        try:
+            # Get all teams that need budget reset
+            teams_to_process = await self.prisma_client.get_data(
+                table_name="team", query_type="find_all", reset_at=now
+            )
+
+            if teams_to_process is not None and len(teams_to_process) > 0:
+                team_ids_to_reset = [
+                    team.team_id
+                    for team in teams_to_process
+                    if team.team_id is not None
+                ]
+
+                verbose_proxy_logger.debug(
+                    "Resetting team member budgets for teams: %s", team_ids_to_reset
+                )
+
+                # Reset spend for all team members in these teams
+                result = await self.prisma_client.db.litellm_teammembership.update_many(
+                    where={
+                        "team_id": {"in": team_ids_to_reset}
+                    },
+                    data={
+                        "spend": 0,
+                    },
+                )
+
+                verbose_proxy_logger.debug(
+                    "Reset %s team member budgets", result
+                )
+
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    call_type="reset_budget_team_members_by_team",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_teams_found": len(teams_to_process) if teams_to_process else 0,
+                        "teams_found": json.dumps(
+                            teams_to_process, indent=4, default=str
+                        ),
+                    },
+                )
+            )
+        except Exception as e:
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="reset_budget_team_members_by_team",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_teams_found": len(teams_to_process) if teams_to_process else 0,
+                        "teams_found": json.dumps(
+                            teams_to_process, indent=4, default=str
+                        ),
+                    },
+                )
+            )
+            verbose_proxy_logger.exception(
+                "Failed to reset budget for team members by team: %s", e
+            )
 
     @staticmethod
     async def _reset_budget_common(
