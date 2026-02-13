@@ -38,11 +38,6 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         default=None,
         description=(
             "Global policy ID for Zscaler AI Guard. Required when using /execute-policy endpoint.\n\n"
-            "Policy Resolution Precedence (highest to lowest):\n"
-            "1. Request metadata: zguard_policy_id (per-request override)\n"
-            "2. Key metadata: user_api_key_metadata.zguard_policy_id\n"
-            "3. Team metadata: team_metadata.zguard_policy_id\n"
-            "4. Config-level policy_id (this field)\n\n"
             "Set to 0 or leave empty when using /resolve-and-execute-policy with dynamic policy resolution.\n"
             "Falls back to ZSCALER_AI_GUARD_POLICY_ID environment variable."
         ),
@@ -106,8 +101,8 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
                 policy_id = int(env_policy)
 
         # Check for configuration issues
-        is_execute_policy = api_base.endswith("/execute-policy")
         is_resolve_policy = api_base.endswith("/resolve-and-execute-policy")
+        is_execute_policy = api_base.endswith("/execute-policy") and not is_resolve_policy
 
         # Scenario A: execute-policy without policy_id
         if is_execute_policy and (policy_id is None or policy_id < 1):
