@@ -85,9 +85,14 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
+
+from starlette.types import Message, Send
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+if TYPE_CHECKING:
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # Header the client sends to opt into debug mode
 MCP_DEBUG_REQUEST_HEADER = "x-litellm-mcp-debug"
@@ -140,6 +145,38 @@ class MCPDebug:
         return False
 
     @staticmethod
+    def resolve_auth_resolution(
+        server: "MCPServer",
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+    ) -> str:
+        """
+        Determine which auth priority will be used for the outbound MCP call.
+
+        Returns one of: ``per-request-header``, ``m2m-client-credentials``,
+        ``static-token``, ``oauth2-passthrough``, or ``no-auth``.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        has_server_specific = bool(
+            mcp_server_auth_headers
+            and (
+                mcp_server_auth_headers.get(server.alias or "")
+                or mcp_server_auth_headers.get(server.server_name or "")
+            )
+        )
+        if has_server_specific or mcp_auth_header:
+            return "per-request-header"
+        if server.has_client_credentials:
+            return "m2m-client-credentials"
+        if server.authentication_token:
+            return "static-token"
+        if oauth2_headers and server.auth_type == MCPAuth.oauth2:
+            return "oauth2-passthrough"
+        return "no-auth"
+
+    @staticmethod
     def build_debug_headers(
         *,
         inbound_headers: Dict[str, str],
@@ -163,8 +200,6 @@ class MCPDebug:
             ``Authorization`` header.
         auth_resolution : str
             Which auth priority was selected for the outbound call.
-            One of: ``per-request-header``, ``m2m-client-credentials``,
-            ``static-token``, ``oauth2-passthrough``, ``no-auth``.
         server_url : str or None
             Upstream MCP server URL.
         server_auth_type : str or None
@@ -191,7 +226,6 @@ class MCPDebug:
         # --- OAuth2 token ---
         oauth2_token = (oauth2_headers or {}).get("Authorization")
         if oauth2_token and litellm_api_key:
-            # Strip "Bearer " prefix for comparison
             oauth2_raw = oauth2_token.removeprefix("Bearer ").strip()
             litellm_raw = litellm_api_key.removeprefix("Bearer ").strip()
             if oauth2_raw == litellm_raw:
@@ -218,3 +252,78 @@ class MCPDebug:
         )
 
         return debug
+
+    @staticmethod
+    def wrap_send_with_debug_headers(
+        send: Send, debug_headers: Dict[str, str]
+    ) -> Send:
+        """
+        Return a new ASGI ``send`` callable that injects *debug_headers*
+        into the ``http.response.start`` message.
+        """
+
+        async def _send_with_debug(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                for k, v in debug_headers.items():
+                    headers.append((k.encode(), v.encode()))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        return _send_with_debug
+
+    @staticmethod
+    def maybe_build_debug_headers(
+        *,
+        raw_headers: Optional[Dict[str, str]],
+        scope: Dict,
+        mcp_servers: Optional[List[str]],
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        client_ip: Optional[str],
+    ) -> Dict[str, str]:
+        """
+        Build debug headers if debug mode is enabled, otherwise return empty dict.
+
+        This is the single entry point called from the MCP request handler.
+        """
+        if not raw_headers or not MCPDebug.is_debug_enabled(raw_headers):
+            return {}
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server_url: Optional[str] = None
+        server_auth_type: Optional[str] = None
+        auth_resolution = "no-auth"
+
+        for server_name in mcp_servers or []:
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                server_name, client_ip=client_ip
+            )
+            if server:
+                server_url = server.url
+                server_auth_type = server.auth_type
+                auth_resolution = MCPDebug.resolve_auth_resolution(
+                    server, mcp_auth_header, mcp_server_auth_headers, oauth2_headers
+                )
+                break
+
+        scope_headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        litellm_key = MCPRequestHandler.get_litellm_api_key_from_headers(
+            scope_headers
+        )
+
+        return MCPDebug.build_debug_headers(
+            inbound_headers=raw_headers,
+            oauth2_headers=oauth2_headers,
+            litellm_api_key=litellm_key,
+            auth_resolution=auth_resolution,
+            server_url=server_url,
+            server_auth_type=server_auth_type,
+        )
