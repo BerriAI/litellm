@@ -1,6 +1,3 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # AG2 Agents
 
 Call AG2 agents via LiteLLM's A2A Gateway.
