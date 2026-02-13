@@ -233,9 +233,9 @@ class TestKeyRotationManager:
         Test that _cleanup_expired_deprecated_keys deletes expired deprecated keys.
         """
         mock_prisma_client = AsyncMock()
-        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = {
-            "count": 3
-        }
+        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = (
+            3
+        )
         manager = KeyRotationManager(mock_prisma_client)
 
         await manager._cleanup_expired_deprecated_keys()

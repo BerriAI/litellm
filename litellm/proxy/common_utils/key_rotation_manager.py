@@ -112,9 +112,9 @@ class KeyRotationManager:
             result = await self.prisma_client.db.litellm_deprecatedverificationtoken.delete_many(
                 where={"revoke_at": {"lt": now}}
             )
-            if result.get("count", 0) > 0:
+            if result > 0:
                 verbose_proxy_logger.debug(
-                    "Cleaned up %s expired deprecated key(s)", result["count"]
+                    "Cleaned up %s expired deprecated key(s)", result
                 )
         except Exception as e:
             verbose_proxy_logger.debug(
