@@ -3192,7 +3192,11 @@ async def _build_ui_spend_logs_response(
     if enrich_session_counts:
         enriched: List[dict] = []
         for row in data:
-            row_dict = row.model_dump()
+            row_dict = (
+                dict(row)
+                if isinstance(row, dict)
+                else row.model_dump()
+            )
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
             enriched.append(row_dict)
