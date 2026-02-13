@@ -37,7 +37,7 @@ else:
 
 
 class _PROXY_LiteLLMManagedVectorStores(
-    BaseManagedResource[VectorStoreCreateResponse], CustomLogger
+    CustomLogger, BaseManagedResource[VectorStoreCreateResponse]
 ):
     """
     Managed vector stores with target_model_names support.
@@ -52,8 +52,8 @@ class _PROXY_LiteLLMManagedVectorStores(
     def __init__(
         self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient
     ):
-        BaseManagedResource.__init__(self, internal_usage_cache, prisma_client)
         CustomLogger.__init__(self)
+        BaseManagedResource.__init__(self, internal_usage_cache, prisma_client)
 
     # ============================================================================
     #                     ABSTRACT METHOD IMPLEMENTATIONS
@@ -87,7 +87,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         
         # Model ID is stored in hidden params if the response object supports it
         # For TypedDict responses, we need to check if _hidden_params was added
-        hidden_params = {}
+        hidden_params: Dict[str, Any] = {}
         if hasattr(resource_object, "_hidden_params"):
             hidden_params = getattr(resource_object, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", "")
@@ -155,9 +155,11 @@ class _PROXY_LiteLLMManagedVectorStores(
         )
 
         # Create vector store for each model
+        # Convert TypedDict to Dict[str, Any] for base class compatibility
+        request_data_dict: Dict[str, Any] = dict(create_request)
         responses = await self.create_resource_for_each_model(
             llm_router=llm_router,
-            request_data=create_request,
+            request_data=request_data_dict,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
@@ -174,7 +176,8 @@ class _PROXY_LiteLLMManagedVectorStores(
             hidden_params = getattr(response, "_hidden_params", {}) or {}
             model_id = hidden_params.get("model_id")
             if model_id:
-                model_mappings[model_id] = response.id
+                # VectorStoreCreateResponse is a TypedDict, use dict access
+                model_mappings[model_id] = response["id"]
 
         verbose_logger.debug(
             f"Created vector stores with model mappings: {model_mappings}"
@@ -423,7 +426,7 @@ class _PROXY_LiteLLMManagedVectorStores(
     #                     DEPLOYMENT FILTERING
     # ============================================================================
 
-    async def async_filter_deployments(
+    async def async_filter_deployments(  # type: ignore[override]
         self,
         model: str,
         healthy_deployments: List,
@@ -437,10 +440,14 @@ class _PROXY_LiteLLMManagedVectorStores(
         This is used by the router to select only deployments that have
         the vector store available.
         
+        Note: This method signature is a compromise between CustomLogger and BaseManagedResource
+        parent classes which have incompatible signatures. The type: ignore[override] is necessary
+        due to this multiple inheritance conflict.
+        
         Args:
             model: Model name
             healthy_deployments: List of healthy deployments
-            messages: Messages (unused for vector stores)
+            messages: Messages (unused for vector stores, required by CustomLogger interface)
             request_kwargs: Request kwargs containing vector_store_id and mappings
             parent_otel_span: OpenTelemetry span for tracing
             
