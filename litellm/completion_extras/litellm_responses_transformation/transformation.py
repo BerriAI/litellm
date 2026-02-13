@@ -227,38 +227,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return input_items, instructions
 
-    def _map_optional_params_to_responses_api(
-        self,
-        optional_params: dict,
-        responses_api_request: ResponsesAPIOptionalRequestParams,
-    ) -> None:
-        """Map chat completion optional parameters to responses API request format."""
-        for key, value in optional_params.items():
-            if value is None:
-                continue
-            if key in ("max_tokens", "max_completion_tokens"):
-                responses_api_request["max_output_tokens"] = value
-            elif key == "tools" and value is not None:
-                responses_api_request[
-                    "tools"
-                ] = self._convert_tools_to_responses_format(
-                    cast(List[Dict[str, Any]], value)
-                )
-            elif key == "response_format":
-                text_format = self._transform_response_format_to_text_format(value)
-                if text_format:
-                    responses_api_request["text"] = text_format  # type: ignore
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
-                responses_api_request[key] = value  # type: ignore
-            elif key == "metadata":
-                responses_api_request["metadata"] = value
-            elif key == "previous_response_id":
-                responses_api_request["previous_response_id"] = value
-            elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
-            elif key == "web_search_options":
-                self._add_web_search_tool(responses_api_request, value)
-
     def transform_request(
         self,
         model: str,
