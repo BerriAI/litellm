@@ -1,0 +1,47 @@
+{
+  "templates": [
+    {
+      "id": "baseline-pii-protection",
+      "name": "Baseline PII Protection",
+      "description": "Base policy that adds common PII and content guardrails for all requests.",
+      "guardrailDefinitions": [
+        {
+          "guardrail_name": "pii_blocker",
+          "litellm_params": {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "default_on": true
+          },
+          "guardrail_info": {
+            "description": "Blocks or masks PII (e.g. SSN, email, phone) in requests and responses."
+          }
+        },
+        {
+          "guardrail_name": "phi_blocker",
+          "litellm_params": {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "default_on": true
+          },
+          "guardrail_info": {
+            "description": "Blocks or masks protected health information (PHI)."
+          }
+        },
+        {
+          "guardrail_name": "prompt_injection",
+          "litellm_params": {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "default_on": true
+          },
+          "guardrail_info": {
+            "description": "Detects and blocks prompt injection attempts."
+          }
+        }
+      ],
+      "templateData": {
+        "guardrails_add": ["pii_blocker", "phi_blocker", "prompt_injection"]
+      }
+    }
+  ]
+}

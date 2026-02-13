@@ -367,6 +367,16 @@
       "pattern": "\\b\\d{1,2}\\.\\d{3}\\.\\d{3}-[\\dXx]\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian RG identity card numbers (common pattern for SP, RJ, MG states)"
+    },
+    {
+      "name": "au_tfn",
+      "display_name": "TFN (Australian Tax File Number)",
+      "pattern": "\\b\\d{8,9}\\b",
+      "category": "PII Patterns",
+      "action": "MASK",
+      "description": "Detects Australian TFN with contextual keywords (8–9 digits; matches only near TFN/tax file number context)",
+      "keyword_pattern": "(?:\\b(?:TFN|T\\.F\\.N\\.|tax\\s+file\\s+number|tax\\s+file\\s+no\\.?|Australian\\s+TFN)\\b)",
+      "allow_word_numbers": true
     }
   ]
 }

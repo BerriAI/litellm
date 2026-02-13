@@ -6,14 +6,20 @@ All /policy management endpoints
 /policy/validate - Validate a policy configuration
 /policy/list - List all loaded policies
 /policy/info - Get information about a specific policy
+/policy/templates - List policy templates (from GitHub with local fallback)
 """
+
+import json
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.policy_engine import (
     PolicyGuardrailsResponse,
     PolicyInfoResponse,
@@ -257,3 +263,64 @@ async def test_policy_matching(
         matching_policies=matching_policy_names,
         resolved_guardrails=resolved_guardrails,
     )
+
+
+# GitHub raw URL for policy templates (with local fallback)
+_POLICY_TEMPLATES_GITHUB_URL = (
+    "https://raw.githubusercontent.com/litellm/litellm/main/litellm/proxy/policy_engine/policy_templates.json"
+)
+
+
+@router.get(
+    "/policy/templates",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def get_policy_templates(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List policy templates (pre-configured guardrail combinations).
+
+    Fetches templates from GitHub with local fallback. Uses async HTTP to avoid
+    blocking the event loop under concurrent load.
+    """
+    # Try GitHub first using async client (do not use sync httpx.get in async context)
+    try:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.UI,
+            params={"timeout": 5.0},
+        )
+        response = await client.get(_POLICY_TEMPLATES_GITHUB_URL)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to fetch policy templates from GitHub (%s), using local fallback: %s",
+            _POLICY_TEMPLATES_GITHUB_URL,
+            e,
+        )
+
+    # Local fallback: bundled policy_templates.json in policy_engine
+    fallback_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "policy_engine",
+        "policy_templates.json",
+    )
+    try:
+        with open(fallback_path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        verbose_proxy_logger.warning(
+            "Policy templates fallback file not found: %s", fallback_path
+        )
+        return {"templates": []}
+    except json.JSONDecodeError as e:
+        verbose_proxy_logger.exception("Invalid JSON in policy_templates.json: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid policy templates configuration",
+        )
