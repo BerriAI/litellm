@@ -25,6 +25,7 @@ google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
+pyroscope-io>=0.8 # for Pyroscope profiling when LITELLM_ENABLE_PYROSCOPE is set
 ddtrace==2.19.0      # for advanced DD tracing / profiling
 orjson==3.11.2 # fast /embedding responses
 polars==1.31.0 # for data processing
