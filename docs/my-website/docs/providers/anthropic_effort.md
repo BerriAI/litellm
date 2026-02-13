@@ -9,10 +9,7 @@ Control how many tokens Claude uses when responding with the `effort` parameter,
 
 The `effort` parameter allows you to control how eager Claude is about spending tokens when responding to requests. This gives you the ability to trade off between response thoroughness and token efficiency, all with a single model.
 
-**Note**: The effort parameter is currently in beta and only supported by Claude Opus 4.5. LiteLLM automatically adds the `effort-2025-11-24` beta header when:
-- `reasoning_effort` parameter is provided (for Claude Opus 4.5 only)
-
-For Claude Opus 4.5, `reasoning_effort="medium"`—both are automatically mapped to the correct format.
+**Note**: The effort parameter is supported by Claude Opus 4.5 and Claude Opus 4.6. LiteLLM automatically maps `reasoning_effort` to the correct format. For Claude Opus 4.5, the `effort-2025-11-24` beta header is added when `reasoning_effort` is provided. Claude Opus 4.6 supports `reasoning_effort="max"` for absolute maximum capability (4.6 only—using `max` on other models returns an error).
 
 ## How Effort Works
 
@@ -35,6 +32,7 @@ This gives a much greater degree of control over efficiency.
 
 | Level | Description | Typical use case |
 |-------|-------------|------------------|
+| `max` | **Claude Opus 4.6 only**—Absolute maximum capability with no constraints on token spending. Requests using `max` on other models will return an error. | Tasks requiring the deepest possible reasoning and most thorough analysis |
 | `high` | Maximum capability—Claude uses as many tokens as needed for the best possible outcome. Equivalent to not setting the parameter. | Complex reasoning, difficult coding problems, agentic tasks |
 | `medium` | Balanced approach with moderate token savings. | Agentic tasks that require a balance of speed, cost, and performance |
 | `low` | Most efficient—significant token savings with some capability reduction. | Simpler tasks that need the best speed and lowest costs, such as subagents |
@@ -130,10 +128,13 @@ curl https://api.anthropic.com/v1/messages \
 
 ## Model Compatibility
 
-The effort parameter is currently only supported by:
-- **Claude Opus 4.5** (`claude-opus-4-5-20251101`)
+The effort parameter is supported by:
+- **Claude Opus 4.6** (`claude-opus-4-6`, `claude-opus-4-6-20260205`) — includes `max` level
+- **Claude Opus 4.5** (`claude-opus-4-5-20251101`) — `high`, `medium`, `low` only
 
 ## When Should I Adjust the Effort Parameter?
+
+- Use **max effort** (Opus 4.6 only) when you need the absolute highest capability—the most thorough reasoning and deepest analysis with no constraints on token spending.
 
 - Use **high effort** (the default) when you need Claude's best work—complex reasoning, nuanced analysis, difficult coding problems, or any task where quality is the top priority.
 
@@ -257,7 +258,11 @@ If you're not seeing the header:
 
 ### Invalid effort value error
 
-Only three values are accepted: `"high"`, `"medium"`, `"low"`. Any other value will raise a validation error:
+Accepted values depend on the model:
+- **Claude Opus 4.6**: `"max"`, `"high"`, `"medium"`, `"low"`
+- **Claude Opus 4.5**: `"high"`, `"medium"`, `"low"` (using `"max"` returns an error)
+
+Any other value will raise a validation error:
 
 ```python
 # ❌ This will raise an error
@@ -269,7 +274,7 @@ output_config={"effort": "low"}
 
 ### Model not supported
 
-Currently, only Claude Opus 4.5 supports the effort parameter. Using it with other models may result in the parameter being ignored or an error.
+Claude Opus 4.5 and Claude Opus 4.6 support the effort parameter. Using it with other models may result in the parameter being ignored or an error. Remember that `max` is only valid for Opus 4.6.
 
 ## Related Features
 
