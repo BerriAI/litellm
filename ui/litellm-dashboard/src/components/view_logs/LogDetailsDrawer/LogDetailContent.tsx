@@ -140,6 +140,7 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         totalSpend={logEntry.spend ?? 0}
         promptTokens={logEntry.prompt_tokens}
         completionTokens={logEntry.completion_tokens}
+        cacheHit={logEntry.cache_hit}
       />
 
       {/* Tools */}
@@ -329,25 +330,18 @@ function RequestResponseSection({
   const totalTokens = promptTokens + completionTokens;
   const costBreakdown = logEntry.metadata?.cost_breakdown;
   const useCostBreakdown =
-    totalSpend > 0 &&
     costBreakdown?.input_cost !== undefined &&
     costBreakdown?.output_cost !== undefined;
-  const inputCost =
-    totalSpend === 0
-      ? 0
-      : useCostBreakdown
-        ? (costBreakdown!.input_cost ?? 0)
-        : totalTokens > 0
-          ? (totalSpend * promptTokens) / totalTokens
-          : 0;
-  const outputCost =
-    totalSpend === 0
-      ? 0
-      : useCostBreakdown
-        ? (costBreakdown!.output_cost ?? 0)
-        : totalTokens > 0
-          ? (totalSpend * completionTokens) / totalTokens
-          : 0;
+  const inputCost = useCostBreakdown
+    ? (costBreakdown!.input_cost ?? 0)
+    : totalTokens > 0
+      ? (totalSpend * promptTokens) / totalTokens
+      : 0;
+  const outputCost = useCostBreakdown
+    ? (costBreakdown!.output_cost ?? 0)
+    : totalTokens > 0
+      ? (totalSpend * completionTokens) / totalTokens
+      : 0;
 
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
