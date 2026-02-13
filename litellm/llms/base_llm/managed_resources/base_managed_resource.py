@@ -18,7 +18,6 @@ from typing import (
 )
 
 from litellm import verbose_logger
-from litellm._uuid import uuid
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
 
