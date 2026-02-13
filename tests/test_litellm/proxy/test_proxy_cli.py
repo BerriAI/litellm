@@ -480,7 +480,6 @@ class TestProxyInitializationHelpers:
                 # Verify that uvicorn.run was called again
                 mock_uvicorn_run.assert_called_once()
 
-
     @patch("uvicorn.run")
     @patch("builtins.print")
     def test_ssl_keyfile_password_uvicorn(self, mock_print, mock_uvicorn_run):
@@ -515,9 +514,12 @@ class TestProxyInitializationHelpers:
                 run_server,
                 [
                     "--local",
-                    "--ssl_keyfile_path", "key.pem",
-                    "--ssl_certfile_path", "cert.pem",
-                    "--ssl_keyfile_password", "mysecretpass",
+                    "--ssl_keyfile_path",
+                    "key.pem",
+                    "--ssl_certfile_path",
+                    "cert.pem",
+                    "--ssl_keyfile_password",
+                    "mysecretpass",
                 ],
             )
 
@@ -530,7 +532,9 @@ class TestProxyInitializationHelpers:
 
     @patch("uvicorn.run")
     @patch("builtins.print")
-    def test_ssl_keyfile_password_not_set_when_omitted(self, mock_print, mock_uvicorn_run):
+    def test_ssl_keyfile_password_not_set_when_omitted(
+        self, mock_print, mock_uvicorn_run
+    ):
         """Test that ssl_keyfile_password is not passed to uvicorn when not provided"""
         from click.testing import CliRunner
 
@@ -562,8 +566,10 @@ class TestProxyInitializationHelpers:
                 run_server,
                 [
                     "--local",
-                    "--ssl_keyfile_path", "key.pem",
-                    "--ssl_certfile_path", "cert.pem",
+                    "--ssl_keyfile_path",
+                    "key.pem",
+                    "--ssl_certfile_path",
+                    "cert.pem",
                 ],
             )
 
@@ -612,8 +618,10 @@ class TestProxyInitializationHelpers:
                 run_server,
                 [
                     "--local",
-                    "--ssl_keyfile_path", "key.pem",
-                    "--ssl_certfile_path", "cert.pem",
+                    "--ssl_keyfile_path",
+                    "key.pem",
+                    "--ssl_certfile_path",
+                    "cert.pem",
                 ],
             )
 
