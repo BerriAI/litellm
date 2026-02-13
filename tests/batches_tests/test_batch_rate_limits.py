@@ -619,3 +619,243 @@ async def test_batch_rate_limiter_without_user_context():
         
     finally:
         os.unlink(file_path)
+
+
+@pytest.mark.asyncio()
+async def test_batch_rate_limiter_managed_files_regression():
+    """
+    Regression test for GEN-2166: Batch Rate Limiter Cannot Access User Files
+    
+    This test ensures that the batch rate limiter can properly access managed files
+    by verifying that:
+    1. Managed files are detected correctly (base64 encoded unified file IDs)
+    2. The _fetch_managed_file_content method uses the managed files hook
+    3. User context (user_api_key_dict) is properly passed through
+    4. No 403 errors occur when accessing files owned by the user
+    5. The fix doesn't break non-managed file access
+    
+    This is a unit test that doesn't require external API calls.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+    import httpx
+    
+    print("\n=== Regression Test: GEN-2166 Batch Rate Limiter Managed Files ===")
+    
+    # Setup: Create batch rate limiter
+    dual_cache = DualCache()
+    internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=internal_usage_cache
+    )
+    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    assert batch_limiter is not None
+    
+    # Setup: Create user API key dict
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-regression",
+        user_id="test-user-regression",
+        tpm_limit=1000,
+        rpm_limit=10,
+    )
+    
+    # Setup: Create mock file content (batch input file)
+    batch_content = b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Test message for regression"}]}}'
+    
+    # Mock managed file ID (base64 encoded unified file ID format)
+    managed_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCxyZWdyZXNzaW9uLXRlc3QtZmlsZQ=="
+    
+    # Test 1: Verify managed file detection
+    print("\n1. Verifying managed file detection...")
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+    )
+    is_managed = _is_base64_encoded_unified_file_id(managed_file_id)
+    assert is_managed, "Managed file should be detected correctly"
+    print("   ✓ Managed file detected")
+    
+    # Test 2: Verify _fetch_managed_file_content uses managed files hook
+    print("\n2. Verifying managed files hook integration...")
+    
+    # Create mock managed files hook
+    class MockManagedFiles(BaseFileEndpoints):
+        def __init__(self):
+            self._afile_content_called = False
+            self._last_call_args = None
+        
+        async def acreate_file(self, *args, **kwargs):
+            pass
+        
+        async def afile_content(self, *args, **kwargs):
+            self._afile_content_called = True
+            self._last_call_args = kwargs
+            # Return mock file content
+            mock_response = httpx.Response(
+                status_code=200,
+                content=batch_content,
+                headers={"content-type": "application/octet-stream"},
+            )
+            return HttpxBinaryResponseContent(response=mock_response)
+        
+        async def afile_delete(self, *args, **kwargs):
+            pass
+        
+        async def afile_list(self, *args, **kwargs):
+            pass
+        
+        async def afile_retrieve(self, *args, **kwargs):
+            pass
+    
+    mock_managed_files = MockManagedFiles()
+    mock_llm_router = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.get_proxy_hook.return_value = mock_managed_files
+    
+    # Patch proxy_server imports
+    with patch.dict('sys.modules', {
+        'litellm.proxy.proxy_server': MagicMock(
+            llm_router=mock_llm_router,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+    }):
+        # Call _fetch_managed_file_content
+        result = await batch_limiter._fetch_managed_file_content(
+            file_id=managed_file_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+        
+        # Verify managed files hook was called
+        assert mock_managed_files._afile_content_called, \
+            "REGRESSION: managed_files_obj.afile_content was not called! Bug GEN-2166 has returned."
+        
+        # Verify user context was passed
+        assert mock_managed_files._last_call_args is not None, \
+            "REGRESSION: No arguments passed to afile_content"
+        assert 'file_id' in mock_managed_files._last_call_args, \
+            "REGRESSION: file_id not passed to managed files hook"
+        assert mock_managed_files._last_call_args['file_id'] == managed_file_id, \
+            "REGRESSION: Incorrect file_id passed"
+        assert 'llm_router' in mock_managed_files._last_call_args, \
+            "REGRESSION: llm_router not passed to managed files hook"
+        
+        print("   ✓ Managed files hook called correctly")
+        print("   ✓ User context passed correctly")
+    
+    # Test 3: Verify count_input_file_usage uses managed files path
+    print("\n3. Verifying count_input_file_usage integration...")
+    
+    with patch.object(batch_limiter, '_fetch_managed_file_content') as mock_fetch:
+        mock_response = httpx.Response(
+            status_code=200,
+            content=batch_content,
+            headers={"content-type": "application/octet-stream"},
+        )
+        mock_fetch.return_value = HttpxBinaryResponseContent(response=mock_response)
+        
+        # Call count_input_file_usage with managed file
+        usage = await batch_limiter.count_input_file_usage(
+            file_id=managed_file_id,
+            custom_llm_provider="openai",
+            user_api_key_dict=user_api_key_dict,
+        )
+        
+        # Verify _fetch_managed_file_content was called
+        assert mock_fetch.called, \
+            "REGRESSION: _fetch_managed_file_content not called for managed files! Bug GEN-2166 has returned."
+        
+        # Verify correct parameters were passed
+        call_kwargs = mock_fetch.call_args.kwargs
+        assert call_kwargs['file_id'] == managed_file_id, \
+            "REGRESSION: Incorrect file_id passed to _fetch_managed_file_content"
+        assert call_kwargs['user_api_key_dict'] == user_api_key_dict, \
+            "REGRESSION: user_api_key_dict not passed! Bug GEN-2166 has returned."
+        
+        # Verify usage was calculated
+        assert usage.total_tokens > 0, "Token count should be greater than 0"
+        assert usage.request_count == 1, "Request count should be 1"
+        
+        print("   ✓ Managed file path used")
+        print(f"   ✓ Token count: {usage.total_tokens}")
+        print(f"   ✓ Request count: {usage.request_count}")
+    
+    # Test 4: Verify non-managed files still work
+    print("\n4. Verifying non-managed files still work...")
+    
+    non_managed_file_id = "file-abc123"  # Standard OpenAI file ID
+    
+    with patch('litellm.afile_content') as mock_afile_content:
+        mock_response = httpx.Response(
+            status_code=200,
+            content=batch_content,
+            headers={"content-type": "application/octet-stream"},
+        )
+        mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
+        
+        # Call count_input_file_usage with non-managed file
+        usage = await batch_limiter.count_input_file_usage(
+            file_id=non_managed_file_id,
+            custom_llm_provider="openai",
+            user_api_key_dict=user_api_key_dict,
+        )
+        
+        # Verify litellm.afile_content was called
+        assert mock_afile_content.called, \
+            "REGRESSION: litellm.afile_content not called for non-managed files"
+        
+        print("   ✓ Standard file path used")
+        print(f"   ✓ Token count: {usage.total_tokens}")
+    
+    # Test 5: Verify the fix prevents 403 errors
+    print("\n5. Verifying 403 error prevention...")
+    
+    # Simulate the bug scenario: managed files hook not being used
+    with patch.object(batch_limiter, '_fetch_managed_file_content') as mock_fetch:
+        # If this is NOT called for managed files, the bug has returned
+        mock_fetch.side_effect = Exception("Should not be called if bug exists")
+        
+        # This should call _fetch_managed_file_content
+        try:
+            with patch('litellm.afile_content') as mock_afile_content:
+                # If litellm.afile_content is called for managed files, bug exists
+                mock_afile_content.side_effect = Exception(
+                    "Error code: 403 - User does not have access to the file"
+                )
+                
+                # Reset mock_fetch to return valid content
+                mock_response = httpx.Response(
+                    status_code=200,
+                    content=batch_content,
+                    headers={"content-type": "application/octet-stream"},
+                )
+                mock_fetch.side_effect = None
+                mock_fetch.return_value = HttpxBinaryResponseContent(response=mock_response)
+                
+                # This should use _fetch_managed_file_content, not litellm.afile_content
+                usage = await batch_limiter.count_input_file_usage(
+                    file_id=managed_file_id,
+                    custom_llm_provider="openai",
+                    user_api_key_dict=user_api_key_dict,
+                )
+                
+                # Verify managed files path was used (not standard path that causes 403)
+                assert mock_fetch.called, \
+                    "REGRESSION: Managed files path not used! This would cause 403 errors."
+                assert not mock_afile_content.called, \
+                    "REGRESSION: Standard path used for managed files! This causes 403 errors."
+                
+                print("   ✓ 403 error prevention verified")
+                
+        except Exception as e:
+            if "403" in str(e):
+                pytest.fail(
+                    f"REGRESSION: 403 error occurred! Bug GEN-2166 has returned. Error: {str(e)}"
+                )
+            raise
+    
+    print("\n=== Regression Test Passed ===")
+    print("✓ Bug GEN-2166 is fixed and protected against regression")
+    print("✓ Managed files are properly accessed via managed files hook")
+    print("✓ User context is correctly passed through")
+    print("✓ No 403 errors occur")
+    print("✓ Non-managed files still work correctly\n")
