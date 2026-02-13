@@ -37,7 +37,7 @@ litellm --config config.yaml
 
 ### 3. Query proxy 
 
-Assuming the proxy is running on (http://localhost:4000)[http://localhost:4000]:
+Assuming the proxy is running on [http://localhost:4000](http://localhost:4000):
 ```bash
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
