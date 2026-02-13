@@ -1099,11 +1099,9 @@ async def _db_health_readiness_check():
 
     global db_health_cache
 
-    # Note - Intentionally don't try/except this so it raises an exception when it fails
     try:
-        # if timedelta is less than 2 minutes return DB Status
         time_diff = datetime.now() - db_health_cache["last_updated"]
-        if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
+        if db_health_cache["status"] == "connected" and time_diff < timedelta(seconds=15):
             return db_health_cache
 
         if prisma_client is None:
@@ -1115,7 +1113,24 @@ async def _db_health_readiness_check():
         return db_health_cache
     except Exception as e:
         PrismaDBExceptionHandler.handle_db_exception(e)
-        return db_health_cache
+        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+        try:
+            verbose_proxy_logger.warning(
+                "_db_health_readiness_check: health_check failed, attempting reconnect"
+            )
+            await prisma_client.disconnect()
+            await prisma_client.connect()
+            await prisma_client.health_check()
+            verbose_proxy_logger.info(
+                "_db_health_readiness_check: reconnect succeeded"
+            )
+            db_health_cache = {"status": "connected", "last_updated": datetime.now()}
+            return db_health_cache
+        except Exception:
+            verbose_proxy_logger.error(
+                "_db_health_readiness_check: reconnect failed"
+            )
+            return db_health_cache
 
 
 @router.get(
@@ -1256,12 +1271,12 @@ async def health_readiness():
             db_health_status = await _db_health_readiness_check()
             return {
                 "status": "healthy",
-                "db": "connected",
+                "db": db_health_status["status"],
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
-                **db_health_status,
+                "last_updated": db_health_status.get("last_updated"),
             }
         else:
             return {
