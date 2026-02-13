@@ -3226,14 +3226,26 @@ class Logging(LiteLLMLoggingBaseClass):
                         result.response.usage
                     )
                 )
-                # Set as dict instead of Usage object so model_dump() serializes it correctly
+                # Transform usage to Chat Completion format for internal logging,
+                # but wrap it in a ResponseAPIUsage so that model_dump() on
+                # ResponsesAPIResponse serializes cleanly without pydantic warnings.
+                # ResponseAPIUsage has model_config = {"extra": "allow"}, so Chat
+                # Completion keys (prompt_tokens, completion_tokens, etc.) are
+                # preserved as extra fields for downstream logging consumers.
+                usage_dict = (
+                    transformed_usage.model_dump()
+                    if hasattr(transformed_usage, "model_dump")
+                    else dict(transformed_usage)
+                )
                 setattr(
                     result.response,
                     "usage",
-                    (
-                        transformed_usage.model_dump()
-                        if hasattr(transformed_usage, "model_dump")
-                        else dict(transformed_usage)
+                    ResponseAPIUsage(
+                        input_tokens=usage_dict.get("prompt_tokens", 0) or 0,
+                        output_tokens=usage_dict.get("completion_tokens", 0) or 0,
+                        total_tokens=usage_dict.get("total_tokens", 0) or 0,
+                        **{k: v for k, v in usage_dict.items()
+                           if k not in ("prompt_tokens", "completion_tokens", "total_tokens")},
                     ),
                 )
             return result.response
