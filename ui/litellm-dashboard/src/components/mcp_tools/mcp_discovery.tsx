@@ -3,6 +3,7 @@ import { Modal, Input } from "antd";
 import { Text } from "@tremor/react";
 import { fetchDiscoverableMCPServers } from "../networking";
 import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "./types";
+import { mcpLogoImg } from "./create_mcp_server";
 
 const { Search } = Input;
 
@@ -102,22 +103,24 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
   return (
     <Modal
       title={
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#111" }}>
-            Add MCP Server
-          </span>
+        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+          <div className="flex items-center space-x-3">
+            <img
+              src={mcpLogoImg}
+              alt="MCP Logo"
+              className="w-8 h-8 object-contain"
+              style={{
+                height: "20px",
+                width: "20px",
+                marginRight: "8px",
+                objectFit: "contain",
+              }}
+            />
+            <h2 className="text-xl font-semibold text-gray-900">Add MCP Server</h2>
+          </div>
           <button
             onClick={onCustomServer}
-            style={{
-              fontSize: 12,
-              padding: "3px 10px",
-              borderRadius: 4,
-              border: "1px solid #d1d5db",
-              background: "#fff",
-              color: "#374151",
-              cursor: "pointer",
-              fontWeight: 500,
-            }}
+            className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none font-medium"
           >
             + Custom Server
           </button>
@@ -126,14 +129,15 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
       open={isVisible}
       onCancel={onClose}
       footer={null}
-      width={640}
+      width={1000}
+      className="top-8"
       styles={{
-        body: { maxHeight: "70vh", overflowY: "auto", padding: "12px 24px 24px" },
-        header: { padding: "16px 24px 0", border: "none" },
+        body: { padding: "24px", maxHeight: "70vh", overflowY: "auto" },
+        header: { padding: "24px 24px 0 24px", border: "none" },
       }}
     >
       {/* Filter pills */}
-      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
         {["All", ...categories].map((cat) => {
           const isSelected = selectedCategory === cat;
           return (
@@ -141,13 +145,13 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
               key={cat}
               onClick={() => setSelectedCategory(cat)}
               style={{
-                padding: "2px 8px",
+                padding: "4px 12px",
                 borderRadius: 4,
                 border: isSelected ? "1px solid #111827" : "1px solid #e5e7eb",
                 background: isSelected ? "#111827" : "#fff",
                 color: isSelected ? "#fff" : "#4b5563",
                 cursor: "pointer",
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: isSelected ? 500 : 400,
                 lineHeight: "20px",
               }}
@@ -163,20 +167,19 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
         placeholder="Search servers..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        style={{ marginBottom: 12 }}
-        size="small"
+        style={{ marginBottom: 16 }}
         allowClear
       />
 
       {/* Loading skeleton */}
       {loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {Array.from({ length: 8 }).map((_, i) => (
             <div
               key={i}
               style={{
-                height: 32,
-                borderRadius: 4,
+                height: 36,
+                borderRadius: 6,
                 background: "#f9fafb",
               }}
             />
@@ -185,18 +188,18 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
       )}
 
       {error && (
-        <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af" }}>
+        <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
           <Text>Failed to load servers: {error}</Text>
         </div>
       )}
 
       {!loading && !error && filteredServers.length === 0 && (
-        <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af" }}>
+        <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
           <Text>
             No servers found.{" "}
             <a
               onClick={onCustomServer}
-              style={{ color: "#2563eb", cursor: "pointer", fontSize: 13 }}
+              style={{ color: "#2563eb", cursor: "pointer" }}
             >
               Add a custom server
             </a>
@@ -204,11 +207,11 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
         </div>
       )}
 
-      {/* Server list grouped by category */}
+      {/* Server list grouped by category — 2 columns */}
       {!loading &&
         !error &&
         Object.entries(groupedServers).map(([category, categoryServers]) => (
-          <div key={category} style={{ marginBottom: 12 }}>
+          <div key={category} style={{ marginBottom: 16 }}>
             <div
               style={{
                 fontSize: 11,
@@ -216,90 +219,98 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
                 color: "#9ca3af",
                 textTransform: "uppercase",
                 letterSpacing: "0.05em",
-                padding: "4px 0",
+                padding: "6px 0",
                 borderBottom: "1px solid #f3f4f6",
-                marginBottom: 2,
+                marginBottom: 4,
               }}
             >
               {category}
             </div>
-            {categoryServers.map((server) => {
-              const avatar = getInitialAvatar(server.title || server.name);
-              return (
-                <div
-                  key={server.name}
-                  onClick={() => onSelectServer(server)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    padding: "6px 8px",
-                    borderRadius: 4,
-                    cursor: "pointer",
-                    transition: "background 0.1s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "#f9fafb";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  {server.icon_url ? (
-                    <img
-                      src={server.icon_url}
-                      alt={server.title}
-                      style={{
-                        width: 18,
-                        height: 18,
-                        objectFit: "contain",
-                        flexShrink: 0,
-                        marginRight: 10,
-                      }}
-                      onError={(e) => {
-                        const target = e.currentTarget;
-                        target.style.display = "none";
-                        const next = target.nextElementSibling as HTMLElement;
-                        if (next) next.style.display = "flex";
-                      }}
-                    />
-                  ) : null}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "0 16px",
+              }}
+            >
+              {categoryServers.map((server) => {
+                const avatar = getInitialAvatar(server.title || server.name);
+                return (
                   <div
+                    key={server.name}
+                    onClick={() => onSelectServer(server)}
                     style={{
-                      width: 18,
-                      height: 18,
-                      borderRadius: 3,
-                      backgroundColor: avatar.backgroundColor,
-                      color: "#fff",
-                      display: server.icon_url ? "none" : "flex",
+                      display: "flex",
                       alignItems: "center",
-                      justifyContent: "center",
-                      fontWeight: 600,
-                      fontSize: 10,
-                      flexShrink: 0,
-                      marginRight: 10,
+                      padding: "8px 10px",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      transition: "background 0.1s ease",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "#f9fafb";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
                     }}
                   >
-                    {avatar.initial}
+                    {server.icon_url ? (
+                      <img
+                        src={server.icon_url}
+                        alt={server.title}
+                        style={{
+                          width: 20,
+                          height: 20,
+                          objectFit: "contain",
+                          flexShrink: 0,
+                          marginRight: 12,
+                        }}
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          target.style.display = "none";
+                          const next = target.nextElementSibling as HTMLElement;
+                          if (next) next.style.display = "flex";
+                        }}
+                      />
+                    ) : null}
+                    <div
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 4,
+                        backgroundColor: avatar.backgroundColor,
+                        color: "#fff",
+                        display: server.icon_url ? "none" : "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontWeight: 600,
+                        fontSize: 11,
+                        flexShrink: 0,
+                        marginRight: 12,
+                      }}
+                    >
+                      {avatar.initial}
+                    </div>
+                    <span
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 400,
+                        color: "#111827",
+                        flex: 1,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {server.title || server.name}
+                    </span>
+                    <span style={{ color: "#d1d5db", fontSize: 14, flexShrink: 0, marginLeft: 8 }}>
+                      &#8250;
+                    </span>
                   </div>
-                  <span
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 400,
-                      color: "#111827",
-                      flex: 1,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {server.title || server.name}
-                  </span>
-                  <span style={{ color: "#d1d5db", fontSize: 12, flexShrink: 0 }}>
-                    &#8250;
-                  </span>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         ))}
     </Modal>

@@ -209,8 +209,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     };
 
     if (transport === "stdio") {
-      prefillValues.command = prefillData.command || "";
-      prefillValues.args = prefillData.args || [];
+      const stdioObj: Record<string, any> = {};
+      if (prefillData.command) stdioObj.command = prefillData.command;
+      if (prefillData.args && prefillData.args.length > 0) stdioObj.args = prefillData.args;
+      if (prefillData.env_vars && prefillData.env_vars.length > 0) {
+        const envObj: Record<string, string> = {};
+        for (const v of prefillData.env_vars) {
+          envObj[v.name] = v.description ? `<${v.description}>` : "";
+        }
+        stdioObj.env = envObj;
+      }
+      if (Object.keys(stdioObj).length > 0) {
+        prefillValues.stdio_config = JSON.stringify(stdioObj, null, 2);
+      }
     } else if (prefillData.url) {
       prefillValues.url = prefillData.url;
     }
@@ -428,29 +439,27 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   return (
     <Modal
       title={
-        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
-          <div className="flex items-center space-x-3">
-            <img
-              src={mcpLogoImg}
-              alt="MCP Logo"
-              className="w-8 h-8 object-contain"
-              style={{
-                height: "20px",
-                width: "20px",
-                marginRight: "8px",
-                objectFit: "contain",
-              }}
-            />
-            <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
-          </div>
+        <div className="flex items-center pb-4 border-b border-gray-100" style={{ gap: 12 }}>
           {onBackToDiscovery && (
             <button
               onClick={onBackToDiscovery}
               className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none"
+              style={{ flexShrink: 0 }}
             >
-              ← Browse MCP Registry
+              &#8592;
             </button>
           )}
+          <img
+            src={mcpLogoImg}
+            alt="MCP Logo"
+            className="w-8 h-8 object-contain"
+            style={{
+              height: "20px",
+              width: "20px",
+              objectFit: "contain",
+            }}
+          />
+          <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
         </div>
       }
       open={isModalVisible}
