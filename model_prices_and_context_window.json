@@ -5859,6 +5859,7 @@
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/kimi-k2-5-now-in-microsoft-foundry/4492321",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     },
     "azure_ai/ministral-3b": {
@@ -6134,8 +6135,11 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3.03e-06,
+        "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 3.18e-06,
@@ -22177,9 +22181,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://platform.moonshot.ai/docs/pricing/chat",
+        "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     },
     "moonshot/kimi-latest": {
@@ -22640,6 +22645,19 @@
         "mode": "chat",
         "output_cost_per_token": 2.3e-07,
         "supports_system_messages": true
+    },
+    "nvidia.nemotron-nano-3-30b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-07,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "o1": {
         "cache_read_input_token_cost": 7.5e-06,
@@ -24519,6 +24537,7 @@
         "source": "https://openrouter.ai/moonshotai/kimi-k2.5",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     },
     "openrouter/nousresearch/nous-hermes-llama2-13b": {
@@ -32346,6 +32365,20 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "zai.glm-4.7": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "zai/glm-4.7": {
         "cache_creation_input_token_cost": 0,
