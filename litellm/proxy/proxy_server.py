@@ -4915,7 +4915,7 @@ def _restamp_streaming_chunk_model(
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
     if not model_mismatch_logged and downstream_model != requested_model_from_client:
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.debug(
             "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
             request_data.get("litellm_call_id"),
             requested_model_from_client,
