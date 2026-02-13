@@ -10443,9 +10443,6 @@ async def get_image():
     """Get logo to show on admin UI"""
     logo_path = os.getenv("UI_LOGO_PATH", "")
 
-"""Get logo to show on admin UI"""
-    logo_path = os.getenv("UI_LOGO_PATH", "")
-
     # NEW: Immediately redirect for HTTP/HTTPS to avoid mixed-content and stale cache bugs
     if logo_path.startswith(("http://", "https://")):
         return RedirectResponse(url=logo_path)
@@ -10480,18 +10477,11 @@ async def get_image():
         else default_site_logo
     )
     
+    if assets_dir != current_dir and not os.path.exists(default_logo):
+        default_logo = default_site_logo
+
     if not logo_path:
         logo_path = default_logo
-
-    verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
-    return FileResponse(logo_path, media_type="image/jpeg")
-
-    # Local file handling logic
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # If no path is provided, use the default internal logo
-    if not logo_path:
-        logo_path = os.path.join(current_dir, "logo.jpg")
 
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
     return FileResponse(logo_path, media_type="image/jpeg")
