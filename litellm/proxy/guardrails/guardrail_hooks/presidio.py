@@ -386,7 +386,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         continue
                 return final_results
         except Exception as e:
-            raise e
+            # Sanitize exception to avoid leaking the original text (which may
+            # contain API keys or other secrets) in error responses.
+            raise Exception(
+                f"Presidio PII analysis failed: {type(e).__name__}"
+            ) from e
 
     async def anonymize_text(
         self,
@@ -443,9 +447,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                 return redacted_text["text"]
             else:
-                raise Exception(f"Invalid anonymizer response: {redacted_text}")
+                raise Exception("Invalid anonymizer response: received None")
         except Exception as e:
-            raise e
+            # Sanitize exception to avoid leaking the original text (which may
+            # contain API keys or other secrets) in error responses.
+            if "Invalid anonymizer response" in str(e):
+                raise
+            raise Exception(
+                f"Presidio PII anonymization failed: {type(e).__name__}"
+            ) from e
 
     def filter_analyze_results_by_score(
         self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]

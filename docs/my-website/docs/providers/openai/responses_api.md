@@ -37,6 +37,24 @@ for event in response:
     print(event)
 ```
 
+#### Web Search
+```python showLineNumbers title="OpenAI Responses with Web Search"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-5",
+    input="What is the capital of France?",
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "medium"  # Options: "low", "medium", "high"
+    }]
+)
+
+print(response)
+```
+
+For full details, see the [Web Search guide](../../completion/web_search.md).
+
 #### Image Generation with Streaming
 ```python showLineNumbers title="OpenAI Streaming Image Generation"
 import litellm

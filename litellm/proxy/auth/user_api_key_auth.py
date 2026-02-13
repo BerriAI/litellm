@@ -925,10 +925,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(
                 api_key, str
             ):  # if generated token, make sure it starts with sk-.
+                _masked_key = "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    api_key
+                    _masked_key
                 )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
