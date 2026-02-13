@@ -12,9 +12,7 @@ from typing import TYPE_CHECKING
 try:
     from fastapi import APIRouter, Depends, HTTPException, Query
 except ImportError:
-    # Provide stubs for type checking only
-    if TYPE_CHECKING:
-        from fastapi import APIRouter, Depends, HTTPException, Query
+    # Provide stubs for environments without FastAPI
     else:
         # Create mock classes that won't be used
         class APIRouter:  # type: ignore[no-redef]
