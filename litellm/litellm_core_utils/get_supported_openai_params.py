@@ -5,7 +5,41 @@ from litellm.exceptions import BadRequestError
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
-def get_supported_openai_params(  # noqa: PLR0915
+def get_supported_openai_params(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    request_type: Literal[
+        "chat_completion", "embeddings", "transcription"
+    ] = "chat_completion",
+) -> Optional[list]:
+    supported_params = _get_supported_openai_params_logic(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        request_type=request_type,
+    )
+
+    if supported_params is not None and isinstance(supported_params, list):
+        try:
+            model_info = litellm.get_model_info(model)
+            if model_info.get("supports_function_calling") is False:
+                supported_params = [
+                    p
+                    for p in supported_params
+                    if p not in ["functions", "function_call"]
+                ]
+            if model_info.get("supports_tool_choice") is False:
+                supported_params = [
+                    p
+                    for p in supported_params
+                    if p not in ["tools", "tool_choice", "parallel_tool_calls"]
+                ]
+        except Exception:
+            pass
+
+    return supported_params
+
+
+def _get_supported_openai_params_logic(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     request_type: Literal[
@@ -118,9 +152,13 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "sap":
         if request_type == "chat_completion":
-            return litellm.GenAIHubOrchestrationConfig().get_supported_openai_params(model=model)
+            return litellm.GenAIHubOrchestrationConfig().get_supported_openai_params(
+                model=model
+            )
         elif request_type == "embeddings":
-            return litellm.GenAIHubEmbeddingConfig().get_supported_openai_params(model=model)
+            return litellm.GenAIHubEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(
