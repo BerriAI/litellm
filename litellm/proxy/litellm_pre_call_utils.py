@@ -40,10 +40,12 @@ service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+    from litellm.types.proxy.policy_engine import PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+    PolicyMatchContext = Any
 
 
 def parse_cache_control(cache_control):
