@@ -29,6 +29,10 @@ class TestAzureResponsesAPITest(BaseResponsesAPITest):
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_version": "2025-03-01-preview",
         }
+    
+    def get_advanced_model_for_shell_tool(self) -> Optional[str]:
+        """If specified, overrides the model used by test_responses_api_shell_tool_streaming_sees_shell_output (e.g. openai/gpt-5.2 for shell support)."""
+        return "azure/gpt-5-mini"
 
 
 @pytest.mark.asyncio
