@@ -202,6 +202,12 @@ class _ProxyDBLogger(CustomLogger):
                         max_budget=end_user_max_budget,
                     )
             else:
+                if sl_object is None and kwargs.get("model") is None:
+                    verbose_proxy_logger.warning(
+                        "Cost tracking - skipping, no standard_logging_object and no model for call_type=%s",
+                        kwargs.get("call_type", "unknown"),
+                    )
+                    return
                 if kwargs.get("stream") is not True or (
                     kwargs.get("stream") is True and "complete_streaming_response" in kwargs
                 ):
