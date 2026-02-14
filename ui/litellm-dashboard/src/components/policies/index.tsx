@@ -6,6 +6,7 @@ import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./policy_table";
 import PolicyInfoView from "./policy_info";
 import AddPolicyForm from "./add_policy_form";
+import { FlowBuilderPage } from "./pipeline_flow_builder";
 import AttachmentTable from "./attachment_table";
 import AddAttachmentForm from "./add_attachment_form";
 import PolicyTestPanel from "./policy_test_panel";
@@ -56,6 +57,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
   const [existingGuardrailNames, setExistingGuardrailNames] = useState<Set<string>>(new Set());
   const [isCreatingGuardrails, setIsCreatingGuardrails] = useState(false);
+  const [showFlowBuilder, setShowFlowBuilder] = useState(false);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -349,8 +351,12 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onClose={() => setSelectedPolicyId(null)}
                 onEdit={(policy) => {
                   setEditingPolicy(policy);
-                  setIsAddPolicyModalVisible(true);
                   setSelectedPolicyId(null);
+                  if (policy.pipeline) {
+                    setShowFlowBuilder(true);
+                  } else {
+                    setIsAddPolicyModalVisible(true);
+                  }
                 }}
                 accessToken={accessToken}
                 isAdmin={isAdmin}
@@ -363,7 +369,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onDeleteClick={handleDeleteClick}
                 onEditClick={(policy) => {
                   setEditingPolicy(policy);
-                  setIsAddPolicyModalVisible(true);
+                  if (policy.pipeline) {
+                    setShowFlowBuilder(true);
+                  } else {
+                    setIsAddPolicyModalVisible(true);
+                  }
                 }}
                 onViewClick={(policyId) => setSelectedPolicyId(policyId)}
                 isAdmin={isAdmin}
@@ -374,6 +384,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               visible={isAddPolicyModalVisible}
               onClose={handleCloseModal}
               onSuccess={handleSuccess}
+              onOpenFlowBuilder={() => {
+                setIsAddPolicyModalVisible(false);
+                setShowFlowBuilder(true);
+              }}
               accessToken={accessToken}
               editingPolicy={editingPolicy}
               existingPolicies={policiesList}
@@ -441,6 +455,15 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               className="mb-6"
             />
 
+            <Alert
+              message="Enterprise Feature Notice"
+              description="Parts of policy attachments will be on LiteLLM Enterprise in subsequent releases."
+              type="warning"
+              showIcon
+              closable
+              className="mb-6"
+            />
+
             <div className="flex justify-between items-center mb-4">
               <Button
                 onClick={() => setIsAddAttachmentModalVisible(true)}
@@ -473,6 +496,24 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {showFlowBuilder && (
+        <FlowBuilderPage
+          onBack={() => {
+            setShowFlowBuilder(false);
+            setEditingPolicy(null);
+          }}
+          onSuccess={() => {
+            fetchPolicies();
+            setEditingPolicy(null);
+          }}
+          accessToken={accessToken}
+          editingPolicy={editingPolicy}
+          availableGuardrails={guardrailsList}
+          createPolicy={createPolicyCall}
+          updatePolicy={updatePolicyCall}
+        />
+      )}
     </div>
   );
 };

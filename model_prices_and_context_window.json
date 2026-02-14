@@ -6126,6 +6126,8 @@
         "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -13120,7 +13122,9 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini-2.5-computer-use-preview-10-2025": {
         "input_cost_per_token": 1.25e-06,
@@ -13698,7 +13702,9 @@
         "source": "https://ai.google.dev/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
-        ]
+        ],
+        "tpm": 4000000,
+        "rpm": 10
     },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -14025,7 +14031,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini/gemini-gemma-2-9b-it": {
         "input_cost_per_token": 3.5e-07,
@@ -14037,7 +14045,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini/gemma-3-27b-it": {
         "input_cost_per_audio_per_second": 0,
@@ -20088,7 +20098,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-05,
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_parallel_function_calling": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -33063,7 +33073,9 @@
             "text",
             "image"
         ],
-        "supports_vision": true
+        "supports_vision": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini/gemini-2.0-flash-lite-001": {
         "cache_read_input_token_cost": 1.875e-08,
@@ -33196,7 +33208,9 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini/gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -33220,7 +33234,9 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -33244,7 +33260,9 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
