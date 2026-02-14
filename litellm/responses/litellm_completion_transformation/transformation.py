@@ -1500,7 +1500,7 @@ class LiteLLMCompletionResponsesConfig:
             previous_response_id=getattr(
                 chat_completion_response, "previous_response_id", None
             ),
-            reasoning=Reasoning(),
+            reasoning=dict(Reasoning()),
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),
@@ -1516,7 +1516,7 @@ class LiteLLMCompletionResponsesConfig:
         # Surface provider-specific fields (generic passthrough from any provider)
         provider_fields = responses_api_response._hidden_params.get("provider_specific_fields")
         if provider_fields:
-            responses_api_response.provider_specific_fields = provider_fields
+            setattr(responses_api_response, "provider_specific_fields", provider_fields)
 
         return responses_api_response
 
