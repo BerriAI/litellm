@@ -21,19 +21,36 @@ grep 'version' pyproject.toml
 
 Edit `pyproject.toml` and bump the version (both `[tool.poetry].version` and `[tool.commitizen].version`).
 
-## Step 2: Install Build Dependencies
+## Step 2: Update Version in Root Package Files
+
+After bumping the version in `litellm-proxy-extras/pyproject.toml`, you **must** also update the version reference in the root-level files:
+
+| File | Line to update |
+|------|---------------|
+| `requirements.txt` | `litellm-proxy-extras==X.Y.Z` |
+| `pyproject.toml` (root) | `litellm-proxy-extras = {version = "X.Y.Z", optional = true}` |
+
+```bash
+# From the repo root — replace OLD with NEW version
+sed -i '' 's/litellm-proxy-extras==OLD/litellm-proxy-extras==NEW/' requirements.txt
+sed -i '' 's/litellm-proxy-extras = {version = "OLD"/litellm-proxy-extras = {version = "NEW"/' pyproject.toml
+```
+
+> **Do NOT skip this step.** The main `litellm` package pins the extras version — if you don't update these, users will install the old version.
+
+## Step 3: Install Build Dependencies
 
 ```bash
 pip install build twine
 ```
 
-## Step 3: Clean Old Artifacts
+## Step 4: Clean Old Artifacts
 
 ```bash
 rm -rf dist/ build/ *.egg-info
 ```
 
-## Step 4: Build the Package
+## Step 5: Build the Package
 
 ```bash
 python3 -m build
@@ -47,7 +64,7 @@ Verify the build output:
 ls -la dist/
 ```
 
-## Step 5: Upload to PyPI
+## Step 6: Upload to PyPI
 
 ```bash
 twine upload dist/*
