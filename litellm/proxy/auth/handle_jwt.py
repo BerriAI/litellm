@@ -964,7 +964,7 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or can_team_access_model(
+                        or await can_team_access_model(
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,

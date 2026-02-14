@@ -1598,7 +1598,7 @@ async def _process_single_key_update(
                 status_code=500,
                 detail={"error": "Team object not found for team change validation"},
             )
-        validate_key_team_change(
+        await validate_key_team_change(
             key=existing_key_row,
             team=team_obj,
             change_initiated_by=user_api_key_dict,
@@ -1826,7 +1826,7 @@ async def update_key_fn(
                         "error": "Team object not found for team change validation"
                     },
                 )
-            validate_key_team_change(
+            await validate_key_team_change(
                 key=existing_key_row,
                 team=team_obj,
                 change_initiated_by=user_api_key_dict,
@@ -2060,7 +2060,7 @@ async def bulk_update_keys(
     )
 
 
-def validate_key_team_change(
+async def validate_key_team_change(
     key: LiteLLM_VerificationToken,
     team: LiteLLM_TeamTable,
     change_initiated_by: UserAPIKeyAuth,
@@ -2077,7 +2077,7 @@ def validate_key_team_change(
     # Check if the team has access to the key's models
     if len(key.models) > 0:
         for model in key.models:
-            can_team_access_model(
+            await can_team_access_model(
                 model=model,
                 team_object=team,
                 llm_router=llm_router,

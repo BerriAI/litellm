@@ -2563,6 +2563,21 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    description: Optional[str] = None
+    access_model_names: List[str] = []
+    access_mcp_server_ids: List[str] = []
+    access_agent_ids: List[str] = []
+    assigned_team_ids: List[str] = []
+    assigned_key_ids: List[str] = []
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
 class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     request_id: str
     api_key: str
