@@ -9,6 +9,7 @@ on:
 jobs:
   build-ui:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: ui/litellm-dashboard
