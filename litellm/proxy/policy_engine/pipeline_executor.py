@@ -153,6 +153,7 @@ class PipelineExecutor:
             # Inject guardrail name into metadata so should_run_guardrail() allows it
             if "metadata" not in data:
                 data["metadata"] = {}
+            original_guardrails = data["metadata"].get("guardrails")
             data["metadata"]["guardrails"] = [step.guardrail]
 
             # Use unified_guardrail path if callback implements apply_guardrail
