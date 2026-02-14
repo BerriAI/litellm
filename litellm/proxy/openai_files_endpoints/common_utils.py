@@ -687,6 +687,16 @@ async def get_batch_from_database(
         batch_data = json.loads(db_batch_object.file_object) if isinstance(db_batch_object.file_object, str) else db_batch_object.file_object
         response = LiteLLMBatch(**batch_data)
         response.id = batch_id
+
+        if response.input_file_id and not _is_base64_encoded_unified_file_id(response.input_file_id):
+            try:
+                managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                    where={"flat_model_file_ids": {"has": response.input_file_id}}
+                )
+                if managed_file:
+                    response.input_file_id = managed_file.unified_file_id
+            except Exception:
+                pass
         
         verbose_proxy_logger.debug(
             f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"
