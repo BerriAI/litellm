@@ -431,6 +431,57 @@ def test_update_access_group_empty_body(client_and_mocks):
     assert call_kwargs["data"]["updated_by"] == "admin_user"
 
 
+def test_update_access_group_name_success(client_and_mocks):
+    """Update access_group_name succeeds when new name is unique."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "new-name"})
+    assert resp.status_code == 200
+    mock_table.update.assert_awaited_once()
+    call_kwargs = mock_table.update.call_args.kwargs
+    assert call_kwargs["data"]["access_group_name"] == "new-name"
+
+
+def test_update_access_group_name_duplicate_conflict(client_and_mocks):
+    """Update access_group_name to existing name returns 409 (unique constraint)."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+    mock_table.update = AsyncMock(
+        side_effect=Exception("Unique constraint failed on the fields: (`access_group_name`)")
+    )
+
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "taken-name"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]
+    mock_table.update.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "Unique constraint failed on the fields: (`access_group_name`)",
+        "P2002: Unique constraint failed",
+        "unique constraint violation",
+    ],
+)
+def test_update_access_group_name_unique_constraint_returns_409(client_and_mocks, error_message):
+    """Update access_group_name: Prisma unique constraint surfaces as 409."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+    mock_table.update = AsyncMock(side_effect=Exception(error_message))
+
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "race-name"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # DELETE
 # ---------------------------------------------------------------------------

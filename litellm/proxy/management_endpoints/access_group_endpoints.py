@@ -153,10 +153,19 @@ async def update_access_group(
     for field, value in data.model_dump(exclude_unset=True).items():
         update_data[field] = value
 
-    record = await prisma_client.db.litellm_accessgrouptable.update(
-        where={"access_group_id": access_group_id},
-        data=update_data,
-    )
+    try:
+        record = await prisma_client.db.litellm_accessgrouptable.update(
+            where={"access_group_id": access_group_id},
+            data=update_data,
+        )
+    except Exception as e:
+        # Unique constraint violation (e.g. access_group_name already exists).
+        if "unique constraint" in str(e).lower() or "P2002" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Access group '{update_data.get('access_group_name', '')}' already exists",
+            )
+        raise
     return _record_to_response(record)
 
 
