@@ -94,6 +94,12 @@ class TestStandardizedResetTime(unittest.TestCase):
         bangkok_result = get_next_standardized_reset_time("1d", base_time, "Asia/Bangkok")
         self.assertEqual(bangkok_result, bangkok_expected)
 
+        # Test America/Los_Angeles IANA timezone (UTC-7): 3:30 PM, so next 1d reset is midnight same day
+        la = ZoneInfo("America/Los_Angeles")
+        la_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=la)
+        la_result = get_next_standardized_reset_time("1d", base_time, "America/Los_Angeles")
+        self.assertEqual(la_result, la_expected)
+
     def test_edge_cases(self):
         """Test edge cases and boundary conditions"""
         # Exactly on hour boundary

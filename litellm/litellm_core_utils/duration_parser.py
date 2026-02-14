@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
     match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
@@ -145,26 +147,32 @@ def get_next_standardized_reset_time(
         return base_midnight + timedelta(days=1)
 
 
-def _setup_timezone(
-    current_time: datetime, timezone_str: str = "UTC"
-) -> Tuple[datetime, timezone]:
-    """Set up timezone and normalize current time to that timezone."""
+# common aliases for timezones
+_TIMEZONE_ALIASES = {
+    "US/Eastern": ZoneInfo("America/New_York"),
+    "US/Pacific": ZoneInfo("America/Los_Angeles"),
+    "Asia/Kolkata": ZoneInfo("Asia/Kolkata"),
+    "Asia/Bangkok": ZoneInfo("Asia/Bangkok"),
+    "Europe/London": ZoneInfo("Europe/London"),
+    "UTC": timezone.utc,
+    None: timezone.utc,
+}
+
+
+def _setup_timezone(current_time: datetime, timezone_str: Optional[str] = "UTC") -> Tuple[datetime, timezone]:
+    """
+    Set up timezone and normalize current time to that timezone.
+
+    Parameters:
+    - current_time: The datetime to convert
+    - timezone_str: IANA timezone name (e.g., 'America/Los_Angeles', 'UTC') or None for UTC
+
+    Returns:
+    - Tuple of (converted datetime, timezone object)
+    """
     try:
-        if timezone_str is None:
-            tz = timezone.utc
-        else:
-            # Map common timezone strings to their UTC offsets
-            timezone_map = {
-                "US/Eastern": timezone(timedelta(hours=-4)),  # EDT
-                "US/Pacific": timezone(timedelta(hours=-7)),  # PDT
-                "Asia/Kolkata": timezone(timedelta(hours=5, minutes=30)),  # IST
-                "Asia/Bangkok": timezone(timedelta(hours=7)),  # ICT (Indochina Time)
-                "Europe/London": timezone(timedelta(hours=1)),  # BST
-                "UTC": timezone.utc,
-            }
-            tz = timezone_map.get(timezone_str, timezone.utc)
-    except Exception:
-        # If timezone is invalid, fall back to UTC
+        tz = _TIMEZONE_ALIASES.get(timezone_str) or ZoneInfo(timezone_str)
+    except ZoneInfoNotFoundError:
         tz = timezone.utc
 
     # Convert current_time to the target timezone
