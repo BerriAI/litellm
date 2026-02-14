@@ -356,7 +356,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         api_version: Optional[str] = None,
-        timeout: Union[float, httpx.Timeout] = httpx.Timeout(timeout=600.0, connect=5.0),
+        timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
