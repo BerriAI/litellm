@@ -1376,6 +1376,52 @@ class TestContentFilterGuardrail:
                 exc_info.value.status_code == 403
             ), f"Failed to block German: '{test_input}'"
 
+    @pytest.mark.asyncio
+    async def test_multilanguage_harm_toxic_abuse_australian(self):
+        """
+        Test that Australian slang/profanity is detected using harm_toxic_abuse_au category.
+
+        Tests Australian-specific terms like:
+        - 'root' (Australian slang for sex)
+        - 'ranga' (offensive term for redheads)
+        - 'perv' / 'perve' (leer/ogle)
+        - 'bogan' (uncouth person, like redneck)
+        - 'wanker', 'tosser' (British/Australian profanity)
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-australian-slang",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse_au",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test Australian slang/profanity
+        australian_test_cases = [
+            "wanna root tonight",  # Australian for sex
+            "stop perving on her",  # leering/ogling
+            "you filthy bogan",  # insult (like redneck)
+            "bloody wanker",  # profanity
+            "get stuffed you tosser",  # profanity
+            "that slapper over there",  # derogatory for woman
+        ]
+
+        for test_input in australian_test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+
+            assert (
+                exc_info.value.status_code == 403
+            ), f"Failed to block Australian: '{test_input}'"
+
     async def test_html_tags_in_messages_not_blocked(self):
         """
         Test that HTML tags like <script> in LLM message content are NOT blocked
