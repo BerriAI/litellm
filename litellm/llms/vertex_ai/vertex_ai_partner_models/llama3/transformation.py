@@ -1,12 +1,15 @@
 import types
-from typing import Any, List, Optional
+from typing import Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionResponse
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 from ...common_utils import VertexAIError
 
@@ -79,6 +82,18 @@ class VertexAILlama3Config(OpenAIGPTConfig):
             drop_params=drop_params,
         )
 
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return VertexAILlama3StreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
     def transform_response(
         self,
         model: str,
@@ -124,3 +139,23 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         )
 
         return model_response
+
+
+class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
+    """
+    Vertex AI Llama models may not include role in streaming chunk deltas.
+    This handler ensures the first chunk always has role="assistant".
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sent_role = False
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        result = super().chunk_parser(chunk)
+        if not self.sent_role and result.choices:
+            delta = result.choices[0].delta
+            if delta.role is None:
+                delta.role = "assistant"
+            self.sent_role = True
+        return result

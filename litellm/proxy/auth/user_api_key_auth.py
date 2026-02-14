@@ -585,7 +585,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                 if is_proxy_admin:
                     return UserAPIKeyAuth(
+                        api_key=None,
                         user_role=LitellmUserRoles.PROXY_ADMIN,
+                        user_id=user_id,
+                        team_id=team_id,
+                        team_alias=(
+                            team_object.team_alias
+                            if team_object is not None
+                            else None
+                        ),
+                        team_metadata=team_object.metadata
+                        if team_object is not None
+                        else None,
+                        org_id=org_id,
+                        end_user_id=end_user_id,
                         parent_otel_span=parent_otel_span,
                     )
 
