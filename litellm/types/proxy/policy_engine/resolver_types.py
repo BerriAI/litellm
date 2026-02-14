@@ -154,6 +154,10 @@ class PolicyCreateRequest(BaseModel):
         default=None,
         description="Condition for when this policy applies.",
     )
+    pipeline: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional guardrail pipeline for ordered execution. Contains 'mode' and 'steps'.",
+    )
 
 
 class PolicyUpdateRequest(BaseModel):
@@ -183,6 +187,10 @@ class PolicyUpdateRequest(BaseModel):
         default=None,
         description="Condition for when this policy applies.",
     )
+    pipeline: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional guardrail pipeline for ordered execution. Contains 'mode' and 'steps'.",
+    )
 
 
 class PolicyDBResponse(BaseModel):
@@ -200,6 +208,9 @@ class PolicyDBResponse(BaseModel):
     )
     condition: Optional[Dict[str, Any]] = Field(
         default=None, description="Policy condition."
+    )
+    pipeline: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional guardrail pipeline."
     )
     created_at: Optional[datetime] = Field(
         default=None, description="When the policy was created."
