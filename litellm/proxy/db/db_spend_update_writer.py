@@ -131,6 +131,10 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
+            # Keep one immutable snapshot for async daily aggregation tasks.
+            # Use a dedicated copy for spend-log queue insertion to avoid aliasing.
+            shared_payload_copy = copy.deepcopy(payload)
+
             asyncio.create_task(
                 self._update_user_db(
                     response_cost=response_cost,
@@ -166,14 +170,14 @@ class DBSpendUpdateWriter:
             asyncio.create_task(
                 self._update_tag_db(
                     response_cost=response_cost,
-                    request_tags=copy.deepcopy(payload.get("request_tags")),
+                    request_tags=shared_payload_copy.get("request_tags"),
                     prisma_client=prisma_client,
                 )
             )
 
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
-                    payload=copy.deepcopy(payload),
+                    payload=copy.deepcopy(shared_payload_copy),
                     prisma_client=prisma_client,
                 )
             else:
@@ -183,41 +187,41 @@ class DBSpendUpdateWriter:
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_user_transaction(
-                    payload=copy.deepcopy(payload),
+                    payload=shared_payload_copy,
                     prisma_client=prisma_client,
                 )
             )
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_end_user_transaction(
-                    payload=copy.deepcopy(payload),
+                    payload=shared_payload_copy,
                     prisma_client=prisma_client,
                 )
             )
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_agent_transaction(
-                    payload=payload,
+                    payload=shared_payload_copy,
                     prisma_client=prisma_client,
                 )
             )
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_team_transaction(
-                    payload=copy.deepcopy(payload),
+                    payload=shared_payload_copy,
                     prisma_client=prisma_client,
                 )
             )
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_org_transaction(
-                    payload=copy.deepcopy(payload),
+                    payload=shared_payload_copy,
                     org_id=org_id,
                     prisma_client=prisma_client,
                 )
             )
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_tag_transaction(
-                    payload=copy.deepcopy(payload),
+                    payload=shared_payload_copy,
                     prisma_client=prisma_client,
                 )
             )
