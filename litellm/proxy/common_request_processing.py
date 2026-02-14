@@ -3,6 +3,7 @@ import json
 import logging
 import traceback
 from datetime import datetime
+from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -14,10 +15,13 @@ from typing import (
     Union,
 )
 
+import anyio
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette._utils import collapse_excgroups
+from starlette.types import Receive, Scope, Send
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -136,6 +140,39 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
             pass
 
     return default_error
+
+
+async def _disconnect_aware_call(
+    self: StreamingResponse, scope: Scope, receive: Receive, send: Send
+) -> None:
+    """Patched StreamingResponse.__call__ that detects client disconnects.
+
+    Starlette >= 0.45.3 relies on ASGI spec 2.4 where send() should raise OSError
+    on client disconnect. Uvicorn does not implement this — send() silently returns.
+    This means async generators keep running forever after clients disconnect,
+    leaking upstream HTTP connections.
+
+    This restores the pre-0.45.3 behavior: a concurrent task listens for
+    http.disconnect and cancels the streaming task group when detected.
+
+    See: https://github.com/encode/starlette/pull/2732
+    See: https://github.com/encode/uvicorn/pull/2276
+    """
+    with collapse_excgroups():
+        async with anyio.create_task_group() as task_group:
+
+            async def wrap(func: Callable[[], Any]) -> None:
+                await func()
+                task_group.cancel_scope.cancel()
+
+            task_group.start_soon(wrap, partial(self.stream_response, send))
+            await wrap(partial(self.listen_for_disconnect, receive))
+
+    if self.background is not None:
+        await self.background()
+
+
+StreamingResponse.__call__ = _disconnect_aware_call  # type: ignore[assignment]
 
 
 async def create_response(
