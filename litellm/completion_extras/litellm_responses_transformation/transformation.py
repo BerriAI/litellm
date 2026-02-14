@@ -176,6 +176,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         instructions = f"{instructions} {extracted}"
                     else:
                         instructions = extracted
+                else:
+                    verbose_logger.warning(
+                        "Unexpected system message content type: %s. Skipping.",
+                        type(content),
+                    )
             elif role == "tool":
                 # Convert tool message to function call output format
                 # The Responses API expects 'output' to be a list with input_text/input_image types
