@@ -13,6 +13,8 @@ import enum
 import hashlib
 import inspect
 import json
+
+import anyio
 import logging
 import threading
 import time
@@ -1593,6 +1595,14 @@ class Router:
                         f"Fallback also failed: {fallback_error}"
                     )
                     raise fallback_error
+            finally:
+                # Close the underlying stream to release the HTTP connection
+                # back to the connection pool when the generator is closed
+                # (e.g. on client disconnect).
+                # Shield from anyio cancellation so the await can complete.
+                if hasattr(model_response, "aclose"):
+                    with anyio.CancelScope(shield=True):
+                        await model_response.aclose()
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
