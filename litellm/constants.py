@@ -565,6 +565,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
     "service_tier",
+    "store",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
