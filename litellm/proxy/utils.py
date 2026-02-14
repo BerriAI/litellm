@@ -1236,6 +1236,9 @@ class ProxyLogging:
                 detection_info=None,
             )
 
+        verbose_proxy_logger.warning(
+            f"Pipeline '{policy_name}': unrecognized terminal_action '{result.terminal_action}', defaulting to allow"
+        )
         return data
 
     # The actual implementation of the function
