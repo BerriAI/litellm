@@ -2858,7 +2858,7 @@ jobs:
 
       - run:
           name: Start outputting logs for second container
-          command: docker logs -f my-app-2
+          command: docker logs -f my-app-3
           background: true
 
       - run:
