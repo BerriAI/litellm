@@ -208,6 +208,17 @@ async def common_checks(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
 
+    # 1.1. If user is deactivated via SCIM
+    if user_object is not None and user_object.metadata is not None:
+        scim_active = user_object.metadata.get("scim_active")
+        if scim_active is False:
+            raise ProxyException(
+                message="User account is deactivated.",
+                type=ProxyErrorTypes.auth_error,
+                param="user_id",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
     # 2. If team can call model
     if _model and team_object:
         if not can_team_access_model(
