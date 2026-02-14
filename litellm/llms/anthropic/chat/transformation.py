@@ -1072,6 +1072,33 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
+    def _sanitize_tool_use_ids(self, data: dict) -> dict:
+        """
+        Sanitize tool_use.id and tool_result.tool_use_id fields to match
+        Anthropic's required pattern: ^[a-zA-Z0-9_-]+$
+
+        Related issue: https://github.com/BerriAI/litellm/issues/21114
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_anthropic_tool_use_id,
+        )
+
+        messages = data.get("messages", [])
+        for message in messages:
+            content = message.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        # Handle tool_use blocks
+                        if block.get("type") == "tool_use" and "id" in block:
+                            block["id"] = _sanitize_anthropic_tool_use_id(block["id"])
+                        # Handle tool_result blocks
+                        if block.get("type") == "tool_result" and "tool_use_id" in block:
+                            block["tool_use_id"] = _sanitize_anthropic_tool_use_id(
+                                block["tool_use_id"]
+                            )
+        return data
+
     def _ensure_beta_header(self, headers: dict, beta_value: str) -> None:
         """
         Ensure a beta header value is present in the anthropic-beta header.
@@ -1287,6 +1314,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low'"
                     )
                 data["output_config"] = output_config
+
+        # Clean up tool_use.id to match Anthropic's required pattern [a-zA-Z0-9_-]+
+        # Related issue: https://github.com/BerriAI/litellm/issues/21114
+        data = self._sanitize_tool_use_ids(data)
 
         return data
 

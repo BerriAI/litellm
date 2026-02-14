@@ -2752,3 +2752,142 @@ def test_fast_mode_parameter_mapping():
     
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_sanitize_tool_use_id():
+    """
+    Test that tool_use.id is sanitized to match Anthropic's required pattern [a-zA-Z0-9_-]+
+
+    Related issue: https://github.com/BerriAI/litellm/issues/21114
+    """
+    config = AnthropicConfig()
+
+    # Test data with invalid characters in tool_use.id (Anthropic format)
+    data = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_composio.NOTION_SEARCH_abc123",
+                        "name": "notion_search",
+                        "input": {"query": "test"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Search for something in Notion",
+            },
+            {
+                "role": "tool",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_composio.NOTION_SEARCH_abc123",
+                        "content": "Found results...",
+                    }
+                ],
+            },
+        ],
+    }
+
+    result = config._sanitize_tool_use_ids(data)
+
+    # Check tool_use.id is sanitized
+    tool_use = result["messages"][0]["content"][0]
+    assert tool_use["id"] == "call_composio_NOTION_SEARCH_abc123"
+
+    # Check tool_result.tool_use_id is sanitized
+    tool_result = result["messages"][2]["content"][0]
+    assert tool_result["tool_use_id"] == "call_composio_NOTION_SEARCH_abc123"
+
+
+def test_sanitize_tool_use_id_no_change_for_valid_ids():
+    """
+    Test that valid tool_use.id values are not modified.
+    """
+    config = AnthropicConfig()
+
+    # Test data with valid characters (Anthropic format)
+    data = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_abc123_valid-id_456",
+                        "name": "test_tool",
+                        "input": {},
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = config._sanitize_tool_use_ids(data)
+
+    # Valid IDs should remain unchanged
+    tool_use = result["messages"][0]["content"][0]
+    assert tool_use["id"] == "call_abc123_valid-id_456"
+
+
+def test_sanitize_tool_use_id_multiple_blocks():
+    """
+    Test sanitization with multiple tool_use and tool_result blocks.
+    """
+    config = AnthropicConfig()
+
+    # Test data with multiple blocks (Anthropic format)
+    data = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_tool.1",
+                        "name": "tool1",
+                        "input": {},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "call_tool.2@hash",
+                        "name": "tool2",
+                        "input": {},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_tool.1",
+                        "content": "Result 1",
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_tool.2@hash",
+                        "content": "Result 2",
+                    },
+                ],
+            },
+        ],
+    }
+
+    result = config._sanitize_tool_use_ids(data)
+
+    # Verify all IDs are sanitized
+    tool_uses = result["messages"][0]["content"]
+    assert tool_uses[0]["id"] == "call_tool_1"
+    assert tool_uses[1]["id"] == "call_tool_2_hash"
+
+    tool_results = result["messages"][1]["content"]
+    assert tool_results[0]["tool_use_id"] == "call_tool_1"
+    assert tool_results[1]["tool_use_id"] == "call_tool_2_hash"
