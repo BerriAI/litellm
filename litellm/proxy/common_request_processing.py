@@ -799,8 +799,6 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         # Post Call Processing
-        if llm_router is not None:
-            self.data["deployment"] = llm_router.get_deployment(model_id=model_id)
         asyncio.create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"

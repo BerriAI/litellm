@@ -456,6 +456,7 @@ class Router:
         # Initialize model name to deployment indices mapping for O(1) lookups
         # Maps model_name -> list of indices in model_list
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
+        self._deployment_cache: Dict[str, Deployment] = {}
 
         if model_list is not None:
             # set_model_list will build indices automatically
@@ -6211,6 +6212,7 @@ class Router:
         self.model_list = []
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
+        self._invalidate_deployment_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
         for model in original_model_list:
@@ -6514,6 +6516,7 @@ class Router:
         """
         idx = len(self.model_list)
         self.model_list.append(model)
+        self._invalidate_deployment_cache()
 
         # Update model_id index for O(1) lookup
         if model_id is not None:
@@ -6561,6 +6564,7 @@ class Router:
 
                     if removal_idx is not None:
                         self.model_list.pop(removal_idx)
+                        self._invalidate_deployment_cache()
                         self._update_deployment_indices_after_removal(
                             model_id=deployment_id, removal_idx=removal_idx
                         )
@@ -6594,6 +6598,7 @@ class Router:
             if deployment_idx is not None:
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
+                self._invalidate_deployment_cache()
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
@@ -6609,12 +6614,19 @@ class Router:
 
         Raise Exception -> if model found in invalid format
         """
+        # Check cache first
+        cached = self._deployment_cache.get(model_id)
+        if cached is not None:
+            return cached
+
         # Use O(1) lookup via model_id_to_deployment_index_map only
         if model_id in self.model_id_to_deployment_index_map:
             idx = self.model_id_to_deployment_index_map[model_id]
             model = self.model_list[idx]
             if isinstance(model, dict):
-                return Deployment(**model)
+                deployment = Deployment(**model)
+                self._deployment_cache[model_id] = deployment
+                return deployment
             elif isinstance(model, Deployment):
                 return model
             else:
@@ -6650,7 +6662,15 @@ class Router:
                 # Return first deployment for this model_name
                 model = self.model_list[indices[0]]
                 if isinstance(model, dict):
-                    return Deployment(**model)
+                    model_id = model.get("model_info", {}).get("id")
+                    if model_id:
+                        cached = self._deployment_cache.get(model_id)
+                        if cached is not None:
+                            return cached
+                    deployment = Deployment(**model)
+                    if model_id:
+                        self._deployment_cache[model_id] = deployment
+                    return deployment
                 elif isinstance(model, Deployment):
                     return model
                 else:
@@ -7328,6 +7348,7 @@ class Router:
         """
         # First populate the model_list
         self.model_list = []
+        self._invalidate_deployment_cache()
         for _, model in enumerate(model_list):
             # Extract model_info from the model dict
             model_info = model.get("model_info", {})
@@ -7663,6 +7684,13 @@ class Router:
             returned_models += self.model_list
 
         return returned_models
+
+    def _invalidate_deployment_cache(self) -> None:
+        """Invalidate the cached Deployment objects.
+
+        Call this whenever self.model_list is modified to ensure deployments are rebuilt.
+        """
+        self._deployment_cache.clear()
 
     def get_model_access_groups(
         self,
