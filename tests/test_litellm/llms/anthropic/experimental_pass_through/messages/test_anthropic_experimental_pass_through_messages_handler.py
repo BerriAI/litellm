@@ -102,13 +102,17 @@ async def test_bedrock_converse_budget_tokens_preserved():
     and losing the original budget_tokens value, causing it to use the default (128) instead.
     """
     client = AsyncHTTPHandler()
-    
-    with patch.object(client, "post") as mock_post:
-        mock_response = AsyncMock()
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_post:
+        # Use MagicMock for response to avoid unawaited coroutine warnings
+        # AsyncMock auto-creates async child methods which causes issues
+        mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {}
         mock_response.text = "mock response"
-        mock_response.json.return_value = {
+        # Explicitly set raise_for_status as a no-op to prevent auto-async behavior
+        mock_response.raise_for_status = MagicMock(return_value=None)
+        mock_response.json = MagicMock(return_value={
             "output": {
                 "message": {
                     "role": "assistant",
@@ -121,8 +125,10 @@ async def test_bedrock_converse_budget_tokens_preserved():
                 "outputTokens": 5,
                 "totalTokens": 15
             }
-        }
+        })
+        # Use AsyncMock for the post method itself since it's async
         mock_post.return_value = mock_response
+        mock_post.side_effect = None  # Clear any default side_effect from patch.object
         
         try:
             await messages.acreate(
