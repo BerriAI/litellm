@@ -157,6 +157,141 @@ class TestS3V2UnitTests:
 
         assert result == {"downloaded": "data"}
 
+    @patch('asyncio.create_task')
+    @patch('litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush')
+    def test_s3_v2_virtual_hosted_style(self, mock_periodic_flush, mock_create_task):
+        """Test s3_use_virtual_hosted_style parameter for virtual-hosted-style URLs"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+        # Mock periodic_flush and create_task to prevent async task creation during init
+        mock_periodic_flush.return_value = None
+        mock_create_task.return_value = None
+
+        # Mock response for all tests
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        # Create a test batch logging element
+        test_element = s3BatchLoggingElement(
+            s3_object_key="2025-09-14/test-key.json",
+            payload={"test": "data"},
+            s3_object_download_filename="test-file.json"
+        )
+
+        # Test 1: Virtual-hosted-style with custom endpoint
+        s3_logger_virtual = S3Logger(
+            s3_bucket_name="test-bucket",
+            s3_endpoint_url="https://s3.custom-endpoint.com",
+            s3_aws_access_key_id="test-key",
+            s3_aws_secret_access_key="test-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True
+        )
+
+        s3_logger_virtual.async_httpx_client = AsyncMock()
+        s3_logger_virtual.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger_virtual.async_upload_data_to_s3(test_element))
+
+        call_args = s3_logger_virtual.async_httpx_client.put.call_args
+        assert call_args is not None
+        url = call_args[0][0]
+        expected_url = "https://test-bucket.s3.custom-endpoint.com/2025-09-14/test-key.json"
+        assert url == expected_url, f"Expected virtual-hosted-style URL {expected_url}, got {url}"
+
+        # Test 2: Path-style (default behavior with s3_use_virtual_hosted_style=False)
+        s3_logger_path = S3Logger(
+            s3_bucket_name="test-bucket",
+            s3_endpoint_url="https://s3.custom-endpoint.com",
+            s3_aws_access_key_id="test-key",
+            s3_aws_secret_access_key="test-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=False
+        )
+
+        s3_logger_path.async_httpx_client = AsyncMock()
+        s3_logger_path.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger_path.async_upload_data_to_s3(test_element))
+
+        call_args_path = s3_logger_path.async_httpx_client.put.call_args
+        assert call_args_path is not None
+        url_path = call_args_path[0][0]
+        expected_path_url = "https://s3.custom-endpoint.com/test-bucket/2025-09-14/test-key.json"
+        assert url_path == expected_path_url, f"Expected path-style URL {expected_path_url}, got {url_path}"
+
+        # Test 3: Virtual-hosted-style with http protocol
+        s3_logger_http = S3Logger(
+            s3_bucket_name="http-bucket",
+            s3_endpoint_url="http://minio.local:9000",
+            s3_aws_access_key_id="minio-key",
+            s3_aws_secret_access_key="minio-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True
+        )
+
+        s3_logger_http.async_httpx_client = AsyncMock()
+        s3_logger_http.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger_http.async_upload_data_to_s3(test_element))
+
+        call_args_http = s3_logger_http.async_httpx_client.put.call_args
+        assert call_args_http is not None
+        url_http = call_args_http[0][0]
+        expected_http_url = "http://http-bucket.minio.local:9000/2025-09-14/test-key.json"
+        assert url_http == expected_http_url, f"Expected virtual-hosted-style URL with http {expected_http_url}, got {url_http}"
+
+        # Test 4: Sync upload method with virtual-hosted-style
+        s3_logger_sync_virtual = S3Logger(
+            s3_bucket_name="sync-bucket",
+            s3_endpoint_url="https://storage.example.com",
+            s3_aws_access_key_id="sync-key",
+            s3_aws_secret_access_key="sync-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True
+        )
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.put.return_value = mock_response
+
+        with patch('litellm.integrations.s3_v2._get_httpx_client', return_value=mock_sync_client):
+            s3_logger_sync_virtual.upload_data_to_s3(test_element)
+
+            call_args_sync = mock_sync_client.put.call_args
+            assert call_args_sync is not None
+            url_sync = call_args_sync[0][0]
+            expected_sync_url = "https://sync-bucket.storage.example.com/2025-09-14/test-key.json"
+            assert url_sync == expected_sync_url, f"Expected virtual-hosted-style sync URL {expected_sync_url}, got {url_sync}"
+
+        # Test 5: Download method with virtual-hosted-style
+        s3_logger_download_virtual = S3Logger(
+            s3_bucket_name="download-bucket",
+            s3_endpoint_url="https://download.endpoint.com",
+            s3_aws_access_key_id="download-key",
+            s3_aws_secret_access_key="download-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True
+        )
+
+        mock_download_response = MagicMock()
+        mock_download_response.status_code = 200
+        mock_download_response.json = MagicMock(return_value={"downloaded": "data"})
+        s3_logger_download_virtual.async_httpx_client = AsyncMock()
+        s3_logger_download_virtual.async_httpx_client.get.return_value = mock_download_response
+
+        result = asyncio.run(s3_logger_download_virtual._download_object_from_s3("2025-09-14/download-test-key.json"))
+
+        call_args_download = s3_logger_download_virtual.async_httpx_client.get.call_args
+        assert call_args_download is not None
+        url_download = call_args_download[0][0]
+        expected_download_url = "https://download-bucket.download.endpoint.com/2025-09-14/download-test-key.json"
+        assert url_download == expected_download_url, f"Expected virtual-hosted-style download URL {expected_download_url}, got {url_download}"
+
+        assert result == {"downloaded": "data"}
+
 @pytest.mark.asyncio
 async def test_strip_base64_removes_file_and_nontext_entries():
     logger = S3Logger(s3_strip_base64_files=True)
