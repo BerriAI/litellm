@@ -57,6 +57,8 @@ class PipelineExecutor:
         """
         step_results: List[PipelineStepResult] = []
         working_data = data.copy()
+        if "metadata" in working_data:
+            working_data["metadata"] = working_data["metadata"].copy()
 
         for i, step in enumerate(steps):
             start_time = time.perf_counter()
