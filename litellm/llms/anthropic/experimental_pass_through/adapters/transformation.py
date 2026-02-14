@@ -760,10 +760,18 @@ class LiteLLMAnthropicMessagesAdapter:
         def _make_strict(obj: Any):
             if isinstance(obj, dict):
                 if obj.get("type") == "object":
+                    # Enforce additionalProperties: false
                     obj.setdefault("additionalProperties", False)
+                    
+                    # Enforce all properties are in the 'required' array
+                    if "properties" in obj and "required" not in obj:
+                        obj["required"] = list(obj["properties"].keys())
+                
+                # Recursively traverse dictionaries
                 for value in obj.values():
                     _make_strict(value)
             elif isinstance(obj, list):
+                # Recursively traverse lists (handles arrays of objects)
                 for item in obj:
                     _make_strict(item)
 
