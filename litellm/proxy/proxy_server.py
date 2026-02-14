@@ -5142,6 +5142,15 @@ async def async_data_generator(
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
+    finally:
+        # Close the response stream to release the underlying HTTP connection
+        # back to the connection pool. This prevents pool exhaustion when
+        # clients disconnect mid-stream.
+        if hasattr(response, "aclose"):
+            try:
+                await response.aclose()
+            except Exception:
+                pass
 
 
 def select_data_generator(
