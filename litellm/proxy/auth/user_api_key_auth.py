@@ -1196,7 +1196,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         proxy_logging_obj=proxy_logging_obj,
                     )
                 except HTTPException:
-                    _team_obj = LiteLLM_TeamTable(
+                    _team_obj = LiteLLM_TeamTableCachedObj(
                         team_id=valid_token.team_id,
                         max_budget=valid_token.team_max_budget,
                         soft_budget=valid_token.team_soft_budget,
