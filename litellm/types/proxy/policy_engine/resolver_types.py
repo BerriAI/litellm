@@ -302,6 +302,17 @@ class PolicyAttachmentListResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class PipelineTestRequest(BaseModel):
+    """Request body for testing a guardrail pipeline with sample messages."""
+
+    pipeline: Dict[str, Any] = Field(
+        description="Pipeline definition with 'mode' and 'steps'.",
+    )
+    test_messages: List[Dict[str, str]] = Field(
+        description="Test messages to run through the pipeline, e.g. [{'role': 'user', 'content': '...'}].",
+    )
+
+
 class PolicyResolveRequest(BaseModel):
     """Request body for resolving effective policies/guardrails for a context."""
 
