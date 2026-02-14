@@ -148,6 +148,11 @@ class PipelineExecutor:
             return ("error", None, f"Guardrail '{step.guardrail}' not found")
 
         try:
+            # Inject guardrail name into metadata so should_run_guardrail() allows it
+            if "metadata" not in data:
+                data["metadata"] = {}
+            data["metadata"]["guardrails"] = [step.guardrail]
+
             # Use unified_guardrail path if callback implements apply_guardrail
             target = callback
             use_unified = "apply_guardrail" in type(callback).__dict__

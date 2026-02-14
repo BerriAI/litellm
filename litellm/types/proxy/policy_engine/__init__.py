@@ -26,6 +26,7 @@ from litellm.types.proxy.policy_engine.policy_types import (
 )
 from litellm.types.proxy.policy_engine.resolver_types import (
     AttachmentImpactResponse,
+    PipelineTestRequest,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
     PolicyAttachmentListResponse,
@@ -90,6 +91,8 @@ __all__ = [
     "PolicyAttachmentCreateRequest",
     "PolicyAttachmentDBResponse",
     "PolicyAttachmentListResponse",
+    # Pipeline test types
+    "PipelineTestRequest",
     # Resolve types
     "PolicyResolveRequest",
     "PolicyResolveResponse",

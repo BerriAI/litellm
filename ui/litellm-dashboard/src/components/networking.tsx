@@ -5673,6 +5673,37 @@ export const deletePolicyAttachmentCall = async (accessToken: string, attachment
   }
 };
 
+export const testPipelineCall = async (
+  accessToken: string,
+  pipeline: any,
+  testMessages: Array<{role: string, content: string}>
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/test-pipeline` : `/policies/test-pipeline`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ pipeline, test_messages: testMessages }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to test pipeline:", error);
+    throw error;
+  }
+};
+
 export const getResolvedGuardrails = async (accessToken: string, policyId: string) => {
   try {
     const url = proxyBaseUrl
