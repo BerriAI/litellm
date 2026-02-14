@@ -5562,26 +5562,19 @@ async def test_validate_key_list_check_key_hash_not_found():
 
 
 @pytest.mark.asyncio
-async def test_key_inherits_budget_duration_from_budget_tier():
+async def test_key_with_budget_id_does_not_store_budget_duration():
     """
-    Test that when a key is created with budget_id pointing to a budget tier
-    that has budget_duration, the key inherits budget_duration from the tier
-    even when budget_duration is not explicitly set on the key request.
+    Test that when a key is created with budget_id but without explicit
+    budget_duration, the key does NOT get budget_duration stored on it.
 
-    This verifies the fix for the bug where keys created with budget_id
-    would have null budget_duration and budget_reset_at, causing the
-    budget reset job to never reset their spend.
+    Keys with budget_id follow their linked budget tier's reset schedule;
+    reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    This avoids duplicating budget_duration on keys so tier updates apply
+    automatically to all linked keys.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    # Mock the budget tier lookup to return a budget with budget_duration="7d"
-    mock_budget_row = MagicMock()
-    mock_budget_row.budget_duration = "7d"
-
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(
-        return_value=mock_budget_row
-    )
 
     mock_generate_key = AsyncMock(
         return_value={
@@ -5619,20 +5612,17 @@ async def test_key_inherits_budget_duration_from_budget_tier():
             team_table=None,
         )
 
-    # Verify generate_key_helper_fn was called
     mock_generate_key.assert_awaited_once()
     call_kwargs = mock_generate_key.call_args.kwargs
 
-    # The key should have inherited key_budget_duration from the budget tier
-    assert call_kwargs.get("key_budget_duration") == "7d", (
-        "key_budget_duration should be inherited from the linked budget tier "
-        f"but got: {call_kwargs.get('key_budget_duration')}"
+    # Key should NOT have key_budget_duration - it follows the budget tier's schedule
+    assert call_kwargs.get("key_budget_duration") is None, (
+        "key_budget_duration should be None for budget-linked keys without explicit "
+        f"budget_duration; got: {call_kwargs.get('key_budget_duration')}"
     )
 
-    # Verify the budget tier was looked up with the correct budget_id
-    mock_prisma.db.litellm_budgettable.find_unique.assert_awaited_once_with(
-        where={"budget_id": "7d-budget-tier"}
-    )
+    # No budget tier lookup - we don't copy budget_duration onto the key
+    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -5698,4 +5688,4 @@ async def test_key_does_not_override_explicit_budget_duration():
     )
 
     # The budget tier should NOT have been looked up since budget_duration was explicit
-    mock_prisma.db.litellm_budgettable.find_unique.assert_not_awaited()
+    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
