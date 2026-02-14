@@ -6192,7 +6192,9 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
     },
     "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 3.18e-06,
@@ -16323,7 +16325,9 @@
         "source": "https://ai.google.dev/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
-        ]
+        ],
+        "tpm": 250000,
+        "rpm": 10
     },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
