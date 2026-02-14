@@ -394,6 +394,59 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
 
       {/* Bottom connector */}
       <Connector onInsert={() => handleInsertStep(pipeline.steps.length)} />
+
+      {/* End card */}
+      <div
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 10,
+          padding: "14px 20px",
+          backgroundColor: "#fff",
+          maxWidth: 720,
+          width: "100%",
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              backgroundColor: "#f3f4f6",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="8" y1="12" x2="16" y2="12" />
+            </svg>
+          </div>
+          <div>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                color: "#6b7280",
+                letterSpacing: "0.06em",
+                display: "block",
+                marginBottom: 2,
+              }}
+            >
+              END
+            </span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>
+              Continue to LLM
+            </span>
+            <span style={{ fontSize: 13, color: "#9ca3af" }}>
+              Request proceeds to the model
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
