@@ -39,6 +39,7 @@ class BasePassthroughUtils:
             # Header We Should NOT forward
             request_headers.pop("content-length", None)
             request_headers.pop("host", None)
+            request_headers.pop("x-litellm-api-key", None)
 
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
