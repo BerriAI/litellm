@@ -151,11 +151,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "logs",
         page: "logs",
-        label: (
-          <span className="flex items-center gap-4">
-            Logs <NewBadge />
-          </span>
-        ),
+        label: "Logs",
         icon: <LineChartOutlined />,
       },
     ],
@@ -181,6 +177,17 @@ const menuGroups: MenuGroup[] = [
         page: "organizations",
         label: "Organizations",
         icon: <BankOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "access-groups",
+        page: "access-groups",
+        label: (
+          <span className="flex items-center gap-2">
+            Access Groups <NewBadge />
+          </span>
+        ),
+        icon: <BlockOutlined />,
         roles: all_admin_roles,
       },
       {

@@ -329,6 +329,9 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.management_endpoints.access_group_endpoints import (
+    router as access_group_router,
+)
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
@@ -339,8 +342,8 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
 from litellm.proxy.management_endpoints.common_utils import (
-    admin_can_invite_user,
     _user_has_admin_privileges,
+    admin_can_invite_user,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -392,9 +395,6 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
-)
-from litellm.proxy.management_endpoints.access_group_endpoints import (
-    router as access_group_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -866,6 +866,9 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
+
+    ## [Optional] Initialize Pyroscope continuous profiling (env: LITELLM_ENABLE_PYROSCOPE=true)
+    ProxyStartupEvent._init_pyroscope()
 
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
@@ -1485,6 +1488,9 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
+# Global variable for anthropic beta headers reload scheduling
+last_anthropic_beta_headers_reload = None
 
 
 ### DB WRITER ###
@@ -4149,6 +4155,10 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+        
+        if self._should_load_db_object(object_type="anthropic_beta_headers"):
+            await self._check_and_reload_anthropic_beta_headers(prisma_client=prisma_client)
+        
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="cache_settings"):
@@ -4375,6 +4385,107 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
+            )
+
+    async def _check_and_reload_anthropic_beta_headers(self, prisma_client: PrismaClient):
+        """
+        Check if anthropic beta headers config needs to be reloaded based on database configuration.
+        This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
+        """
+        try:
+            # Get anthropic beta headers reload configuration from database
+            config_record = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "anthropic_beta_headers_reload_config"}
+            )
+
+            if config_record is None or config_record.param_value is None:
+                return  # No configuration found, skip reload
+
+            config = config_record.param_value
+            interval_hours = config.get("interval_hours")
+            force_reload = config.get("force_reload", False)
+
+            if interval_hours is None and force_reload is False:
+                return  # No interval configured, skip reload
+
+            current_time = datetime.utcnow()
+
+            # Check if we need to reload based on interval or force reload
+            should_reload = False
+
+            if force_reload:
+                should_reload = True
+                verbose_proxy_logger.info(
+                    "Anthropic beta headers reload triggered by force reload flag"
+                )
+            elif interval_hours is not None:
+                # Use pod's in-memory last reload time
+                global last_anthropic_beta_headers_reload
+                if last_anthropic_beta_headers_reload is not None:
+                    try:
+                        last_reload_time = datetime.fromisoformat(
+                            last_anthropic_beta_headers_reload
+                        )
+                        time_since_last_reload = current_time - last_reload_time
+                        hours_since_last_reload = (
+                            time_since_last_reload.total_seconds() / 3600
+                        )
+
+                        if hours_since_last_reload >= interval_hours:
+                            should_reload = True
+                            verbose_proxy_logger.info(
+                                f"Anthropic beta headers reload triggered by interval. Hours since last reload: {hours_since_last_reload:.2f}, Interval: {interval_hours}"
+                            )
+                    except Exception as e:
+                        verbose_proxy_logger.warning(
+                            f"Error parsing last reload time: {e}"
+                        )
+                        # If we can't parse the last reload time, reload anyway
+                        should_reload = True
+                else:
+                    # No last reload time recorded, reload now
+                    should_reload = True
+                    verbose_proxy_logger.info(
+                        "Anthropic beta headers reload triggered - no previous reload time recorded"
+                    )
+
+            if should_reload:
+                # Perform the reload
+                from litellm.anthropic_beta_headers_manager import (
+                    reload_beta_headers_config,
+                )
+
+                new_config = reload_beta_headers_config()
+
+                # Update pod's in-memory last reload time
+                last_anthropic_beta_headers_reload = current_time.isoformat()
+
+                # Clear force reload flag in database
+                await prisma_client.db.litellm_config.upsert(
+                    where={"param_name": "anthropic_beta_headers_reload_config"},
+                    data={
+                        "create": {
+                            "param_name": "anthropic_beta_headers_reload_config",
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            ),
+                        },
+                        "update": {"param_value": safe_dumps({"force_reload": False})},
+                    },
+                )
+
+                # Count providers in config
+                provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
+                verbose_proxy_logger.info(
+                    f"Anthropic beta headers config reloaded successfully. Providers: {provider_count}"
+                )
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error in _check_and_reload_anthropic_beta_headers: {str(e)}"
             )
 
     def _get_prompt_spec_for_db_prompt(self, db_prompt):
@@ -5706,6 +5817,69 @@ class ProxyStartupEvent:
             prof.start()
             verbose_proxy_logger.debug("Datadog Profiler started......")
 
+    @classmethod
+    def _init_pyroscope(cls):
+        """
+        Optional continuous profiling via Grafana Pyroscope.
+
+        Off by default. Enable with LITELLM_ENABLE_PYROSCOPE=true.
+        Requires: pip install pyroscope-io (optional dependency).
+        When enabled, PYROSCOPE_SERVER_ADDRESS and PYROSCOPE_APP_NAME are required (no defaults).
+        Optional: PYROSCOPE_SAMPLE_RATE (parsed as integer) to set the sample rate.
+        """
+        if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
+            verbose_proxy_logger.debug(
+                "LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
+            )
+        try:
+            import pyroscope
+
+            app_name = os.getenv("PYROSCOPE_APP_NAME")
+            if not app_name:
+                raise ValueError(
+                    "LITELLM_ENABLE_PYROSCOPE is true but PYROSCOPE_APP_NAME is not set. "
+                    "Set PYROSCOPE_APP_NAME when enabling Pyroscope."
+                )
+            server_address = os.getenv("PYROSCOPE_SERVER_ADDRESS")
+            if not server_address:
+                raise ValueError(
+                    "LITELLM_ENABLE_PYROSCOPE is true but PYROSCOPE_SERVER_ADDRESS is not set. "
+                    "Set PYROSCOPE_SERVER_ADDRESS when enabling Pyroscope."
+                )
+            tags = {}
+            env_name = os.getenv("OTEL_ENVIRONMENT_NAME") or os.getenv(
+                "LITELLM_DEPLOYMENT_ENVIRONMENT",
+            )
+            if env_name:
+                tags["environment"] = env_name
+            sample_rate_env = os.getenv("PYROSCOPE_SAMPLE_RATE")
+            configure_kwargs = {
+                "app_name": app_name,
+                "server_address": server_address,
+                "tags": tags if tags else None,
+            }
+            if sample_rate_env is not None:
+                try:
+                    # pyroscope-io expects sample_rate as an integer
+                    configure_kwargs["sample_rate"] = int(float(sample_rate_env))
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        "PYROSCOPE_SAMPLE_RATE must be a number, got: "
+                        f"{sample_rate_env!r}"
+                    )
+            pyroscope.configure(**configure_kwargs)
+            msg = (
+                f"LiteLLM: Pyroscope profiling started (app_name={app_name}, server_address={server_address}). "
+                f"View CPU profiles at the Pyroscope UI and select application '{app_name}'."
+            )
+            if "sample_rate" in configure_kwargs:
+                msg += f" sample_rate={configure_kwargs['sample_rate']}"
+            verbose_proxy_logger.info(msg)
+        except ImportError:
+            verbose_proxy_logger.warning(
+                "LiteLLM: LITELLM_ENABLE_PYROSCOPE is set but the 'pyroscope-io' package is not installed. "
+                "Pyroscope profiling will not run. Install with: pip install pyroscope-io"
+            )
 
 #### API ENDPOINTS ####
 @router.get(
@@ -11884,6 +12058,296 @@ async def get_model_cost_map_reload_status(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get model cost map reload status: {str(e)}",
+        )
+
+
+#### ANTHROPIC BETA HEADERS RELOAD ENDPOINTS ####
+
+
+@router.post(
+    "/reload/anthropic_beta_headers",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def reload_anthropic_beta_headers(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Manually reload the Anthropic beta headers configuration from the remote source.
+    This will fetch fresh configuration from the anthropic_beta_headers_config.json file.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
+        # Immediately reload the beta headers config in the current pod
+        from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+        new_config = reload_beta_headers_config()
+
+        # Update pod's in-memory last reload time
+        global last_anthropic_beta_headers_reload
+        current_time = datetime.utcnow()
+        last_anthropic_beta_headers_reload = current_time.isoformat()
+
+        # Set force reload flag in database for other pods
+        await prisma_client.db.litellm_config.upsert(
+            where={"param_name": "anthropic_beta_headers_reload_config"},
+            data={
+                "create": {
+                    "param_name": "anthropic_beta_headers_reload_config",
+                    "param_value": safe_dumps(
+                        {"interval_hours": None, "force_reload": True}
+                    ),
+                },
+                "update": {"param_value": safe_dumps({"force_reload": True})},
+            },
+        )
+
+        provider_count = sum(1 for k in new_config.keys() if k not in ["provider_aliases", "description"])
+        verbose_proxy_logger.info(
+            f"Anthropic beta headers config reloaded successfully in current pod. Providers: {provider_count}"
+        )
+
+        return {
+            "message": f"Anthropic beta headers configuration reloaded successfully! {provider_count} providers updated.",
+            "status": "success",
+            "providers_count": provider_count,
+            "timestamp": current_time.isoformat(),
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to reload anthropic beta headers: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to reload anthropic beta headers: {str(e)}"
+        )
+
+
+@router.post(
+    "/schedule/anthropic_beta_headers_reload",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def schedule_anthropic_beta_headers_reload(
+    hours: int,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Schedule periodic reload of the Anthropic beta headers configuration.
+    This will create a background job that reloads the configuration every specified hours.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    if hours <= 0:
+        raise HTTPException(status_code=400, detail="Hours must be greater than 0")
+
+    try:
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
+        # Update database with new reload configuration
+        await prisma_client.db.litellm_config.upsert(
+            where={"param_name": "anthropic_beta_headers_reload_config"},
+            data={
+                "create": {
+                    "param_name": "anthropic_beta_headers_reload_config",
+                    "param_value": safe_dumps(
+                        {"interval_hours": hours, "force_reload": False}
+                    ),
+                },
+                "update": {
+                    "param_value": safe_dumps(
+                        {"interval_hours": hours, "force_reload": False}
+                    )
+                },
+            },
+        )
+
+        verbose_proxy_logger.info(
+            f"Anthropic beta headers reload scheduled for every {hours} hours"
+        )
+
+        return {
+            "message": f"Anthropic beta headers reload scheduled for every {hours} hours",
+            "status": "success",
+            "interval_hours": hours,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to schedule anthropic beta headers reload: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to schedule anthropic beta headers reload: {str(e)}",
+        )
+
+
+@router.delete(
+    "/schedule/anthropic_beta_headers_reload",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def cancel_anthropic_beta_headers_reload(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Cancel the scheduled periodic reload of the Anthropic beta headers configuration.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
+        # Remove reload configuration from database
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
+        )
+
+        verbose_proxy_logger.info("Anthropic beta headers reload schedule cancelled")
+
+        return {
+            "message": "Anthropic beta headers reload schedule cancelled",
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to cancel anthropic beta headers reload: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to cancel anthropic beta headers reload: {str(e)}"
+        )
+
+
+@router.get(
+    "/schedule/anthropic_beta_headers_reload/status",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def get_anthropic_beta_headers_reload_status(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Get the status of the scheduled Anthropic beta headers reload job.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        global prisma_client, last_anthropic_beta_headers_reload
+
+        verbose_proxy_logger.info(
+            f"Checking anthropic beta headers reload status. Last reload: {last_anthropic_beta_headers_reload}"
+        )
+
+        if prisma_client is None:
+            verbose_proxy_logger.info("No database connection, returning not scheduled")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        # Get reload configuration from database
+        config_record = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
+        )
+
+        if config_record is None or config_record.param_value is None:
+            verbose_proxy_logger.info("No anthropic beta headers reload configuration found")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        config = config_record.param_value
+        interval_hours = config.get("interval_hours")
+
+        if interval_hours is None:
+            verbose_proxy_logger.info("No interval configured, returning not scheduled")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        current_time = datetime.utcnow()
+        next_run = None
+
+        # Use pod's in-memory last reload time
+        if last_anthropic_beta_headers_reload is not None:
+            try:
+                last_reload_time = datetime.fromisoformat(last_anthropic_beta_headers_reload)
+                time_since_last_reload = current_time - last_reload_time
+                hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
+
+                if hours_since_last_reload < interval_hours:
+                    next_run = (
+                        last_reload_time + timedelta(hours=interval_hours)
+                    ).isoformat()
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Error parsing last reload time: {e}")
+
+        return {
+            "scheduled": True,
+            "interval_hours": interval_hours,
+            "last_run": last_anthropic_beta_headers_reload,
+            "next_run": next_run,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to get anthropic beta headers reload status: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get anthropic beta headers reload status: {str(e)}",
         )
 
 

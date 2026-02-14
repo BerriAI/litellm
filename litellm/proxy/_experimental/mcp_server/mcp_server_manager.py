@@ -71,9 +71,7 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import (
-        SEP_986_URL,
-    )
+    from mcp.shared.tool_name_validation import SEP_986_URL
 except ImportError:
     from pydantic import BaseModel
 
@@ -158,13 +156,13 @@ class MCPServerManager:
         [
             "server-1": {
                 "name": "zapier_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
                 "transport": "sse",
                 "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
             }
         ]
         """

@@ -770,6 +770,22 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([model_object_id])
 }
 
+model LiteLLM_ManagedVectorStoreTable {
+  id String @id @default(uuid())
+  unified_resource_id String @unique // The base64 encoded unified vector store ID
+  resource_object Json? // Stores the VectorStoreCreateResponse
+  model_mappings Json // Maps model_id -> provider_vector_store_id
+  flat_model_resource_ids String[] @default([]) // Flat list of provider vector store IDs for faster querying
+  storage_backend String? // Storage backend name (if applicable)
+  storage_url String? // Storage URL (if applicable)
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+
+  @@index([unified_resource_id])
+}
+
 model LiteLLM_ManagedVectorStoresTable {
   vector_store_id String @id
   custom_llm_provider String
@@ -932,7 +948,7 @@ model LiteLLM_AccessGroupTable {
   description        String?
   
   // Resource memberships - explicit arrays per type
-  access_model_ids        String[] @default([])
+  access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
   access_agent_ids        String[] @default([])
 
