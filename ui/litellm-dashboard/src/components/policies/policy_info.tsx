@@ -3,6 +3,7 @@ import { Card, Badge, Button } from "@tremor/react";
 import { ArrowLeftIcon, PencilIcon } from "@heroicons/react/outline";
 import { Descriptions, Tag, Spin, Divider, Typography, Alert } from "antd";
 import { Policy } from "./types";
+import { PipelineInfoDisplay } from "./pipeline_flow_builder";
 import { getResolvedGuardrails } from "../networking";
 
 const { Title, Text } = Typography;
@@ -126,6 +127,21 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
               : "-"}
           </Descriptions.Item>
         </Descriptions>
+
+        {policy.pipeline && (
+          <>
+            <Divider orientation="left">
+              <Text strong>Pipeline Flow</Text>
+            </Divider>
+            <Alert
+              message={`Pipeline (${policy.pipeline.mode} mode, ${policy.pipeline.steps.length} step${policy.pipeline.steps.length !== 1 ? "s" : ""})`}
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+            />
+            <PipelineInfoDisplay pipeline={policy.pipeline} />
+          </>
+        )}
 
         <Divider orientation="left">
           <Text strong>Guardrails Configuration</Text>
