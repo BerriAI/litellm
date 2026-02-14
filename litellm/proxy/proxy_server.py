@@ -5559,9 +5559,9 @@ class ProxyStartupEvent:
         Optional continuous profiling via Grafana Pyroscope.
 
         Off by default. Enable with LITELLM_ENABLE_PYROSCOPE=true.
-        Requires: pip install pyroscope-io
-        Sends profiles to PYROSCOPE_SERVER_ADDRESS (default http://localhost:4040).
-        Optional: PYROSCOPE_SAMPLE_RATE (float, no default) to set the sample rate.
+        Requires: pip install pyroscope-io (optional dependency).
+        When enabled, PYROSCOPE_SERVER_ADDRESS and PYROSCOPE_APP_NAME are required (no defaults).
+        Optional: PYROSCOPE_SAMPLE_RATE (parsed as integer) to set the sample rate.
         """
         if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
             verbose_proxy_logger.info(

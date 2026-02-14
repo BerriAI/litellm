@@ -69,7 +69,7 @@ polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = ">=0.1.12", optional = true, python = ">=3.9,<3.14"}
 mlflow = {version = ">3.1.4", optional = true, python = ">=3.10"}
 soundfile = {version = "^0.12.1", optional = true}
-pyroscope-io = {version = "^0.8", markers = "sys_platform != 'win32'"}
+pyroscope-io = {version = "^0.8", optional = true, markers = "sys_platform != 'win32'"}
 # grpcio constraints:
 # - 1.62.3+ required by grpcio-status
 # - 1.68.0-1.68.1 has reconnect bug (https://github.com/grpc/grpc/issues/38290)
