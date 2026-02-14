@@ -105,7 +105,10 @@ def test_map_openai_params_moonshot_reasoning_effort_disable_values_disable_reas
         drop_params=False,
     )
 
-    assert "reasoning_config" not in result
+    if reasoning_effort is None:
+        assert result["reasoning_config"] == "high"
+    else:
+        assert "reasoning_config" not in result
     assert "thinking" not in result
     assert "reasoning_effort" not in result
 
@@ -121,6 +124,17 @@ def test_prepare_request_params_translates_legacy_thinking_for_moonshot():
     assert additional_request_params["reasoning_config"] == "high"
     assert "thinking" not in additional_request_params
     assert "reasoning_effort" not in additional_request_params
+
+
+def test_prepare_request_params_defaults_reasoning_enabled_for_moonshot():
+    config = AmazonConverseConfig()
+
+    _, additional_request_params, _ = config._prepare_request_params(
+        optional_params={},
+        model="bedrock/us-east-1/moonshotai.kimi-k2.5",
+    )
+
+    assert additional_request_params["reasoning_config"] == "high"
 
 
 def test_prepare_request_params_translates_openai_reasoning_effort_dict_for_moonshot():
@@ -146,3 +160,26 @@ def test_prepare_request_params_thinking_disabled_does_not_set_reasoning_config(
 
     assert "reasoning_config" not in additional_request_params
     assert "thinking" not in additional_request_params
+
+
+@pytest.mark.parametrize(
+    "disable_value",
+    [
+        "none",
+        "false",
+        "disabled",
+        False,
+    ],
+)
+def test_prepare_request_params_reasoning_effort_disable_values_keep_reasoning_disabled(
+    disable_value,
+):
+    config = AmazonConverseConfig()
+
+    _, additional_request_params, _ = config._prepare_request_params(
+        optional_params={"reasoning_effort": disable_value},
+        model="bedrock/us-east-1/moonshotai.kimi-k2.5",
+    )
+
+    assert "reasoning_config" not in additional_request_params
+    assert "reasoning_effort" not in additional_request_params
