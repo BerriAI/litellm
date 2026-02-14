@@ -1,9 +1,10 @@
-import React from "react";
-import { Select, Typography, Tag } from "antd";
-import { TextInput } from "@tremor/react";
-import { PlusIcon, TrashIcon } from "@heroicons/react/outline";
-import { GuardrailPipeline, PipelineStep } from "./types";
+import React, { useState } from "react";
+import { Select, Typography, Tag, message } from "antd";
+import { Button, TextInput } from "@tremor/react";
+import { ArrowLeftIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import { GuardrailPipeline, PipelineStep, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
+import NotificationsManager from "../molecules/notifications_manager";
 
 const { Text } = Typography;
 
@@ -120,7 +121,7 @@ const StepCard: React.FC<StepCardProps> = ({
         padding: 20,
         backgroundColor: "#fff",
         boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-        maxWidth: 520,
+        maxWidth: 680,
         width: "100%",
       }}
     >
@@ -272,7 +273,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
           borderRadius: 12,
           padding: "16px 24px",
           backgroundColor: "#fafafa",
-          maxWidth: 520,
+          maxWidth: 680,
           width: "100%",
         }}
       >
@@ -355,7 +356,7 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
         borderRadius: 12,
         padding: "12px 20px",
         backgroundColor: "#fafafa",
-        maxWidth: 520,
+        maxWidth: 680,
         width: "100%",
       }}
     >
@@ -382,7 +383,7 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
             borderRadius: 12,
             padding: "12px 20px",
             backgroundColor: "#fff",
-            maxWidth: 520,
+            maxWidth: 680,
             width: "100%",
           }}
         >
@@ -414,6 +415,199 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
     ))}
   </div>
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Full-screen Flow Builder Page
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface FlowBuilderPageProps {
+  onBack: () => void;
+  onSuccess: () => void;
+  accessToken: string | null;
+  editingPolicy?: Policy | null;
+  availableGuardrails: Guardrail[];
+  createPolicy: (accessToken: string, policyData: any) => Promise<any>;
+  updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
+}
+
+export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
+  onBack,
+  onSuccess,
+  accessToken,
+  editingPolicy,
+  availableGuardrails,
+  createPolicy,
+  updatePolicy,
+}) => {
+  const isEditing = !!editingPolicy?.policy_id;
+
+  const [policyName, setPolicyName] = useState(editingPolicy?.policy_name || "");
+  const [description, setDescription] = useState(editingPolicy?.description || "");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pipeline, setPipeline] = useState<GuardrailPipeline>(
+    editingPolicy?.pipeline || { mode: "pre_call", steps: [createDefaultStep()] }
+  );
+
+  const handleSave = async () => {
+    if (!policyName.trim()) {
+      message.error("Please enter a policy name");
+      return;
+    }
+    if (!accessToken) {
+      message.error("No access token available");
+      return;
+    }
+
+    const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
+    if (emptySteps.length > 0) {
+      message.error("Please select a guardrail for all steps");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const guardrailsFromPipeline = pipeline.steps
+        .map((s) => s.guardrail)
+        .filter(Boolean);
+
+      const data: PolicyCreateRequest | PolicyUpdateRequest = {
+        policy_name: policyName,
+        description: description || undefined,
+        guardrails_add: guardrailsFromPipeline,
+        guardrails_remove: [],
+        pipeline: pipeline,
+      };
+
+      if (isEditing && editingPolicy) {
+        await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
+        NotificationsManager.success("Policy updated successfully");
+      } else {
+        await createPolicy(accessToken, data as PolicyCreateRequest);
+        NotificationsManager.success("Policy created successfully");
+      }
+
+      onSuccess();
+      onBack();
+    } catch (error) {
+      console.error("Failed to save policy:", error);
+      NotificationsManager.fromBackend(
+        "Failed to save policy: " + (error instanceof Error ? error.message : String(error))
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: "#f8f9fa",
+        zIndex: 1000,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      {/* Header bar */}
+      <div
+        style={{
+          borderBottom: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+          padding: "12px 24px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexShrink: 0,
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onBack}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 4,
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <ArrowLeftIcon style={{ width: 20, height: 20, color: "#6b7280" }} />
+          </button>
+          <Text type="secondary">Policies</Text>
+          <Text type="secondary">/</Text>
+          <TextInput
+            placeholder="Policy name..."
+            value={policyName}
+            onChange={(e) => setPolicyName(e.target.value)}
+            disabled={isEditing}
+            style={{ width: 240 }}
+          />
+          <Tag color="purple" style={{ margin: 0, fontSize: 11, fontWeight: 600 }}>
+            Flow
+          </Tag>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={onBack}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSave}
+            loading={isSubmitting}
+            style={{
+              backgroundColor: "#4f46e5",
+              color: "#fff",
+              border: "none",
+            }}
+          >
+            {isEditing ? "Update Policy" : "Save Policy"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Description bar */}
+      <div
+        style={{
+          padding: "8px 24px",
+          backgroundColor: "#fff",
+          borderBottom: "1px solid #e5e7eb",
+          flexShrink: 0,
+        }}
+      >
+        <TextInput
+          placeholder="Add a description (optional)..."
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          style={{ maxWidth: 500 }}
+        />
+      </div>
+
+      {/* Flow builder canvas - scrollable */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          display: "flex",
+          justifyContent: "center",
+          padding: "40px 24px",
+        }}
+      >
+        <div style={{ maxWidth: 760, width: "100%" }}>
+          <PipelineFlowBuilder
+            pipeline={pipeline}
+            onChange={setPipeline}
+            availableGuardrails={availableGuardrails}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export { createDefaultStep };
 export default PipelineFlowBuilder;
