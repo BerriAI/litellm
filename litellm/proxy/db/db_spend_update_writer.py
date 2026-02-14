@@ -1725,13 +1725,6 @@ class DBSpendUpdateWriter:
                 "prisma_client is None. Skipping writing spend logs to db."
             )
             return
-        base_daily_transaction = (
-            await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload, prisma_client, "agent"
-            )
-        )
-        if base_daily_transaction is None:
-            return
         if payload["agent_id"] is None:
             verbose_proxy_logger.debug(
                 "agent_id is None for request. Skipping incrementing agent spend."
