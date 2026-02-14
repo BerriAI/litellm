@@ -15,6 +15,7 @@ class AccessGroupCreateRequest(BaseModel):
 
 
 class AccessGroupUpdateRequest(BaseModel):
+    access_group_name: Optional[str] = None
     description: Optional[str] = None
     access_model_names: Optional[List[str]] = None
     access_mcp_server_ids: Optional[List[str]] = None
