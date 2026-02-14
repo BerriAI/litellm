@@ -184,6 +184,13 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
       },
       {
+        key: "access-groups",
+        page: "access-groups",
+        label: "Access Groups",
+        icon: <BlockOutlined />,
+        roles: all_admin_roles,
+      },
+      {
         key: "budgets",
         page: "budgets",
         label: "Budgets",
