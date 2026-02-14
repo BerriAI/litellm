@@ -5,6 +5,9 @@ This section covers integrations with various tools and services that can be use
 ## AI Agent Frameworks
 - **[Letta](./letta.md)** - Build stateful LLM agents with persistent memory using LiteLLM Proxy
 
+## Workflow Automation
+- **[n8n](./n8n.md)** - Workflow automation with 100+ LLMs through LiteLLM proxy
+
 ## Development Tools
 - **[OpenWebUI](../tutorials/openweb_ui.md)** - Self-hosted ChatGPT-style interface
 
