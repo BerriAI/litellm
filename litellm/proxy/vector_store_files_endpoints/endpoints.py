@@ -1,9 +1,9 @@
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
-import litellm
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -12,18 +12,252 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    handle_model_based_routing,
+    prepare_data_with_credentials,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_files_endpoint,
 )
 from litellm.types.utils import LlmProviders
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 router = APIRouter()
+
+
+def _update_request_data_with_managed_file_id(
+    data: Dict,
+    file_id: str,
+    request: Request,
+    llm_router: Optional["Router"] = None,
+) -> tuple[Dict, Optional[str]]:
+    """
+    Update request data with model routing information from managed file ID.
+    
+    This function handles two types of file IDs:
+    1. Simple encoded file IDs (format: litellm:{file_id};model,{model})
+    2. Unified managed file IDs (format: litellm_proxy:{mime};unified_id,{uuid};...;llm_output_file_id,{file_id};...)
+    
+    For unified managed file IDs, it:
+    - Decodes the unified ID to extract the actual provider file ID (llm_output_file_id)
+    - Extracts the model routing information (target_model_names)
+    - Updates data with credentials for the correct deployment
+    
+    Args:
+        data: Request data to update
+        file_id: File ID (can be managed/encoded or regular)
+        request: FastAPI request object
+        llm_router: LiteLLM router for credential lookup (required for managed files)
+        
+    Returns:
+        Tuple of (updated request data, original_managed_file_id)
+        - original_managed_file_id is the original file_id if it was managed/encoded, None otherwise
+    """
+    import re
+
+    from litellm import verbose_logger
+    from litellm.llms.base_llm.managed_resources.utils import (
+        is_base64_encoded_unified_id,
+        parse_unified_id,
+    )
+
+    # First, check if this is a unified managed file ID (base64 encoded)
+    decoded_id = is_base64_encoded_unified_id(file_id)
+    
+    if decoded_id:
+        # This is a unified managed file ID
+        verbose_logger.debug(
+            f"Processing unified managed file ID: {file_id}"
+        )
+        
+        # Parse the unified ID to extract components
+        parsed_id = parse_unified_id(file_id)
+        
+        if parsed_id:
+            target_model_names = parsed_id.get("target_model_names", [])
+            
+            # Extract the actual provider file ID from llm_output_file_id field
+            # Format: litellm_proxy:...;llm_output_file_id,{actual_file_id};...
+            llm_output_file_id = None
+            try:
+                match = re.search(r"llm_output_file_id,([^;]+)", decoded_id)
+                if match:
+                    llm_output_file_id = match.group(1).strip()
+            except Exception:
+                pass
+            
+            verbose_logger.debug(
+                f"Decoded unified file ID - target_model_names: {target_model_names}, llm_output_file_id: {llm_output_file_id}"
+            )
+            
+            # Set the model for routing
+            if target_model_names and len(target_model_names) > 0:
+                routing_model = target_model_names[0]
+                data["model"] = routing_model
+                
+                # Get credentials for the model
+                if llm_router:
+                    credentials = llm_router.get_deployment_credentials_with_provider(
+                        model_id=routing_model
+                    )
+                    if credentials:
+                        prepare_data_with_credentials(
+                            data=data,
+                            credentials=credentials,
+                            file_id=llm_output_file_id,  # Use the actual provider file ID
+                        )
+                        verbose_logger.info(
+                            f"Routing vector store file operation to model: {routing_model}, file_id: {file_id} -> {llm_output_file_id}"
+                        )
+                        return data, file_id  # Return original managed file ID
+            
+            # If we extracted the provider file ID but no routing, still use it
+            if llm_output_file_id:
+                data["file_id"] = llm_output_file_id
+                verbose_logger.debug(
+                    f"Replaced unified file ID with provider file ID: {llm_output_file_id}"
+                )
+                return data, file_id  # Return original managed file ID
+        
+        return data, file_id if decoded_id else None
+    
+    # Fall back to simple encoded file ID handling (format: litellm:{file_id};model,{model})
+    should_route, model_used, original_file_id, credentials = handle_model_based_routing(
+        file_id=file_id,
+        request=request,
+        llm_router=llm_router,
+        data=data,
+        check_file_id_encoding=True,
+    )
+    
+    if should_route:
+        # Use model-based routing with credentials from config
+        prepare_data_with_credentials(
+            data=data,
+            credentials=credentials,  # type: ignore
+            file_id=original_file_id,  # Use decoded file ID if from encoded ID
+        )
+        
+        verbose_logger.debug(
+            f"Routing vector store file operation using model: {model_used}"
+            + (f", file_id: {file_id} -> {original_file_id}" if original_file_id else "")
+        )
+        return data, file_id  # Return original file ID for response replacement
+    
+    return data, None
+
+
+def _replace_file_id_in_response(response, original_file_id: str):
+    """
+    Replace the provider file ID in the response with the original managed file ID.
+    
+    This ensures that when a user sends a managed file ID, they get back the same
+    managed file ID in the response, not the decoded provider file ID.
+    
+    Args:
+        response: The response object from the provider
+        original_file_id: The original managed file ID to restore
+        
+    Returns:
+        Modified response with original file ID
+    """
+    if response is None:
+        return response
+    
+    # Handle different response types
+    if isinstance(response, dict):
+        # For dict responses (e.g., VectorStoreFileDeleteResponse)
+        if "id" in response:
+            response["id"] = original_file_id
+        if "file_id" in response:
+            response["file_id"] = original_file_id
+    elif hasattr(response, "id"):
+        # For object responses (e.g., VectorStoreFileObject)
+        response.id = original_file_id
+    elif hasattr(response, "file_id"):
+        response.file_id = original_file_id
+    
+    return response
 
 
 def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
+    llm_router: Optional["Router"] = None,
 ) -> Dict:
+    """
+    Update request data with model routing information from managed vector store.
+    
+    This function handles two types of vector stores:
+    1. Legacy vector stores from registry (non-managed)
+    2. Managed vector stores with unified IDs (requires decoding)
+    
+    For managed vector stores, this function:
+    - Decodes the unified vector store ID
+    - Extracts the model_id and provider resource ID
+    - Sets data["model"] so the router can use the correct deployment credentials
+    - Replaces the unified ID with the provider-specific ID
+    
+    Args:
+        data: Request data to update
+        vector_store_id: Vector store ID (can be unified or legacy)
+        llm_router: LiteLLM router for credential lookup (required for managed vector stores)
+        
+    Returns:
+        Updated request data with model routing information
+    """
+    from litellm import verbose_logger
+    from litellm.llms.base_llm.managed_resources.utils import (
+        is_base64_encoded_unified_id,
+        parse_unified_id,
+    )
+
+    # Check if this is a managed vector store ID (base64 encoded unified ID)
+    decoded_id = is_base64_encoded_unified_id(vector_store_id)
+    
+    if decoded_id:
+        # This is a managed vector store - decode and extract routing information
+        verbose_logger.debug(
+            f"Processing managed vector store ID: {vector_store_id}"
+        )
+        
+        parsed_id = parse_unified_id(vector_store_id)
+        
+        if parsed_id:
+            model_id = parsed_id.get("model_id")
+            provider_resource_id = parsed_id.get("provider_resource_id")
+            target_model_names = parsed_id.get("target_model_names", [])
+            
+            verbose_logger.debug(
+                f"Decoded vector store - model_id: {model_id}, provider_resource_id: {provider_resource_id}, target_model_names: {target_model_names}"
+            )
+            
+            # Set the model for routing - this tells the router which deployment to use
+            # The router will automatically get the credentials from the deployment
+            routing_model = None
+            if model_id:
+                routing_model = model_id
+            elif target_model_names and len(target_model_names) > 0:
+                routing_model = target_model_names[0]
+            
+            if routing_model:
+                data["model"] = routing_model
+                verbose_logger.info(
+                    f"Routing vector store files operation to model: {routing_model}"
+                )
+            
+            # Replace unified vector store ID with provider resource ID
+            if provider_resource_id:
+                data["vector_store_id"] = provider_resource_id
+                verbose_logger.debug(
+                    f"Replaced unified vector store ID with provider resource ID: {provider_resource_id}"
+                )
+        
+        return data
+    
+    # Legacy path: Check vector store registry for non-managed vector stores
     if litellm.vector_store_registry is not None:
         vector_store_to_run = (
             litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
@@ -42,6 +276,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
             if "litellm_params" in vector_store_to_run:
                 litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
                 data.update(litellm_params)
+    
     return data
 
 
@@ -128,8 +363,16 @@ async def vector_store_file_create(
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
 
+    # Handle managed file IDs if present in request body
+    original_managed_file_id = None
+    if "file_id" in data:
+        data, original_managed_file_id = _update_request_data_with_managed_file_id(
+            data=data, file_id=data["file_id"], request=request, llm_router=llm_router
+        )
+
+    # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, llm_router=llm_router
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -145,7 +388,7 @@ async def vector_store_file_create(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -163,6 +406,12 @@ async def vector_store_file_create(
             user_api_base=user_api_base,
             version=version,
         )
+        
+        # Replace provider file ID with original managed file ID in response
+        if original_managed_file_id:
+            response = _replace_file_id_in_response(response, original_managed_file_id)
+        
+        return response
     except Exception as e:  # noqa: BLE001
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -209,7 +458,7 @@ async def vector_store_file_list(
     data.update(query_params)
 
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, llm_router=llm_router
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -290,8 +539,14 @@ async def vector_store_file_retrieve(
         "file_id": file_id,
     }
 
+    # Handle managed file IDs first
+    data, original_managed_file_id = _update_request_data_with_managed_file_id(
+        data=data, file_id=file_id, request=request, llm_router=llm_router
+    )
+
+    # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, llm_router=llm_router
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -307,7 +562,7 @@ async def vector_store_file_retrieve(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -325,6 +580,12 @@ async def vector_store_file_retrieve(
             user_api_base=user_api_base,
             version=version,
         )
+        
+        # Replace provider file ID with original managed file ID in response
+        if original_managed_file_id:
+            response = _replace_file_id_in_response(response, original_managed_file_id)
+        
+        return response
     except Exception as e:  # noqa: BLE001
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -372,8 +633,14 @@ async def vector_store_file_content(
         "file_id": file_id,
     }
 
+    # Handle managed file IDs first
+    data, original_managed_file_id = _update_request_data_with_managed_file_id(
+        data=data, file_id=file_id, request=request, llm_router=llm_router
+    )
+
+    # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, llm_router=llm_router
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -389,7 +656,7 @@ async def vector_store_file_content(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -407,6 +674,12 @@ async def vector_store_file_content(
             user_api_base=user_api_base,
             version=version,
         )
+        
+        # Replace provider file ID with original managed file ID in response
+        if original_managed_file_id:
+            response = _replace_file_id_in_response(response, original_managed_file_id)
+        
+        return response
     except Exception as e:  # noqa: BLE001
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -454,8 +727,14 @@ async def vector_store_file_update(
     data["vector_store_id"] = vector_store_id
     data["file_id"] = file_id
 
+    # Handle managed file IDs first
+    data, original_managed_file_id = _update_request_data_with_managed_file_id(
+        data=data, file_id=file_id, request=request, llm_router=llm_router
+    )
+
+    # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, llm_router=llm_router
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -471,7 +750,7 @@ async def vector_store_file_update(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -489,6 +768,12 @@ async def vector_store_file_update(
             user_api_base=user_api_base,
             version=version,
         )
+        
+        # Replace provider file ID with original managed file ID in response
+        if original_managed_file_id:
+            response = _replace_file_id_in_response(response, original_managed_file_id)
+        
+        return response
     except Exception as e:  # noqa: BLE001
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -536,8 +821,14 @@ async def vector_store_file_delete(
         "file_id": file_id,
     }
 
+    # Handle managed file IDs first
+    data, original_managed_file_id = _update_request_data_with_managed_file_id(
+        data=data, file_id=file_id, request=request, llm_router=llm_router
+    )
+
+    # Then handle managed vector store IDs
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, llm_router=llm_router
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
@@ -553,7 +844,7 @@ async def vector_store_file_delete(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -571,6 +862,12 @@ async def vector_store_file_delete(
             user_api_base=user_api_base,
             version=version,
         )
+        
+        # Replace provider file ID with original managed file ID in response
+        if original_managed_file_id:
+            response = _replace_file_id_in_response(response, original_managed_file_id)
+        
+        return response
     except Exception as e:  # noqa: BLE001
         raise await processor._handle_llm_api_exception(
             e=e,

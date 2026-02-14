@@ -41,7 +41,9 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const { userId, userRole } = useAuthorized();
 
-  const isEditing = !!editingPolicy;
+  // Only consider it "editing" if editingPolicy has a policy_id (real existing policy)
+  // If editingPolicy is set but has no policy_id, it's just pre-filled data for a new policy (e.g., from a template)
+  const isEditing = !!editingPolicy?.policy_id;
 
   useEffect(() => {
     if (visible && editingPolicy) {

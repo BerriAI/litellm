@@ -10,10 +10,13 @@ Endpoints here:
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 - GET `/v1/mcp/tools - lists all the tools available for a key
 - GET `/v1/mcp/access_groups` - lists all available MCP access groups
+- GET `/v1/mcp/discover` - Returns curated list of well-known MCP servers for discovery UI
 
 """
 
 import importlib
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Literal, Optional
@@ -1176,3 +1179,88 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_proxy_logger.exception(f"Error making agent public: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    # --- MCP Discovery ---
+
+    _MCP_REGISTRY_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "mcp_registry.json",
+    )
+
+    _mcp_registry_cache: Optional[Dict[str, Any]] = None
+
+    def _load_mcp_registry() -> Dict[str, Any]:
+        """Load the curated MCP registry from disk. Cached after first read."""
+        global _mcp_registry_cache
+        if _mcp_registry_cache is not None:
+            return _mcp_registry_cache
+        try:
+            with open(_MCP_REGISTRY_PATH, "r") as f:
+                data: Dict[str, Any] = json.load(f)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to load MCP registry from {_MCP_REGISTRY_PATH}: {e}"
+            )
+            data = {"servers": []}
+        _mcp_registry_cache = data
+        return data
+
+    @router.get(
+        "/discover",
+        description="Returns a curated list of well-known MCP servers for discovery UI",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def discover_mcp_servers(
+        query: Optional[str] = Query(
+            None, description="Search filter for server names and descriptions"
+        ),
+        category: Optional[str] = Query(
+            None, description="Filter by category"
+        ),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Returns a curated list of well-known MCP servers that can be added to the proxy.
+
+        Used by the UI to show a discovery grid when adding new MCP servers.
+        """
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can access MCP discovery. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        registry = _load_mcp_registry()
+        servers = registry.get("servers", [])
+
+        # Apply query filter
+        if query:
+            query_lower = query.lower()
+            servers = [
+                s
+                for s in servers
+                if query_lower in s.get("name", "").lower()
+                or query_lower in s.get("title", "").lower()
+                or query_lower in s.get("description", "").lower()
+            ]
+
+        # Apply category filter
+        if category:
+            servers = [
+                s for s in servers if s.get("category", "") == category
+            ]
+
+        # Extract unique categories from the full list (before filtering)
+        all_servers = registry.get("servers", [])
+        categories = sorted(
+            set(s.get("category", "Other") for s in all_servers)
+        )
+
+        return {
+            "servers": servers,
+            "categories": categories,
+        }

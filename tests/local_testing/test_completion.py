@@ -2189,7 +2189,7 @@ def test_completion_openrouter1():
     try:
         litellm.set_verbose = True
         response = completion(
-            model="openrouter/mistralai/mistral-tiny",
+            model="openrouter/mistralai/ministral-8b",
             messages=messages,
             max_tokens=5,
         )

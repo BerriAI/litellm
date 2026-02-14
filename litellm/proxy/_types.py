@@ -420,7 +420,8 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools",
         "/mcp/tools/list",
         "/mcp/tools/call",
-        # Read-only MCP discovery endpoint (virtual keys may be allowed here)
+        "/mcp-rest/tools/list",
+        "/mcp-rest/tools/call",
         "/v1/mcp/server",
     ]
 
@@ -513,6 +514,8 @@ class LiteLLMRoutes(enum.Enum):
         "/user/delete",
         "/user/info",
         "/user/list",
+        "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         # team
         "/team/new",
         "/team/update",
@@ -525,6 +528,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/available",
         "/team/permissions_list",
         "/team/permissions_update",
+        "/team/daily/activity",
         # model
         "/model/new",
         "/model/update",
@@ -632,6 +636,9 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
+        "/invitation/new",
+        "/invitation/delete",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -889,6 +896,7 @@ class KeyRequestBase(GenerateRequestBase):
         Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
     router_settings: Optional[UpdateRouterConfig] = None
+    access_group_ids: Optional[List[str]] = None
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -1498,6 +1506,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     models: list = []
     blocked: bool = False
     router_settings: Optional[dict] = None
+    access_group_ids: Optional[List[str]] = None
 
 
 class NewTeamRequest(TeamBase):
@@ -1585,6 +1594,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     router_settings: Optional[dict] = None
+    access_group_ids: Optional[List[str]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -2173,6 +2183,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    access_group_ids: Optional[List[str]] = None
     rotation_count: Optional[int] = 0  # Number of times key has been rotated
     auto_rotate: Optional[bool] = False  # Whether this key should be auto-rotated
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
@@ -3939,6 +3950,18 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune", "response"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+
+
+class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
+    """Table for managing vector stores with target_model_names support."""
+    unified_resource_id: str
+    resource_object: Optional[Any] = None  # VectorStoreCreateResponse
+    model_mappings: Dict[str, str]
+    flat_model_resource_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
+    storage_backend: Optional[str] = None
+    storage_url: Optional[str] = None
 
 
 class EnterpriseLicenseData(TypedDict, total=False):
