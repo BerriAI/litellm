@@ -88,6 +88,32 @@ Need to distribute guardrail requests across multiple accounts or regions? See [
 - Weighted distribution across guardrail instances
 - Multi-region guardrail deployments
 
+### Retrying failed guardrail calls
+
+Guardrail calls (e.g. to Bedrock, Lakera, Model Armor) are retried on transient failures (429, 5xx, timeouts, network errors), using the same retry rules as the router. You can configure retries per guardrail or set defaults for all guardrails in `router_settings`.
+
+**Per-guardrail** — Add `num_retries` and/or `retry_after` under `litellm_params`:
+
+```yaml
+guardrails:
+  - guardrail_name: "bedrock-guard"
+    litellm_params:
+      guardrail: bedrock
+      mode: pre_call
+      num_retries: 3           # number of retries (default: 2; use 0 to disable)
+      retry_after: 1.0        # minimum seconds to wait before retry (used in backoff)
+```
+
+**Proxy-level defaults** — Set defaults in `router_settings` so guardrails that don't specify their own values use these:
+
+```yaml
+router_settings:
+  guardrail_num_retries: 3    # default retries for all guardrails
+  guardrail_retry_after: 1.0 # default minimum wait before retry (seconds)
+```
+
+Retries are not attempted for policy violations (e.g. `ModifyResponseException`, `ContentPolicyViolationError`) or non-retriable 4xx (e.g. 404).
+
 
 ## 2. Start LiteLLM Gateway 
 
@@ -633,6 +659,8 @@ guardrails:
       api_key: string          # Required: API key for the guardrail service
       api_base: string         # Optional: Base URL for the guardrail service
       default_on: boolean      # Optional: Default False. When set to True, will run on every request, does not need client to specify guardrail in request
+      num_retries: int         # Optional: Number of retries for failed guardrail calls (default: 2; 0 to disable). Retries on 429, 5xx, timeouts.
+      retry_after: float       # Optional: Minimum seconds to wait before retrying (used in backoff).
     guardrail_info:            # Optional[Dict]: Additional information about the guardrail
       
 ```
