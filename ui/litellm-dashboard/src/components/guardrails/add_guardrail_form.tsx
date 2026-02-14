@@ -324,6 +324,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
       // For Content Filter, add patterns, blocked words, and categories
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
+        // Validate that at least one content filter setting is configured
+        if (selectedPatterns.length === 0 && blockedWords.length === 0 && selectedContentCategories.length === 0) {
+          NotificationsManager.fromBackend(
+            "Please configure at least one content filter setting (category, pattern, or keyword)"
+          );
+          setLoading(false);
+          return;
+        }
+
         if (selectedPatterns.length > 0) {
           guardrailData.litellm_params.patterns = selectedPatterns.map((p) => ({
             pattern_type: p.type === "prebuilt" ? "prebuilt" : "regex",
