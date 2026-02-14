@@ -1661,8 +1661,8 @@ async def test_model_armor_retry_exhausted():
 
         with pytest.raises(_httpx.HTTPStatusError):
             await guardrail.make_model_armor_request(content="hi", source="user_prompt", request_data={})
-        # 1 initial + _call_guardrail_with_retries(1 + 2 retries) = 4
-        assert mock_post.call_count == 4
+        # 1 initial + 2 retries = 3
+        assert mock_post.call_count == 3
 
 
 @pytest.mark.asyncio
