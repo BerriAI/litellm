@@ -1704,12 +1704,12 @@ def add_guardrails_from_policy_engine(
         f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
     )
 
-    # Match and track policies (may be empty, but resolution still happens)
+    # Match and track policies based on attachments and request body
     _match_and_track_policies(data, context, request_body_policies)
 
-    # Apply resolved guardrails to metadata
-    # Note: PolicyResolver does its own independent matching and inheritance resolution,
-    # so we always call it even if applied_policy_names is empty
+    # Always resolve and apply guardrails, even if no policies matched above.
+    # PolicyResolver does its own independent matching and inheritance resolution,
+    # so guardrails can still be applied via inherited parent policies.
     _apply_resolved_guardrails_to_metadata(data, metadata_variable_name, context)
 
 
