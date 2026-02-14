@@ -1084,7 +1084,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         keyword: str,
         action: ContentFilterAction,
-        description: str,
+        description: Optional[str],
         text: str,
         detections: Optional[List[ContentFilterDetection]],
     ) -> str:
