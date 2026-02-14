@@ -8,9 +8,7 @@ that we properly catch this error and return a meaningful error message.
 Related issue: https://github.com/BerriAI/litellm/issues/20589
 """
 
-import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.common_utils import BedrockError

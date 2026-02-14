@@ -1676,8 +1676,9 @@ class AWSEventStreamDecoder:
                 try:
                     error_response = json.loads(accumulated_bytes.decode("utf-8"))
                     error_message = error_response.get("message", str(error_response))
+                    status_code = int(error_response.get("status_code", error_response.get("statusCode", 400)))
                     raise BedrockError(
-                        status_code=400,
+                        status_code=status_code,
                         message=f"Bedrock returned error: {error_message}",
                     )
                 except json.JSONDecodeError:
@@ -1711,8 +1712,9 @@ class AWSEventStreamDecoder:
                 try:
                     error_response = json.loads(accumulated_bytes.decode("utf-8"))
                     error_message = error_response.get("message", str(error_response))
+                    status_code = int(error_response.get("status_code", error_response.get("statusCode", 400)))
                     raise BedrockError(
-                        status_code=400,
+                        status_code=status_code,
                         message=f"Bedrock returned error: {error_message}",
                     )
                 except json.JSONDecodeError:
