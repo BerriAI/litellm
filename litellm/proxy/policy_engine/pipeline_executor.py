@@ -14,6 +14,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -157,7 +158,7 @@ class PipelineExecutor:
             data["metadata"]["guardrails"] = [step.guardrail]
 
             # Use unified_guardrail path if callback implements apply_guardrail
-            target = callback
+            target: CustomLogger = callback
             use_unified = "apply_guardrail" in type(callback).__dict__
             if use_unified:
                 data["guardrail_to_apply"] = callback
