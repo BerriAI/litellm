@@ -126,6 +126,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ad_hoc_recognizers = presidio_ad_hoc_recognizers
         if ad_hoc_recognizers is not None:
             try:
+                # Sanitize file path to prevent path traversal attacks
+                ad_hoc_recognizers = self._validate_recognizer_file_path(ad_hoc_recognizers)
                 with open(ad_hoc_recognizers, "r") as file:
                     self.ad_hoc_recognizers = json.load(file)
             except FileNotFoundError:
@@ -142,6 +144,51 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_analyzer_api_base=presidio_analyzer_api_base,
             presidio_anonymizer_api_base=presidio_anonymizer_api_base,
         )
+
+    @staticmethod
+    def _validate_recognizer_file_path(file_path: str) -> str:
+        """
+        Validate and sanitize the ad-hoc recognizers file path to prevent
+        path traversal attacks.
+
+        Ensures:
+        1. No path traversal sequences (../)
+        2. File must have .json extension
+        3. Path is resolved to absolute and checked
+        4. Path must stay within the current working directory (directory boundary check)
+        """
+        import os
+
+        # Reject paths containing path traversal sequences
+        if ".." in file_path:
+            raise ValueError(
+                f"Invalid file path: path traversal sequences are not allowed. file_path={file_path}"
+            )
+
+        # Ensure the file has a .json extension
+        if not file_path.endswith(".json"):
+            raise ValueError(
+                f"Invalid file path: only .json files are allowed. file_path={file_path}"
+            )
+
+        # Resolve to absolute path
+        resolved_path = os.path.realpath(file_path)
+
+        # Ensure resolved path still ends with .json (in case of symlink tricks)
+        if not resolved_path.endswith(".json"):
+            raise ValueError(
+                f"Invalid file path: resolved path must be a .json file. file_path={file_path}"
+            )
+
+        # Directory boundary check: ensure the resolved path stays within the
+        # current working directory to prevent absolute path attacks
+        base_dir = os.path.realpath(os.getcwd())
+        if not (resolved_path.startswith(base_dir + os.sep) or resolved_path == base_dir):
+            raise ValueError(
+                f"Invalid file path: path must be within the working directory. file_path={file_path}"
+            )
+
+        return resolved_path
 
     def validate_environment(
         self,
