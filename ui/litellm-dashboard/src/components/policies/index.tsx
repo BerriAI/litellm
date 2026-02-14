@@ -443,7 +443,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
             <Alert
               message="Enterprise Feature Notice"
-              description="Team, Key, and Tag policy attachments will be on LiteLLM Enterprise in subsequent releases."
+              description="Parts of policy attachments will be on LiteLLM Enterprise in subsequent releases."
               type="warning"
               showIcon
               closable
