@@ -475,8 +475,8 @@ class ProxyLogging:
 
         # Replace string entries in litellm.callbacks with initialized instances
         for idx, initialized_callback in string_callbacks_to_replace.items():
-            litellm.callbacks[idx] = initialized_callback        
-            
+            litellm.callbacks[idx] = initialized_callback
+
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
     ):
