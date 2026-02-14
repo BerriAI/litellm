@@ -10,6 +10,12 @@ Configuration:
 - `policy_attachments`: Define WHERE policies apply (teams, keys, models)
 """
 
+from litellm.types.proxy.policy_engine.pipeline_types import (
+    GuardrailPipeline,
+    PipelineExecutionResult,
+    PipelineStep,
+    PipelineStepResult,
+)
 from litellm.types.proxy.policy_engine.policy_types import (
     Policy,
     PolicyAttachment,
@@ -48,6 +54,11 @@ from litellm.types.proxy.policy_engine.validation_types import (
 )
 
 __all__ = [
+    # Pipeline types
+    "GuardrailPipeline",
+    "PipelineStep",
+    "PipelineStepResult",
+    "PipelineExecutionResult",
     # Policy types
     "Policy",
     "PolicyConfig",
