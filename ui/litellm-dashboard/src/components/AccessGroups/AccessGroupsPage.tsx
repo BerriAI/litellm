@@ -59,7 +59,7 @@ function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
     id: r.access_group_id,
     name: r.access_group_name,
     description: r.description ?? "",
-    modelIds: r.access_model_ids,
+    modelIds: r.access_model_names,
     mcpServerIds: r.access_mcp_server_ids,
     agentIds: r.access_agent_ids,
     keyIds: r.assigned_key_ids,

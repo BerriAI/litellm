@@ -15,7 +15,7 @@ export interface AccessGroupResponse {
   access_group_id: string;
   access_group_name: string;
   description: string | null;
-  access_model_ids: string[];
+  access_model_names: string[];
   access_mcp_server_ids: string[];
   access_agent_ids: string[];
   assigned_team_ids: string[];
