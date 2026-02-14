@@ -22022,7 +22022,6 @@
         "input_cost_per_second": 5e-05,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
@@ -22031,7 +22030,6 @@
         "input_cost_per_second": 5e-05,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
