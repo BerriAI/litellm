@@ -1174,10 +1174,14 @@ def _resolve_vertex_model_from_router(
 
 def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
     """
-    Return True, if the endpoint should be routed to the `bedrock-agent-runtime` endpoint.
+    Return True if the endpoint should be routed to the `bedrock-agent-runtime` endpoint.
+
+    Uses normalized path segments so trailing slashes are not required.
     """
+    normalized = endpoint.strip("/")
+    parts = normalized.split("/")
     for _route in BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES:
-        if _route in endpoint:
+        if _route in parts:
             return True
     return False
 

@@ -1197,13 +1197,13 @@ PYTHON_GC_THRESHOLD = os.getenv("PYTHON_GC_THRESHOLD")
 
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
-    "agents/",
-    "knowledgebases/",
-    "flows/",
-    "retrieveAndGenerate/",
-    "rerank/",
-    "generateQuery/",
-    "optimize-prompt/",
+    "agents",
+    "knowledgebases",
+    "flows",
+    "retrieveAndGenerate",
+    "rerank",
+    "generateQuery",
+    "optimize-prompt",
 ]
 
 

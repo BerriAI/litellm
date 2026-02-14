@@ -419,6 +419,17 @@ def test_is_bedrock_agent_runtime_route():
     )
     assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
 
+    # Test endpoints without trailing slashes still match
+    assert _is_bedrock_agent_runtime_route("agents") is True
+    assert _is_bedrock_agent_runtime_route("knowledgebases") is True
+    assert _is_bedrock_agent_runtime_route("flows") is True
+    assert _is_bedrock_agent_runtime_route("/agents") is True
+    assert _is_bedrock_agent_runtime_route("/knowledgebases/") is True
+
+    # Test that partial segment matches do NOT match (no substring false positives)
+    assert _is_bedrock_agent_runtime_route("/myagents/foo") is False
+    assert _is_bedrock_agent_runtime_route("/someflows/bar") is False
+
 
 def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict):
     """
