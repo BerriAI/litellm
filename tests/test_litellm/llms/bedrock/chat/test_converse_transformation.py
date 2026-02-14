@@ -3308,6 +3308,57 @@ def test_add_additional_properties_non_object():
     assert result == {"type": "string"}
 
 
+def test_add_additional_properties_definitions():
+    """Recursively processes object types inside 'definitions' (not just '$defs')."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "item": {"$ref": "#/definitions/Item"},
+        },
+        "definitions": {
+            "Item": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "details": {
+                        "type": "object",
+                        "properties": {"weight": {"type": "number"}},
+                    },
+                },
+            }
+        },
+    }
+    result = AmazonConverseConfig._add_additional_properties_to_schema(schema)
+    # Top-level
+    assert result["additionalProperties"] is False
+    # definitions object
+    assert result["definitions"]["Item"]["additionalProperties"] is False
+    # Nested object inside definitions
+    assert result["definitions"]["Item"]["properties"]["details"]["additionalProperties"] is False
+
+
+def test_json_object_no_schema_falls_back_to_tool_call():
+    """response_format: {type: json_object} with no schema should use tool-call fallback,
+    even for models that support native structured outputs."""
+    config = AmazonConverseConfig()
+    optional_params: dict = {}
+    non_default_params = {"response_format": {"type": "json_object"}}
+
+    result = config._translate_response_format_param(
+        value=non_default_params["response_format"],
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        is_thinking_enabled=False,
+    )
+
+    # Should NOT use native outputConfig (no schema provided)
+    assert "outputConfig" not in result
+    # Should use tool-call fallback
+    assert "tools" in result
+    assert result["json_mode"] is True
+
+
 def test_output_config_applies_additional_properties():
     """_create_output_config_for_response_format normalizes the schema."""
     schema = {
