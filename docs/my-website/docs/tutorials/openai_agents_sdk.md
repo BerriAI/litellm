@@ -15,6 +15,29 @@ The OpenAI Agents SDK provides a high-level interface for building AI agents. By
 - Switch easily between models from different providers
 - Connect to a LiteLLM proxy for centralized model management
 
+:::tip Built-in LiteLLM Extension
+
+The OpenAI Agents SDK includes an official LiteLLM extension (`LitellmModel`) that works without a proxy. If you don't need centralized proxy features (cost tracking, rate limiting, load balancing), you can use it directly:
+
+```python
+from agents import Agent, Runner
+from agents.extensions.models.litellm_model import LitellmModel
+
+
+agent = Agent(
+    name="Assistant",
+    instructions="You are a helpful assistant.",
+    model=LitellmModel(model="anthropic/claude-sonnet-4-20250514"),
+)
+
+result = Runner.run_sync(agent, "Hello!")
+print(result.final_output)
+```
+
+See the [Docs](https://openai.github.io/openai-agents-python/models/litellm/) for more details. The rest of this tutorial focuses on the **proxy-based approach** for teams that need centralized model management.
+
+:::
+
 ## Prerequisites
 
 - Python environment setup
@@ -27,9 +50,50 @@ The OpenAI Agents SDK provides a high-level interface for building AI agents. By
 pip install openai-agents litellm
 ```
 
-## 1. Setting Up Environment
+## 1. Start LiteLLM Proxy
 
-First, import the necessary libraries and configure your LiteLLM proxy connection:
+Configure and start the LiteLLM proxy with the models you want to use:
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: bedrock-claude-sonnet-4
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: "openai/gpt-4o"
+
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-20250514"
+
+  - model_name: bedrock-claude-haiku
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"
+```
+
+```bash
+litellm --config config.yaml
+```
+
+Required environment variables:
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy URL |
+| `LITELLM_API_KEY` | `sk-1234` | Your LiteLLM API key (not your provider's key) |
+
+## 2. Setting Up Environment
+
+Import the necessary libraries and configure your LiteLLM proxy connection:
 
 ```python showLineNumbers title="Setup environment"
 from __future__ import annotations
@@ -66,7 +130,7 @@ client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
 set_tracing_disabled(disabled=True)
 ```
 
-## 2. Create a Custom Model Provider
+## 3. Create a Custom Model Provider
 
 The Agents SDK uses a `ModelProvider` to resolve model names. Create a custom provider that routes all requests through LiteLLM:
 
@@ -82,7 +146,7 @@ class LiteLLMModelProvider(ModelProvider):
 LITELLM_MODEL_PROVIDER = LiteLLMModelProvider()
 ```
 
-## 3. Define a Simple Tool
+## 4. Define a Simple Tool
 
 Create a tool that your agent can use:
 
@@ -113,9 +177,9 @@ def get_weather(city: str) -> str:
         return f"Sorry, I don't have weather information for '{city}'."
 ```
 
-## 4. Using Different Models with Agents
+## 5. Using Different Models with Agents
 
-### 4.1 Using Bedrock Models
+### 5.1 Using Bedrock Models
 
 ```python showLineNumbers title="Bedrock model via LiteLLM proxy"
 async def test_bedrock_agent():
@@ -143,7 +207,7 @@ async def test_bedrock_agent():
 asyncio.run(test_bedrock_agent())
 ```
 
-### 4.2 Using OpenAI Models
+### 5.2 Using OpenAI Models
 
 ```python showLineNumbers title="OpenAI model via LiteLLM proxy"
 async def test_openai_agent():
@@ -171,7 +235,7 @@ async def test_openai_agent():
 asyncio.run(test_openai_agent())
 ```
 
-### 4.3 Using Anthropic Models
+### 5.3 Using Anthropic Models
 
 ```python showLineNumbers title="Anthropic model via LiteLLM proxy"
 async def test_anthropic_agent():
@@ -198,49 +262,6 @@ async def test_anthropic_agent():
 
 asyncio.run(test_anthropic_agent())
 ```
-
-## 5. Start LiteLLM Proxy
-
-Configure LiteLLM proxy with the models used above:
-
-```yaml title="config.yaml" showLineNumbers
-model_list:
-  - model_name: bedrock-claude-sonnet-4
-    litellm_params:
-      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
-      aws_region_name: "us-east-1"
-
-  - model_name: gpt-4o
-    litellm_params:
-      model: "openai/gpt-4o"
-
-  - model_name: claude-sonnet-4
-    litellm_params:
-      model: "anthropic/claude-sonnet-4-20250514"
-
-  - model_name: bedrock-claude-haiku
-    litellm_params:
-      model: "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
-      aws_region_name: "us-east-1"
-
-  - model_name: bedrock-nova-premier
-    litellm_params:
-      model: "bedrock/amazon.nova-premier-v1:0"
-      aws_region_name: "us-east-1"
-```
-
-```bash
-litellm --config config.yaml
-```
-
-![LiteLLM ScreenShot](../../img/litellm_proxy_setup.png)
-
-Required environment variables:
-
-| Variable | Value | Description |
-|----------|-------|-------------|
-| `LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy URL |
-| `LITELLM_API_KEY` | `sk-1234` | Your LiteLLM API key (not your provider's key) |
 
 ## 6. Complete Working Example
 
