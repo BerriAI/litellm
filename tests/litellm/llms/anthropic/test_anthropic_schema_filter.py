@@ -40,7 +40,13 @@ class TestFilterAnthropicOutputSchema:
         
         # Other fields preserved
         assert result["properties"]["age"]["type"] == "integer"
-        assert result["properties"]["age"]["description"] == "Person's age"
+        # Description should be updated with removed constraint info
+        assert "Person's age" in result["properties"]["age"]["description"]
+        assert "minimum value: 0" in result["properties"]["age"]["description"]
+        assert "maximum value: 150" in result["properties"]["age"]["description"]
+        # Score had no description, should get one from constraints
+        assert "exclusive minimum value: 0" in result["properties"]["score"]["description"]
+        assert "exclusive maximum value: 100" in result["properties"]["score"]["description"]
 
     def test_removes_string_constraints(self):
         """Test that minLength/maxLength are removed from string schemas."""
@@ -60,6 +66,9 @@ class TestFilterAnthropicOutputSchema:
         assert "minLength" not in result["properties"]["name"]
         assert "maxLength" not in result["properties"]["name"]
         assert result["properties"]["name"]["type"] == "string"
+        # Description should contain constraint info
+        assert "minimum length: 1" in result["properties"]["name"]["description"]
+        assert "maximum length: 100" in result["properties"]["name"]["description"]
 
     def test_removes_array_constraints(self):
         """Test that minItems/maxItems are removed from array schemas."""
@@ -76,6 +85,9 @@ class TestFilterAnthropicOutputSchema:
         assert "maxItems" not in result
         assert result["type"] == "array"
         assert result["items"] == {"type": "string"}
+        # Description should contain constraint info
+        assert "minimum number of items: 1" in result["description"]
+        assert "maximum number of items: 10" in result["description"]
 
     def test_handles_nested_schemas(self):
         """Test that nested schemas are also filtered."""

@@ -240,9 +240,40 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "minLength", "maxLength",         # string constraints
         }
 
+        # Build description additions from removed constraints
+        constraint_descriptions: list = []
+        constraint_labels = {
+            "minItems": "minimum number of items: {}",
+            "maxItems": "maximum number of items: {}",
+            "minimum": "minimum value: {}",
+            "maximum": "maximum value: {}",
+            "exclusiveMinimum": "exclusive minimum value: {}",
+            "exclusiveMaximum": "exclusive maximum value: {}",
+            "minLength": "minimum length: {}",
+            "maxLength": "maximum length: {}",
+        }
+        for field in unsupported_fields:
+            if field in schema:
+                constraint_descriptions.append(
+                    constraint_labels[field].format(schema[field])
+                )
+
         result: Dict[str, Any] = {}
+
+        # Update description with removed constraint info
+        if constraint_descriptions:
+            existing_desc = schema.get("description", "")
+            constraint_note = "Note: " + ", ".join(constraint_descriptions) + "."
+            if existing_desc:
+                result["description"] = existing_desc + " " + constraint_note
+            else:
+                result["description"] = constraint_note
+
         for key, value in schema.items():
             if key in unsupported_fields:
+                continue
+            if key == "description" and "description" in result:
+                # Already handled above
                 continue
 
             if key == "properties" and isinstance(value, dict):
