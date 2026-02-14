@@ -5828,10 +5828,9 @@ class ProxyStartupEvent:
         Optional: PYROSCOPE_SAMPLE_RATE (parsed as integer) to set the sample rate.
         """
         if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
             )
-            return
         try:
             import pyroscope
 
