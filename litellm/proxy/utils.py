@@ -1222,10 +1222,7 @@ class ProxyLogging:
                     },
                 }
             }
-            if HTTPException is not None:
-                raise HTTPException(status_code=400, detail=error_detail)
-            else:
-                raise Exception(str(error_detail))
+            raise HTTPException(status_code=400, detail=error_detail)
 
         if result.terminal_action == "modify_response":
             raise ModifyResponseException(
