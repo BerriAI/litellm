@@ -761,7 +761,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if isinstance(obj, dict):
                 if obj.get("type") == "object":
                     # Enforce additionalProperties: false
-                    obj.setdefault("additionalProperties", False)
+                    obj["additionalProperties"] = False
                     
                     # Enforce all properties are in the 'required' array
                     if "properties" in obj and "required" not in obj:
