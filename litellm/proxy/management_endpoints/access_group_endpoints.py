@@ -3,7 +3,16 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LiteLLM_AccessGroupTable,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import (
+    _cache_access_object,
+    _delete_cache_access_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import get_prisma_client_or_throw
@@ -40,6 +49,45 @@ def _record_to_response(record) -> AccessGroupResponse:
         created_by=record.created_by,
         updated_at=record.updated_at,
         updated_by=record.updated_by,
+    )
+
+
+def _record_to_access_group_table(record) -> LiteLLM_AccessGroupTable:
+    """Convert a Prisma record to a LiteLLM_AccessGroupTable pydantic object for caching."""
+    return LiteLLM_AccessGroupTable(**record.dict())
+
+
+async def _cache_access_group_record(record) -> None:
+    """
+    Cache an access group Prisma record in the user_api_key_cache.
+
+    Uses a lazy import of user_api_key_cache and proxy_logging_obj from proxy_server
+    to avoid circular imports, following the same pattern as key_management_endpoints.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    access_group_table = _record_to_access_group_table(record)
+    await _cache_access_object(
+        access_group_id=record.access_group_id,
+        access_group_table=access_group_table,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _invalidate_cache_access_group(access_group_id: str) -> None:
+    """
+    Invalidate (delete) an access group entry from both in-memory and Redis caches.
+
+    Uses a lazy import of user_api_key_cache and proxy_logging_obj from proxy_server
+    to avoid circular imports, following the same pattern as key_management_endpoints.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    await _delete_cache_access_object(
+        access_group_id=access_group_id,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
 
@@ -87,6 +135,10 @@ async def create_access_group(
                 detail=f"Access group '{data.access_group_name}' already exists",
             )
         raise
+
+    # Cache the newly created access group for read-heavy access patterns
+    await _cache_access_group_record(record)
+
     return _record_to_response(record)
 
 
@@ -166,6 +218,10 @@ async def update_access_group(
                 detail=f"Access group '{update_data.get('access_group_name', '')}' already exists",
             )
         raise
+
+    # Write the updated record into cache (same key, overwrites stale entry)
+    await _cache_access_group_record(record)
+
     return _record_to_response(record)
 
 
@@ -215,6 +271,10 @@ async def delete_access_group(
             await tx.litellm_accessgrouptable.delete(
                 where={"access_group_id": access_group_id}
             )
+
+        # Invalidate the deleted access group from cache
+        await _invalidate_cache_access_group(access_group_id)
+
     except HTTPException:
         raise
     except Exception as e:
