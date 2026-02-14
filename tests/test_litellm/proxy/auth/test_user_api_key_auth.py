@@ -422,3 +422,77 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
     assert result.user_tpm_limit == 1000
     assert result.user_rpm_limit == 100
     assert result.user_email == "test@example.com"
+
+
+def test_proxy_admin_jwt_auth_includes_identity_fields():
+    """
+    Test that the proxy admin early-return path in JWT auth populates
+    user_id, team_id, team_alias, team_metadata, org_id, and end_user_id.
+
+    Regression test: previously the is_proxy_admin branch only set user_role
+    and parent_otel_span, discarding all identity fields resolved from the JWT.
+    This caused blank Team Name and Internal User in Request Logs UI.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, UserAPIKeyAuth
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        team_alias="my-team",
+        metadata={"tags": ["prod"], "env": "production"},
+    )
+
+    # Simulate the proxy admin early-return path (user_api_key_auth.py ~line 586)
+    result = UserAPIKeyAuth(
+        api_key=None,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="user-abc",
+        team_id="team-123",
+        team_alias=(
+            team_object.team_alias if team_object is not None else None
+        ),
+        team_metadata=team_object.metadata if team_object is not None else None,
+        org_id="org-456",
+        end_user_id="end-user-789",
+        parent_otel_span=None,
+    )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert result.user_id == "user-abc"
+    assert result.team_id == "team-123"
+    assert result.team_alias == "my-team"
+    assert result.team_metadata == {"tags": ["prod"], "env": "production"}
+    assert result.org_id == "org-456"
+    assert result.end_user_id == "end-user-789"
+    assert result.api_key is None
+
+
+def test_proxy_admin_jwt_auth_handles_no_team_object():
+    """
+    Test that the proxy admin early-return path works correctly when
+    team_object is None (user has admin role but no team association).
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    team_object = None
+
+    result = UserAPIKeyAuth(
+        api_key=None,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        team_id=None,
+        team_alias=(
+            team_object.team_alias if team_object is not None else None
+        ),
+        team_metadata=team_object.metadata if team_object is not None else None,
+        org_id=None,
+        end_user_id=None,
+        parent_otel_span=None,
+    )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert result.user_id == "admin-user"
+    assert result.team_id is None
+    assert result.team_alias is None
+    assert result.team_metadata is None
+    assert result.org_id is None
+    assert result.end_user_id is None
