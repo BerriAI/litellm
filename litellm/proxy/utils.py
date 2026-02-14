@@ -2198,11 +2198,8 @@ async def _lookup_deprecated_key(
                 now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
             )
             return deprecated_row.active_token_id
-        # Cache negative result to avoid repeated DB lookups for invalid tokens
-        _deprecated_key_cache[hashed_token] = (
-            None,
-            now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
-        )
+        # Only cache positive results; negative lookups are fast on indexed columns
+        # and caching them risks evicting real deprecated key entries.
     except Exception as e:
         verbose_proxy_logger.debug("Deprecated key lookup skipped: %s", e)
 
