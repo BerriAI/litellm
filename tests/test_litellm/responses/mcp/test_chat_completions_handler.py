@@ -1,3 +1,4 @@
+import os
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -577,6 +578,10 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not configured"
+)
 async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeypatch):
     """
     Test that MCP metadata is added to the correct chunks:

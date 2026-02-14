@@ -533,24 +533,29 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raw_response.usage
             ),
         )
-        
+
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
         raw_response_hidden_params = getattr(raw_response, "_hidden_params", {})
         if raw_response_hidden_params:
-            if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
+            if (
+                not hasattr(model_response, "_hidden_params")
+                or model_response._hidden_params is None
+            ):
                 model_response._hidden_params = {}
             # Merge the raw_response hidden params with model_response hidden params
             # Preserve existing keys in model_response but add/override with raw_response params
             for key, value in raw_response_hidden_params.items():
                 if key == "additional_headers" and key in model_response._hidden_params:
                     # Merge additional_headers to preserve both sets
-                    existing_additional_headers = model_response._hidden_params.get("additional_headers", {})
+                    existing_additional_headers = model_response._hidden_params.get(
+                        "additional_headers", {}
+                    )
                     merged_headers = {**value, **existing_additional_headers}
                     model_response._hidden_params[key] = merged_headers
                 else:
                     model_response._hidden_params[key] = value
-        
+
         return model_response
 
     def get_model_response_iterator(
@@ -669,15 +674,36 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "input_image",
                             "output_text",
                             "refusal",
-                            "input_file",
+                            "file",
                             "computer_screenshot",
                             "summary_text",
                         ]:
-                            # Already in responses API format
-                            result.append(item)
-                            verbose_logger.debug(
-                                f"Chat provider:   passthrough -> {item}"
-                            )
+                            if item_type == "file":
+                                # Convert document format (file) to Responses API format (input_file)
+                                # See: https://docs.litellm.ai/docs/completion/document_understanding
+                                # OpenAI Responses API format:
+                                # - URL: {"type": "input_file", "file_url": "https://..."} (filename optional)
+                                # - Base64: {"type": "input_file", "filename": "...", "file_data": "data:...;base64,..."} (filename required)
+                                file_info = item.get("file") or {}
+                                converted = {
+                                    "type": "input_file",
+                                    "file_url": file_info.get("file_id"),
+                                    "file_data": file_info.get("file_data"),
+                                    "filename": file_info.get("filename"),
+                                }
+                                # Remove None values
+                                converted = {
+                                    k: v for k, v in converted.items() if v is not None
+                                }
+                                result.append(converted)
+                                verbose_logger.debug(
+                                    f"Chat provider:   file -> {converted}"
+                                )
+                            else:
+                                result.append(item)
+                                verbose_logger.debug(
+                                    f"Chat provider:   passthrough -> {item}"
+                                )
                         else:
                             # Default to input_text for unknown types
                             converted = self._convert_content_str_to_input_text(
@@ -768,15 +794,31 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if reasoning_effort == "none":
             return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
+            return (
+                Reasoning(effort="high", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="high")
+            )
         elif reasoning_effort == "xhigh":
             return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
-            return Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
+            return (
+                Reasoning(effort="medium", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="medium")
+            )
         elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
+            return (
+                Reasoning(effort="low", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="low")
+            )
         elif reasoning_effort == "minimal":
-            return Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
+            return (
+                Reasoning(effort="minimal", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="minimal")
+            )
         return None
 
     def _add_web_search_tool(
@@ -855,7 +897,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return {"format": {"type": "text"}}
 
         return None
-    
+
     @staticmethod
     def _convert_annotations_to_chat_format(
         annotations: Optional[List[Any]],
@@ -881,13 +923,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     annotation_dict = annotation
                 else:
                     # Skip unsupported annotation types
-                    verbose_logger.debug(f"Skipping unsupported annotation type: {type(annotation)}")
+                    verbose_logger.debug(
+                        f"Skipping unsupported annotation type: {type(annotation)}"
+                    )
                     continue
 
                 result.append(annotation_dict)  # type: ignore
             except Exception as e:
                 # Skip malformed annotations
-                verbose_logger.debug(f"Skipping malformed annotation: {annotation}, error: {e}")
+                verbose_logger.debug(
+                    f"Skipping malformed annotation: {annotation}, error: {e}"
+                )
                 continue
 
         return result if result else None
