@@ -206,7 +206,7 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | o3-pro | `response = completion(model="o3-pro", messages=messages)` |
 | o3-mini | `response = completion(model="o3-mini", messages=messages)` |
 | o3 | `response = completion(model="o3", messages=messages)` |
-| o3-deep-research | `response = completion(model="o3-deep-research", messages=messages)` or `o3-deep-research-2025-06-26` |
+| o3-deep-research | `response = completion(model="o3-deep-research", messages=messages)` or `completion(model="o3-deep-research-2025-06-26", messages=messages)` |
 | o1-pro | `response = completion(model="o1-pro", messages=messages)` |
 | o1-mini | `response = completion(model="o1-mini", messages=messages)` |
 | o1-preview | `response = completion(model="o1-preview", messages=messages)` |
