@@ -23204,7 +23204,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-05,
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_parallel_function_calling": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
