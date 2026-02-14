@@ -2701,10 +2701,10 @@ async def test_get_ui_settings_api_doc_base_url_independent_of_proxy_base_url():
     )
 
     # Case 1: Only LITELLM_UI_API_DOC_BASE_URL set, no PROXY_BASE_URL
-    env_only_doc_url = {"LITELLM_UI_API_DOC_BASE_URL": "https://docs.example.com"}
-    with patch.dict(os.environ, env_only_doc_url, clear=False):
-        # Remove PROXY_BASE_URL if it exists
-        os.environ.pop("PROXY_BASE_URL", None)
+    saved_env = os.environ.copy()
+    env_case1 = {k: v for k, v in saved_env.items() if k != "PROXY_BASE_URL"}
+    env_case1["LITELLM_UI_API_DOC_BASE_URL"] = "https://docs.example.com"
+    with patch.dict(os.environ, env_case1, clear=True):
         response = await get_ui_settings(mock_request)
         assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://docs.example.com"
         assert response["PROXY_BASE_URL"] is None
@@ -2720,9 +2720,9 @@ async def test_get_ui_settings_api_doc_base_url_independent_of_proxy_base_url():
         assert response["PROXY_BASE_URL"] == "https://proxy.example.com"
 
     # Case 3: Neither set
-    with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("LITELLM_UI_API_DOC_BASE_URL", None)
-        os.environ.pop("PROXY_BASE_URL", None)
+    env_case3 = {k: v for k, v in os.environ.items()
+                 if k not in ("LITELLM_UI_API_DOC_BASE_URL", "PROXY_BASE_URL")}
+    with patch.dict(os.environ, env_case3, clear=True):
         response = await get_ui_settings(mock_request)
         assert response["LITELLM_UI_API_DOC_BASE_URL"] is None
         assert response["PROXY_BASE_URL"] is None
