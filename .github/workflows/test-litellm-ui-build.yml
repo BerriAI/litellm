@@ -1,4 +1,6 @@
 name: UI Build Check
+permissions:
+  contents: read
 
 on:
   pull_request:
@@ -23,7 +25,7 @@ jobs:
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build
         run: npm run build
