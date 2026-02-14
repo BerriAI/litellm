@@ -1356,14 +1356,15 @@ async def test_unblock_key_invalid_key_format(monkeypatch):
     assert "Invalid key format" in str(exc_info.value.message)
 
 
-def test_validate_key_team_change_with_member_permissions():
+@pytest.mark.asyncio
+async def test_validate_key_team_change_with_member_permissions():
     """
     Test validate_key_team_change function with team member permissions.
 
     This test covers the new logic that allows team members with specific
     permissions to update keys, not just team admins.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy._types import KeyManagementRoutes
 
@@ -1389,7 +1390,8 @@ def test_validate_key_team_change_with_member_permissions():
     mock_member_object = MagicMock()
 
     with patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model"
+        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model",
+        new_callable=AsyncMock,
     ):
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
@@ -1406,7 +1408,7 @@ def test_validate_key_team_change_with_member_permissions():
                     mock_has_perms.return_value = True
 
                     # This should not raise an exception due to member permissions
-                    validate_key_team_change(
+                    await validate_key_team_change(
                         key=mock_key,
                         team=mock_team,
                         change_initiated_by=mock_change_initiator,
