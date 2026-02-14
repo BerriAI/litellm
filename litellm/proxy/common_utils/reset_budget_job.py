@@ -95,10 +95,12 @@ class ResetBudgetJob:
             where={
                 "budget_id": {"in": budget_ids},
                 "budget_duration": None,  # only keys without their own reset schedule
+                "spend": {"gt": 0},  # only reset keys that have accumulated spend
             },
             data={
                 "spend": 0,
             },
+        )
         )
 
     async def reset_budget_for_litellm_budget_table(self):
