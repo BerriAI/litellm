@@ -9,5 +9,5 @@ test("user can log in", async ({ page }) => {
   const loginButton = page.getByRole("button", { name: "Login", exact: true });
   await expect(loginButton).toBeEnabled();
   await loginButton.click();
-  await expect(page.getByText("AI Gateway")).toBeVisible();
+  await expect(page.getByText("Virtual Keys")).toBeVisible();
 });
