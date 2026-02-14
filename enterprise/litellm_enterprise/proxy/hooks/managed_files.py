@@ -914,12 +914,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         # Fetch the actual file object from the provider
                         file_object = None
                         try:
-                            # Use litellm to retrieve the file object from the provider
-                            from litellm import afile_retrieve
-                            file_object = await afile_retrieve(
-                                custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
-                                file_id=original_file_id
-                            )
+                            from litellm.proxy.proxy_server import llm_router as _llm_router
+                            if _llm_router is not None and model_id:
+                                _creds = _llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                                file_object = await litellm.afile_retrieve(
+                                    file_id=original_file_id,
+                                    **_creds,
+                                )
+                            else:
+                                file_object = await litellm.afile_retrieve(
+                                    custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                                    file_id=original_file_id,
+                                )
                             verbose_logger.debug(
                                 f"Successfully retrieved file object for {file_attr}={original_file_id}"
                             )
