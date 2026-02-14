@@ -226,6 +226,7 @@ LLM_CONFIG_NAMES = (
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
+    "PerplexityResponsesConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -904,6 +905,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "ManusResponsesAPIConfig": (
         ".llms.manus.responses.transformation",
         "ManusResponsesAPIConfig",
+    ),
+    "PerplexityResponsesConfig": (
+        ".llms.perplexity.responses.transformation",
+        "PerplexityResponsesConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
