@@ -768,7 +768,7 @@ class BaseResponsesAPITest(ABC):
         model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
             "model"
         ) or "openai/gpt-5.2"
-        if "openai/" not in str(model) and "azure/" not in str(model):
+        if "openai/" not in str(model):
             pytest.skip(
                 "Shell tool streaming e2e is only run for OpenAI/Azure Responses API"
             )
