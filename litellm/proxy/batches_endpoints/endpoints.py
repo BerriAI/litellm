@@ -377,6 +377,23 @@ async def retrieve_batch(
             response = await proxy_logging_obj.post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
+
+            # Resolve raw input_file_id to unified ID
+            if (
+                unified_batch_id
+                and hasattr(response, "input_file_id")
+                and response.input_file_id
+                and not _is_base64_encoded_unified_file_id(response.input_file_id)
+                and prisma_client
+            ):
+                try:
+                    _managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                        where={"flat_model_file_ids": {"has": response.input_file_id}}
+                    )
+                    if _managed_file:
+                        response.input_file_id = _managed_file.unified_file_id
+                except Exception:
+                    pass
             
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -478,6 +495,23 @@ async def retrieve_batch(
         response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
+
+        # Resolve raw input_file_id to unified ID
+        if (
+            unified_batch_id
+            and hasattr(response, "input_file_id")
+            and response.input_file_id
+            and not _is_base64_encoded_unified_file_id(response.input_file_id)
+            and prisma_client
+        ):
+            try:
+                _managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                    where={"flat_model_file_ids": {"has": response.input_file_id}}
+                )
+                if _managed_file:
+                    response.input_file_id = _managed_file.unified_file_id
+            except Exception:
+                pass
 
         ### ALERTING ###
         asyncio.create_task(
