@@ -2479,6 +2479,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     auto_rotate: Optional[bool] = None,
     rotation_interval: Optional[str] = None,
     router_settings: Optional[dict] = None,
+    access_group_ids: Optional[list] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -2595,6 +2596,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
+            "access_group_ids": access_group_ids or [],
         }
 
         # Add rotation fields if auto_rotate is enabled
