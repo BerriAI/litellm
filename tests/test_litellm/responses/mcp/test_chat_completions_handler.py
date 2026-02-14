@@ -1,16 +1,12 @@
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from litellm.types.utils import ModelResponse
+import pytest
 
 from litellm.responses.mcp import chat_completions_handler
-from litellm.responses.mcp.chat_completions_handler import (
-    acompletion_with_mcp,
-)
-from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-    LiteLLM_Proxy_MCP_Handler,
-)
+from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.asyncio
@@ -22,6 +18,7 @@ async def test_acompletion_with_mcp_returns_normal_completion_without_tools(monk
             model="test-model",
             messages=[],
             tools=None,
+            api_key="test-key",
         )
 
     assert result == "normal_response"
@@ -79,6 +76,7 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
             messages=[],
             tools=tools,
             secret_fields={"api_key": "value"},
+            api_key="test-key",
         )
 
     assert result == "ok"
@@ -92,9 +90,16 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
 @pytest.mark.asyncio
 async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
-    from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, ChatCompletionDeltaToolCall, Function
     from unittest.mock import MagicMock
+
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+    from litellm.utils import CustomStreamWrapper
     
     tools = [{"type": "function", "function": {"name": "tool"}}]
     
@@ -267,6 +272,7 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
             messages=[{"role": "user", "content": "hello"}],
             tools=tools,
             stream=True,
+            api_key="test-key",
         )
 
         # Consume the stream to trigger the iterator and follow-up call
@@ -301,9 +307,9 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     Test that acompletion_with_mcp adds MCP metadata to CustomStreamWrapper
     and it appears in the final chunk's delta.provider_specific_fields.
     """
-    from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.utils import CustomStreamWrapper
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -408,6 +414,7 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
             messages=[{"role": "user", "content": "hello"}],
             tools=tools,
             stream=True,
+            api_key="test-key",
         )
 
     # Verify result is CustomStreamWrapper
@@ -445,8 +452,8 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     Test that acompletion_with_mcp makes the initial LLM call with streaming=True
     when stream=True is requested, instead of making a non-streaming call first.
     """
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
     from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -565,6 +572,7 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
             messages=[{"role": "user", "content": "hello"}],
             tools=tools,
             stream=True,
+            api_key="test-key",
         )
 
     # Verify result is CustomStreamWrapper
@@ -583,8 +591,14 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     - mcp_list_tools should be in the first chunk
     - mcp_tool_calls and mcp_call_results should be in the final chunk of initial response
     """
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponseStream,
+        StreamingChoices,
+    )
     from litellm.utils import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, ChatCompletionDeltaToolCall, Function
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
@@ -758,6 +772,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             messages=[{"role": "user", "content": "hello"}],
             tools=tools,
             stream=True,
+            api_key="test-key",  # Mock API key to prevent authentication error
         )
 
     # Verify result is CustomStreamWrapper
@@ -810,7 +825,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     """
     import importlib
     from unittest.mock import MagicMock
-    
+
     # Capture the kwargs passed to function_setup
     captured_kwargs = {}
     
