@@ -9,7 +9,6 @@ import { Row } from "@tanstack/react-table";
 import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Button, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
-import NewBadge from "../common_components/NewBadge";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
@@ -514,11 +513,11 @@ export default function SpendLogsTable({
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold">Request Logs</h1>
-              <NewBadge dot><Button
+              <Button
                 icon={<SettingOutlined />}
                 onClick={() => setIsSpendLogsSettingsModalVisible(true)}
                 title="Spend Logs Settings"
-              /></NewBadge>
+              />
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
