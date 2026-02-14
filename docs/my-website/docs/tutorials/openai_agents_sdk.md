@@ -266,8 +266,8 @@ from agents import (
 )
 
 # Point to LiteLLM proxy
-BASE_URL = os.getenv("OPENAI_BASE_URL") or "http://localhost:4000"
-API_KEY = os.getenv("OPENAI_API_KEY") or "sk-1234"
+BASE_URL = os.getenv("LITELLM_BASE_URL") or "http://localhost:4000"
+API_KEY = os.getenv("LITELLM_API_KEY") or "sk-1234"
 MODEL_NAME = os.getenv("MODEL_NAME") or "bedrock-claude-sonnet-4"
 
 client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
