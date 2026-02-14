@@ -4,8 +4,10 @@ import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
+import jsonschema
 
 import litellm
+from litellm.exceptions import BadRequestError
 from litellm.constants import (
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
@@ -110,6 +112,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
+        # preserving user's original schemas (for response validation before sending to client)
+        self._original_schemas: Dict[str, Dict[str, Any]] = {}
+        self._current_schema_hash: Optional[str] = None
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "anthropic"
@@ -203,66 +209,160 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return params
 
     @staticmethod
-    def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    def _add_constraint_to_descriptions(schema: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Filter out unsupported fields from JSON schema for Anthropic's output_format API.
-        
-        Anthropic's output_format doesn't support certain JSON schema properties:
-        - maxItems: Not supported for array types
-        - minItems: Not supported for array types
-        
-        This function recursively removes these unsupported fields while preserving
-        all other valid schema properties.
-        
-        Args:
-            schema: The JSON schema dictionary to filter
-            
-        Returns:
-            A new dictionary with unsupported fields removed
-            
-        Related issue: https://github.com/BerriAI/litellm/issues/19444
+        Add constraint info to descriptions before removing unsupported fields.
+        Ref: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
         """
         if not isinstance(schema, dict):
             return schema
 
-        unsupported_fields = {"maxItems", "minItems"}
-
         result: Dict[str, Any] = {}
-        for key, value in schema.items():
-            if key in unsupported_fields:
-                continue
 
+        for key, value in schema.items():
             if key == "properties" and isinstance(value, dict):
-                result[key] = {
-                    k: AnthropicConfig.filter_anthropic_output_schema(v)
-                    for k, v in value.items()
-                }
-            elif key == "items" and isinstance(value, dict):
-                result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
-            elif key == "$defs" and isinstance(value, dict):
-                result[key] = {
-                    k: AnthropicConfig.filter_anthropic_output_schema(v)
-                    for k, v in value.items()
-                }
-            elif key == "anyOf" and isinstance(value, list):
+                result[key] = {k: AnthropicConfig._add_constraint_to_descriptions(v) for k, v in value.items()}
+            elif key in ("items", "$defs", "definitions") and isinstance(value, dict):
+                if key in ("$defs", "definitions"):
+                    result[key] = {k: AnthropicConfig._add_constraint_to_descriptions(v) for k, v in value.items()}
+                else:
+                    result[key] = AnthropicConfig._add_constraint_to_descriptions(value)
+            elif key in ("anyOf", "allOf", "oneOf") and isinstance(value, list):
                 result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
-                    for item in value
-                ]
-            elif key == "allOf" and isinstance(value, list):
-                result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
-                    for item in value
-                ]
-            elif key == "oneOf" and isinstance(value, list):
-                result[key] = [
-                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    AnthropicConfig._add_constraint_to_descriptions(item) if isinstance(item, dict) else item
                     for item in value
                 ]
             else:
                 result[key] = value
 
+        constraints = []
+        if "minimum" in result:
+            constraints.append(f"Must be at least {result['minimum']}")
+        if "maximum" in result:
+            constraints.append(f"Must be at most {result['maximum']}")
+        if "exclusiveMinimum" in result:
+            constraints.append(f"Must be greater than {result['exclusiveMinimum']}")
+        if "exclusiveMaximum" in result:
+            constraints.append(f"Must be less than {result['exclusiveMaximum']}")
+        if "multipleOf" in result:
+            constraints.append(f"Must be multiple of {result['multipleOf']}")
+        if "minLength" in result:
+            constraints.append(f"Minimum length: {result['minLength']}")
+        if "maxLength" in result:
+            constraints.append(f"Maximum length: {result['maxLength']}")
+        if "pattern" in result:
+            constraints.append(f"Pattern: {result['pattern']}")
+        if "minItems" in result and isinstance(result.get("minItems"), int) and result["minItems"] > 1:
+            constraints.append(f"Minimum items: {result['minItems']}")
+        if "maxItems" in result:
+            constraints.append(f"Maximum items: {result['maxItems']}")
+
+        if constraints:
+            constraint_text = ". ".join(constraints)
+            existing_desc = result.get("description", "")
+            result["description"] = f"{existing_desc}. {constraint_text}" if existing_desc else constraint_text
+
         return result
+
+    @staticmethod
+    def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Remove unsupported constraints: minimum, maximum, minLength, maxLength, etc.
+        Ref: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        unsupported = {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "maxItems", "pattern"}
+
+        result: Dict[str, Any] = {}
+        for key, value in schema.items():
+            if key == "minItems":
+                if isinstance(value, int) and value in [0, 1]:
+                    result[key] = value
+                continue
+            if key in unsupported:
+                continue
+
+            if key == "properties" and isinstance(value, dict):
+                result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
+            elif key in ("items", "$defs", "definitions") and isinstance(value, dict):
+                if key in ("$defs", "definitions"):
+                    result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
+                else:
+                    result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
+            elif key in ("anyOf", "allOf", "oneOf") and isinstance(value, list):
+                result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+            else:
+                result[key] = value
+
+        # Add additionalProperties: false to all objects (matches Anthropic python SDK behavior)
+        # Ref: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs#how-sdk-transformation-works
+        if result.get("type") == "object" and "additionalProperties" not in result:
+            result["additionalProperties"] = False
+
+        return result
+
+    @staticmethod
+    def _validate_response_against_schema(
+        response_json: Dict[str, Any],
+        original_schema: Dict[str, Any],
+        model: str,
+        strict: bool = False
+    ) -> None:
+        """
+        Validate response against original schema with constraints.
+
+        Args:
+            response_json: Response to validate
+            original_schema: Original schema with constraints
+            model: Model name for error messages
+            strict: If True, raise error on violation. If False, log warning (matches Anthropic SDK)
+        """
+        try:
+            jsonschema.validate(instance=response_json, schema=original_schema)
+        except jsonschema.ValidationError as e:
+            error_path = ".".join(str(p) for p in e.path) if e.path else "root"
+            error_msg = getattr(e, 'message', getattr(e, 'msg', str(e)))
+            violation_msg = (
+                f"Response from {model} violates the original schema constraints.\n"
+                f"Field: {error_path}\nError: {error_msg}\nValue: {e.instance}"
+            )
+
+            if strict:
+                raise BadRequestError(
+                    message=violation_msg,
+                    model=model,
+                    llm_provider="anthropic"
+                )
+            else:
+                # Match Anthropic SDK behavior: warn but don't block response
+                litellm.verbose_logger.warning(f"Schema validation warning: {violation_msg}")
+
+    def validate_structured_output_response(
+        self,
+        response_content: str,
+        model: str,
+        strict_validation: bool = False
+    ) -> None:
+        """
+        Validate Claude's response against original schema (with constraints).
+
+        Args:
+            response_content: JSON response from Claude
+            model: Model name
+            strict_validation: If True, raise error on violations. If False, log warning (default, matches SDK)
+        """
+        if not self._current_schema_hash or self._current_schema_hash not in self._original_schemas:
+            return
+
+        try:
+            response_json = json.loads(response_content)
+        except json.JSONDecodeError:
+            return
+
+        original_schema = self._original_schemas[self._current_schema_hash]
+        self._validate_response_against_schema(response_json, original_schema, model, strict_validation)
 
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
@@ -706,22 +806,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return json_schema
 
-    def map_response_format_to_anthropic_output_format(
-        self, value: Optional[dict]
-    ) -> Optional[AnthropicOutputSchema]:
-        json_schema: Optional[dict] = self._extract_json_schema_from_response_format(
-            value
-        )
+    def map_response_format_to_anthropic_output_format(self, value: Optional[dict]) -> Optional[AnthropicOutputSchema]:
+        """
+        Transform schema for Anthropic structured outputs API.
+        Ref: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
+        """
+        json_schema = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-        
-        # Filter out unsupported fields for Anthropic's output_format API
-        filtered_schema = self.filter_anthropic_output_schema(json_schema)
-        
-        return AnthropicOutputSchema(
-            type="json_schema",
-            schema=filtered_schema,
-        )
+
+        # Store original for validation (deep copy to avoid mutation)
+        original_schema = json.loads(json.dumps(json_schema))
+        schema_hash = str(hash(json.dumps(original_schema, sort_keys=True)))
+        self._original_schemas[schema_hash] = original_schema
+        self._current_schema_hash = schema_hash
+
+        # Add constraints to descriptions, then filter out unsupported fields
+        schema_with_descriptions = self._add_constraint_to_descriptions(json_schema)
+        filtered_schema = self.filter_anthropic_output_schema(schema_with_descriptions)
+
+        return AnthropicOutputSchema(type="json_schema", schema=filtered_schema)
 
     def map_response_format_to_anthropic_tool(
         self, value: Optional[dict], optional_params: dict, is_thinking_enabled: bool
@@ -1653,6 +1757,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             prefix_prompt=prefix_prompt,
             speed=speed,
         )
+
+        try:
+            # Validate structured output against original schema if applicable
+            if model_response.choices and len(model_response.choices) > 0:
+                message = model_response.choices[0].message
+                if message and message.content:
+                    self.validate_structured_output_response(
+                        response_content=message.content,
+                        model=model
+                    )
+        finally:
+            # Always cleanup schema to prevent memory leak
+            # (even on refusals, empty responses, errors, etc.)
+            if self._current_schema_hash and self._current_schema_hash in self._original_schemas:
+                del self._original_schemas[self._current_schema_hash]
+                self._current_schema_hash = None
+
         return model_response
 
     @staticmethod
