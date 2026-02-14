@@ -1193,14 +1193,11 @@ def create_pass_through_route(
                 final_query_params.update(query_params)
             # When a caller (e.g. bedrock_proxy_route) supplies a pre-built
             # body, use it instead of the body parsed from the raw request.
+            final_custom_body: Optional[dict] = None
             if custom_body is not None:
                 final_custom_body = custom_body
-            else:
-                final_custom_body = (
-                    custom_body_data
-                    if isinstance(custom_body_data, dict) or custom_body_data is None
-                    else None
-                )
+            elif isinstance(custom_body_data, dict):
+                final_custom_body = custom_body_data
 
             return await pass_through_request(  # type: ignore
                 request=request,
