@@ -181,14 +181,17 @@ const StepCard: React.FC<StepCardProps> = ({
       style={{
         border: "1px solid #e5e7eb",
         borderRadius: 10,
-        padding: "16px 20px",
         backgroundColor: "#fff",
         maxWidth: 720,
         width: "100%",
+        overflow: "hidden",
       }}
     >
-      {/* Header row: icon + GUARDRAIL label ... Step N + menu */}
-      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+      {/* Header row */}
+      <div
+        className="flex items-center justify-between"
+        style={{ padding: "14px 20px 0 20px" }}
+      >
         <div className="flex items-center gap-2">
           <GuardrailIcon />
           <span
@@ -226,8 +229,11 @@ const StepCard: React.FC<StepCardProps> = ({
         </div>
       </div>
 
-      {/* Guardrail name / selector */}
-      <div style={{ marginBottom: 12 }}>
+      {/* Guardrail selector */}
+      <div style={{ padding: "12px 20px 16px 20px" }}>
+        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+          Guardrail
+        </label>
         <Select
           showSearch
           style={{ width: "100%" }}
@@ -241,47 +247,63 @@ const StepCard: React.FC<StepCardProps> = ({
         />
       </div>
 
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid #f3f4f6", marginBottom: 12 }} />
-
-      {/* Pass / Fail row */}
-      <div className="flex items-center gap-6" style={{ flexWrap: "wrap" }}>
-        <div className="flex items-center gap-2">
+      {/* ON PASS section */}
+      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
           <PassIcon />
-          <span style={{ fontSize: 13, color: "#374151" }}>Pass</span>
-          <span style={{ fontSize: 13, color: "#9ca3af" }}>&#8594;</span>
-          <Select
-            size="small"
-            style={{ minWidth: 140 }}
-            value={step.on_pass}
-            onChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
-            options={ACTION_OPTIONS}
-          />
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON PASS</span>
         </div>
-        <div className="flex items-center gap-2">
-          <FailIcon />
-          <span style={{ fontSize: 13, color: "#374151" }}>Fail</span>
-          <span style={{ fontSize: 13, color: "#9ca3af" }}>&#8594;</span>
-          <Select
-            size="small"
-            style={{ minWidth: 140 }}
-            value={step.on_fail}
-            onChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
-            options={ACTION_OPTIONS}
-          />
-        </div>
+        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+          Action
+        </label>
+        <Select
+          style={{ width: "100%" }}
+          value={step.on_pass}
+          onChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
+          options={ACTION_OPTIONS}
+        />
+        {step.on_pass === "modify_response" && (
+          <div style={{ marginTop: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+              Custom Response Message
+            </label>
+            <TextInput
+              placeholder="Enter custom response..."
+              value={step.modify_response_message || ""}
+              onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Custom response input */}
-      {(step.on_pass === "modify_response" || step.on_fail === "modify_response") && (
-        <div style={{ marginTop: 10 }}>
-          <TextInput
-            placeholder="Custom response message"
-            value={step.modify_response_message || ""}
-            onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
-          />
+      {/* ON FAIL section */}
+      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
+          <FailIcon />
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON FAIL</span>
         </div>
-      )}
+        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+          Action
+        </label>
+        <Select
+          style={{ width: "100%" }}
+          value={step.on_fail}
+          onChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
+          options={ACTION_OPTIONS}
+        />
+        {step.on_fail === "modify_response" && (
+          <div style={{ marginTop: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+              Custom Response Message
+            </label>
+            <TextInput
+              placeholder="Enter custom response..."
+              value={step.modify_response_message || ""}
+              onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 };
