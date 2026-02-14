@@ -72,12 +72,27 @@ class CategoryConfig:
         default_action: ContentFilterAction,
         keywords: List[Dict[str, str]],
         exceptions: List[str],
+        identifier_words: Optional[List[str]] = None,
+        always_block_keywords: Optional[List[Dict[str, str]]] = None,
+        inherit_from: Optional[str] = None,
+        additional_block_words: Optional[List[str]] = None,
     ):
         self.category_name = category_name
         self.description = description
         self.default_action = default_action
         self.keywords = keywords
         self.exceptions = [e.lower() for e in exceptions]
+        # New fields for conditional child safety logic
+        self.identifier_words = (
+            [w.lower() for w in identifier_words] if identifier_words else []
+        )
+        self.always_block_keywords = always_block_keywords or []
+        self.inherit_from = inherit_from
+        self.additional_block_words = (
+            [w.lower() for w in additional_block_words]
+            if additional_block_words
+            else []
+        )
 
 
 class ContentFilterGuardrail(CustomGuardrail):
@@ -155,6 +170,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
             {}
         )  # keyword -> (category, severity, action)
+        # Store conditional categories (identifier_words + block_words)
+        self.conditional_categories: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # category_name -> {identifier_words, block_words, action, severity}
 
         # Load categories if provided
         if categories:
@@ -287,7 +306,32 @@ class ContentFilterGuardrail(CustomGuardrail):
                     action if action else category_config_obj.default_action
                 )
 
-                # Add keywords from this category
+                # Handle conditional categories (with identifier_words + inherit_from)
+                if (
+                    category_config_obj.identifier_words
+                    and category_config_obj.inherit_from
+                ):
+                    self._load_conditional_category(
+                        category_name,
+                        category_config_obj,
+                        category_action,
+                        severity_threshold,
+                        categories_dir,
+                    )
+
+                # Add always_block_keywords if present
+                if category_config_obj.always_block_keywords:
+                    for keyword_data in category_config_obj.always_block_keywords:
+                        keyword = keyword_data["keyword"].lower()
+                        severity = keyword_data.get("severity", "high")
+                        if self._should_apply_severity(severity, severity_threshold):
+                            self.category_keywords[keyword] = (
+                                category_name,
+                                severity,
+                                category_action,
+                            )
+
+                # Add regular keywords from this category
                 for keyword_data in category_config_obj.keywords:
                     keyword = keyword_data["keyword"].lower()
                     severity = keyword_data["severity"]
@@ -302,12 +346,93 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 verbose_proxy_logger.info(
                     f"Loaded category {category_name}: "
-                    f"{len(category_config_obj.keywords)} keywords"
+                    f"{len(category_config_obj.keywords)} keywords, "
+                    f"{len(category_config_obj.always_block_keywords)} always-block keywords, "
+                    f"conditional: {bool(category_config_obj.identifier_words)}"
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
                     f"Error loading category {category_name}: {e}"
                 )
+
+    def _load_conditional_category(
+        self,
+        category_name: str,
+        category_config_obj: CategoryConfig,
+        category_action: ContentFilterAction,
+        severity_threshold: str,
+        categories_dir: str,
+    ) -> None:
+        """
+        Load a conditional category that uses identifier_words + inherited block_words.
+
+        Args:
+            category_name: Name of the category
+            category_config_obj: CategoryConfig object with identifier_words and inherit_from
+            category_action: Action to take when match is found
+            severity_threshold: Minimum severity threshold
+            categories_dir: Directory containing category files
+        """
+        # Load the inherited category to get block words
+        inherit_from = category_config_obj.inherit_from
+        if not inherit_from:
+            return
+
+        # Remove .json or .yaml extension if included
+        inherit_base = inherit_from.replace(".json", "").replace(".yaml", "")
+
+        # Find the inherited category file
+        inherit_yaml_path = os.path.join(categories_dir, f"{inherit_base}.yaml")
+        inherit_json_path = os.path.join(categories_dir, f"{inherit_base}.json")
+
+        if os.path.exists(inherit_yaml_path):
+            inherit_file_path = inherit_yaml_path
+        elif os.path.exists(inherit_json_path):
+            inherit_file_path = inherit_json_path
+        else:
+            verbose_proxy_logger.warning(
+                f"Category {category_name}: inherit_from '{inherit_from}' file not found at {categories_dir}"
+            )
+            verbose_proxy_logger.debug(
+                f"Tried paths: {inherit_yaml_path}, {inherit_json_path}"
+            )
+            return
+
+        try:
+            # Load the inherited category
+            inherited_category = self._load_category_file(inherit_file_path)
+
+            # Extract block words from inherited category that meet severity threshold
+            block_words = []
+            for keyword_data in inherited_category.keywords:
+                keyword = keyword_data["keyword"].lower()
+                severity = keyword_data["severity"]
+                if self._should_apply_severity(severity, severity_threshold):
+                    block_words.append(keyword)
+
+            # Add additional block words specific to this category
+            if category_config_obj.additional_block_words:
+                block_words.extend(category_config_obj.additional_block_words)
+
+            # Store the conditional category configuration
+            self.conditional_categories[category_name] = {
+                "identifier_words": category_config_obj.identifier_words,
+                "block_words": block_words,
+                "action": category_action,
+                "severity": "high",  # Combinations are always high severity
+            }
+
+            verbose_proxy_logger.info(
+                f"Loaded conditional category {category_name}: "
+                f"{len(category_config_obj.identifier_words)} identifiers + "
+                f"{len(block_words)} block words "
+                f"({len(category_config_obj.additional_block_words)} additional + "
+                f"{len(block_words) - len(category_config_obj.additional_block_words)} from {inherit_from})"
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error loading inherited category for {category_name}: {e}"
+            )
 
     def _load_category_file(self, file_path: str) -> CategoryConfig:
         """
@@ -315,6 +440,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         YAML format: category_name, description, default_action, keywords (list of
         {keyword, severity}), exceptions.
+        Optional: identifier_words, always_block_keywords, inherit_from.
         JSON format: list of {id, match, tags, severity}; match is pipe-separated
         phrases; severity 1-4 mapped to low/medium/high. Used for harm_toxic_abuse.
 
@@ -328,12 +454,20 @@ class ContentFilterGuardrail(CustomGuardrail):
             return self._load_category_file_json(file_path)
         with open(file_path, "r") as f:
             data = yaml.safe_load(f)
+
+        # Handle always_block_keywords if present
+        always_block = data.get("always_block_keywords", [])
+
         return CategoryConfig(
             category_name=data.get("category_name", "unknown"),
             description=data.get("description", ""),
             default_action=ContentFilterAction(data.get("default_action", "BLOCK")),
             keywords=data.get("keywords", []),
             exceptions=data.get("exceptions", []),
+            identifier_words=data.get("identifier_words"),
+            always_block_keywords=always_block,
+            inherit_from=data.get("inherit_from"),
+            additional_block_words=data.get("additional_block_words"),
         )
 
     def _load_category_file_json(self, file_path: str) -> CategoryConfig:
@@ -631,6 +765,94 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (matched_text, pattern_name, action)
         return None
 
+    def _check_conditional_categories(
+        self, text: str, exceptions: List[str]
+    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        """
+        Check text for conditional category matches (identifier + block word in same sentence).
+
+        This implements logic like: if text contains both an identifier word (e.g., "minor")
+        AND a block word (e.g., "romantic"), then block it.
+
+        Args:
+            text: Text to check
+            exceptions: List of exception phrases to ignore
+
+        Returns:
+            Tuple of (matched_phrase, category, severity, action) if match found, None otherwise
+        """
+        text_lower = text.lower()
+
+        # First check if any exception applies
+        for exception in exceptions:
+            if exception in text_lower:
+                return None
+
+        # Split text into sentences for more precise matching
+        # Simple sentence splitting on common terminators
+        sentences = re.split(r"[.!?]+", text)
+
+        for category_name, config in self.conditional_categories.items():
+            identifier_words = config["identifier_words"]
+            block_words = config["block_words"]
+            action = config["action"]
+            severity = config["severity"]
+
+            # Check category-specific exceptions
+            category_obj = self.loaded_categories.get(category_name)
+            if category_obj:
+                exception_found = False
+                for exception in category_obj.exceptions:
+                    if exception in text_lower:
+                        verbose_proxy_logger.debug(
+                            f"Category exception '{exception}' found for {category_name}, skipping"
+                        )
+                        exception_found = True
+                        break
+                if exception_found:
+                    continue
+
+            # Check each sentence for identifier + block word combination
+            for sentence in sentences:
+                sentence_lower = sentence.lower().strip()
+                if not sentence_lower:
+                    continue
+
+                # Check if sentence contains ANY identifier word
+                identifier_found = None
+                for identifier in identifier_words:
+                    if identifier in sentence_lower:
+                        identifier_found = identifier
+                        break
+
+                if not identifier_found:
+                    continue
+
+                # Check if sentence also contains ANY block word
+                block_word_found = None
+                for block_word in block_words:
+                    # Use word boundary for single words to avoid false positives
+                    if " " in block_word:
+                        # Multi-word phrase
+                        if block_word in sentence_lower:
+                            block_word_found = block_word
+                            break
+                    else:
+                        # Single word - use word boundary
+                        pattern = r"\b" + re.escape(block_word) + r"\b"
+                        if re.search(pattern, sentence_lower):
+                            block_word_found = block_word
+                            break
+
+                if block_word_found:
+                    matched_phrase = f"{identifier_found} + {block_word_found}"
+                    verbose_proxy_logger.warning(
+                        f"Conditional match in {category_name}: '{matched_phrase}' in sentence"
+                    )
+                    return (matched_phrase, category_name, severity, action)
+
+        return None
+
     def _check_category_keywords(
         self, text: str, exceptions: List[str]
     ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
@@ -760,6 +982,41 @@ class ContentFilterGuardrail(CustomGuardrail):
         all_exceptions = []
         for category in self.loaded_categories.values():
             all_exceptions.extend(category.exceptions)
+
+        # Check conditional categories first (identifier + block word combinations)
+        conditional_match = self._check_conditional_categories(text, all_exceptions)
+        if conditional_match:
+            matched_phrase, category_name, severity, action = conditional_match
+            if detections is not None:
+                category_detection: CategoryKeywordDetection = {
+                    "type": "category_keyword",
+                    "category": category_name,
+                    "keyword": matched_phrase,
+                    "severity": severity,
+                    "action": action.value,
+                }
+                detections.append(category_detection)
+            if action == ContentFilterAction.BLOCK:
+                error_msg = (
+                    f"Content blocked: {category_name} conditional match '{matched_phrase}' detected "
+                    f"(severity: {severity})"
+                )
+                verbose_proxy_logger.warning(error_msg)
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": error_msg,
+                        "category": category_name,
+                        "matched_phrase": matched_phrase,
+                        "severity": severity,
+                    },
+                )
+            elif action == ContentFilterAction.MASK:
+                # For conditional matches, we don't mask - too complex to determine what to mask
+                # Just log a warning
+                verbose_proxy_logger.warning(
+                    f"Conditional match '{matched_phrase}' from {category_name} detected but MASK action not supported for conditional categories"
+                )
 
         # Check category keywords
         category_keyword_match = self._check_category_keywords(text, all_exceptions)
