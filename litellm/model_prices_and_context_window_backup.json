@@ -6191,6 +6191,8 @@
         "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
