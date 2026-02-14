@@ -736,6 +736,15 @@
     "severity": 3
   },
   {
+    "id": "call-girl",
+    "match": "call girl|call girls|callgirl",
+    "tags": [
+      "sexual",
+      "solicitation"
+    ],
+    "severity": 3
+  },
+  {
     "id": "cam-girl",
     "match": "cam girl|camgirl|cam boy|camboy",
     "tags": [
@@ -776,12 +785,13 @@
     "severity": 3
   },
   {
-    "id": "censored-fucking",
-    "match": "f**ing|f***ing|f**k|f***",
+    "id": "casting-couch",
+    "match": "casting couch",
     "tags": [
-      "general"
+      "sexual",
+      "exploitation"
     ],
-    "severity": 4
+    "severity": 3
   },
   {
     "id": "cheese-monkey",
@@ -1484,6 +1494,21 @@
     "severity": 3
   },
   {
+    "id": "dominant",
+    "match": "dominant|dominate",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "market",
+      "species",
+      "hand",
+      "gene",
+      "trait"
+    ]
+  },
+  {
     "id": "domination",
     "match": "domination",
     "tags": [
@@ -1643,6 +1668,23 @@
     "severity": 3
   },
   {
+    "id": "escort",
+    "match": "escort|escorts|escorting",
+    "tags": [
+      "sexual",
+      "solicitation"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "police",
+      "security",
+      "military",
+      "ford",
+      "armed",
+      "guard"
+    ]
+  },
+  {
     "id": "eskimo-trebuchet",
     "match": "eskimo trebuchet",
     "tags": [
@@ -1703,6 +1745,25 @@
       "lgbtq"
     ],
     "severity": 3
+  },
+  {
+    "id": "fantasize",
+    "match": "fantasize|fantasizing|fantasy|fantasies",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "football",
+      "final",
+      "sports",
+      "book",
+      "movie",
+      "game",
+      "sci-fi",
+      "fiction",
+      "novel"
+    ]
   },
   {
     "id": "felch",
@@ -1767,6 +1828,14 @@
       "sexual"
     ],
     "severity": 3
+  },
+  {
+    "id": "flirt",
+    "match": "flirt|flirting|flirtatious",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 2
   },
   {
     "id": "footjob",
@@ -2055,6 +2124,23 @@
     "severity": 3
   },
   {
+    "id": "happy-ending",
+    "match": "happy ending|happy endings",
+    "tags": [
+      "sexual",
+      "solicitation"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "movie",
+      "film",
+      "story",
+      "book",
+      "fairy tale",
+      "fairytale"
+    ]
+  },
+  {
     "id": "hell",
     "match": "hell",
     "tags": [
@@ -2106,6 +2192,15 @@
     "severity": 3
   },
   {
+    "id": "hire",
+    "match": "hire an escort|hire a hooker|hire a prostitute|soliciting",
+    "tags": [
+      "sexual",
+      "solicitation"
+    ],
+    "severity": 3
+  },
+  {
     "id": "homoerotic",
     "match": "homoerotic",
     "tags": [
@@ -2120,6 +2215,15 @@
       "racial"
     ],
     "severity": 2
+  },
+  {
+    "id": "hooker",
+    "match": "hooker|hookers",
+    "tags": [
+      "sexual",
+      "solicitation"
+    ],
+    "severity": 3
   },
   {
     "id": "hookup",
@@ -2378,6 +2482,14 @@
   {
     "id": "kinbaku",
     "match": "kinbaku",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kinky",
+    "match": "kinky|kink",
     "tags": [
       "sexual"
     ],
@@ -2995,7 +3107,7 @@
   },
   {
     "id": "piece-of-sht",
-    "match": "piece of sht|sht ai|sht",
+    "match": "piece of sht|sht ai",
     "tags": [
       "general"
     ],
@@ -3238,6 +3350,15 @@
     "severity": 3
   },
   {
+    "id": "prostitute",
+    "match": "prostitute|prostitutes|prostitution",
+    "tags": [
+      "sexual",
+      "solicitation"
+    ],
+    "severity": 3
+  },
+  {
     "id": "pubes",
     "match": "pubes",
     "tags": [
@@ -3382,6 +3503,21 @@
     "severity": 3
   },
   {
+    "id": "roleplay",
+    "match": "roleplay|role play|roleplaying",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "game",
+      "gaming",
+      "dnd",
+      "tabletop",
+      "character"
+    ]
+  },
+  {
     "id": "rusty-trombone",
     "match": "rusty trombone",
     "tags": [
@@ -3428,6 +3564,14 @@
       "sexual"
     ],
     "severity": 3
+  },
+  {
+    "id": "seduce",
+    "match": "seduce",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 2
   },
   {
     "id": "seductive",
@@ -3540,6 +3684,15 @@
       "sexual"
     ],
     "severity": 3
+  },
+  {
+    "id": "sex-worker",
+    "match": "sex worker|sex workers|sexworker",
+    "tags": [
+      "sexual",
+      "solicitation"
+    ],
+    "severity": 2
   },
   {
     "id": "sexual",
@@ -3917,6 +4070,14 @@
     ]
   },
   {
+    "id": "submissive",
+    "match": "submissive|submission",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 3
+  },
+  {
     "id": "swamp-guinea",
     "match": "swamp guinea|swamp-guinea",
     "tags": [
@@ -3949,6 +4110,14 @@
     "severity": 3
   },
   {
+    "id": "talk-dirty",
+    "match": "talk dirty|dirty talk|dirty talking",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 3
+  },
+  {
     "id": "taphephilia",
     "match": "taphephilia|taphephile",
     "tags": [
@@ -3963,6 +4132,21 @@
       "sexual"
     ],
     "severity": 3
+  },
+  {
+    "id": "tease",
+    "match": "tease|teasing",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "hair",
+      "comb",
+      "joke",
+      "bully",
+      "playful"
+    ]
   },
   {
     "id": "thanatophilia",

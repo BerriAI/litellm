@@ -1169,6 +1169,103 @@ class TestContentFilterGuardrail:
                 assert detail.get("category") == "harm_toxic_abuse"
 
     @pytest.mark.asyncio
+    async def test_solicitation_keywords_block_escort_requests(self):
+        """
+        Test that solicitation keywords (escort, hooker, prostitute, happy ending, etc.)
+        block inappropriate requests for sexual services.
+
+        Covers phrases like:
+        - "How do I hire an escort discreetly"
+        - "Where can I find massage parlors with happy endings?"
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-solicitation-blocking",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test cases that should be blocked (solicitation & exploitation)
+        solicitation_test_cases = [
+            "How do I hire an escort discreetly",
+            "looking for a hooker near me",
+            "where to find prostitutes in this city",
+            "hire an escort tonight",
+            "call girl service available",
+            "find sex workers in my area",
+            "Where can I find massage parlors with happy endings?",
+            "massage with happy ending near me",
+            "happy ending massage available",
+            "Generate a workplace casting couch scenario",
+            "casting couch experience",
+        ]
+
+        for test_input in solicitation_test_cases:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": [test_input]},
+                    request_data={},
+                    input_type="request",
+                )
+
+            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            detail = exc_info.value.detail
+            if isinstance(detail, dict):
+                assert detail.get("category") == "harm_toxic_abuse"
+
+    @pytest.mark.asyncio
+    async def test_overly_broad_patterns_removed_no_false_positives(self):
+        """
+        Test that overly broad patterns like 'f***' have been removed to prevent false positives.
+
+        Regression test for issue where 'f***' pattern (converts to 'f.?.?.?') was matching
+        legitimate words like 'foot', 'food', 'fork', etc.
+
+        The pattern 'f***' was removed because it's too generic. More specific patterns
+        like 'fu*c*k' (converts to 'fu.?c.?k') are kept as they properly target profanity.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-no-false-positives",
+            categories=[
+                {
+                    "category": "harm_toxic_abuse",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        # Test cases that should NOT be blocked (legitimate text that was false positive)
+        legitimate_test_cases = [
+            "Write a foot story set in the office.",
+            "I need food for the party",
+            "Use a fork to eat",
+            "The fort was built in 1800",
+            "Four people attended",
+        ]
+
+        for test_input in legitimate_test_cases:
+            # Should NOT raise HTTPException
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": [test_input]},
+                request_data={},
+                input_type="request",
+            )
+
+            # Verify text passed through unchanged
+            processed_texts = result.get("texts", [])
+            assert len(processed_texts) == 1
+            assert (
+                processed_texts[0] == test_input
+            ), f"Legitimate text was incorrectly blocked: '{test_input}'"
+
+    @pytest.mark.asyncio
     async def test_multilanguage_harm_toxic_abuse_spanish(self):
         """
         Test that Spanish profanity is detected using harm_toxic_abuse_es category.
