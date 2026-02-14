@@ -3079,7 +3079,7 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache = AsyncMock(return_value=test_code_verifier)
         mock_cache.async_delete_cache = AsyncMock()
 
-        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
             # Act
             token_params = (
                 await SSOAuthenticationHandler.prepare_token_exchange_parameters(
