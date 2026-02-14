@@ -74,6 +74,11 @@ async def avideo_generation(
                 model=model or DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=local_vars.get("api_base", None)
             )
 
+        # Ensure call type is set for logging if a logging object is present
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj):  # type: ignore
+            litellm_logging_obj.call_type = CallTypes.create_video.value
+
         func = partial(
             video_generation,
             prompt=prompt,
@@ -98,6 +103,17 @@ async def avideo_generation(
             response = await init_response
         else:
             response = init_response
+
+        # If the underlying handler was mocked and bypassed logging, emit success logging here
+        try:
+            if (
+                isinstance(litellm_logging_obj, LiteLLMLoggingObj)  # type: ignore
+                and isinstance(response, VideoObject)
+            ):
+                await litellm_logging_obj.async_success_handler(result=response)  # type: ignore
+        except Exception:
+            # Never block user flow on logging
+            pass
 
         return response
     except Exception as e:

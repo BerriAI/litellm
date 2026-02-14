@@ -44,9 +44,10 @@ class AimGuardrail(CustomGuardrail):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
     ):
         ssl_verify = kwargs.pop("ssl_verify", None)
+        # Always initialize an async HTTP client (even without explicit ssl_verify)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
-            params={"ssl_verify": ssl_verify} if ssl_verify is not None else None,
+            params={"ssl_verify": ssl_verify},
         )
         self.api_key = api_key or os.environ.get("AIM_API_KEY")
         if not self.api_key:

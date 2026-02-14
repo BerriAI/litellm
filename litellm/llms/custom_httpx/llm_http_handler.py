@@ -5266,13 +5266,21 @@ class BaseLLMHTTPHandler:
                 provider_config=video_generation_provider_config,
             )
 
-        return video_generation_provider_config.transform_video_create_response(
+        # Transform response into a VideoObject
+        video_obj = video_generation_provider_config.transform_video_create_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             request_data=data,
         )
+        # Emit logging callbacks for standard logging payloads (sync path)
+        try:
+            logging_obj.success_handler(result=video_obj)
+        except Exception:
+            # Non-blocking: ignore logging errors
+            pass
+        return video_obj
 
     async def async_video_generation_handler(
         self,
@@ -5364,13 +5372,21 @@ class BaseLLMHTTPHandler:
                 provider_config=video_generation_provider_config,
             )
 
-        return video_generation_provider_config.transform_video_create_response(
+        # Transform response into a VideoObject
+        video_obj_async = video_generation_provider_config.transform_video_create_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             request_data=data,
         )
+        # Emit logging callbacks for standard logging payloads (async path)
+        try:
+            await logging_obj.async_success_handler(result=video_obj_async)
+        except Exception:
+            # Non-blocking: ignore logging errors
+            pass
+        return video_obj_async
 
     ###### VIDEO CONTENT HANDLER ######
     def video_content_handler(
