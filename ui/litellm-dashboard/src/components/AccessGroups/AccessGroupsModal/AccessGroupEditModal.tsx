@@ -77,7 +77,7 @@ export function AccessGroupEditModal({
       okText="Save Changes"
       cancelText="Cancel"
       confirmLoading={editMutation.isPending}
-      destroyOnClose
+      destroyOnHidden
     >
       <AccessGroupBaseForm form={form} />
     </Modal>
