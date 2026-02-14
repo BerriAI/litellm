@@ -455,6 +455,15 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               className="mb-6"
             />
 
+            <Alert
+              message="Enterprise Feature Notice"
+              description="Parts of policy attachments will be on LiteLLM Enterprise in subsequent releases."
+              type="warning"
+              showIcon
+              closable
+              className="mb-6"
+            />
+
             <div className="flex justify-between items-center mb-4">
               <Button
                 onClick={() => setIsAddAttachmentModalVisible(true)}
