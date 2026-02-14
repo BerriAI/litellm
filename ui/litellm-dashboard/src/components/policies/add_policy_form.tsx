@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "antd";
 import { Button, TextInput, Textarea } from "@tremor/react";
-import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
+import { Policy, PolicyCreateRequest, PolicyUpdateRequest, GuardrailPipeline } from "./types";
 import { Guardrail } from "../guardrails/types";
+import PipelineFlowBuilder, { createDefaultStep } from "./pipeline_flow_builder";
 import { getResolvedGuardrails, modelAvailableCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -39,6 +40,11 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   const [isLoadingResolved, setIsLoadingResolved] = useState(false);
   const [modelConditionType, setModelConditionType] = useState<"model" | "regex">("model");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [policyMode, setPolicyMode] = useState<"simple" | "flow_builder">("simple");
+  const [pipeline, setPipeline] = useState<GuardrailPipeline>({
+    mode: "pre_call",
+    steps: [createDefaultStep()],
+  });
   const { userId, userRole } = useAuthorized();
 
   // Only consider it "editing" if editingPolicy has a policy_id (real existing policy)
@@ -64,10 +70,19 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       if (editingPolicy.policy_id && accessToken) {
         loadResolvedGuardrails(editingPolicy.policy_id);
       }
+      // Detect pipeline mode
+      if (editingPolicy.pipeline) {
+        setPolicyMode("flow_builder");
+        setPipeline(editingPolicy.pipeline);
+      } else {
+        setPolicyMode("simple");
+      }
     } else if (visible) {
       form.resetFields();
       setResolvedGuardrails([]);
       setModelConditionType("model");
+      setPolicyMode("simple");
+      setPipeline({ mode: "pre_call", steps: [createDefaultStep()] });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, editingPolicy, form]);
@@ -184,16 +199,36 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         throw new Error("No access token available");
       }
 
-      const data: PolicyCreateRequest | PolicyUpdateRequest = {
-        policy_name: values.policy_name,
-        description: values.description || undefined,
-        inherit: values.inherit || undefined,
-        guardrails_add: values.guardrails_add || [],
-        guardrails_remove: values.guardrails_remove || [],
-        condition: values.model_condition
-          ? { model: values.model_condition }
-          : undefined,
-      };
+      let data: PolicyCreateRequest | PolicyUpdateRequest;
+
+      if (policyMode === "flow_builder") {
+        // Flow builder mode: auto-derive guardrails_add from pipeline steps
+        const guardrailsFromPipeline = pipeline.steps
+          .map((s) => s.guardrail)
+          .filter(Boolean);
+        data = {
+          policy_name: values.policy_name,
+          description: values.description || undefined,
+          inherit: values.inherit || undefined,
+          guardrails_add: guardrailsFromPipeline,
+          guardrails_remove: [],
+          condition: values.model_condition
+            ? { model: values.model_condition }
+            : undefined,
+          pipeline: pipeline,
+        };
+      } else {
+        data = {
+          policy_name: values.policy_name,
+          description: values.description || undefined,
+          inherit: values.inherit || undefined,
+          guardrails_add: values.guardrails_add || [],
+          guardrails_remove: values.guardrails_remove || [],
+          condition: values.model_condition
+            ? { model: values.model_condition }
+            : undefined,
+        };
+      }
 
       if (isEditing && editingPolicy) {
         await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
@@ -234,7 +269,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       open={visible}
       onCancel={handleClose}
       footer={null}
-      width={700}
+      width={policyMode === "flow_builder" ? 800 : 700}
     >
       <Form
         form={form}
@@ -271,6 +306,48 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         </Form.Item>
 
         <Divider orientation="left">
+          <Text strong>Mode</Text>
+        </Divider>
+
+        <div className="flex gap-3 mb-4">
+          <div
+            onClick={() => setPolicyMode("simple")}
+            style={{
+              flex: 1,
+              padding: "12px 16px",
+              border: `2px solid ${policyMode === "simple" ? "#1890ff" : "#d9d9d9"}`,
+              borderRadius: 8,
+              cursor: "pointer",
+              backgroundColor: policyMode === "simple" ? "#e6f7ff" : "#fff",
+            }}
+          >
+            <Text strong>Simple Mode</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Add/remove guardrails directly
+            </Text>
+          </div>
+          <div
+            onClick={() => setPolicyMode("flow_builder")}
+            style={{
+              flex: 1,
+              padding: "12px 16px",
+              border: `2px solid ${policyMode === "flow_builder" ? "#1890ff" : "#d9d9d9"}`,
+              borderRadius: 8,
+              cursor: "pointer",
+              backgroundColor: policyMode === "flow_builder" ? "#e6f7ff" : "#fff",
+            }}
+          >
+            <Text strong>Flow Builder</Text>
+            <Tag color="green" style={{ marginLeft: 8, fontSize: 10 }}>NEW</Tag>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Visual pipeline with conditional routing
+            </Text>
+          </div>
+        </div>
+
+        <Divider orientation="left">
           <Text strong>Inheritance</Text>
         </Divider>
 
@@ -287,59 +364,75 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
           />
         </Form.Item>
 
-        <Divider orientation="left">
-          <Text strong>Guardrails</Text>
-        </Divider>
+        {policyMode === "simple" ? (
+          <>
+            <Divider orientation="left">
+              <Text strong>Guardrails</Text>
+            </Divider>
 
-        <Form.Item
-          name="guardrails_add"
-          label="Guardrails to Add"
-          tooltip="These guardrails will be added to requests matching this policy"
-        >
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="Select guardrails to add"
-            options={guardrailOptions}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
+            <Form.Item
+              name="guardrails_add"
+              label="Guardrails to Add"
+              tooltip="These guardrails will be added to requests matching this policy"
+            >
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Select guardrails to add"
+                options={guardrailOptions}
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
 
-        <Form.Item
-          name="guardrails_remove"
-          label="Guardrails to Remove"
-          tooltip="These guardrails will be removed from inherited guardrails"
-        >
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="Select guardrails to remove (from inherited)"
-            options={guardrailOptions}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
+            <Form.Item
+              name="guardrails_remove"
+              label="Guardrails to Remove"
+              tooltip="These guardrails will be removed from inherited guardrails"
+            >
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Select guardrails to remove (from inherited)"
+                options={guardrailOptions}
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
 
-        {resolvedGuardrails.length > 0 && (
-          <Alert
-            message="Resolved Guardrails"
-            description={
-              <div>
-                <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                  These are the final guardrails that will be applied (including inheritance):
-                </Text>
-                <div className="flex flex-wrap gap-1">
-                  {resolvedGuardrails.map((g) => (
-                    <Tag key={g} color="blue">
-                      {g}
-                    </Tag>
-                  ))}
-                </div>
-              </div>
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
+            {resolvedGuardrails.length > 0 && (
+              <Alert
+                message="Resolved Guardrails"
+                description={
+                  <div>
+                    <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+                      These are the final guardrails that will be applied (including inheritance):
+                    </Text>
+                    <div className="flex flex-wrap gap-1">
+                      {resolvedGuardrails.map((g) => (
+                        <Tag key={g} color="blue">
+                          {g}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                }
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
+          </>
+        ) : (
+          <>
+            <Divider orientation="left">
+              <Text strong>Pipeline Flow</Text>
+            </Divider>
+
+            <PipelineFlowBuilder
+              pipeline={pipeline}
+              onChange={setPipeline}
+              availableGuardrails={availableGuardrails}
+            />
+          </>
         )}
 
         <Divider orientation="left">
