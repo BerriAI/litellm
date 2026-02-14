@@ -1099,6 +1099,7 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
+            custom_body: Optional[dict] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
         ):
             return await chat_completion_pass_through_endpoint(
                 fastapi_response=fastapi_response,
@@ -1115,6 +1116,7 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
+            custom_body: Optional[dict] = None,
         ):
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
@@ -1189,11 +1191,16 @@ def create_pass_through_route(
             )
             if query_params:
                 final_query_params.update(query_params)
-            final_custom_body = (
-                custom_body_data
-                if isinstance(custom_body_data, dict) or custom_body_data is None
-                else None
-            )
+            # When a caller (e.g. bedrock_proxy_route) supplies a pre-built
+            # body, use it instead of the body parsed from the raw request.
+            if custom_body is not None:
+                final_custom_body = custom_body
+            else:
+                final_custom_body = (
+                    custom_body_data
+                    if isinstance(custom_body_data, dict) or custom_body_data is None
+                    else None
+                )
 
             return await pass_through_request(  # type: ignore
                 request=request,
