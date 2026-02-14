@@ -890,7 +890,7 @@ async def test_partner_models_httpx(model, region, sync_mode):
 @pytest.mark.parametrize(
     "model,region",
     [
-        ("vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas", "us-east5"),
+        ("vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas", "us-east5"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         (
             "vertex_ai/mistral-small-2503",
