@@ -83,7 +83,7 @@ export function AccessGroupDetail({
     );
   }
 
-  const modelIds = accessGroup.access_model_ids ?? [];
+  const modelIds = accessGroup.access_model_names ?? [];
   const mcpServerIds = accessGroup.access_mcp_server_ids ?? [];
   const agentIds = accessGroup.access_agent_ids ?? [];
   const keyIds = accessGroup.assigned_key_ids ?? [];
