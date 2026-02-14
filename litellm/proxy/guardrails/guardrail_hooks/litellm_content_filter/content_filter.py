@@ -957,7 +957,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
-    def _filter_single_text(
+    def _filter_single_text(  # noqa: PLR0915
         self, text: str, detections: Optional[List[ContentFilterDetection]] = None
     ) -> str:
         """

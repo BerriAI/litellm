@@ -1515,7 +1515,7 @@ def move_guardrails_to_metadata(
             ] = request_body_guardrail_config
 
 
-def add_guardrails_from_policy_engine(
+def add_guardrails_from_policy_engine(  # noqa: PLR0915
     data: dict,
     metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
