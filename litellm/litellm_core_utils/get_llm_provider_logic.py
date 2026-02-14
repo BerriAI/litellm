@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -146,13 +146,19 @@ def get_llm_provider(  # noqa: PLR0915
                 return model, custom_llm_provider, dynamic_api_key, api_base
 
         ### Handle cases when custom_llm_provider is set to cohere/command-r-plus but it should use cohere_chat route
-        model, custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
+        _model, _custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
             model, custom_llm_provider
         )
+        # model is validated at function entry and handlers preserve it
+        model = cast(str, _model)
+        custom_llm_provider = _custom_llm_provider
 
-        model, custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
+        _model, _custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
             model, custom_llm_provider
         )
+        # model is validated at function entry and handlers preserve it
+        model = cast(str, _model)
+        custom_llm_provider = _custom_llm_provider
 
         if custom_llm_provider and (
             model.split("/")[0] != custom_llm_provider
