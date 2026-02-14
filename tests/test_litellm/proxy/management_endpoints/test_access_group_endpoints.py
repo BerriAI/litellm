@@ -28,7 +28,7 @@ def _make_access_group_record(
     access_group_id: str = "ag-123",
     access_group_name: str = "test-group",
     description: str | None = "Test description",
-    access_model_ids: list | None = None,
+    access_model_names: list | None = None,
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
     assigned_team_ids: list | None = None,
@@ -41,7 +41,7 @@ def _make_access_group_record(
     record.access_group_id = access_group_id
     record.access_group_name = access_group_name
     record.description = description
-    record.access_model_ids = access_model_ids or []
+    record.access_model_names = access_model_names or []
     record.access_mcp_server_ids = access_mcp_server_ids or []
     record.access_agent_ids = access_agent_ids or []
     record.assigned_team_ids = assigned_team_ids or []
@@ -64,7 +64,7 @@ def client_and_mocks(monkeypatch):
             access_group_id="ag-new",
             access_group_name=data.get("access_group_name", "new"),
             description=data.get("description"),
-            access_model_ids=data.get("access_model_ids", []),
+            access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
@@ -80,7 +80,7 @@ def client_and_mocks(monkeypatch):
         access_group_id=where.get("access_group_id", "ag-123"),
         access_group_name=data.get("access_group_name", "updated"),
         description=data.get("description"),
-        access_model_ids=data.get("access_model_ids", []),
+        access_model_names=data.get("access_model_names", []),
         access_mcp_server_ids=data.get("access_mcp_server_ids", []),
         access_agent_ids=data.get("access_agent_ids", []),
         assigned_team_ids=data.get("assigned_team_ids", []),
@@ -147,7 +147,7 @@ ACCESS_GROUP_PATHS = ["/v1/access_group", "/v1/unified_access_group"]
         {
             "access_group_name": "group-b",
             "description": "Group B description",
-            "access_model_ids": ["model-1"],
+            "access_model_names": ["model-1"],
             "access_mcp_server_ids": ["mcp-1"],
             "assigned_team_ids": ["team-1"],
         },
@@ -369,7 +369,7 @@ def test_get_access_group_forbidden_non_admin(client_and_mocks, user_role):
     "update_payload",
     [
         {"description": "Updated description"},
-        {"access_model_ids": ["model-1", "model-2"]},
+        {"access_model_names": ["model-1", "model-2"]},
         {"assigned_team_ids": [], "assigned_key_ids": ["key-1"]},
     ],
 )
@@ -429,6 +429,57 @@ def test_update_access_group_empty_body(client_and_mocks):
     assert call_kwargs["where"] == {"access_group_id": "ag-update"}
     assert "updated_by" in call_kwargs["data"]
     assert call_kwargs["data"]["updated_by"] == "admin_user"
+
+
+def test_update_access_group_name_success(client_and_mocks):
+    """Update access_group_name succeeds when new name is unique."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "new-name"})
+    assert resp.status_code == 200
+    mock_table.update.assert_awaited_once()
+    call_kwargs = mock_table.update.call_args.kwargs
+    assert call_kwargs["data"]["access_group_name"] == "new-name"
+
+
+def test_update_access_group_name_duplicate_conflict(client_and_mocks):
+    """Update access_group_name to existing name returns 409 (unique constraint)."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+    mock_table.update = AsyncMock(
+        side_effect=Exception("Unique constraint failed on the fields: (`access_group_name`)")
+    )
+
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "taken-name"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]
+    mock_table.update.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "Unique constraint failed on the fields: (`access_group_name`)",
+        "P2002: Unique constraint failed",
+        "unique constraint violation",
+    ],
+)
+def test_update_access_group_name_unique_constraint_returns_409(client_and_mocks, error_message):
+    """Update access_group_name: Prisma unique constraint surfaces as 409."""
+    client, _, mock_table = client_and_mocks
+
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+    mock_table.update = AsyncMock(side_effect=Exception(error_message))
+
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "race-name"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

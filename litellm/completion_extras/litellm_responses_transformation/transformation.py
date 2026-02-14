@@ -163,15 +163,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         instructions = f"{instructions} {content}"
                     else:
                         instructions = content
+                elif isinstance(content, list):
+                    # Extract text from content blocks (e.g. [{"type": "text", "text": "..."}])
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    extracted = " ".join(text_parts)
+                    if instructions:
+                        instructions = f"{instructions} {extracted}"
+                    else:
+                        instructions = extracted
                 else:
-                    input_items.append(
-                        {
-                            "type": "message",
-                            "role": role,
-                            "content": self._convert_content_to_responses_format(
-                                content, role  # type: ignore
-                            ),
-                        }
+                    verbose_logger.warning(
+                        "Unexpected system message content type: %s. Skipping.",
+                        type(content),
                     )
             elif role == "tool":
                 # Convert tool message to function call output format

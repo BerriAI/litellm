@@ -1278,3 +1278,86 @@ def test_transform_response_preserves_annotations():
     assert result.usage.total_tokens == 30
 
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+
+
+def test_convert_chat_completion_messages_to_responses_api_system_string():
+    """Test that string system content is extracted into instructions."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert instructions == "You are a helpful assistant."
+    # System message should NOT appear in input items
+    for item in input_items:
+        assert item.get("role") != "system"
+    # User message should be in input items
+    assert len(input_items) == 1
+    assert input_items[0]["role"] == "user"
+
+
+def test_convert_chat_completion_messages_to_responses_api_system_list_content():
+    """Test that list-format system content blocks are extracted into instructions.
+
+    This happens when requests arrive via the Anthropic /v1/messages adapter,
+    which converts system prompts into list-format content blocks.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant."},
+                {"type": "text", "text": "Be concise."},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert instructions == "You are a helpful assistant. Be concise."
+    # System message should NOT appear in input items
+    for item in input_items:
+        assert item.get("role") != "system"
+    assert len(input_items) == 1
+    assert input_items[0]["role"] == "user"
+
+
+def test_convert_chat_completion_messages_to_responses_api_multiple_system_messages():
+    """Test that multiple system messages (string and list) are concatenated."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Be concise."},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert instructions == "You are a helpful assistant. Be concise."
+    for item in input_items:
+        assert item.get("role") != "system"

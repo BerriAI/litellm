@@ -917,6 +917,7 @@ model LiteLLM_PolicyTable {
   guardrails_add   String[]  @default([])
   guardrails_remove String[] @default([])
   condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
@@ -945,7 +946,7 @@ model LiteLLM_AccessGroupTable {
   description        String?
   
   // Resource memberships - explicit arrays per type
-  access_model_ids        String[] @default([])
+  access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
   access_agent_ids        String[] @default([])
 
