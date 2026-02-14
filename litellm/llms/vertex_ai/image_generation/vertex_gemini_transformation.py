@@ -38,7 +38,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         BaseImageGenerationConfig.__init__(self)
         VertexLLM.__init__(self)
     
-    def get_supported_openai_params(
+    def get_supported_openai_params(  # type: ignore[override]
         self, model: str
     ) -> List[str]:
         """
