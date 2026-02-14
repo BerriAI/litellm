@@ -82,3 +82,20 @@ export interface PolicyAttachmentListResponse {
   attachments: PolicyAttachment[];
   total_count: number;
 }
+
+export interface PipelineStepResult {
+  guardrail_name: string;
+  outcome: "pass" | "fail" | "error";
+  action_taken: string;
+  modified_data: Record<string, any> | null;
+  error_detail: string | null;
+  duration_seconds: number | null;
+}
+
+export interface PipelineTestResult {
+  terminal_action: string;
+  step_results: PipelineStepResult[];
+  modified_data: Record<string, any> | null;
+  error_message: string | null;
+  modify_response_message: string | null;
+}
