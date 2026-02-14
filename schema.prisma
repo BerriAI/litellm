@@ -930,7 +930,7 @@ model LiteLLM_AccessGroupTable {
   description        String?
   
   // Resource memberships - explicit arrays per type
-  access_model_ids        String[] @default([])
+  access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
   access_agent_ids        String[] @default([])
 

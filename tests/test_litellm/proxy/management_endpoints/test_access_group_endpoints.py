@@ -28,7 +28,7 @@ def _make_access_group_record(
     access_group_id: str = "ag-123",
     access_group_name: str = "test-group",
     description: str | None = "Test description",
-    access_model_ids: list | None = None,
+    access_model_names: list | None = None,
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
     assigned_team_ids: list | None = None,
@@ -41,7 +41,7 @@ def _make_access_group_record(
     record.access_group_id = access_group_id
     record.access_group_name = access_group_name
     record.description = description
-    record.access_model_ids = access_model_ids or []
+    record.access_model_names = access_model_names or []
     record.access_mcp_server_ids = access_mcp_server_ids or []
     record.access_agent_ids = access_agent_ids or []
     record.assigned_team_ids = assigned_team_ids or []
@@ -64,7 +64,7 @@ def client_and_mocks(monkeypatch):
             access_group_id="ag-new",
             access_group_name=data.get("access_group_name", "new"),
             description=data.get("description"),
-            access_model_ids=data.get("access_model_ids", []),
+            access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
@@ -80,7 +80,7 @@ def client_and_mocks(monkeypatch):
         access_group_id=where.get("access_group_id", "ag-123"),
         access_group_name=data.get("access_group_name", "updated"),
         description=data.get("description"),
-        access_model_ids=data.get("access_model_ids", []),
+        access_model_names=data.get("access_model_names", []),
         access_mcp_server_ids=data.get("access_mcp_server_ids", []),
         access_agent_ids=data.get("access_agent_ids", []),
         assigned_team_ids=data.get("assigned_team_ids", []),
@@ -147,7 +147,7 @@ ACCESS_GROUP_PATHS = ["/v1/access_group", "/v1/unified_access_group"]
         {
             "access_group_name": "group-b",
             "description": "Group B description",
-            "access_model_ids": ["model-1"],
+            "access_model_names": ["model-1"],
             "access_mcp_server_ids": ["mcp-1"],
             "assigned_team_ids": ["team-1"],
         },
@@ -369,7 +369,7 @@ def test_get_access_group_forbidden_non_admin(client_and_mocks, user_role):
     "update_payload",
     [
         {"description": "Updated description"},
-        {"access_model_ids": ["model-1", "model-2"]},
+        {"access_model_names": ["model-1", "model-2"]},
         {"assigned_team_ids": [], "assigned_key_ids": ["key-1"]},
     ],
 )
