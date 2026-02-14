@@ -500,6 +500,14 @@
     "severity": 1
   },
   {
+    "id": "bondage",
+    "match": "bondage|bound|tied up|rope play",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 3
+  },
+  {
     "id": "bone-smuggler",
     "match": "bone smuggler|bone-smuggler|bonesmuggler",
     "tags": [
@@ -2266,6 +2274,15 @@
     "severity": 3
   },
   {
+    "id": "how-to-kill",
+    "match": "how to kill|how to murder|how do i kill|how do i murder",
+    "tags": [
+      "violence",
+      "harm"
+    ],
+    "severity": 4
+  },
+  {
     "id": "humping",
     "match": "humping",
     "tags": [
@@ -2472,6 +2489,22 @@
     "severity": 3
   },
   {
+    "id": "kill",
+    "match": "kill yourself|kill myself|murder someone",
+    "tags": [
+      "violence",
+      "harm"
+    ],
+    "severity": 4,
+    "exceptions": [
+      "time",
+      "vibe",
+      "mood",
+      "skill",
+      "thrill"
+    ]
+  },
+  {
     "id": "kill-yourself",
     "match": "kill yourself|go kill yourself",
     "tags": [
@@ -2672,6 +2705,14 @@
     "severity": 3
   },
   {
+    "id": "lust",
+    "match": "lust|lusting|lustful|lusty",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 2
+  },
+  {
     "id": "male-squirting",
     "match": "male squirting|male-squirting",
     "tags": [
@@ -2768,6 +2809,15 @@
     "severity": 3
   },
   {
+    "id": "molest",
+    "match": "molest|molested|molesting|molestation",
+    "tags": [
+      "sexual",
+      "abuse"
+    ],
+    "severity": 4
+  },
+  {
     "id": "mr-hands",
     "match": "mr. hands|mr hands|mrhands",
     "tags": [
@@ -2790,6 +2840,22 @@
       "sexual"
     ],
     "severity": 3
+  },
+  {
+    "id": "murder",
+    "match": "murder|murdering|murderer",
+    "tags": [
+      "violence",
+      "harm"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "mystery",
+      "podcast",
+      "documentary",
+      "news",
+      "she wrote"
+    ]
   },
   {
     "id": "muscle-mary",
@@ -3735,6 +3801,14 @@
     "severity": 3
   },
   {
+    "id": "sexy",
+    "match": "sexy",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 2
+  },
+  {
     "id": "shaved pussy",
     "match": "shaved pussy|shaved beaver",
     "tags": [
@@ -3845,6 +3919,20 @@
     "severity": 3
   },
   {
+    "id": "slave",
+    "match": "slave|slavery|enslaved",
+    "tags": [
+      "exploitation"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "historical",
+      "history",
+      "civil war",
+      "ancient"
+    ]
+  },
+  {
     "id": "snatch",
     "match": "snatch",
     "tags": [
@@ -3859,6 +3947,15 @@
       "sexual"
     ],
     "severity": 3
+  },
+  {
+    "id": "snuff",
+    "match": "snuff|snuff film|snuff video",
+    "tags": [
+      "violence",
+      "extreme"
+    ],
+    "severity": 4
   },
   {
     "id": "sod-off",
@@ -3899,6 +3996,20 @@
       "racial"
     ],
     "severity": 3
+  },
+  {
+    "id": "sperm",
+    "match": "sperm|semen",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "medical",
+      "biology",
+      "reproduction",
+      "fertility"
+    ]
   },
   {
     "id": "spic",
@@ -4072,6 +4183,14 @@
   {
     "id": "submissive",
     "match": "submissive|submission",
+    "tags": [
+      "sexual"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "suck",
+    "match": "suck my|suck your|suck his|suck her",
     "tags": [
       "sexual"
     ],
