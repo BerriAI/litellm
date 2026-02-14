@@ -75,6 +75,28 @@ db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
+def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
+    """
+    Log a warning when budget lookup fails; cache will not be populated.
+
+    Skips logging for expected "user not found" cases (bare Exception from
+    get_user_object when user_id_upsert=False). Adds a schema migration hint
+    when the error appears schema-related.
+    """
+    # Skip logging for expected "user not found" - not caching is correct
+    if str(error) == "" and type(error).__name__ == "Exception":
+        return
+    err_str = str(error).lower()
+    hint = ""
+    if any(
+        x in err_str
+        for x in ("column", "schema", "does not exist", "prisma", "migrate")
+    ):
+        hint = " Run `prisma db push` or `prisma migrate deploy` to fix schema mismatches."
+    verbose_proxy_logger.error(
+        f"Budget lookup failed for {entity}; cache will not be populated. "
+        f"Each request will hit the database. Error: {error}.{hint}"
+    )
 
 def _is_model_cost_zero(
     model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
@@ -213,6 +235,13 @@ async def common_checks(
     if not skip_budget_checks:
         # 3. If team is in budget
         await _team_max_budget_check(
+            team_object=team_object,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=valid_token,
+        )
+
+        # 3.0.5. If team is over soft budget (alert only, doesn't block)
+        await _team_soft_budget_check(
             team_object=team_object,
             proxy_logging_obj=proxy_logging_obj,
             valid_token=valid_token,
@@ -1208,6 +1237,7 @@ async def get_user_object(
 
         return _response
     except Exception as e:  # if user not in db
+        _log_budget_lookup_failure("user", e)
         raise ValueError(
             f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
         )
@@ -1338,6 +1368,22 @@ async def _get_team_object_from_user_api_key_cache(
         raise Exception
 
     _response = LiteLLM_TeamTableCachedObj(**response.dict())
+    
+    # Load object_permission if object_permission_id exists but object_permission is not loaded
+    if _response.object_permission_id and not _response.object_permission:
+        try:
+            _response.object_permission = await get_object_permission(
+                object_permission_id=_response.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to load object_permission for team {team_id} with object_permission_id={_response.object_permission_id}: {e}"
+            )
+    
     # save the team object to cache
     await _cache_team_object(
         team_id=team_id,
@@ -1519,6 +1565,21 @@ async def get_team_object_by_alias(
 
         team = teams[0]
         team_obj = LiteLLM_TeamTableCachedObj(**team.model_dump())
+
+        # Load object_permission if object_permission_id exists but object_permission is not loaded
+        if team_obj.object_permission_id and not team_obj.object_permission:
+            try:
+                team_obj.object_permission = await get_object_permission(
+                    object_permission_id=team_obj.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Failed to load object_permission for team {team_obj.team_id} with object_permission_id={team_obj.object_permission_id}: {e}"
+                )
 
         # Cache the result by both alias and team_id
         await user_api_key_cache.async_set_cache(
@@ -1807,6 +1868,21 @@ async def get_key_object(
         )
 
     _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+
+    # Load object_permission if object_permission_id exists but object_permission is not loaded
+    if _response.object_permission_id and not _response.object_permission:
+        try:
+            _response.object_permission = await get_object_permission(
+                object_permission_id=_response.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to load object_permission for key with object_permission_id={_response.object_permission_id}: {e}"
+            )
 
     # save the key object to cache
     await _cache_key_object(
@@ -2419,6 +2495,75 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
             message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
+
+
+async def _team_soft_budget_check(
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Triggers a budget alert if the team is over it's soft budget.
+    """
+    if (
+        team_object is not None
+        and team_object.soft_budget is not None
+        and team_object.spend is not None
+        and team_object.spend >= team_object.soft_budget
+    ):
+        verbose_proxy_logger.debug(
+            "Crossed Soft Budget for team %s, spend %s, soft_budget %s",
+            team_object.team_id,
+            team_object.spend,
+            team_object.soft_budget,
+        )
+        if valid_token:
+            # Extract alert emails from team metadata
+            alert_emails: Optional[List[str]] = None
+            if team_object.metadata is not None and isinstance(team_object.metadata, dict):
+                soft_budget_alert_emails = team_object.metadata.get("soft_budget_alerting_emails")
+                if soft_budget_alert_emails is not None:
+                    if isinstance(soft_budget_alert_emails, list):
+                        alert_emails = [email for email in soft_budget_alert_emails if isinstance(email, str) and email.strip()]
+                    elif isinstance(soft_budget_alert_emails, str):
+                        # Handle comma-separated string
+                        alert_emails = [email.strip() for email in soft_budget_alert_emails.split(",") if email.strip()]
+                    # Filter out empty strings
+                    if alert_emails:
+                        alert_emails = [email for email in alert_emails if email]
+                    else:
+                        alert_emails = None
+
+            # Only send team soft budget alerts if alert_emails are configured
+            # Team soft budget alerts are sent via metadata.soft_budget_alerting_emails, not global alerting
+            if alert_emails is None or len(alert_emails) == 0:
+                verbose_proxy_logger.debug(
+                    "Skipping team soft budget alert for team %s: no alert_emails configured in metadata.soft_budget_alerting_emails",
+                    team_object.team_id,
+                )
+                return
+
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=team_object.spend,
+                max_budget=team_object.max_budget,
+                soft_budget=team_object.soft_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                user_email=None,  # Team-level alert, no specific user email
+                key_alias=valid_token.key_alias,
+                event_group=Litellm_EntityType.TEAM,
+                alert_emails=alert_emails,
+            )
+
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="soft_budget",
+                    user_info=call_info,
+                )
+            )
 
 
 async def _organization_max_budget_check(

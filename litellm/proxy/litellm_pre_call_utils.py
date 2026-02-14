@@ -1539,7 +1539,14 @@ def add_guardrails_from_policy_engine(
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_utils.callback_utils import (
+        add_policy_sources_to_metadata,
         add_policy_to_applied_policies_header,
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        get_tags_from_request_body,
+    )
+    from litellm.proxy.policy_engine.attachment_registry import (
+        get_attachment_registry,
     )
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -1561,20 +1568,31 @@ def add_guardrails_from_policy_engine(
         )
         return
 
-    # Build context from request
+    # Extract tags using the shared helper (handles metadata / litellm_metadata,
+    # top-level tags, deduplication, and type filtering).
+
+    all_tags = get_tags_from_request_body(data) or None
+
     context = PolicyMatchContext(
         team_alias=user_api_key_dict.team_alias,
         key_alias=user_api_key_dict.key_alias,
         model=data.get("model"),
+        tags=all_tags,
     )
 
     verbose_proxy_logger.debug(
         f"Policy engine: matching policies for context team_alias={context.team_alias}, "
-        f"key_alias={context.key_alias}, model={context.model}"
+        f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
     )
 
-    # Get matching policies via attachments
-    matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
+    # Get matching policies via attachments (with match reasons for attribution)
+    attachment_registry = get_attachment_registry()
+    matches_with_reasons = attachment_registry.get_attached_policies_with_reasons(
+        context
+    )
+    matching_policy_names = [m["policy_name"] for m in matches_with_reasons]
+    # Build reasons map: {"hipaa-policy": "tag:healthcare", ...}
+    policy_reasons = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
 
     verbose_proxy_logger.debug(
         f"Policy engine: matched policies via attachments: {matching_policy_names}"
@@ -1607,6 +1625,16 @@ def add_guardrails_from_policy_engine(
             request_data=data, policy_name=policy_name
         )
 
+    # Track policy attribution sources for x-litellm-policy-sources header
+    applied_reasons = {
+        name: policy_reasons[name]
+        for name in applied_policy_names
+        if name in policy_reasons
+    }
+    add_policy_sources_to_metadata(
+        request_data=data, policy_sources=applied_reasons
+    )
+
     # Resolve guardrails from matching policies
     resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context)
 
@@ -1614,20 +1642,40 @@ def add_guardrails_from_policy_engine(
         f"Policy engine: resolved guardrails: {resolved_guardrails}"
     )
 
-    if not resolved_guardrails:
-        return
+    # Resolve pipelines from matching policies
+    pipelines = PolicyResolver.resolve_pipelines_for_context(context=context)
 
     # Add resolved guardrails to request metadata
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
+
+    # Track pipeline-managed guardrails to exclude from independent execution
+    pipeline_managed_guardrails: set = set()
+    if pipelines:
+        pipeline_managed_guardrails = PolicyResolver.get_pipeline_managed_guardrails(
+            pipelines
+        )
+        data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
+        data[metadata_variable_name]["_pipeline_managed_guardrails"] = (
+            pipeline_managed_guardrails
+        )
+        verbose_proxy_logger.debug(
+            f"Policy engine: resolved {len(pipelines)} pipeline(s), "
+            f"managed guardrails: {pipeline_managed_guardrails}"
+        )
+
+    if not resolved_guardrails and not pipelines:
+        return
 
     existing_guardrails = data[metadata_variable_name].get("guardrails", [])
     if not isinstance(existing_guardrails, list):
         existing_guardrails = []
 
     # Combine existing guardrails with policy-resolved guardrails (no duplicates)
+    # Exclude pipeline-managed guardrails from the flat list
     combined = set(existing_guardrails)
     combined.update(resolved_guardrails)
+    combined -= pipeline_managed_guardrails
     data[metadata_variable_name]["guardrails"] = list(combined)
 
     verbose_proxy_logger.debug(

@@ -77,7 +77,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    ModifyResponseException,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
@@ -110,6 +113,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.mcp import (
@@ -117,6 +121,7 @@ from litellm.types.mcp import (
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
 )
+from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
@@ -740,7 +745,7 @@ class ProxyLogging:
         self, dynamic_success_callbacks: Optional[List], global_callbacks: List
     ) -> List:
         if dynamic_success_callbacks is None:
-            return global_callbacks
+            return list(global_callbacks)
         return list(set(dynamic_success_callbacks + global_callbacks))
 
     def _parse_pre_mcp_call_hook_response(
@@ -1141,6 +1146,95 @@ class ProxyLogging:
                         request_data=data, guardrail_name=guardrail_name
                     )
 
+    async def _maybe_execute_pipelines(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+        event_hook: str,
+    ) -> dict:
+        """
+        Execute guardrail pipelines if any are configured for this request.
+
+        Checks metadata for pipelines resolved by the policy engine
+        and executes them. Handles the result (allow/block/modify_response).
+
+        Returns the (possibly modified) data dict.
+        """
+        metadata = data.get("metadata", data.get("litellm_metadata", {})) or {}
+        pipelines = metadata.get("_guardrail_pipelines")
+        if not pipelines:
+            return data
+
+        for policy_name, pipeline in pipelines:
+            if pipeline.mode != event_hook:
+                continue
+
+            result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
+                steps=pipeline.steps,
+                mode=pipeline.mode,
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                policy_name=policy_name,
+            )
+
+            data = self._handle_pipeline_result(
+                result=result,
+                data=data,
+                policy_name=policy_name,
+            )
+
+        return data
+
+    @staticmethod
+    def _handle_pipeline_result(
+        result: Any,
+        data: dict,
+        policy_name: str,
+    ) -> dict:
+        """
+        Handle a PipelineExecutionResult — allow, block, or modify_response.
+
+        Returns data dict if allowed, raises on block/modify_response.
+        """
+        if result.terminal_action == "allow":
+            if result.modified_data is not None:
+                data.update(result.modified_data)
+            return data
+
+        if result.terminal_action == "block":
+            step_results_serializable = [
+                {
+                    "guardrail": sr.guardrail_name,
+                    "outcome": sr.outcome,
+                    "action": sr.action_taken,
+                }
+                for sr in result.step_results
+            ]
+            error_detail = {
+                "error": {
+                    "message": f"Content blocked by guardrail pipeline '{policy_name}'",
+                    "type": "guardrail_pipeline_error",
+                    "pipeline_context": {
+                        "policy": policy_name,
+                        "step_results": step_results_serializable,
+                    },
+                }
+            }
+            raise HTTPException(status_code=400, detail=error_detail)
+
+        if result.terminal_action == "modify_response":
+            raise ModifyResponseException(
+                message=result.modify_response_message or "Response modified by pipeline",
+                model=data.get("model", "unknown"),
+                request_data=data,
+                guardrail_name=f"pipeline:{policy_name}",
+                detection_info=None,
+            )
+
+        return data
+
     # The actual implementation of the function
     @overload
     async def pre_call_hook(
@@ -1203,6 +1297,18 @@ class ProxyLogging:
             )
 
         try:
+            # Execute guardrail pipelines before the normal callback loop
+            data = await self._maybe_execute_pipelines(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                event_hook="pre_call",
+            )
+
+            # Get pipeline-managed guardrails to skip in normal loop
+            metadata = data.get("metadata", data.get("litellm_metadata", {})) or {}
+            pipeline_managed: set = metadata.get("_pipeline_managed_guardrails", set())
+
             for callback in litellm.callbacks:
                 start_time = time.time()
                 _callback = None
@@ -1217,6 +1323,10 @@ class ProxyLogging:
                     and isinstance(_callback, CustomGuardrail)
                     and data is not None
                 ):
+                    # Skip guardrails managed by a pipeline
+                    if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                        continue
+
                     result = await self._process_guardrail_callback(
                         callback=_callback,
                         data=data,  # type: ignore
@@ -1370,17 +1480,36 @@ class ProxyLogging:
         ],
         user_info: CallInfo,
     ):
-        if self.alerting is None:
-            # do nothing if alerting is not switched on
+        # For soft_budget alerts with alert_emails set, allow email sending even if alerting is None
+        # This enables team-specific soft budget email alerts via metadata.soft_budget_alerting_emails
+        # Note: user_info is a CallInfo that can represent user/team/org level info. For team budgets,
+        # alert_emails is populated from team_object.metadata.soft_budget_alerting_emails (see auth_checks.py)
+        is_soft_budget_with_alert_emails = (
+            type == "soft_budget" 
+            and user_info.alert_emails is not None 
+            and len(user_info.alert_emails) > 0
+        )
+        
+        if self.alerting is None and not is_soft_budget_with_alert_emails:
+            # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if "slack" in self.alerting:
-            await self.slack_alerting_instance.budget_alerts(
-                type=type,
-                user_info=user_info,
-            )
+        if self.alerting is not None and "slack" in self.alerting:
+            if self.slack_alerting_instance is not None:
+                await self.slack_alerting_instance.budget_alerts(
+                    type=type,
+                    user_info=user_info,
+                )
 
-        if "email" in self.alerting and self.email_logging_instance is not None:
+        # Call email_logging_instance if:
+        # 1. "email" is in alerting config, OR
+        # 2. It's a soft_budget alert with team-specific alert_emails (bypasses global alerting config)
+        should_send_email = (
+            (self.alerting is not None and "email" in self.alerting) 
+            or is_soft_budget_with_alert_emails
+        )
+        
+        if should_send_email and self.email_logging_instance is not None:
             await self.email_logging_instance.budget_alerts(
                 type=type,
                 user_info=user_info,
@@ -2607,7 +2736,8 @@ class PrismaClient:
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
-                            t.max_budget AS team_max_budget, 
+                            t.max_budget AS team_max_budget,
+                            t.soft_budget AS team_soft_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.models AS team_models,

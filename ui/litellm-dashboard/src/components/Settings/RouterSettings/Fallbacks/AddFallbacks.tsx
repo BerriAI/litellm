@@ -140,7 +140,7 @@ export default function AddFallbacks({
           groups={groups}
           onGroupsChange={setGroups}
           availableModels={availableModels}
-          maxFallbacks={5}
+          maxFallbacks={10}
           maxGroups={5}
         />
         {/* Footer with Cancel and Save buttons */}
