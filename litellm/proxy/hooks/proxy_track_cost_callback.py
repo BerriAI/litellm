@@ -202,7 +202,7 @@ class _ProxyDBLogger(CustomLogger):
                         max_budget=end_user_max_budget,
                     )
             else:
-                if sl_object is None and kwargs.get("model") is None:
+                if sl_object is None and not kwargs.get("model"):
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object and no model for call_type=%s",
                         kwargs.get("call_type", "unknown"),

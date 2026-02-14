@@ -167,3 +167,36 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
         # failed_tracking_alert should NOT be called — this is not an error
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_value", [None, ""])
+async def test_track_cost_callback_skips_for_falsy_model_and_no_slo(model_value):
+    """
+    Same bug as above but model can also be empty string (e.g. health check callbacks).
+    The guard should catch all falsy model values when sl_object is missing.
+    """
+    logger = _ProxyDBLogger()
+
+    kwargs = {
+        "call_type": "acompletion",
+        "model": model_value,
+        "litellm_params": {},
+        "stream": False,
+    }
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+    ) as mock_proxy_logging:
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
