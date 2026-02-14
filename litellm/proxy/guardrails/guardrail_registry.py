@@ -470,6 +470,21 @@ class InMemoryGuardrailHandler:
         else:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
+        # Inject guardrail retry config into callback so get_guardrail_retry_config can read it
+        if custom_guardrail_callback is not None:
+            if (
+                getattr(litellm_params, "num_retries", None) is not None
+                or getattr(litellm_params, "retry_after", None) is not None
+            ):
+                opts = getattr(custom_guardrail_callback, "optional_params", None)
+                if opts is None:
+                    setattr(custom_guardrail_callback, "optional_params", {})
+                    opts = getattr(custom_guardrail_callback, "optional_params")
+                if getattr(litellm_params, "num_retries", None) is not None:
+                    opts["num_retries"] = litellm_params.num_retries
+                if getattr(litellm_params, "retry_after", None) is not None:
+                    opts["retry_after"] = litellm_params.retry_after
+
         parsed_guardrail = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
             guardrail_name=guardrail["guardrail_name"],

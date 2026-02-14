@@ -6561,7 +6561,7 @@ def _calculate_retry_after(
     remaining_retries: int,
     max_retries: int,
     response_headers: Optional[httpx.Headers] = None,
-    min_timeout: int = 0,
+    min_timeout: Union[int, float] = 0,
 ) -> Union[float, int]:
     retry_after = _get_retry_after_from_exception_header(response_headers)
 

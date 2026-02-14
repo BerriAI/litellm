@@ -103,6 +103,10 @@ from litellm.proxy.db.create_views import (
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.guardrails.guardrail_retries import (
+    get_guardrail_retry_config,
+    run_guardrail_with_retries,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -876,27 +880,71 @@ class ProxyLogging:
 
         target = unified_guardrail if use_unified else callback
 
-        if hook_type == "pre_call":
-            return await target.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                cache=self.call_details["user_api_key_cache"],
-                data=data,
-                call_type=call_type,
-            )
-        elif hook_type == "during_call":
-            return await target.async_moderation_hook(
-                data=data,
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                call_type=call_type,
-            )
-        elif hook_type == "post_call":
-            return await target.async_post_call_success_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                data=data,
-                response=response,  # type: ignore
-            )
+        if use_unified:
+            # Retries are handled inside unified_guardrail
+            if hook_type == "pre_call":
+                return await target.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,
+                    call_type=call_type,
+                )
+            elif hook_type == "during_call":
+                return await target.async_moderation_hook(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    call_type=call_type,
+                )
+            elif hook_type == "post_call":
+                return await target.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    data=data,
+                    response=response,  # type: ignore
+                )
+            else:
+                raise ValueError(f"Unknown hook_type: {hook_type}")
         else:
-            raise ValueError(f"Unknown hook_type: {hook_type}")
+            # Direct path: wrap with guardrail retries
+            num_retries, retry_after = get_guardrail_retry_config(callback)
+            guardrail_name = getattr(
+                callback, "guardrail_name", type(callback).__name__
+            )
+            if hook_type == "pre_call":
+                return await run_guardrail_with_retries(
+                    coro_factory=lambda: target.async_pre_call_hook(
+                        user_api_key_dict=user_api_key_dict,  # type: ignore
+                        cache=self.call_details["user_api_key_cache"],
+                        data=data,
+                        call_type=call_type,
+                    ),
+                    num_retries=num_retries,
+                    retry_after=retry_after,
+                    guardrail_name=guardrail_name,
+                )
+            elif hook_type == "during_call":
+                return await run_guardrail_with_retries(
+                    coro_factory=lambda: target.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,  # type: ignore
+                        call_type=call_type,
+                    ),
+                    num_retries=num_retries,
+                    retry_after=retry_after,
+                    guardrail_name=guardrail_name,
+                )
+            elif hook_type == "post_call":
+                return await run_guardrail_with_retries(
+                    coro_factory=lambda: target.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,  # type: ignore
+                        data=data,
+                        response=response,  # type: ignore
+                    ),
+                    num_retries=num_retries,
+                    retry_after=retry_after,
+                    guardrail_name=guardrail_name,
+                )
+            else:
+                raise ValueError(f"Unknown hook_type: {hook_type}")
 
     async def _execute_guardrail_with_load_balancing(
         self,
@@ -1435,10 +1483,20 @@ class ProxyLogging:
                         call_type=call_type,
                     )
                 else:
-                    guardrail_task = callback.async_moderation_hook(
-                        data=data,
-                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
-                        call_type=call_type,  # type: ignore
+                    _cb = callback
+                    num_retries, retry_after = get_guardrail_retry_config(_cb)
+                    guardrail_name = getattr(
+                        _cb, "guardrail_name", type(_cb).__name__
+                    )
+                    guardrail_task = run_guardrail_with_retries(
+                        coro_factory=lambda _c=_cb: _c.async_moderation_hook(
+                            data=data,
+                            user_api_key_dict=user_api_key_auth_dict,  # type: ignore
+                            call_type=call_type,  # type: ignore
+                        ),
+                        num_retries=num_retries,
+                        retry_after=retry_after,
+                        guardrail_name=guardrail_name,
                     )
                 guardrail_tasks.append(guardrail_task)
 
@@ -1915,10 +1973,23 @@ class ProxyLogging:
                         )
                     )
                 else:
-                    guardrail_response = await callback.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        data=data,
-                        response=response,
+                    _guardrail_cb = callback
+                    num_retries, retry_after = get_guardrail_retry_config(
+                        _guardrail_cb
+                    )
+                    guardrail_name = getattr(
+                        _guardrail_cb, "guardrail_name",
+                        type(_guardrail_cb).__name__,
+                    )
+                    guardrail_response = await run_guardrail_with_retries(
+                        coro_factory=lambda: _guardrail_cb.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        ),
+                        num_retries=num_retries,
+                        retry_after=retry_after,
+                        guardrail_name=guardrail_name,
                     )
 
                 if guardrail_response is not None:

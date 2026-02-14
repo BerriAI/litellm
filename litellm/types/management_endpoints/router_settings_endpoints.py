@@ -190,6 +190,22 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         ui_field_name="Retry After",
     ),
     RouterSettingsField(
+        field_name="guardrail_num_retries",
+        field_type="Integer",
+        field_value=None,
+        field_description="Default number of retries for failed guardrail calls (used when guardrail config does not set num_retries)",
+        field_default=None,
+        ui_field_name="Guardrail Num Retries",
+    ),
+    RouterSettingsField(
+        field_name="guardrail_retry_after",
+        field_type="Float",
+        field_value=None,
+        field_description="Default minimum seconds to wait before retrying a failed guardrail call",
+        field_default=None,
+        ui_field_name="Guardrail Retry After",
+    ),
+    RouterSettingsField(
         field_name="retry_policy",
         field_type="Dictionary",
         field_value=None,
