@@ -56,7 +56,7 @@ class PipelineExecutor:
             PipelineExecutionResult with terminal action and step results
         """
         step_results: List[PipelineStepResult] = []
-        working_data = data.copy()
+        working_data = copy.deepcopy(data)
 
         for i, step in enumerate(steps):
             start_time = time.perf_counter()
