@@ -757,11 +757,12 @@ class AmazonConverseConfig(BaseConfig):
             result["items"] = AmazonConverseConfig._add_additional_properties_to_schema(
                 result["items"]
             )
-        if "$defs" in result and isinstance(result["$defs"], dict):
-            result["$defs"] = {
-                k: AmazonConverseConfig._add_additional_properties_to_schema(v)
-                for k, v in result["$defs"].items()
-            }
+        for defs_key in ("$defs", "definitions"):
+            if defs_key in result and isinstance(result[defs_key], dict):
+                result[defs_key] = {
+                    k: AmazonConverseConfig._add_additional_properties_to_schema(v)
+                    for k, v in result[defs_key].items()
+                }
         for key in ("anyOf", "allOf", "oneOf"):
             if key in result and isinstance(result[key], list):
                 result[key] = [
@@ -955,9 +956,11 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        if self._supports_native_structured_outputs(model):
+        if self._supports_native_structured_outputs(model) and json_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
-            # No synthetic tool injection, no fake_stream needed
+            # No synthetic tool injection, no fake_stream needed.
+            # Requires an explicit schema — json_object with no schema falls through
+            # to the tool-call path below.
             output_config = self._create_output_config_for_response_format(
                 json_schema=json_schema,
                 name=name,
