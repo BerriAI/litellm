@@ -1011,6 +1011,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         
         # Case 2: Managed file and the file object exists in the database
         if stored_file_object and stored_file_object.file_object:
+            stored_file_object.file_object.id = file_id
             return stored_file_object.file_object
 
         # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
