@@ -248,7 +248,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
 
             if s3_batch_logging_element is None:
-                raise ValueError("s3_batch_logging_element is None")
+                verbose_logger.debug(
+                    "s3 Logging - skipping event, no standard_logging_object for call_type=%s",
+                    kwargs.get("call_type", "unknown"),
+                )
+                return
 
             verbose_logger.debug(
                 "\ns3 Logger - Logging payload = %s", s3_batch_logging_element
