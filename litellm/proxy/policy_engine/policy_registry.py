@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
+    GuardrailPipeline,
+    PipelineStep,
     Policy,
     PolicyCondition,
     PolicyCreateRequest,
@@ -93,11 +95,32 @@ class PolicyRegistry:
         if condition_data:
             condition = PolicyCondition(model=condition_data.get("model"))
 
+        # Parse pipeline (optional ordered guardrail execution)
+        pipeline = PolicyRegistry._parse_pipeline(policy_data.get("pipeline"))
+
         return Policy(
             inherit=policy_data.get("inherit"),
             description=policy_data.get("description"),
             guardrails=guardrails,
             condition=condition,
+            pipeline=pipeline,
+        )
+
+    @staticmethod
+    def _parse_pipeline(pipeline_data: Optional[Dict[str, Any]]) -> Optional[GuardrailPipeline]:
+        """Parse a pipeline configuration from raw data."""
+        if pipeline_data is None:
+            return None
+
+        steps_data = pipeline_data.get("steps", [])
+        steps = [
+            PipelineStep(**step_data) if isinstance(step_data, dict) else step_data
+            for step_data in steps_data
+        ]
+
+        return GuardrailPipeline(
+            mode=pipeline_data.get("mode", "pre_call"),
+            steps=steps,
         )
 
     def get_policy(self, policy_name: str) -> Optional[Policy]:
