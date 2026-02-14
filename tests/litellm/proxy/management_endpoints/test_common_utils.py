@@ -38,12 +38,11 @@ class TestHasNonEmptyValue:
     def test_non_empty_string_has_value(self):
         assert _has_non_empty_value("30d") is True
 
-    def test_dict_has_value(self):
+    def test_non_empty_dict_has_value(self):
         assert _has_non_empty_value({"key": "val"}) is True
 
-    def test_empty_dict_has_value(self):
-        # empty dict is not None/list/str, so it counts as non-empty
-        assert _has_non_empty_value({}) is True
+    def test_empty_dict_is_empty(self):
+        assert _has_non_empty_value({}) is False
 
 
 class TestUpdateMetadataFieldsPremiumCheck:

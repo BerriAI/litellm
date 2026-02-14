@@ -369,19 +369,17 @@ def _update_metadata_field(
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         value = updated_kv.get(field_name)
-        # Skip the premium check for empty collections ([] or {}).
+        # Skip the premium check for empty/blank values (None, [], {}, "", "  ").
         # The UI sends these as defaults even when the user hasn't configured
         # any enterprise features (see issue #20304).  However, we still
         # proceed with the update so that users can intentionally clear a
         # previously-set field by sending an empty list/dict.
-        if value is not None and value != [] and value != {}:
-            # Skip premium check for proxy admins - they should be able to update team settings
+        if _has_non_empty_value(value):
+            # Proxy admins bypass the premium check
             if (
-                user_api_key_dict is not None
-                and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+                user_api_key_dict is None
+                or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
             ):
-                pass  # Proxy admins bypass premium check
-            else:
                 _premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
@@ -394,10 +392,12 @@ def _update_metadata_field(
 
 
 def _has_non_empty_value(value: Any) -> bool:
-    """Check if a value has real content (not None, not empty list, not blank string)."""
+    """Check if a value has real content (not None, not empty collection, not blank string)."""
     if value is None:
         return False
     if isinstance(value, list) and len(value) == 0:
+        return False
+    if isinstance(value, dict) and len(value) == 0:
         return False
     if isinstance(value, str) and value.strip() == "":
         return False
