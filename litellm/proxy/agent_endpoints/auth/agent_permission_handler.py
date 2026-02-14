@@ -202,7 +202,7 @@ class AgentRequestHandler:
         1. First checks native team-level agent permissions (object_permission)
         2. Also includes agents from team's access_group_ids (unified access groups)
 
-        Note: object_permission is already loaded by get_team_object() in main auth flow.
+        Fetches the team object once and reuses it for both permission sources.
         """
         if user_api_key_auth is None:
             return []
@@ -211,13 +211,32 @@ class AgentRequestHandler:
             return []
 
         try:
+            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            if not prisma_client:
+                return []
+
+            # Fetch the team object once for both permission sources
+            team_obj = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+            if team_obj is None:
+                return []
+
             all_agents: List[str] = []
 
             # 1. Get agents from object_permission (native permissions)
-            object_permissions = await AgentRequestHandler._get_team_object_permission(
-                user_api_key_auth
-            )
-
+            object_permissions = team_obj.object_permission
             if object_permissions is not None:
                 # Get direct agents
                 direct_agents = object_permissions.agents or []
@@ -231,33 +250,17 @@ class AgentRequestHandler:
 
                 all_agents = direct_agents + access_group_agents
 
-            # 2. Fallback: get agent IDs from team's access_group_ids (unified access groups)
-            from litellm.proxy.auth.auth_checks import get_team_object
-            from litellm.proxy.proxy_server import (
-                prisma_client,
-                proxy_logging_obj,
-                user_api_key_cache,
-            )
-
-            if prisma_client is not None:
-                team_obj = await get_team_object(
-                    team_id=user_api_key_auth.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=user_api_key_auth.parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
+            # 2. Also include agents from team's access_group_ids (unified access groups)
+            team_access_group_ids = team_obj.access_group_ids or []
+            if team_access_group_ids:
+                from litellm.proxy.auth.auth_checks import (
+                    _get_agent_ids_from_access_groups,
                 )
-                if team_obj is not None:
-                    team_access_group_ids = team_obj.access_group_ids or []
-                    if team_access_group_ids:
-                        from litellm.proxy.auth.auth_checks import (
-                            _get_agent_ids_from_access_groups,
-                        )
 
-                        unified_agents = await _get_agent_ids_from_access_groups(
-                            access_group_ids=team_access_group_ids,
-                        )
-                        all_agents.extend(unified_agents)
+                unified_agents = await _get_agent_ids_from_access_groups(
+                    access_group_ids=team_access_group_ids,
+                )
+                all_agents.extend(unified_agents)
 
             return list(set(all_agents))
         except Exception as e:

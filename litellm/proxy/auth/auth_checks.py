@@ -2471,7 +2471,7 @@ async def can_team_access_model(
     except ProxyException:
         # Fallback: check team's access_group_ids
         team_access_group_ids = (
-            team_object.access_group_ids or [] if team_object else []
+            (team_object.access_group_ids or []) if team_object else []
         )
         if team_access_group_ids:
             models_from_groups = await _get_models_from_access_groups(
