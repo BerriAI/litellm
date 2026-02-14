@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { Select, Typography, message } from "antd";
 import { Button, TextInput } from "@tremor/react";
-import { ArrowLeftIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
+import { DotsVerticalIcon } from "@heroicons/react/solid";
 import { GuardrailPipeline, PipelineStep, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -9,11 +10,18 @@ import NotificationsManager from "../molecules/notifications_manager";
 const { Text } = Typography;
 
 const ACTION_OPTIONS = [
-  { label: "Continue to next step", value: "next" },
-  { label: "Allow (end flow)", value: "allow" },
-  { label: "Block with error response", value: "block" },
-  { label: "Return custom response", value: "modify_response" },
+  { label: "Next Step", value: "next" },
+  { label: "Allow", value: "allow" },
+  { label: "Block", value: "block" },
+  { label: "Custom Response", value: "modify_response" },
 ];
+
+const ACTION_LABELS: Record<string, string> = {
+  allow: "Allow",
+  block: "Block",
+  next: "Next Step",
+  modify_response: "Custom Response",
+};
 
 function createDefaultStep(): PipelineStep {
   return {
@@ -47,7 +55,63 @@ function updateStepAtIndex(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-components
+// Icons (matching the reference image)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GuardrailIcon: React.FC = () => (
+  <div
+    style={{
+      width: 28,
+      height: 28,
+      borderRadius: "50%",
+      backgroundColor: "#eef2ff",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      flexShrink: 0,
+    }}
+  >
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 8v4" />
+    </svg>
+  </div>
+);
+
+const PlayIcon: React.FC = () => (
+  <div
+    style={{
+      width: 28,
+      height: 28,
+      borderRadius: "50%",
+      backgroundColor: "#f3f4f6",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      flexShrink: 0,
+    }}
+  >
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="#6b7280" stroke="none">
+      <polygon points="6,3 20,12 6,21" />
+    </svg>
+  </div>
+);
+
+const PassIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <circle cx="12" cy="12" r="10" />
+    <path d="M9 12l2 2 4-4" />
+  </svg>
+);
+
+const FailIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <circle cx="12" cy="12" r="10" />
+  </svg>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Connector
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ConnectorProps {
@@ -55,38 +119,40 @@ interface ConnectorProps {
 }
 
 const Connector: React.FC<ConnectorProps> = ({ onInsert }) => (
-  <div className="flex flex-col items-center" style={{ height: 28 }}>
-    <div style={{ width: 1, flex: 1, backgroundColor: "#e5e7eb" }} />
+  <div className="flex flex-col items-center" style={{ height: 56 }}>
+    <div style={{ width: 1, flex: 1, backgroundColor: "#d1d5db" }} />
     <button
       onClick={onInsert}
       className="flex items-center justify-center"
       style={{
-        width: 20,
-        height: 20,
+        width: 24,
+        height: 24,
         borderRadius: "50%",
-        border: "1px solid #e5e7eb",
+        border: "1px solid #d1d5db",
         backgroundColor: "#fff",
         cursor: "pointer",
         zIndex: 1,
-        marginTop: -2,
-        marginBottom: -2,
         transition: "all 0.15s ease",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#9ca3af";
-        e.currentTarget.style.backgroundColor = "#f9fafb";
+        e.currentTarget.style.borderColor = "#6366f1";
+        e.currentTarget.style.backgroundColor = "#eef2ff";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#e5e7eb";
+        e.currentTarget.style.borderColor = "#d1d5db";
         e.currentTarget.style.backgroundColor = "#fff";
       }}
       title="Insert step"
     >
-      <PlusIcon style={{ width: 10, height: 10, color: "#9ca3af" }} />
+      <PlusIcon style={{ width: 12, height: 12, color: "#9ca3af" }} />
     </button>
-    <div style={{ width: 1, flex: 1, backgroundColor: "#e5e7eb" }} />
+    <div style={{ width: 1, flex: 1, backgroundColor: "#d1d5db" }} />
   </div>
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step Card (editable)
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface StepCardProps {
   step: PipelineStep;
@@ -114,31 +180,57 @@ const StepCard: React.FC<StepCardProps> = ({
     <div
       style={{
         border: "1px solid #e5e7eb",
-        borderRadius: 6,
-        padding: "10px 14px",
+        borderRadius: 10,
+        padding: "16px 20px",
         backgroundColor: "#fff",
-        maxWidth: 680,
+        maxWidth: 720,
         width: "100%",
       }}
     >
-      {/* Row 1: GUARDRAIL label + selector + step number + delete */}
-      <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 600,
-            textTransform: "uppercase",
-            color: "#9ca3af",
-            letterSpacing: "0.05em",
-            flexShrink: 0,
-          }}
-        >
-          GUARDRAIL
-        </span>
+      {/* Header row: icon + GUARDRAIL label ... Step N + menu */}
+      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+        <div className="flex items-center gap-2">
+          <GuardrailIcon />
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              color: "#6366f1",
+              letterSpacing: "0.06em",
+            }}
+          >
+            GUARDRAIL
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span style={{ fontSize: 13, color: "#9ca3af" }}>
+            Step {stepIndex + 1}
+          </span>
+          <button
+            onClick={onDelete}
+            disabled={totalSteps <= 1}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: totalSteps <= 1 ? "not-allowed" : "pointer",
+              opacity: totalSteps <= 1 ? 0.3 : 1,
+              padding: 2,
+              display: "flex",
+              alignItems: "center",
+            }}
+            title="Delete step"
+          >
+            <DotsVerticalIcon style={{ width: 16, height: 16, color: "#9ca3af" }} />
+          </button>
+        </div>
+      </div>
+
+      {/* Guardrail name / selector */}
+      <div style={{ marginBottom: 12 }}>
         <Select
           showSearch
-          size="small"
-          style={{ flex: 1 }}
+          style={{ width: "100%" }}
           placeholder="Select a guardrail"
           value={step.guardrail || undefined}
           onChange={(value) => onChange({ guardrail: value })}
@@ -147,77 +239,32 @@ const StepCard: React.FC<StepCardProps> = ({
             (option?.label ?? "").toString().toLowerCase().includes(input.toLowerCase())
           }
         />
-        <span style={{ fontSize: 11, color: "#9ca3af", flexShrink: 0 }}>
-          Step {stepIndex + 1}
-        </span>
-        <button
-          onClick={onDelete}
-          disabled={totalSteps <= 1}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: totalSteps <= 1 ? "not-allowed" : "pointer",
-            opacity: totalSteps <= 1 ? 0.3 : 1,
-            padding: 2,
-            display: "flex",
-            alignItems: "center",
-            transition: "all 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            if (totalSteps > 1) {
-              const icon = e.currentTarget.querySelector("svg");
-              if (icon) (icon as SVGElement).style.color = "#ef4444";
-            }
-          }}
-          onMouseLeave={(e) => {
-            const icon = e.currentTarget.querySelector("svg");
-            if (icon) (icon as SVGElement).style.color = "#9ca3af";
-          }}
-          title="Delete step"
-        >
-          <TrashIcon style={{ width: 14, height: 14, color: "#9ca3af", transition: "color 0.15s ease" }} />
-        </button>
       </div>
 
-      {/* Row 2: ON PASS + ON FAIL inline */}
-      <div className="flex items-center gap-4" style={{ flexWrap: "wrap" }}>
-        <div className="flex items-center gap-2" style={{ flex: 1, minWidth: 200 }}>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 600,
-              textTransform: "uppercase",
-              color: "#16a34a",
-              letterSpacing: "0.05em",
-              flexShrink: 0,
-            }}
-          >
-            ON PASS
-          </span>
+      {/* Divider */}
+      <div style={{ borderTop: "1px solid #f3f4f6", marginBottom: 12 }} />
+
+      {/* Pass / Fail row */}
+      <div className="flex items-center gap-6" style={{ flexWrap: "wrap" }}>
+        <div className="flex items-center gap-2">
+          <PassIcon />
+          <span style={{ fontSize: 13, color: "#374151" }}>Pass</span>
+          <span style={{ fontSize: 13, color: "#9ca3af" }}>&#8594;</span>
           <Select
             size="small"
-            style={{ flex: 1 }}
+            style={{ minWidth: 140 }}
             value={step.on_pass}
             onChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
             options={ACTION_OPTIONS}
           />
         </div>
-        <div className="flex items-center gap-2" style={{ flex: 1, minWidth: 200 }}>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 600,
-              textTransform: "uppercase",
-              color: "#dc2626",
-              letterSpacing: "0.05em",
-              flexShrink: 0,
-            }}
-          >
-            ON FAIL
-          </span>
+        <div className="flex items-center gap-2">
+          <FailIcon />
+          <span style={{ fontSize: 13, color: "#374151" }}>Fail</span>
+          <span style={{ fontSize: 13, color: "#9ca3af" }}>&#8594;</span>
           <Select
             size="small"
-            style={{ flex: 1 }}
+            style={{ minWidth: 140 }}
             value={step.on_fail}
             onChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
             options={ACTION_OPTIONS}
@@ -225,14 +272,13 @@ const StepCard: React.FC<StepCardProps> = ({
         </div>
       </div>
 
-      {/* Custom response input (shown only when modify_response is selected) */}
+      {/* Custom response input */}
       {(step.on_pass === "modify_response" || step.on_fail === "modify_response") && (
-        <div style={{ marginTop: 6 }}>
+        <div style={{ marginTop: 10 }}>
           <TextInput
             placeholder="Custom response message"
             value={step.modify_response_message || ""}
             onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
-            style={{ fontSize: 13 }}
           />
         </div>
       )}
@@ -271,36 +317,39 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
   };
 
   return (
-    <div className="flex flex-col items-center" style={{ padding: "8px 0" }}>
+    <div className="flex flex-col items-center" style={{ padding: "16px 0" }}>
       {/* Trigger Card */}
       <div
         style={{
           border: "1px solid #e5e7eb",
-          borderRadius: 6,
-          padding: "10px 14px",
-          backgroundColor: "#fafafa",
-          maxWidth: 680,
+          borderRadius: 10,
+          padding: "16px 20px",
+          backgroundColor: "#fff",
+          maxWidth: 720,
           width: "100%",
         }}
       >
-        <div className="flex items-center gap-2">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="#9ca3af" stroke="none">
-            <polygon points="5,3 19,12 5,21" />
-          </svg>
+        <div className="flex items-center gap-3">
+          <PlayIcon />
           <div>
             <span
               style={{
-                fontSize: 10,
-                fontWeight: 600,
+                fontSize: 11,
+                fontWeight: 700,
                 textTransform: "uppercase",
-                color: "#9ca3af",
-                letterSpacing: "0.05em",
+                color: "#6b7280",
+                letterSpacing: "0.06em",
+                display: "block",
+                marginBottom: 2,
               }}
             >
               TRIGGER
             </span>
-            <span style={{ fontSize: 13, fontWeight: 500, marginLeft: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>
               Incoming LLM Request
+            </span>
+            <span style={{ fontSize: 13, color: "#9ca3af" }}>
+              This flow runs when a request matches this policy
             </span>
           </div>
         </div>
@@ -321,7 +370,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
         </React.Fragment>
       ))}
 
-      {/* Bottom add button */}
+      {/* Bottom connector */}
       <Connector onInsert={() => handleInsertStep(pipeline.steps.length)} />
     </div>
   );
@@ -331,74 +380,79 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
 // Read-only display for policy info view
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ACTION_LABELS: Record<string, string> = {
-  allow: "Allow",
-  block: "Block",
-  next: "Next Step",
-  modify_response: "Custom Response",
-};
-
 interface PipelineInfoDisplayProps {
   pipeline: GuardrailPipeline;
 }
 
 export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeline }) => (
-  <div className="flex flex-col items-center" style={{ padding: "8px 0" }}>
+  <div className="flex flex-col items-center" style={{ padding: "16px 0" }}>
     {/* Trigger */}
     <div
       style={{
         border: "1px solid #e5e7eb",
-        borderRadius: 6,
-        padding: "8px 14px",
-        backgroundColor: "#fafafa",
-        maxWidth: 680,
+        borderRadius: 10,
+        padding: "14px 20px",
+        backgroundColor: "#fff",
+        maxWidth: 720,
         width: "100%",
       }}
     >
-      <div className="flex items-center gap-2">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="#9ca3af" stroke="none">
-          <polygon points="5,3 19,12 5,21" />
-        </svg>
-        <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: "#9ca3af", letterSpacing: "0.05em" }}>
-          TRIGGER
-        </span>
-        <span style={{ fontSize: 13, fontWeight: 500 }}>
-          Incoming LLM Request
-        </span>
+      <div className="flex items-center gap-3">
+        <PlayIcon />
+        <div>
+          <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#6b7280", letterSpacing: "0.06em", display: "block", marginBottom: 2 }}>
+            TRIGGER
+          </span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>
+            Incoming LLM Request
+          </span>
+        </div>
       </div>
     </div>
 
     {/* Steps */}
     {pipeline.steps.map((step, index) => (
       <React.Fragment key={index}>
-        <div style={{ width: 1, height: 20, backgroundColor: "#e5e7eb" }} />
+        {/* Connector */}
+        <div style={{ width: 1, height: 32, backgroundColor: "#d1d5db" }} />
+
+        {/* Step card */}
         <div
           style={{
             border: "1px solid #e5e7eb",
-            borderRadius: 6,
-            padding: "8px 14px",
+            borderRadius: 10,
+            padding: "14px 20px",
             backgroundColor: "#fff",
-            maxWidth: 680,
+            maxWidth: 720,
             width: "100%",
           }}
         >
-          <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
-            <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: "#9ca3af", letterSpacing: "0.05em" }}>
-              GUARDRAIL
-            </span>
-            <span style={{ fontSize: 13, fontWeight: 500 }}>{step.guardrail}</span>
-            <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto" }}>Step {index + 1}</span>
+          {/* Header */}
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <div className="flex items-center gap-2">
+              <GuardrailIcon />
+              <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#6366f1", letterSpacing: "0.06em" }}>
+                GUARDRAIL
+              </span>
+            </div>
+            <span style={{ fontSize: 13, color: "#9ca3af" }}>Step {index + 1}</span>
           </div>
-          <div className="flex gap-4" style={{ fontSize: 12, color: "#6b7280" }}>
-            <span>
-              <span style={{ fontSize: 10, fontWeight: 600, color: "#16a34a", textTransform: "uppercase" }}>Pass</span>
-              {" "}
-              {ACTION_LABELS[step.on_pass] || step.on_pass}
+
+          {/* Name */}
+          <div style={{ fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 8 }}>
+            {step.guardrail}
+          </div>
+
+          {/* Divider */}
+          <div style={{ borderTop: "1px solid #f3f4f6", marginBottom: 10 }} />
+
+          {/* Pass / Fail */}
+          <div className="flex items-center gap-6" style={{ fontSize: 13, color: "#374151" }}>
+            <span className="flex items-center gap-1.5">
+              <PassIcon /> Pass &#8594; {ACTION_LABELS[step.on_pass] || step.on_pass}
             </span>
-            <span>
-              <span style={{ fontSize: 10, fontWeight: 600, color: "#dc2626", textTransform: "uppercase" }}>Fail</span>
-              {" "}
-              {ACTION_LABELS[step.on_fail] || step.on_fail}
+            <span className="flex items-center gap-1.5">
+              <FailIcon /> Fail &#8594; {ACTION_LABELS[step.on_fail] || step.on_fail}
             </span>
           </div>
         </div>
@@ -497,7 +551,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: "#fafafa",
+        backgroundColor: "#f9fafb",
         zIndex: 1000,
         display: "flex",
         flexDirection: "column",
@@ -516,7 +570,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           flexShrink: 0,
         }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <button
             onClick={onBack}
             style={{
@@ -528,41 +582,36 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
               alignItems: "center",
             }}
           >
-            <ArrowLeftIcon style={{ width: 16, height: 16, color: "#9ca3af" }} />
+            <ArrowLeftIcon style={{ width: 18, height: 18, color: "#6b7280" }} />
           </button>
-          <span style={{ fontSize: 13, color: "#9ca3af" }}>Policies</span>
-          <span style={{ fontSize: 13, color: "#d1d5db" }}>/</span>
+          <span style={{ fontSize: 14, color: "#6b7280" }}>Policies</span>
+          <span style={{ fontSize: 14, color: "#d1d5db" }}>/</span>
           <TextInput
             placeholder="Policy name..."
             value={policyName}
             onChange={(e) => setPolicyName(e.target.value)}
             disabled={isEditing}
-            style={{ width: 220, fontSize: 13 }}
+            style={{ width: 240 }}
           />
           <span
             style={{
-              fontSize: 10,
+              fontSize: 11,
               fontWeight: 600,
-              backgroundColor: "#f3f4f6",
-              color: "#6b7280",
-              padding: "2px 6px",
-              borderRadius: 3,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
+              backgroundColor: "#eef2ff",
+              color: "#6366f1",
+              padding: "3px 8px",
+              borderRadius: 4,
+              letterSpacing: "0.02em",
             }}
           >
             Flow
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={onBack} style={{ fontSize: 13 }}>
+          <Button variant="secondary" onClick={onBack}>
             Cancel
           </Button>
-          <Button
-            onClick={handleSave}
-            loading={isSubmitting}
-            style={{ fontSize: 13 }}
-          >
+          <Button onClick={handleSave} loading={isSubmitting}>
             {isEditing ? "Update Policy" : "Save Policy"}
           </Button>
         </div>
@@ -571,7 +620,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       {/* Description bar */}
       <div
         style={{
-          padding: "6px 24px",
+          padding: "8px 24px",
           backgroundColor: "#fff",
           borderBottom: "1px solid #e5e7eb",
           flexShrink: 0,
@@ -581,7 +630,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           placeholder="Add a description (optional)..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          style={{ maxWidth: 480, fontSize: 13 }}
+          style={{ maxWidth: 500 }}
         />
       </div>
 
@@ -592,10 +641,10 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           overflowY: "auto",
           display: "flex",
           justifyContent: "center",
-          padding: "24px 24px",
+          padding: "32px 24px",
         }}
       >
-        <div style={{ maxWidth: 720, width: "100%" }}>
+        <div style={{ maxWidth: 760, width: "100%" }}>
           <PipelineFlowBuilder
             pipeline={pipeline}
             onChange={setPipeline}
