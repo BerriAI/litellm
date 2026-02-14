@@ -957,6 +957,176 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
+    def _handle_conditional_match(
+        self,
+        matched_phrase: str,
+        category_name: str,
+        severity: str,
+        action: ContentFilterAction,
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> None:
+        """Handle conditional category match detection and action."""
+        if detections is not None:
+            category_detection: CategoryKeywordDetection = {
+                "type": "category_keyword",
+                "category": category_name,
+                "keyword": matched_phrase,
+                "severity": severity,
+                "action": action.value,
+            }
+            detections.append(category_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = (
+                f"Content blocked: {category_name} conditional match '{matched_phrase}' detected "
+                f"(severity: {severity})"
+            )
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": error_msg,
+                    "category": category_name,
+                    "matched_phrase": matched_phrase,
+                    "severity": severity,
+                },
+            )
+        elif action == ContentFilterAction.MASK:
+            verbose_proxy_logger.warning(
+                f"Conditional match '{matched_phrase}' from {category_name} detected but MASK action not supported for conditional categories"
+            )
+
+    def _handle_category_keyword_match(
+        self,
+        keyword: str,
+        category_name: str,
+        severity: str,
+        action: ContentFilterAction,
+        text: str,
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> str:
+        """Handle category keyword match detection and action."""
+        if detections is not None:
+            category_detection: CategoryKeywordDetection = {
+                "type": "category_keyword",
+                "category": category_name,
+                "keyword": keyword,
+                "severity": severity,
+                "action": action.value,
+            }
+            detections.append(category_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = (
+                f"Content blocked: {category_name} category keyword '{keyword}' detected "
+                f"(severity: {severity})"
+            )
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": error_msg,
+                    "category": category_name,
+                    "keyword": keyword,
+                    "severity": severity,
+                },
+            )
+        elif action == ContentFilterAction.MASK:
+            keyword_pattern_for_masking = keyword.replace("*", ".?")
+            text = re.sub(
+                keyword_pattern_for_masking,
+                self.keyword_redaction_tag,
+                text,
+                flags=re.IGNORECASE,
+            )
+            verbose_proxy_logger.info(
+                f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
+            )
+
+        return text
+
+    def _handle_pattern_match(
+        self,
+        pattern_name: str,
+        action: ContentFilterAction,
+        text: str,
+        spans: List[Tuple[int, int]],
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> str:
+        """Handle regex pattern match detection and action."""
+        if detections is not None:
+            pattern_detection: PatternDetection = {
+                "type": "pattern",
+                "pattern_name": pattern_name,
+                "action": action.value,
+            }
+            detections.append(pattern_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = f"Content blocked: {pattern_name} pattern detected"
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={"error": error_msg, "pattern": pattern_name},
+            )
+        elif action == ContentFilterAction.MASK:
+            redaction_tag = self.pattern_redaction_format.format(
+                pattern_name=pattern_name.upper()
+            )
+            text = self._mask_spans(text, spans, redaction_tag)
+            verbose_proxy_logger.info(
+                f"Masked all {pattern_name} matches in content"
+            )
+
+        return text
+
+    def _handle_blocked_word_match(
+        self,
+        keyword: str,
+        action: ContentFilterAction,
+        description: str,
+        text: str,
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> str:
+        """Handle blocked word match detection and action."""
+        verbose_proxy_logger.debug(
+            f"Blocked word '{keyword}' found with action {action}"
+        )
+
+        if detections is not None:
+            blocked_word_detection: BlockedWordDetection = {
+                "type": "blocked_word",
+                "keyword": keyword,
+                "action": action.value,
+                "description": description,
+            }
+            detections.append(blocked_word_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = f"Content blocked: keyword '{keyword}' detected"
+            if description:
+                error_msg += f" ({description})"
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": error_msg,
+                    "keyword": keyword,
+                    "description": description,
+                },
+            )
+        elif action == ContentFilterAction.MASK:
+            keyword_pattern_for_masking = keyword.replace("*", ".?")
+            text = re.sub(
+                keyword_pattern_for_masking,
+                self.keyword_redaction_tag,
+                text,
+                flags=re.IGNORECASE,
+            )
+            verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+
+        return text
+
     def _filter_single_text(
         self, text: str, detections: Optional[List[ContentFilterDetection]] = None
     ) -> str:
@@ -983,164 +1153,41 @@ class ContentFilterGuardrail(CustomGuardrail):
         for category in self.loaded_categories.values():
             all_exceptions.extend(category.exceptions)
 
-        # Check conditional categories first (identifier + block word combinations)
+        # Check conditional categories first
         conditional_match = self._check_conditional_categories(text, all_exceptions)
         if conditional_match:
             matched_phrase, category_name, severity, action = conditional_match
-            if detections is not None:
-                category_detection: CategoryKeywordDetection = {
-                    "type": "category_keyword",
-                    "category": category_name,
-                    "keyword": matched_phrase,
-                    "severity": severity,
-                    "action": action.value,
-                }
-                detections.append(category_detection)
-            if action == ContentFilterAction.BLOCK:
-                error_msg = (
-                    f"Content blocked: {category_name} conditional match '{matched_phrase}' detected "
-                    f"(severity: {severity})"
-                )
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": error_msg,
-                        "category": category_name,
-                        "matched_phrase": matched_phrase,
-                        "severity": severity,
-                    },
-                )
-            elif action == ContentFilterAction.MASK:
-                # For conditional matches, we don't mask - too complex to determine what to mask
-                # Just log a warning
-                verbose_proxy_logger.warning(
-                    f"Conditional match '{matched_phrase}' from {category_name} detected but MASK action not supported for conditional categories"
-                )
+            self._handle_conditional_match(
+                matched_phrase, category_name, severity, action, detections
+            )
 
         # Check category keywords
         category_keyword_match = self._check_category_keywords(text, all_exceptions)
         if category_keyword_match:
             keyword, category_name, severity, action = category_keyword_match
-            if detections is not None:
-                category_detection: CategoryKeywordDetection = {
-                    "type": "category_keyword",
-                    "category": category_name,
-                    "keyword": keyword,
-                    "severity": severity,
-                    "action": action.value,
-                }
-                detections.append(category_detection)
-            if action == ContentFilterAction.BLOCK:
-                error_msg = (
-                    f"Content blocked: {category_name} category keyword '{keyword}' detected "
-                    f"(severity: {severity})"
-                )
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": error_msg,
-                        "category": category_name,
-                        "keyword": keyword,
-                        "severity": severity,
-                    },
-                )
-            elif action == ContentFilterAction.MASK:
-                # Replace keyword with redaction tag
-                # Convert asterisks to regex wildcards for matching
-                keyword_pattern_for_masking = keyword.replace("*", ".?")
-                text = re.sub(
-                    keyword_pattern_for_masking,
-                    self.keyword_redaction_tag,
-                    text,
-                    flags=re.IGNORECASE,
-                )
-                verbose_proxy_logger.info(
-                    f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
-                )
+            text = self._handle_category_keyword_match(
+                keyword, category_name, severity, action, text, detections
+            )
 
         # Check regex patterns - process ALL patterns, not just first match
         for pattern_entry in self.compiled_patterns:
             spans = self._find_pattern_spans(text, pattern_entry)
-            if not spans:
-                continue
-
-            pattern_name = pattern_entry["pattern_name"]
-            action = pattern_entry["action"]
-            if detections is not None:
-                # Don't log matched_text to avoid exposing sensitive content (emails, credit cards, etc.)
-                pattern_detection: PatternDetection = {
-                    "type": "pattern",
-                    "pattern_name": pattern_name,
-                    "action": action.value,
-                }
-                detections.append(pattern_detection)
-
-            if action == ContentFilterAction.BLOCK:
-                error_msg = f"Content blocked: {pattern_name} pattern detected"
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=403,
-                    detail={"error": error_msg, "pattern": pattern_name},
-                )
-            elif action == ContentFilterAction.MASK:
-                redaction_tag = self.pattern_redaction_format.format(
-                    pattern_name=pattern_name.upper()
-                )
-                text = self._mask_spans(text, spans, redaction_tag)
-                verbose_proxy_logger.info(
-                    f"Masked all {pattern_name} matches in content"
+            if spans:
+                pattern_name = pattern_entry["pattern_name"]
+                action = pattern_entry["action"]
+                text = self._handle_pattern_match(
+                    pattern_name, action, text, spans, detections
                 )
 
         # Check blocked words - iterate through ALL blocked words
-        # to ensure all matching keywords are processed, not just the first one
         text_lower = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
-            # Convert asterisks to regex wildcards for matching
             keyword_pattern_str = keyword.replace("*", ".?")
-            if not re.search(keyword_pattern_str, text_lower):
-                continue
-
-            verbose_proxy_logger.debug(
-                f"Blocked word '{keyword}' found with action {action}"
-            )
-
-            if detections is not None:
-                blocked_word_detection: BlockedWordDetection = {
-                    "type": "blocked_word",
-                    "keyword": keyword,
-                    "action": action.value,
-                    "description": description,
-                }
-                detections.append(blocked_word_detection)
-
-            if action == ContentFilterAction.BLOCK:
-                error_msg = f"Content blocked: keyword '{keyword}' detected"
-                if description:
-                    error_msg += f" ({description})"
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": error_msg,
-                        "keyword": keyword,
-                        "description": description,
-                    },
+            if re.search(keyword_pattern_str, text_lower):
+                text = self._handle_blocked_word_match(
+                    keyword, action, description, text, detections
                 )
-            elif action == ContentFilterAction.MASK:
-                # Replace keyword with redaction tag (case-insensitive)
-                # Convert asterisks to regex wildcards for matching
-                keyword_pattern_for_masking = keyword.replace("*", ".?")
-                text = re.sub(
-                    keyword_pattern_for_masking,
-                    self.keyword_redaction_tag,
-                    text,
-                    flags=re.IGNORECASE,
-                )
-                # Update text_lower after masking to avoid re-matching
-                text_lower = text.lower()
-                verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+                text_lower = text.lower()  # Update after masking
 
         return text
 
