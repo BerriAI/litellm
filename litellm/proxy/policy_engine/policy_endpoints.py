@@ -360,6 +360,7 @@ async def get_resolved_guardrails(policy_id: str):
 @router.post(
     "/policies/test-pipeline",
     tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def test_pipeline(
     request: PipelineTestRequest,
