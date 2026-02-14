@@ -3,8 +3,9 @@ import { Select, Typography, message } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
 import { DotsVerticalIcon } from "@heroicons/react/solid";
-import { GuardrailPipeline, PipelineStep, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
+import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
+import { testPipelineCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const { Text } = Typography;
@@ -537,6 +538,252 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Pipeline Test Panel (right drawer)
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PipelineTestPanelProps {
+  pipeline: GuardrailPipeline;
+  accessToken: string | null;
+  onClose: () => void;
+}
+
+const OUTCOME_STYLES: Record<string, { bg: string; color: string; label: string }> = {
+  pass: { bg: "#f0fdf4", color: "#16a34a", label: "PASS" },
+  fail: { bg: "#fef2f2", color: "#dc2626", label: "FAIL" },
+  error: { bg: "#fffbeb", color: "#d97706", label: "ERROR" },
+};
+
+const TERMINAL_STYLES: Record<string, { bg: string; color: string }> = {
+  allow: { bg: "#f0fdf4", color: "#16a34a" },
+  block: { bg: "#fef2f2", color: "#dc2626" },
+  modify_response: { bg: "#eff6ff", color: "#2563eb" },
+};
+
+const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
+  pipeline,
+  accessToken,
+  onClose,
+}) => {
+  const [testMessage, setTestMessage] = useState("Hello, can you help me?");
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<PipelineTestResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRunTest = async () => {
+    if (!accessToken) return;
+
+    const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
+    if (emptySteps.length > 0) {
+      setError("All steps must have a guardrail selected");
+      return;
+    }
+
+    setIsRunning(true);
+    setResult(null);
+    setError(null);
+
+    try {
+      const data = await testPipelineCall(
+        accessToken,
+        pipeline,
+        [{ role: "user", content: testMessage }]
+      );
+      setResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        width: 400,
+        borderLeft: "1px solid #e5e7eb",
+        backgroundColor: "#fff",
+        display: "flex",
+        flexDirection: "column",
+        flexShrink: 0,
+        overflow: "hidden",
+      }}
+    >
+      {/* Panel header */}
+      <div
+        style={{
+          padding: "12px 16px",
+          borderBottom: "1px solid #e5e7eb",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>Test Pipeline</span>
+        <button
+          onClick={onClose}
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontSize: 18,
+            color: "#9ca3af",
+            padding: "0 4px",
+          }}
+        >
+          x
+        </button>
+      </div>
+
+      {/* Input section */}
+      <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb" }}>
+        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+          Test Message
+        </label>
+        <textarea
+          value={testMessage}
+          onChange={(e) => setTestMessage(e.target.value)}
+          placeholder="Enter a test message..."
+          rows={3}
+          style={{
+            width: "100%",
+            border: "1px solid #d1d5db",
+            borderRadius: 6,
+            padding: "8px 10px",
+            fontSize: 13,
+            resize: "vertical",
+            fontFamily: "inherit",
+          }}
+        />
+        <Button
+          onClick={handleRunTest}
+          loading={isRunning}
+          style={{ marginTop: 8, width: "100%" }}
+        >
+          Run Test
+        </Button>
+      </div>
+
+      {/* Results section */}
+      <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+        {error && (
+          <div
+            style={{
+              padding: "10px 12px",
+              backgroundColor: "#fef2f2",
+              border: "1px solid #fecaca",
+              borderRadius: 6,
+              fontSize: 13,
+              color: "#dc2626",
+              marginBottom: 12,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {result && (
+          <div>
+            {/* Step results */}
+            {result.step_results.map((step, i) => {
+              const style = OUTCOME_STYLES[step.outcome] || OUTCOME_STYLES.error;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    marginBottom: 8,
+                  }}
+                >
+                  <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+                      Step {i + 1}: {step.guardrail_name}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        backgroundColor: style.bg,
+                        color: style.color,
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                      }}
+                    >
+                      {style.label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                    Action: {ACTION_LABELS[step.action_taken] || step.action_taken}
+                    {step.duration_seconds != null && (
+                      <span style={{ marginLeft: 8 }}>
+                        ({(step.duration_seconds * 1000).toFixed(0)}ms)
+                      </span>
+                    )}
+                  </div>
+                  {step.error_detail && (
+                    <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>
+                      {step.error_detail}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Terminal result */}
+            <div
+              style={{
+                borderTop: "1px solid #e5e7eb",
+                paddingTop: 12,
+                marginTop: 4,
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>Result</span>
+                {(() => {
+                  const ts = TERMINAL_STYLES[result.terminal_action] || TERMINAL_STYLES.block;
+                  return (
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        backgroundColor: ts.bg,
+                        color: ts.color,
+                        padding: "3px 10px",
+                        borderRadius: 4,
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {result.terminal_action === "modify_response" ? "Custom Response" : result.terminal_action}
+                    </span>
+                  );
+                })()}
+              </div>
+              {result.error_message && (
+                <div style={{ fontSize: 12, color: "#dc2626", marginTop: 6 }}>
+                  {result.error_message}
+                </div>
+              )}
+              {result.modify_response_message && (
+                <div style={{ fontSize: 12, color: "#2563eb", marginTop: 6 }}>
+                  Response: {result.modify_response_message}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!result && !error && (
+          <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
+            Enter a test message and click "Run Test" to execute the pipeline
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Full-screen Flow Builder Page
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -564,6 +811,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   const [policyName, setPolicyName] = useState(editingPolicy?.policy_name || "");
   const [description, setDescription] = useState(editingPolicy?.description || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showTestPanel, setShowTestPanel] = useState(false);
   const [pipeline, setPipeline] = useState<GuardrailPipeline>(
     editingPolicy?.pipeline || { mode: "pre_call", steps: [createDefaultStep()] }
   );
@@ -686,6 +934,12 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           <Button variant="secondary" onClick={onBack}>
             Cancel
           </Button>
+          <Button
+            variant="secondary"
+            onClick={() => setShowTestPanel(!showTestPanel)}
+          >
+            {showTestPanel ? "Hide Test" : "Test Pipeline"}
+          </Button>
           <Button onClick={handleSave} loading={isSubmitting}>
             {isEditing ? "Update Policy" : "Save Policy"}
           </Button>
@@ -709,23 +963,33 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         />
       </div>
 
-      {/* Flow builder canvas */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          display: "flex",
-          justifyContent: "center",
-          padding: "32px 24px",
-        }}
-      >
-        <div style={{ maxWidth: 760, width: "100%" }}>
-          <PipelineFlowBuilder
-            pipeline={pipeline}
-            onChange={setPipeline}
-            availableGuardrails={availableGuardrails}
-          />
+      {/* Flow builder canvas + test panel */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            display: "flex",
+            justifyContent: "center",
+            padding: "32px 24px",
+          }}
+        >
+          <div style={{ maxWidth: 760, width: "100%" }}>
+            <PipelineFlowBuilder
+              pipeline={pipeline}
+              onChange={setPipeline}
+              availableGuardrails={availableGuardrails}
+            />
+          </div>
         </div>
+
+        {showTestPanel && (
+          <PipelineTestPanel
+            pipeline={pipeline}
+            accessToken={accessToken}
+            onClose={() => setShowTestPanel(false)}
+          />
+        )}
       </div>
     </div>
   );
