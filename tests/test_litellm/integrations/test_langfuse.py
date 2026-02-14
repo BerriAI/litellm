@@ -32,6 +32,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         )
         self.env_patcher.start()
 
+        # Store original langfuse module if it exists for cleanup
+        self._original_langfuse_module = sys.modules.get("langfuse")
+
         # Create mock objects
         self.mock_langfuse_client = MagicMock()
         # Mock the client attribute to prevent errors during logger initialization
@@ -39,7 +42,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
         self.mock_langfuse_generation.trace_id = "test-trace-id"
-        
+
         # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
         self.mock_langfuse_span = MagicMock()
         self.mock_langfuse_span.end = MagicMock()
@@ -109,7 +112,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 response_obj=response_obj,
                 level=level,
                 litellm_call_id=kwargs.get("litellm_call_id", None),
-                print_verbose=True,  # Add the missing parameter
             )
 
         # Bind the method to the instance
@@ -126,6 +128,12 @@ class TestLangfuseUsageDetails(unittest.TestCase):
     def tearDown(self):
         self.env_patcher.stop()
         self.langfuse_module_patcher.stop()
+
+        # Restore original langfuse module or remove mock to prevent test pollution
+        if self._original_langfuse_module is not None:
+            sys.modules["langfuse"] = self._original_langfuse_module
+        elif "langfuse" in sys.modules:
+            del sys.modules["langfuse"]
 
     def test_langfuse_usage_details_type(self):
         """Test that LangfuseUsageDetails TypedDict is properly defined with the correct fields"""
