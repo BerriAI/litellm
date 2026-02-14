@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "antd";
 import { Button, TextInput, Textarea } from "@tremor/react";
-import { Policy, PolicyCreateRequest, PolicyUpdateRequest, GuardrailPipeline } from "./types";
+import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
 import { Guardrail } from "../guardrails/types";
-import PipelineFlowBuilder, { createDefaultStep } from "./pipeline_flow_builder";
 import { getResolvedGuardrails, modelAvailableCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -15,6 +14,7 @@ interface AddPolicyFormProps {
   visible: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  onOpenFlowBuilder: () => void;
   accessToken: string | null;
   editingPolicy?: Policy | null;
   existingPolicies: Policy[];
@@ -23,10 +23,117 @@ interface AddPolicyFormProps {
   updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Mode Picker (Step 1) - shown first when creating a new policy
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ModePicker {
+  selected: "simple" | "flow_builder";
+  onSelect: (mode: "simple" | "flow_builder") => void;
+}
+
+const ModePicker: React.FC<ModePicker> = ({ selected, onSelect }) => (
+  <div className="flex gap-4" style={{ padding: "8px 0" }}>
+    {/* Simple Mode Card */}
+    <div
+      onClick={() => onSelect("simple")}
+      style={{
+        flex: 1,
+        padding: "24px 20px",
+        border: `2px solid ${selected === "simple" ? "#4f46e5" : "#e5e7eb"}`,
+        borderRadius: 12,
+        cursor: "pointer",
+        backgroundColor: selected === "simple" ? "#eef2ff" : "#fff",
+        transition: "all 0.15s ease",
+      }}
+    >
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 10,
+          backgroundColor: selected === "simple" ? "#e0e7ff" : "#f3f4f6",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: 16,
+        }}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={selected === "simple" ? "#4f46e5" : "#6b7280"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <path d="M8 7h8M8 12h8M8 17h5" />
+        </svg>
+      </div>
+      <Text strong style={{ fontSize: 15, display: "block", marginBottom: 4 }}>
+        Simple Mode
+      </Text>
+      <Text type="secondary" style={{ fontSize: 13 }}>
+        Pick guardrails from a list. All run in parallel.
+      </Text>
+    </div>
+
+    {/* Flow Builder Card */}
+    <div
+      onClick={() => onSelect("flow_builder")}
+      style={{
+        flex: 1,
+        padding: "24px 20px",
+        border: `2px solid ${selected === "flow_builder" ? "#4f46e5" : "#e5e7eb"}`,
+        borderRadius: 12,
+        cursor: "pointer",
+        backgroundColor: selected === "flow_builder" ? "#eef2ff" : "#fff",
+        transition: "all 0.15s ease",
+        position: "relative",
+      }}
+    >
+      <Tag
+        color="purple"
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          fontSize: 10,
+          fontWeight: 600,
+          margin: 0,
+        }}
+      >
+        NEW
+      </Tag>
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 10,
+          backgroundColor: selected === "flow_builder" ? "#e0e7ff" : "#f3f4f6",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: 16,
+        }}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={selected === "flow_builder" ? "#4f46e5" : "#6b7280"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+        </svg>
+      </div>
+      <Text strong style={{ fontSize: 15, display: "block", marginBottom: 4 }}>
+        Flow Builder
+      </Text>
+      <Text type="secondary" style={{ fontSize: 13 }}>
+        Define steps, conditions, and error responses.
+      </Text>
+    </div>
+  </div>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────────────────
+
 const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   visible,
   onClose,
   onSuccess,
+  onOpenFlowBuilder,
   accessToken,
   editingPolicy,
   existingPolicies,
@@ -40,21 +147,16 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   const [isLoadingResolved, setIsLoadingResolved] = useState(false);
   const [modelConditionType, setModelConditionType] = useState<"model" | "regex">("model");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [policyMode, setPolicyMode] = useState<"simple" | "flow_builder">("simple");
-  const [pipeline, setPipeline] = useState<GuardrailPipeline>({
-    mode: "pre_call",
-    steps: [createDefaultStep()],
-  });
+  const [step, setStep] = useState<"pick_mode" | "simple_form">("pick_mode");
+  const [selectedMode, setSelectedMode] = useState<"simple" | "flow_builder">("simple");
   const { userId, userRole } = useAuthorized();
 
   // Only consider it "editing" if editingPolicy has a policy_id (real existing policy)
-  // If editingPolicy is set but has no policy_id, it's just pre-filled data for a new policy (e.g., from a template)
   const isEditing = !!editingPolicy?.policy_id;
 
   useEffect(() => {
     if (visible && editingPolicy) {
       const modelCondition = editingPolicy.condition?.model;
-      // Detect if it's a regex pattern (contains *, ., [, ], etc.)
       const isRegex = modelCondition && /[.*+?^${}()|[\]\\]/.test(modelCondition);
       setModelConditionType(isRegex ? "regex" : "model");
 
@@ -66,23 +168,25 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         guardrails_remove: editingPolicy.guardrails_remove || [],
         model_condition: modelCondition,
       });
-      // Load resolved guardrails for editing
+
       if (editingPolicy.policy_id && accessToken) {
         loadResolvedGuardrails(editingPolicy.policy_id);
       }
-      // Detect pipeline mode
+
+      // If editing a pipeline policy, go directly to flow builder
       if (editingPolicy.pipeline) {
-        setPolicyMode("flow_builder");
-        setPipeline(editingPolicy.pipeline);
-      } else {
-        setPolicyMode("simple");
+        onClose();
+        onOpenFlowBuilder();
+        return;
       }
+      // If editing a simple policy, skip mode picker
+      setStep("simple_form");
     } else if (visible) {
       form.resetFields();
       setResolvedGuardrails([]);
       setModelConditionType("model");
-      setPolicyMode("simple");
-      setPipeline({ mode: "pre_call", steps: [createDefaultStep()] });
+      setSelectedMode("simple");
+      setStep("pick_mode");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, editingPolicy, form]);
@@ -96,7 +200,6 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadAvailableModels = async () => {
     if (!accessToken) return;
-
     try {
       const response = await modelAvailableCall(accessToken, userId, userRole);
       if (response?.data) {
@@ -110,7 +213,6 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadResolvedGuardrails = async (policyId: string) => {
     if (!accessToken) return;
-
     setIsLoadingResolved(true);
     try {
       const data = await getResolvedGuardrails(accessToken, policyId);
@@ -130,20 +232,15 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
     let resolved = new Set<string>();
 
-    // If inheriting, find parent policy and get its guardrails
     if (inheritFrom) {
       const parentPolicy = existingPolicies.find(p => p.policy_name === inheritFrom);
       if (parentPolicy) {
-        // Recursively resolve parent's guardrails
         const parentResolved = resolveParentGuardrails(parentPolicy);
         parentResolved.forEach(g => resolved.add(g));
       }
     }
 
-    // Add guardrails
     guardrailsAdd.forEach((g: string) => resolved.add(g));
-
-    // Remove guardrails
     guardrailsRemove.forEach((g: string) => resolved.delete(g));
 
     return Array.from(resolved).sort();
@@ -152,32 +249,23 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   const resolveParentGuardrails = (policy: Policy): string[] => {
     let resolved = new Set<string>();
 
-    // If parent inherits, resolve recursively
     if (policy.inherit) {
       const grandparent = existingPolicies.find(p => p.policy_name === policy.inherit);
       if (grandparent) {
-        const grandparentResolved = resolveParentGuardrails(grandparent);
-        grandparentResolved.forEach(g => resolved.add(g));
+        resolveParentGuardrails(grandparent).forEach(g => resolved.add(g));
       }
     }
-
-    // Add parent's guardrails
     if (policy.guardrails_add) {
       policy.guardrails_add.forEach(g => resolved.add(g));
     }
-
-    // Remove parent's removed guardrails
     if (policy.guardrails_remove) {
       policy.guardrails_remove.forEach(g => resolved.delete(g));
     }
-
     return Array.from(resolved);
   };
 
-  // Recompute resolved guardrails when form values change
   const handleFormChange = () => {
-    const resolved = computeResolvedGuardrails();
-    setResolvedGuardrails(resolved);
+    setResolvedGuardrails(computeResolvedGuardrails());
   };
 
   const resetForm = () => {
@@ -186,7 +274,18 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const handleClose = () => {
     resetForm();
+    setStep("pick_mode");
+    setSelectedMode("simple");
     onClose();
+  };
+
+  const handleModeConfirm = () => {
+    if (selectedMode === "flow_builder") {
+      onClose();
+      onOpenFlowBuilder();
+    } else {
+      setStep("simple_form");
+    }
   };
 
   const handleSubmit = async () => {
@@ -199,36 +298,16 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         throw new Error("No access token available");
       }
 
-      let data: PolicyCreateRequest | PolicyUpdateRequest;
-
-      if (policyMode === "flow_builder") {
-        // Flow builder mode: auto-derive guardrails_add from pipeline steps
-        const guardrailsFromPipeline = pipeline.steps
-          .map((s) => s.guardrail)
-          .filter(Boolean);
-        data = {
-          policy_name: values.policy_name,
-          description: values.description || undefined,
-          inherit: values.inherit || undefined,
-          guardrails_add: guardrailsFromPipeline,
-          guardrails_remove: [],
-          condition: values.model_condition
-            ? { model: values.model_condition }
-            : undefined,
-          pipeline: pipeline,
-        };
-      } else {
-        data = {
-          policy_name: values.policy_name,
-          description: values.description || undefined,
-          inherit: values.inherit || undefined,
-          guardrails_add: values.guardrails_add || [],
-          guardrails_remove: values.guardrails_remove || [],
-          condition: values.model_condition
-            ? { model: values.model_condition }
-            : undefined,
-        };
-      }
+      const data: PolicyCreateRequest | PolicyUpdateRequest = {
+        policy_name: values.policy_name,
+        description: values.description || undefined,
+        inherit: values.inherit || undefined,
+        guardrails_add: values.guardrails_add || [],
+        guardrails_remove: values.guardrails_remove || [],
+        condition: values.model_condition
+          ? { model: values.model_condition }
+          : undefined,
+      };
 
       if (isEditing && editingPolicy) {
         await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
@@ -263,13 +342,57 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       value: p.policy_name,
     }));
 
+  // ── Mode Picker Step ──────────────────────────────────────────────────────
+  if (step === "pick_mode") {
+    return (
+      <Modal
+        title="Create New Policy"
+        open={visible}
+        onCancel={handleClose}
+        footer={null}
+        width={620}
+      >
+        <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
+
+        {selectedMode === "flow_builder" && (
+          <Alert
+            message="You'll be redirected to the full-screen Flow Builder to design your policy logic visually."
+            type="info"
+            style={{
+              marginTop: 16,
+              backgroundColor: "#eef2ff",
+              border: "1px solid #c7d2fe",
+            }}
+          />
+        )}
+
+        <div className="flex justify-end gap-2" style={{ marginTop: 24 }}>
+          <Button variant="secondary" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleModeConfirm}
+            style={{
+              backgroundColor: "#4f46e5",
+              color: "#fff",
+              border: "none",
+            }}
+          >
+            {selectedMode === "flow_builder" ? "Continue to Builder" : "Create Policy"}
+          </Button>
+        </div>
+      </Modal>
+    );
+  }
+
+  // ── Simple Form Step ──────────────────────────────────────────────────────
   return (
     <Modal
       title={isEditing ? "Edit Policy" : "Create New Policy"}
       open={visible}
       onCancel={handleClose}
       footer={null}
-      width={policyMode === "flow_builder" ? 800 : 700}
+      width={700}
     >
       <Form
         form={form}
@@ -306,48 +429,6 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         </Form.Item>
 
         <Divider orientation="left">
-          <Text strong>Mode</Text>
-        </Divider>
-
-        <div className="flex gap-3 mb-4">
-          <div
-            onClick={() => setPolicyMode("simple")}
-            style={{
-              flex: 1,
-              padding: "12px 16px",
-              border: `2px solid ${policyMode === "simple" ? "#1890ff" : "#d9d9d9"}`,
-              borderRadius: 8,
-              cursor: "pointer",
-              backgroundColor: policyMode === "simple" ? "#e6f7ff" : "#fff",
-            }}
-          >
-            <Text strong>Simple Mode</Text>
-            <br />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Add/remove guardrails directly
-            </Text>
-          </div>
-          <div
-            onClick={() => setPolicyMode("flow_builder")}
-            style={{
-              flex: 1,
-              padding: "12px 16px",
-              border: `2px solid ${policyMode === "flow_builder" ? "#1890ff" : "#d9d9d9"}`,
-              borderRadius: 8,
-              cursor: "pointer",
-              backgroundColor: policyMode === "flow_builder" ? "#e6f7ff" : "#fff",
-            }}
-          >
-            <Text strong>Flow Builder</Text>
-            <Tag color="green" style={{ marginLeft: 8, fontSize: 10 }}>NEW</Tag>
-            <br />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Visual pipeline with conditional routing
-            </Text>
-          </div>
-        </div>
-
-        <Divider orientation="left">
           <Text strong>Inheritance</Text>
         </Divider>
 
@@ -364,75 +445,59 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
           />
         </Form.Item>
 
-        {policyMode === "simple" ? (
-          <>
-            <Divider orientation="left">
-              <Text strong>Guardrails</Text>
-            </Divider>
+        <Divider orientation="left">
+          <Text strong>Guardrails</Text>
+        </Divider>
 
-            <Form.Item
-              name="guardrails_add"
-              label="Guardrails to Add"
-              tooltip="These guardrails will be added to requests matching this policy"
-            >
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Select guardrails to add"
-                options={guardrailOptions}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
+        <Form.Item
+          name="guardrails_add"
+          label="Guardrails to Add"
+          tooltip="These guardrails will be added to requests matching this policy"
+        >
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Select guardrails to add"
+            options={guardrailOptions}
+            style={{ width: "100%" }}
+          />
+        </Form.Item>
 
-            <Form.Item
-              name="guardrails_remove"
-              label="Guardrails to Remove"
-              tooltip="These guardrails will be removed from inherited guardrails"
-            >
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Select guardrails to remove (from inherited)"
-                options={guardrailOptions}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
+        <Form.Item
+          name="guardrails_remove"
+          label="Guardrails to Remove"
+          tooltip="These guardrails will be removed from inherited guardrails"
+        >
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Select guardrails to remove (from inherited)"
+            options={guardrailOptions}
+            style={{ width: "100%" }}
+          />
+        </Form.Item>
 
-            {resolvedGuardrails.length > 0 && (
-              <Alert
-                message="Resolved Guardrails"
-                description={
-                  <div>
-                    <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                      These are the final guardrails that will be applied (including inheritance):
-                    </Text>
-                    <div className="flex flex-wrap gap-1">
-                      {resolvedGuardrails.map((g) => (
-                        <Tag key={g} color="blue">
-                          {g}
-                        </Tag>
-                      ))}
-                    </div>
-                  </div>
-                }
-                type="info"
-                showIcon
-                style={{ marginBottom: 16 }}
-              />
-            )}
-          </>
-        ) : (
-          <>
-            <Divider orientation="left">
-              <Text strong>Pipeline Flow</Text>
-            </Divider>
-
-            <PipelineFlowBuilder
-              pipeline={pipeline}
-              onChange={setPipeline}
-              availableGuardrails={availableGuardrails}
-            />
-          </>
+        {resolvedGuardrails.length > 0 && (
+          <Alert
+            message="Resolved Guardrails"
+            description={
+              <div>
+                <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+                  These are the final guardrails that will be applied (including inheritance):
+                </Text>
+                <div className="flex flex-wrap gap-1">
+                  {resolvedGuardrails.map((g) => (
+                    <Tag key={g} color="blue">
+                      {g}
+                    </Tag>
+                  ))}
+                </div>
+              </div>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
         )}
 
         <Divider orientation="left">
