@@ -1656,7 +1656,7 @@ jobs:
             - search_coverage.xml
             - search_coverage
   # Split litellm_mapped_tests into 3 parallel jobs for 3x faster execution
-  litellm_mapped_tests_proxy:
+  litellm_mapped_tests_proxy_part1:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -1667,24 +1667,53 @@ jobs:
     steps:
       - setup_litellm_test_deps
       - run:
-          name: Run proxy tests
+          name: Run proxy tests part 1 (high-volume directories)
           command: |
             prisma generate
             export PYTHONUNBUFFERED=1
-            python -m pytest tests/test_litellm/proxy --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy.xml --durations=10 -n 8 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
+            python -m pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/client tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part1.xml --durations=10 -n 8 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
           no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_proxy_tests_coverage.xml
-            mv .coverage litellm_proxy_tests_coverage
+            mv coverage.xml litellm_proxy_tests_part1_coverage.xml
+            mv .coverage litellm_proxy_tests_part1_coverage
       - store_test_results:
           path: test-results
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_proxy_tests_coverage.xml
-            - litellm_proxy_tests_coverage
+            - litellm_proxy_tests_part1_coverage.xml
+            - litellm_proxy_tests_part1_coverage
+  litellm_mapped_tests_proxy_part2:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: xlarge
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Run proxy tests part 2 (all other tests)
+          command: |
+            prisma generate
+            export PYTHONUNBUFFERED=1
+            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 8 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
+          no_output_timeout: 60m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_proxy_tests_part2_coverage.xml
+            mv .coverage litellm_proxy_tests_part2_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_proxy_tests_part2_coverage.xml
+            - litellm_proxy_tests_part2_coverage
   litellm_mapped_tests_llms:
     docker:
       - image: cimg/python:3.11
@@ -4422,7 +4451,13 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - litellm_mapped_tests_proxy:
+      - litellm_mapped_tests_proxy_part1:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_mapped_tests_proxy_part2:
           filters:
             branches:
               only:
@@ -4505,7 +4540,8 @@ workflows:
             - llm_responses_api_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests_proxy
+            - litellm_mapped_tests_proxy_part1
+            - litellm_mapped_tests_proxy_part2
             - litellm_mapped_tests_llms
             - litellm_mapped_tests_core
             - litellm_mapped_tests_mcps
@@ -4585,7 +4621,8 @@ workflows:
             - llm_responses_api_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests_proxy
+            - litellm_mapped_tests_proxy_part1
+            - litellm_mapped_tests_proxy_part2
             - litellm_mapped_tests_llms
             - litellm_mapped_tests_core
             - litellm_mapped_tests_mcps
