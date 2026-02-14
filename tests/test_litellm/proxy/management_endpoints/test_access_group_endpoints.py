@@ -37,19 +37,27 @@ def _make_access_group_record(
     updated_by: str | None = "admin-user",
     created_at: datetime | None = None,
 ):
+    created_at_val = created_at or datetime.now()
+    updated_at_val = datetime.now()
+    data = {
+        "access_group_id": access_group_id,
+        "access_group_name": access_group_name,
+        "description": description,
+        "access_model_names": access_model_names or [],
+        "access_mcp_server_ids": access_mcp_server_ids or [],
+        "access_agent_ids": access_agent_ids or [],
+        "assigned_team_ids": assigned_team_ids or [],
+        "assigned_key_ids": assigned_key_ids or [],
+        "created_at": created_at_val,
+        "created_by": created_by,
+        "updated_at": updated_at_val,
+        "updated_by": updated_by,
+    }
     record = MagicMock()
-    record.access_group_id = access_group_id
-    record.access_group_name = access_group_name
-    record.description = description
-    record.access_model_names = access_model_names or []
-    record.access_mcp_server_ids = access_mcp_server_ids or []
-    record.access_agent_ids = access_agent_ids or []
-    record.assigned_team_ids = assigned_team_ids or []
-    record.assigned_key_ids = assigned_key_ids or []
-    record.created_at = created_at or datetime.now()
-    record.created_by = created_by
-    record.updated_at = datetime.now()
-    record.updated_by = updated_by
+    for k, v in data.items():
+        setattr(record, k, v)
+    record.dict = lambda: data
+    record.model_dump = lambda: data
     return record
 
 
@@ -115,6 +123,20 @@ def client_and_mocks(monkeypatch):
     mock_prisma.db = mock_db
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    # Mock user_api_key_cache and proxy_logging_obj for cache operations (create/update/delete)
+    mock_cache = MagicMock()
+    mock_cache.async_set_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock(return_value=None)
+    monkeypatch.setattr(ps, "user_api_key_cache", mock_cache)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.internal_usage_cache = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
+        return_value=None
+    )
+    monkeypatch.setattr(ps, "proxy_logging_obj", mock_proxy_logging)
 
     admin_user = UserAPIKeyAuth(
         user_id="admin_user",
@@ -632,3 +654,25 @@ def test_access_group_endpoints_db_not_connected(client_and_mocks, monkeypatch, 
     resp = getattr(client, method)(url, **factory())
     assert resp.status_code == 500
     assert resp.json()["detail"]["error"] == CommonProxyErrors.db_not_connected_error.value
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for cache helpers (_record_to_access_group_table)
+# ---------------------------------------------------------------------------
+
+
+def test_record_to_access_group_table():
+    """Test _record_to_access_group_table converts Prisma-like record to LiteLLM_AccessGroupTable."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import _record_to_access_group_table
+
+    record = _make_access_group_record(
+        access_group_id="ag-unit-test",
+        access_group_name="unit-test-group",
+        access_model_names=["gpt-4", "claude-3"],
+        access_agent_ids=["agent-1"],
+    )
+    result = _record_to_access_group_table(record)
+    assert result.access_group_id == "ag-unit-test"
+    assert result.access_group_name == "unit-test-group"
+    assert result.access_model_names == ["gpt-4", "claude-3"]
+    assert result.access_agent_ids == ["agent-1"]

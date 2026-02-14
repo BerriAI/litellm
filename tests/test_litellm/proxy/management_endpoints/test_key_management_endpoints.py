@@ -521,6 +521,51 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
+    """Ensure generate_key_helper_fn passes access_group_ids into the key insert payload."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id=None)
+    )
+
+    captured_key_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            captured_key_data.update(kwargs.get("data", {}))
+            return MagicMock(
+                token="hashed_token_789",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_id="test-user",
+        access_group_ids=["ag-1", "ag-2"],
+    )
+
+    assert captured_key_data.get("access_group_ids") == ["ag-1", "ag-2"]
+
+
+@pytest.mark.asyncio
 async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     """
     Test that /key/generate correctly handles mcp_tool_permissions in object_permission.
