@@ -2029,7 +2029,7 @@ if MCP_AVAILABLE:
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers = MCPDebug.maybe_build_debug_headers(
                 raw_headers=raw_headers,
-                scope=scope,
+                scope=dict(scope),
                 mcp_servers=mcp_servers,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
