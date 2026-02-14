@@ -1775,8 +1775,8 @@ class CustomStreamWrapper:
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         response = self._add_mcp_list_tools_to_first_chunk(response)
-                        response = self.strip_role_from_delta(response)
-
+                        self.sent_first_chunk = True
+                    
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
@@ -1948,7 +1948,7 @@ class CustomStreamWrapper:
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
-                        processed_chunk = self.strip_role_from_delta(processed_chunk)
+                        self.sent_first_chunk = True
                     if hasattr(
                         processed_chunk, "usage"
                     ):  # remove usage from chunk, only send on final chunk
