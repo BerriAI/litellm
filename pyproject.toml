@@ -61,7 +61,7 @@ boto3 = { version = "1.40.76", optional = true }
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = ">=1.25.0,<2.0.0", optional = true, python = ">=3.10"}
 a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.37", optional = true}
+litellm-proxy-extras = {version = "0.4.38", optional = true}
 rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.31", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
@@ -173,6 +173,7 @@ opentelemetry-api = "^1.28.0"
 opentelemetry-sdk = "^1.28.0"
 opentelemetry-exporter-otlp = "^1.28.0"
 azure-identity = {version = "^1.15.0", python = ">=3.9"}
+a2a-sdk = {version = "^0.3.22", python = ">=3.10"}
 
 [build-system]
 requires = ["poetry-core", "wheel"]
