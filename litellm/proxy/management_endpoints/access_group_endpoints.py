@@ -11,7 +11,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _cache_access_object,
+    _cache_key_object,
+    _cache_team_object,
     _delete_cache_access_object,
+    _get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -237,6 +240,10 @@ async def delete_access_group(
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
     try:
+        # Track affected team IDs and key tokens for cache invalidation
+        affected_team_ids: list = []
+        affected_key_tokens: list = []
+
         async with prisma_client.db.tx() as tx:
             existing = await tx.litellm_accessgrouptable.find_unique(
                 where={"access_group_id": access_group_id}
@@ -252,6 +259,7 @@ async def delete_access_group(
                 where={"access_group_ids": {"hasSome": [access_group_id]}}
             )
             for team in teams_with_group:
+                affected_team_ids.append(team.team_id)
                 updated_ids = [tid for tid in (team.access_group_ids or []) if tid != access_group_id]
                 await tx.litellm_teamtable.update(
                     where={"team_id": team.team_id},
@@ -262,6 +270,7 @@ async def delete_access_group(
                 where={"access_group_ids": {"hasSome": [access_group_id]}}
             )
             for key in keys_with_group:
+                affected_key_tokens.append(key.token)
                 updated_ids = [kid for kid in (key.access_group_ids or []) if kid != access_group_id]
                 await tx.litellm_verificationtoken.update(
                     where={"token": key.token},
@@ -274,6 +283,44 @@ async def delete_access_group(
 
         # Invalidate the deleted access group from cache
         await _invalidate_cache_access_group(access_group_id)
+
+        # Patch cached team and key objects to remove the deleted access_group_id
+        # instead of fully invalidating them (keeps cache warm, avoids DB re-fetch)
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+        for team_id in affected_team_ids:
+            cached_team = await _get_team_object_from_cache(
+                key="team_id:{}".format(team_id),
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+            )
+            if cached_team is not None and cached_team.access_group_ids:
+                cached_team.access_group_ids = [
+                    ag_id for ag_id in cached_team.access_group_ids if ag_id != access_group_id
+                ]
+                await _cache_team_object(
+                    team_id=team_id,
+                    team_table=cached_team,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
+        for token in affected_key_tokens:
+            cached_key = await user_api_key_cache.async_get_cache(key=token)
+            if cached_key is not None:
+                if isinstance(cached_key, dict):
+                    cached_key = UserAPIKeyAuth(**cached_key)
+                if isinstance(cached_key, UserAPIKeyAuth) and cached_key.access_group_ids:
+                    cached_key.access_group_ids = [
+                        ag_id for ag_id in cached_key.access_group_ids if ag_id != access_group_id
+                    ]
+                    await _cache_key_object(
+                        hashed_token=token,
+                        user_api_key_obj=cached_key,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
 
     except HTTPException:
         raise
