@@ -155,6 +155,12 @@ class CustomStreamWrapper:
     def __aiter__(self):
         return self
 
+    async def aclose(self):
+        if self.completion_stream is not None and hasattr(
+            self.completion_stream, "aclose"
+        ):
+            await self.completion_stream.aclose()
+
     def check_send_stream_usage(self, stream_options: Optional[dict]):
         return (
             stream_options is not None
