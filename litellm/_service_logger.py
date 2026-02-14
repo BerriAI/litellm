@@ -315,7 +315,7 @@ class ServiceLogging(CustomLogger):
             await self.async_service_success_hook(
                 service=ServiceTypes.LITELLM,
                 duration=_duration,
-                call_type=kwargs["call_type"],
+                call_type=kwargs.get("call_type", "unknown")
             )
         except Exception as e:
             raise e
