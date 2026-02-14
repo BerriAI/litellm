@@ -56,7 +56,9 @@ class PipelineExecutor:
             PipelineExecutionResult with terminal action and step results
         """
         step_results: List[PipelineStepResult] = []
-        working_data = copy.deepcopy(data)
+        working_data = data.copy()
+        if "metadata" in working_data:
+            working_data["metadata"] = working_data["metadata"].copy()
 
         for i, step in enumerate(steps):
             start_time = time.perf_counter()
@@ -148,6 +150,12 @@ class PipelineExecutor:
             return ("error", None, f"Guardrail '{step.guardrail}' not found")
 
         try:
+            # Inject guardrail name into metadata so should_run_guardrail() allows it
+            if "metadata" not in data:
+                data["metadata"] = {}
+            original_guardrails = data["metadata"].get("guardrails")
+            data["metadata"]["guardrails"] = [step.guardrail]
+
             # Use unified_guardrail path if callback implements apply_guardrail
             target = callback
             use_unified = "apply_guardrail" in type(callback).__dict__

@@ -10,8 +10,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
+    GuardrailPipeline,
+    PipelineTestRequest,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
     PolicyAttachmentListResponse,
@@ -346,6 +349,69 @@ async def get_resolved_guardrails(policy_id: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error resolving guardrails: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline Test Endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/policies/test-pipeline",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_pipeline(
+    request: PipelineTestRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Test a guardrail pipeline with sample messages.
+
+    Executes the pipeline steps against the provided test messages and returns
+    step-by-step results showing which guardrails passed/failed, actions taken,
+    and timing information.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/policies/test-pipeline" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "pipeline": {
+                "mode": "pre_call",
+                "steps": [
+                    {"guardrail": "pii-guard", "on_pass": "next", "on_fail": "block"}
+                ]
+            },
+            "test_messages": [{"role": "user", "content": "My SSN is 123-45-6789"}]
+        }'
+    ```
+    """
+    try:
+        validated_pipeline = GuardrailPipeline(**request.pipeline)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid pipeline: {e}")
+
+    data = {
+        "messages": request.test_messages,
+        "model": "test",
+        "metadata": {},
+    }
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=validated_pipeline.steps,
+            mode=validated_pipeline.mode,
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+            policy_name="test-pipeline",
+        )
+        return result.model_dump()
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error testing pipeline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
