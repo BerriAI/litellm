@@ -1,0 +1,91 @@
+# Build & Publish `litellm-proxy-extras`
+
+This runbook covers building and publishing a new version of the `litellm-proxy-extras` PyPI package. For use by litellm engineers only.
+
+## Prerequisites
+
+- All `schema.prisma` files are in sync (see [migration_runbook.md](./migration_runbook.md) Step 0)
+- Migration has been generated and committed
+- You are in the `litellm-proxy-extras/` directory
+
+## Step 1: Bump the Version
+
+Update the version in `pyproject.toml`:
+
+```bash
+cd litellm-proxy-extras
+
+# Check current version
+grep 'version' pyproject.toml
+```
+
+Edit `pyproject.toml` and bump the version (both `[tool.poetry].version` and `[tool.commitizen].version`).
+
+## Step 2: Install Build Dependencies
+
+```bash
+pip install build twine
+```
+
+## Step 3: Clean Old Artifacts
+
+```bash
+rm -rf dist/ build/ *.egg-info
+```
+
+## Step 4: Build the Package
+
+```bash
+python3 -m build
+```
+
+This creates `.tar.gz` and `.whl` files in the `dist/` directory.
+
+Verify the build output:
+
+```bash
+ls -la dist/
+```
+
+## Step 5: Upload to PyPI
+
+```bash
+twine upload dist/*
+```
+
+You will be prompted for your PyPI API token:
+
+```
+Enter your API token: pypi-...
+```
+
+> Use `__token__` as the username and your PyPI API token as the password.
+
+## Quick Reference (Copy-Paste)
+
+```bash
+cd litellm-proxy-extras
+rm -rf dist/ build/ *.egg-info
+python3 -m build
+twine upload dist/*
+```
+
+---
+
+## Do you want to build and publish a new `litellm-proxy-extras` package? (y/n)
+
+If **yes**, run the following commands in order:
+
+```bash
+cd litellm-proxy-extras
+pip install build twine
+rm -rf dist/ build/ *.egg-info
+python3 -m build
+twine upload dist/*
+```
+
+When `twine upload` runs, enter your PyPI credentials:
+- **Username:** `__token__`
+- **Password:** *(paste your PyPI API key)*
+
+If **no**, you're done — no package publish needed.
