@@ -10,6 +10,8 @@ by policy_attachments (see AttachmentRegistry).
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from prisma import Json as PrismaJson
+
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
@@ -248,7 +250,10 @@ class PolicyRegistry:
                 data["created_by"] = created_by
                 data["updated_by"] = created_by
             if policy_request.condition is not None:
-                data["condition"] = policy_request.condition.model_dump()
+                data["condition"] = PrismaJson(policy_request.condition.model_dump())
+            if policy_request.pipeline is not None:
+                validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
+                data["pipeline"] = PrismaJson(validated_pipeline.model_dump())
 
             created_policy = await prisma_client.db.litellm_policytable.create(
                 data=data
@@ -267,6 +272,7 @@ class PolicyRegistry:
                     "condition": policy_request.condition.model_dump()
                     if policy_request.condition
                     else None,
+                    "pipeline": policy_request.pipeline,
                 },
             )
             self.add_policy(policy_request.policy_name, policy)
@@ -279,6 +285,7 @@ class PolicyRegistry:
                 guardrails_add=created_policy.guardrails_add or [],
                 guardrails_remove=created_policy.guardrails_remove or [],
                 condition=created_policy.condition,
+                pipeline=created_policy.pipeline,
                 created_at=created_policy.created_at,
                 updated_at=created_policy.updated_at,
                 created_by=created_policy.created_by,
@@ -325,7 +332,10 @@ class PolicyRegistry:
             if policy_request.guardrails_remove is not None:
                 update_data["guardrails_remove"] = policy_request.guardrails_remove
             if policy_request.condition is not None:
-                update_data["condition"] = policy_request.condition.model_dump()
+                update_data["condition"] = PrismaJson(policy_request.condition.model_dump())
+            if policy_request.pipeline is not None:
+                validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
+                update_data["pipeline"] = PrismaJson(validated_pipeline.model_dump())
 
             updated_policy = await prisma_client.db.litellm_policytable.update(
                 where={"policy_id": policy_id},
@@ -343,6 +353,7 @@ class PolicyRegistry:
                         "remove": updated_policy.guardrails_remove,
                     },
                     "condition": updated_policy.condition,
+                    "pipeline": updated_policy.pipeline,
                 },
             )
             self.add_policy(updated_policy.policy_name, policy)
@@ -355,6 +366,7 @@ class PolicyRegistry:
                 guardrails_add=updated_policy.guardrails_add or [],
                 guardrails_remove=updated_policy.guardrails_remove or [],
                 condition=updated_policy.condition,
+                pipeline=updated_policy.pipeline,
                 created_at=updated_policy.created_at,
                 updated_at=updated_policy.updated_at,
                 created_by=updated_policy.created_by,
@@ -432,6 +444,7 @@ class PolicyRegistry:
                 guardrails_add=policy.guardrails_add or [],
                 guardrails_remove=policy.guardrails_remove or [],
                 condition=policy.condition,
+                pipeline=policy.pipeline,
                 created_at=policy.created_at,
                 updated_at=policy.updated_at,
                 created_by=policy.created_by,
@@ -468,6 +481,7 @@ class PolicyRegistry:
                     guardrails_add=p.guardrails_add or [],
                     guardrails_remove=p.guardrails_remove or [],
                     condition=p.condition,
+                    pipeline=p.pipeline,
                     created_at=p.created_at,
                     updated_at=p.updated_at,
                     created_by=p.created_by,
@@ -503,6 +517,7 @@ class PolicyRegistry:
                             "remove": policy_response.guardrails_remove,
                         },
                         "condition": policy_response.condition,
+                        "pipeline": policy_response.pipeline,
                     },
                 )
                 self.add_policy(policy_response.policy_name, policy)
@@ -551,6 +566,7 @@ class PolicyRegistry:
                             "remove": policy_response.guardrails_remove,
                         },
                         "condition": policy_response.condition,
+                        "pipeline": policy_response.pipeline,
                     },
                 )
                 temp_policies[policy_response.policy_name] = policy

@@ -1222,10 +1222,7 @@ class ProxyLogging:
                     },
                 }
             }
-            if HTTPException is not None:
-                raise HTTPException(status_code=400, detail=error_detail)
-            else:
-                raise Exception(str(error_detail))
+            raise HTTPException(status_code=400, detail=error_detail)
 
         if result.terminal_action == "modify_response":
             raise ModifyResponseException(
@@ -1236,9 +1233,6 @@ class ProxyLogging:
                 detection_info=None,
             )
 
-        verbose_proxy_logger.warning(
-            f"Pipeline '{policy_name}': unrecognized terminal_action '{result.terminal_action}', defaulting to allow"
-        )
         return data
 
     # The actual implementation of the function
