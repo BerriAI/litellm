@@ -356,13 +356,16 @@ async def _upsert_budget_and_membership(
     )
 
 
-def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
+def _update_metadata_field(
+    updated_kv: dict, field_name: str, user_api_key_dict: Optional[UserAPIKeyAuth] = None
+) -> None:
     """
     Helper function to update metadata fields that require premium user checks in the update endpoint
 
     Args:
         updated_kv: The key-value dict being used for the update
         field_name: Name of the metadata field being updated
+        user_api_key_dict: Optional user API key auth object to check for proxy admin role
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         value = updated_kv.get(field_name)
@@ -372,7 +375,14 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         # proceed with the update so that users can intentionally clear a
         # previously-set field by sending an empty list/dict.
         if value is not None and value != [] and value != {}:
-            _premium_user_check()
+            # Skip premium check for proxy admins - they should be able to update team settings
+            if (
+                user_api_key_dict is not None
+                and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            ):
+                pass  # Proxy admins bypass premium check
+            else:
+                _premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
@@ -394,17 +404,27 @@ def _has_non_empty_value(value: Any) -> bool:
     return True
 
 
-def _update_metadata_fields(updated_kv: dict) -> None:
+def _update_metadata_fields(
+    updated_kv: dict, user_api_key_dict: Optional[UserAPIKeyAuth] = None
+) -> None:
     """
     Helper function to update all metadata fields (both premium and standard).
 
     Args:
         updated_kv: The key-value dict being used for the update
+        user_api_key_dict: Optional user API key auth object to check for proxy admin role
     """
+    # Process all premium fields that are present (not just non-empty ones)
+    # Empty collections must still be moved into metadata so users can clear
+    # previously-set fields (e.g., removing all guardrails by sending guardrails: [])
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if field in updated_kv and _has_non_empty_value(updated_kv[field]):
-            _update_metadata_field(updated_kv=updated_kv, field_name=field)
+        if field in updated_kv:
+            _update_metadata_field(
+                updated_kv=updated_kv, field_name=field, user_api_key_dict=user_api_key_dict
+            )
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
-            _update_metadata_field(updated_kv=updated_kv, field_name=field)
+            _update_metadata_field(
+                updated_kv=updated_kv, field_name=field, user_api_key_dict=user_api_key_dict
+            )

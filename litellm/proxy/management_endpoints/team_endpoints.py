@@ -1442,7 +1442,9 @@ async def update_team(   # noqa: PLR0915
             )
 
         # update team metadata fields
-        _update_metadata_fields(updated_kv=updated_kv)
+        _update_metadata_fields(
+            updated_kv=updated_kv, user_api_key_dict=user_api_key_dict
+        )
 
         if "model_aliases" in updated_kv:
             updated_kv.pop("model_aliases")
