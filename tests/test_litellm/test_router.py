@@ -1990,3 +1990,94 @@ async def test_anthropic_messages_call_type_is_cached():
     # This assertion will FAIL if anthropic_messages is filtered out
     assert cached_result is not None, "Model ID should be cached for anthropic_messages call type"
     assert cached_result["model_id"] == test_model_id, f"Expected {test_model_id}, got {cached_result['model_id']}"
+
+
+def test_update_kwargs_with_deployment_propagates_model_tags():
+    """
+    Test that deployment-level tags from litellm_params are merged into
+    kwargs metadata when _update_kwargs_with_deployment is called.
+
+    This ensures model-level tags defined in config.yaml appear in SpendLogs.
+    See: https://github.com/BerriAI/litellm/issues/XXXX
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "tags": ["openai-account", "production"],
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Deployment tags should be propagated to kwargs metadata
+    assert "tags" in kwargs["metadata"]
+    assert "openai-account" in kwargs["metadata"]["tags"]
+    assert "production" in kwargs["metadata"]["tags"]
+
+
+def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
+    """
+    Test that when both request-level and deployment-level tags exist,
+    they are merged without duplicates.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "tags": ["openai-account", "shared-tag"],
+                },
+            },
+        ],
+    )
+
+    # Simulate request that already has tags (from request body or key/team level)
+    kwargs: dict = {"metadata": {"tags": ["user-tag", "shared-tag"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Both sources should be merged, no duplicates
+    assert "user-tag" in kwargs["metadata"]["tags"]
+    assert "openai-account" in kwargs["metadata"]["tags"]
+    assert "shared-tag" in kwargs["metadata"]["tags"]
+    assert kwargs["metadata"]["tags"].count("shared-tag") == 1
+
+
+def test_update_kwargs_with_deployment_no_tags():
+    """
+    Test that when deployment has no tags, kwargs metadata is not affected.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # No tags key should be added if deployment has no tags
+    assert "tags" not in kwargs["metadata"]

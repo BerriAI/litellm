@@ -208,28 +208,72 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
         
         Anthropic's output_format doesn't support certain JSON schema properties:
-        - maxItems: Not supported for array types
-        - minItems: Not supported for array types
+        - maxItems/minItems: Not supported for array types
+        - minimum/maximum: Not supported for numeric types
+        - minLength/maxLength: Not supported for string types
         
-        This function recursively removes these unsupported fields while preserving
-        all other valid schema properties.
+        This mirrors the transformation done by the Anthropic Python SDK.
+        See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
+        
+        The SDK approach:
+        1. Remove unsupported constraints from schema
+        2. Add constraint info to description (e.g., "Must be at least 100")
+        3. Validate responses against original schema
         
         Args:
             schema: The JSON schema dictionary to filter
             
         Returns:
-            A new dictionary with unsupported fields removed
+            A new dictionary with unsupported fields removed and descriptions updated
             
-        Related issue: https://github.com/BerriAI/litellm/issues/19444
+        Related issues: 
+        - https://github.com/BerriAI/litellm/issues/19444
         """
         if not isinstance(schema, dict):
             return schema
 
-        unsupported_fields = {"maxItems", "minItems"}
+        # All numeric/string/array constraints not supported by Anthropic
+        unsupported_fields = {
+            "maxItems", "minItems",           # array constraints
+            "minimum", "maximum",             # numeric constraints  
+            "exclusiveMinimum", "exclusiveMaximum",  # numeric constraints
+            "minLength", "maxLength",         # string constraints
+        }
+
+        # Build description additions from removed constraints
+        constraint_descriptions: list = []
+        constraint_labels = {
+            "minItems": "minimum number of items: {}",
+            "maxItems": "maximum number of items: {}",
+            "minimum": "minimum value: {}",
+            "maximum": "maximum value: {}",
+            "exclusiveMinimum": "exclusive minimum value: {}",
+            "exclusiveMaximum": "exclusive maximum value: {}",
+            "minLength": "minimum length: {}",
+            "maxLength": "maximum length: {}",
+        }
+        for field in unsupported_fields:
+            if field in schema:
+                constraint_descriptions.append(
+                    constraint_labels[field].format(schema[field])
+                )
 
         result: Dict[str, Any] = {}
+
+        # Update description with removed constraint info
+        if constraint_descriptions:
+            existing_desc = schema.get("description", "")
+            constraint_note = "Note: " + ", ".join(constraint_descriptions) + "."
+            if existing_desc:
+                result["description"] = existing_desc + " " + constraint_note
+            else:
+                result["description"] = constraint_note
+
         for key, value in schema.items():
             if key in unsupported_fields:
+                continue
+            if key == "description" and "description" in result:
+                # Already handled above
                 continue
 
             if key == "properties" and isinstance(value, dict):
@@ -664,35 +708,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]], 
         model: str,
     ) -> Optional[AnthropicThinkingParam]:
+        if reasoning_effort is None or reasoning_effort == "none":
+            return None
         if AnthropicConfig._is_claude_opus_4_6(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
+        elif reasoning_effort == "low":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "medium":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "high":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "minimal":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+            )
         else:
-            if reasoning_effort is None:
-                return None
-            elif reasoning_effort == "low":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "medium":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "high":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                )
-            elif reasoning_effort == "minimal":
-                return AnthropicThinkingParam(
-                    type="enabled",
-                    budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
-                )
-            else:
-                raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -834,6 +877,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "sonnet-4-5",
                         "opus-4.1",
                         "opus-4-1",
+                        "opus-4.5",
+                        "opus-4-5",
+                        "opus-4.6",
+                        "opus-4-6",
                     }
                 ):
                     _output_format = (
@@ -931,6 +978,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
+        Filters out system messages containing x-anthropic-billing-header metadata.
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
@@ -941,6 +989,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if isinstance(system_message_block["content"], str):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
+                        continue
+                    # Skip system messages containing x-anthropic-billing-header metadata
+                    if system_message_block["content"].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -959,6 +1010,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         # Skip empty text blocks - Anthropic API raises errors for empty text
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
+                            continue
+                        # Skip system messages containing x-anthropic-billing-header metadata
+                        if _content.get("type") == "text" and text_value and text_value.startswith("x-anthropic-billing-header:"):
                             continue
                         anthropic_system_message_content = (
                             AnthropicSystemMessageContent(

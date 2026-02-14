@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Modal, Select, Switch, Collapse, Input } from "antd";
+import { Modal, Select, Switch, Collapse, Input, Divider } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import {
   CodeOutlined,
@@ -8,6 +8,8 @@ import {
   CloseCircleOutlined,
   CaretRightOutlined,
   SaveOutlined,
+  UsergroupAddOutlined,
+  ExportOutlined,
 } from "@ant-design/icons";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
@@ -90,6 +92,7 @@ const CODE_TEMPLATES = {
     return allow()`,
   },
 };
+
 
 // Available primitives organized by category
 const PRIMITIVES = {
@@ -230,6 +233,45 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
         structured_messages: [],
         model: "gpt-4"
       }
+    },
+    pre_mcp_call: {
+      name: "Pre MCP (MCP tool as OpenAI tool)",
+      data: {
+        texts: [
+          "Tool: read_wiki_structure\nArguments: {\"repoName\": \"BerriAI/litellm\"}"
+        ],
+        images: [],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "read_wiki_structure",
+              description: "Read the structure of a GitHub repository (MCP tool passed as OpenAI tool)",
+              parameters: {
+                type: "object",
+                properties: {
+                  repoName: { type: "string", description: "Repository name, e.g. BerriAI/litellm" }
+                },
+                required: ["repoName"]
+              }
+            }
+          }
+        ],
+        tool_calls: [
+          {
+            id: "call_mcp_001",
+            type: "function",
+            function: {
+              name: "read_wiki_structure",
+              arguments: "{\"repoName\": \"BerriAI/litellm\"}"
+            }
+          }
+        ],
+        structured_messages: [
+          { role: "user", content: "Tool: read_wiki_structure\nArguments: {\"repoName\": \"BerriAI/litellm\"}" }
+        ],
+        model: "mcp-tool-call"
+      }
     }
   };
   
@@ -241,6 +283,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
   // Handle template change
   const handleTemplateChange = (templateKey: string) => {
     setSelectedTemplate(templateKey);
+    
+    // Check if it's a standard template
     setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
@@ -486,12 +530,45 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
               onChange={handleTemplateChange}
               className="w-full"
               size="middle"
+              dropdownRender={(menu) => (
+                <>
+                  {menu}
+                  <Divider style={{ margin: '8px 0' }} />
+                  <div
+                    style={{
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      color: '#1890ff',
+                      fontSize: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      window.open('https://models.litellm.ai/guardrails', '_blank');
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f0f0f0';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <UsergroupAddOutlined />
+                    <span>Browse Community templates</span>
+                    <ExportOutlined style={{ fontSize: '10px' }} />
+                  </div>
+                </>
+              )}
             >
-              {Object.entries(CODE_TEMPLATES).map(([key, template]) => (
-                <Select.Option key={key} value={key}>
-                  {template.name}
-                </Select.Option>
-              ))}
+              <Select.OptGroup label="STANDARD">
+                {Object.entries(CODE_TEMPLATES).map(([key, template]) => (
+                  <Select.Option key={key} value={key}>
+                    {template.name}
+                  </Select.Option>
+                ))}
+              </Select.OptGroup>
             </Select>
           </div>
           <div className="flex items-center gap-2 pt-5">
@@ -561,6 +638,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                         </button>
                         <button
                           type="button"
+                          onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_mcp_call.data, null, 2))}
+                          className="px-2 py-1 text-xs rounded border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                        >
+                          Pre MCP
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.post_call.data, null, 2))}
                           className="px-2 py-1 text-xs rounded border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
                         >
@@ -572,7 +656,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         <div><strong>texts</strong>: Message content (always)</div>
                         <div><strong>images</strong>: Base64 images (vision)</div>
-                        <div><strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span></div>
+                        <div><strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span>, MCP as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span></div>
                         <div><strong>tool_calls</strong>: LLM tool calls <span className="text-green-600">(post_call)</span></div>
                         <div><strong>structured_messages</strong>: Full messages <span className="text-orange-600">(pre_call)</span></div>
                         <div><strong>model</strong>: Model name (always)</div>
@@ -632,6 +716,27 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                 </div>
               </Panel>
             </Collapse>
+            {/* Contribution CTA Banner */}
+            <div className="mt-3 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-100 rounded-full p-2">
+                  <UsergroupAddOutlined className="text-blue-600 text-lg" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-gray-900">Built a useful guardrail?</div>
+                  <div className="text-xs text-gray-600">Share it with the community and help others build faster</div>
+                </div>
+              </div>
+              <Button
+                size="xs"
+                onClick={() => window.open('https://github.com/BerriAI/litellm-guardrails', '_blank')}
+                icon={ExportOutlined}
+                className="bg-blue-600 hover:bg-blue-700 text-white border-0"
+              >
+                Contribute Template
+              </Button>
+            </div>
+
           </div>
 
           {/* Primitives Panel */}

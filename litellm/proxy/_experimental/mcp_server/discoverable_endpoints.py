@@ -1,6 +1,6 @@
 import json
 from typing import Optional
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -194,7 +194,13 @@ async def authorize_with_server(
     if code_challenge_method:
         params["code_challenge_method"] = code_challenge_method
 
-    return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
+    parsed_auth_url = urlparse(mcp_server.authorization_url)
+    existing_params = dict(parse_qsl(parsed_auth_url.query))
+    existing_params.update(params)
+    final_url = urlunparse(
+        parsed_auth_url._replace(query=urlencode(existing_params))
+    )
+    return RedirectResponse(final_url)
 
 
 async def exchange_token_with_server(
@@ -492,7 +498,7 @@ def _build_oauth_protected_resource_response(
             )
         ],
         "resource": resource_url,
-        "scopes_supported": mcp_server.scopes if mcp_server else [],
+        "scopes_supported": mcp_server.scopes if mcp_server and mcp_server.scopes else [],
     }
 
 
@@ -599,7 +605,7 @@ def _build_oauth_authorization_server_response(
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
-        "scopes_supported": mcp_server.scopes if mcp_server else [],
+        "scopes_supported": mcp_server.scopes if mcp_server and mcp_server.scopes else [],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
