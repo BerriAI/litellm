@@ -228,7 +228,7 @@ export function AccessGroupDetail({
               {accessGroup.created_by && (
                 <Text>
                   &nbsp;{"by"}&nbsp;
-                  <DefaultProxyAdminTag userId={accessGroup.updated_by} />
+                  <DefaultProxyAdminTag userId={accessGroup.created_by} />
                 </Text>
               )}
             </Descriptions.Item>
