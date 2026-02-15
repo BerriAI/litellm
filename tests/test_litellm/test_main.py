@@ -427,6 +427,12 @@ async def test_extra_body_with_fallback(
     original_disable_aiohttp = litellm.disable_aiohttp_transport
 
     try:
+        # Clear cache to ensure no cached clients from previous tests interfere
+        # This prevents cache pollution where a previous test cached a client with
+        # aiohttp transport, which would bypass respx mocks
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+
         # since this uses respx, we need to set use_aiohttp_transport to False
         litellm.disable_aiohttp_transport = True
         # Set up test parameters
