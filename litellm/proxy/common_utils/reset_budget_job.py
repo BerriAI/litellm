@@ -101,7 +101,6 @@ class ResetBudgetJob:
                 "spend": 0,
             },
         )
-        )
 
     async def reset_budget_for_litellm_budget_table(self):
         """
