@@ -68,6 +68,7 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
     PrismaClient,
+    ProxyLogging,
     _hash_token_if_needed,
     handle_exception_on_proxy,
     is_valid_api_key,
@@ -3180,6 +3181,63 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     return new_token
 
 
+async def _execute_virtual_key_regeneration(
+    *,
+    prisma_client: PrismaClient,
+    key_in_db: LiteLLM_VerificationToken,
+    hashed_api_key: str,
+    key: str,
+    data: Optional[RegenerateKeyRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> GenerateKeyResponse:
+    """Generate new token, update DB, invalidate cache, and return response."""
+    from litellm.proxy.proxy_server import hash_token
+
+    new_token = get_new_token(data=data)
+    new_token_hash = hash_token(new_token)
+    new_token_key_name = f"sk-...{new_token[-4:]}"
+    update_data = {"token": new_token_hash, "key_name": new_token_key_name}
+
+    non_default_values = {}
+    if data is not None:
+        non_default_values = await prepare_key_update_data(
+            data=data, existing_key_row=key_in_db
+        )
+        verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
+    update_data.update(non_default_values)
+    update_data = prisma_client.jsonify_object(data=update_data)
+
+    updated_token = await prisma_client.db.litellm_verificationtoken.update(
+        where={"token": hashed_api_key},
+        data=update_data,  # type: ignore
+    )
+    updated_token_dict = dict(updated_token) if updated_token is not None else {}
+    updated_token_dict["key"] = new_token
+    updated_token_dict["token_id"] = updated_token_dict.pop("token")
+
+    if hashed_api_key or key:
+        await _delete_cache_key_object(
+            hashed_token=hash_token(key),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    response = GenerateKeyResponse(**updated_token_dict)
+    asyncio.create_task(
+        KeyManagementEventHooks.async_key_rotated_hook(
+            data=data,
+            existing_key_row=key_in_db,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+    )
+    return response
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -3191,7 +3249,7 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(  # noqa: PLR0915
+async def regenerate_key_fn(
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -3363,69 +3421,17 @@ async def regenerate_key_fn(  # noqa: PLR0915
             litellm_changed_by=litellm_changed_by,
         )
 
-        new_token = get_new_token(data=data)
-
-        new_token_hash = hash_token(new_token)
-        new_token_key_name = f"sk-...{new_token[-4:]}"
-
-        # Prepare the update data
-        update_data = {
-            "token": new_token_hash,
-            "key_name": new_token_key_name,
-        }
-
-        non_default_values = {}
-        if data is not None:
-            # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = await prepare_key_update_data(
-                data=data, existing_key_row=_key_in_db
-            )
-            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
-
-        update_data.update(non_default_values)
-        update_data = prisma_client.jsonify_object(data=update_data)
-        # Update the token in the database
-        updated_token = await prisma_client.db.litellm_verificationtoken.update(
-            where={"token": hashed_api_key},
-            data=update_data,  # type: ignore
+        return await _execute_virtual_key_regeneration(
+            prisma_client=prisma_client,
+            key_in_db=_key_in_db,
+            hashed_api_key=hashed_api_key,
+            key=key,
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
-
-        updated_token_dict = {}
-        if updated_token is not None:
-            updated_token_dict = dict(updated_token)
-
-        updated_token_dict["key"] = new_token
-        updated_token_dict["token_id"] = updated_token_dict.pop("token")
-
-        ### 3. remove existing key entry from cache
-        ######################################################################
-
-        if hashed_api_key or key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-        response = GenerateKeyResponse(
-            **updated_token_dict,
-        )
-
-        verbose_proxy_logger.info(
-            "Key regeneration completed: key_alias=%s",
-            getattr(_key_in_db, "key_alias", None),
-        )
-        asyncio.create_task(
-            KeyManagementEventHooks.async_key_rotated_hook(
-                data=data,
-                existing_key_row=_key_in_db,
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-            )
-        )
-
-        return response
     except Exception as e:
         verbose_proxy_logger.exception("Error regenerating key: %s", e)
         raise handle_exception_on_proxy(e)
