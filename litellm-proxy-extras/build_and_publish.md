@@ -10,6 +10,25 @@ This runbook covers building and publishing a new version of the `litellm-proxy-
 
 ## Step 1: Bump the Version
 
+### Option A: Automatic Version Bump (Recommended)
+
+Use commitizen to automatically bump the version across all files:
+
+```bash
+cd litellm-proxy-extras
+cz bump --increment patch
+```
+
+This will automatically:
+- Bump the version in `pyproject.toml` (both `[tool.poetry].version` and `[tool.commitizen].version`)
+- Update the version in `../requirements.txt`
+- Update the version in `../pyproject.toml` (root)
+- Create a git commit with the version bump
+
+Then skip to Step 3 (Install Build Dependencies).
+
+### Option B: Manual Version Bump
+
 Update the version in `pyproject.toml`:
 
 ```bash
@@ -21,7 +40,7 @@ grep 'version' pyproject.toml
 
 Edit `pyproject.toml` and bump the version (both `[tool.poetry].version` and `[tool.commitizen].version`).
 
-## Step 2: Update Version in Root Package Files
+#### Step 2: Update Version in Root Package Files (Manual Only)
 
 After bumping the version in `litellm-proxy-extras/pyproject.toml`, you **must** also update the version reference in the root-level files:
 
