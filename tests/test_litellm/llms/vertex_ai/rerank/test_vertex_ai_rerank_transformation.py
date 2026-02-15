@@ -442,34 +442,36 @@ class TestVertexAIRerankTransform:
         """Test that validate_environment accepts and uses optional_params for credentials."""
         # Mock the authentication
         mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
-        
+
         optional_params = {
             "vertex_credentials": "path/to/credentials.json",
             "vertex_project": "custom-project-id",
             "query": "test query",
             "documents": ["doc1"]
         }
-        
-        headers = self.config.validate_environment(
-            headers={},
-            model=self.model,
-            api_key=None,
-            optional_params=optional_params
-        )
-        
-        # Verify that _ensure_access_token was called with the credentials from optional_params
-        mock_ensure_access_token.assert_called_once()
-        call_args = mock_ensure_access_token.call_args
-        # The first call argument should be credentials (which will be the value from optional_params)
-        # We can't check the exact value easily due to how get_vertex_ai_credentials pops values,
-        # but we can verify the headers were set correctly
-        
-        expected_headers = {
-            "Authorization": "Bearer test-access-token",
-            "Content-Type": "application/json",
-            "X-Goog-User-Project": "test-project-123"
-        }
-        assert headers == expected_headers
+
+        # Mock get_vertex_ai_credentials to prevent it from trying to load the fake credential file
+        with patch.object(self.config, 'get_vertex_ai_credentials', return_value=None):
+            headers = self.config.validate_environment(
+                headers={},
+                model=self.model,
+                api_key=None,
+                optional_params=optional_params
+            )
+
+            # Verify that _ensure_access_token was called with the credentials from optional_params
+            mock_ensure_access_token.assert_called_once()
+            call_args = mock_ensure_access_token.call_args
+            # The first call argument should be credentials (which will be the value from optional_params)
+            # We can't check the exact value easily due to how get_vertex_ai_credentials pops values,
+            # but we can verify the headers were set correctly
+
+            expected_headers = {
+                "Authorization": "Bearer test-access-token",
+                "Content-Type": "application/json",
+                "X-Goog-User-Project": "test-project-123"
+            }
+            assert headers == expected_headers
 
     @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
     def test_validate_environment_preserves_optional_params_for_get_complete_url(
@@ -487,17 +489,19 @@ class TestVertexAIRerankTransform:
             "vertex_project": "custom-project-id",
         }
 
-        # Call validate_environment first – this previously popped the values in-place
-        self.config.validate_environment(
-            headers={},
-            model=self.model,
-            api_key=None,
-            optional_params=optional_params,
-        )
+        # Mock get_vertex_ai_credentials to prevent it from trying to load the fake credential file
+        with patch.object(self.config, 'get_vertex_ai_credentials', return_value=None):
+            # Call validate_environment first – this previously popped the values in-place
+            self.config.validate_environment(
+                headers={},
+                model=self.model,
+                api_key=None,
+                optional_params=optional_params,
+            )
 
-        # Ensure the original optional_params dict still retains the vertex keys
-        assert optional_params["vertex_credentials"] == "path/to/credentials.json"
-        assert optional_params["vertex_project"] == "custom-project-id"
+            # Ensure the original optional_params dict still retains the vertex keys
+            assert optional_params["vertex_credentials"] == "path/to/credentials.json"
+            assert optional_params["vertex_project"] == "custom-project-id"
 
         # get_complete_url should still be able to access the vertex params
         with patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str', return_value=None):
