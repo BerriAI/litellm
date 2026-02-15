@@ -61,4 +61,54 @@ describe("CreateKey", () => {
     renderWithProviders(<CreateKey {...defaultProps} />);
     expect(screen.getByRole("button", { name: /create new key/i })).toBeInTheDocument();
   });
+
+  it("should include access_group_ids in keyCreateCall payload when access groups are selected", async () => {
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/key name/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/key name/i), { target: { value: "Test Key" } });
+
+    const optionalSettingsAccordion = screen.getByText("Optional Settings");
+    act(() => {
+      fireEvent.click(optionalSettingsAccordion);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("access-group-selector")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId("access-group-selector"), { target: { value: "ag-1,ag-2" } });
+
+    const modelsCombobox = screen.getAllByRole("combobox").find((el) => el.closest('[class*="ant-form-item"]')?.textContent?.includes("Models")) ||
+      screen.getAllByRole("combobox")[1];
+    if (modelsCombobox) {
+      act(() => fireEvent.mouseDown(modelsCombobox));
+      await waitFor(() => {
+        const allTeamModels = [...document.body.querySelectorAll(".ant-select-item")].find(
+          (el) => el.textContent?.includes("All Team Models"),
+        );
+        if (allTeamModels) fireEvent.click(allTeamModels);
+      });
+    }
+
+    const createButton = screen.getByRole("button", { name: /create key/i });
+    act(() => fireEvent.click(createButton));
+
+    await waitFor(
+      () => {
+        expect(mockKeyCreateCall).toHaveBeenCalled();
+        const formValues = mockKeyCreateCall.mock.calls[0][2];
+        expect(formValues).toHaveProperty("access_group_ids");
+        expect(formValues.access_group_ids).toEqual(["ag-1", "ag-2"]);
+      },
+      { timeout: 15000 },
+    );
+  }, { timeout: 30000 });
 });
