@@ -262,6 +262,11 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
         "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
         lambda *args, **kwargs: False,
     )
+    # Mock premium_user to bypass enterprise check (prevents 403 Forbidden)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
+    )
     monkeypatch.setenv("UI_USERNAME", "admin")
 
     response = client_no_auth.get("/sso/key/generate")
