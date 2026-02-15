@@ -361,7 +361,6 @@ guardrails:
 - **`api_key`**: Noma API key (optional if using OAuth client credentials)
 - **`client_id`**: OAuth client ID (used when `api_key` is not set)
 - **`client_secret`**: OAuth client secret (used when `api_key` is not set)
-- **`token_url`**: Optional OAuth token URL (defaults to `<api_base>/auth`)
 - **`api_base`**: Noma API base URL (defaults to `https://api.noma.security/`)
 - **`application_id`**: Application identifier
 - **`use_v2`**: Migration toggle when `guardrail: noma` is used

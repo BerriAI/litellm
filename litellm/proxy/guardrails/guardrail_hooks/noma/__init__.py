@@ -46,7 +46,6 @@ def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardra
         application_id=litellm_params.application_id,
         client_id=litellm_params.client_id,
         client_secret=litellm_params.client_secret,
-        token_url=litellm_params.token_url,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

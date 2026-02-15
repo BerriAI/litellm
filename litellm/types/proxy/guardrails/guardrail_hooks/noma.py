@@ -20,7 +20,7 @@ class NomaGuardrailConfigModel(GuardrailConfigModel):
     )
     token_url: Optional[str] = Field(
         default=None,
-        description="Optional OAuth token URL. Defaults to <api_base>/auth if not provided.",
+        description="Optional OAuth token URL for Noma integrations.",
     )
     api_key: Optional[str] = Field(
         default=None,
@@ -60,10 +60,6 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
     client_secret: Optional[str] = Field(
         default=None,
         description="Noma OAuth client secret. Used when api_key is not provided.",
-    )
-    token_url: Optional[str] = Field(
-        default=None,
-        description="Optional OAuth token URL. Defaults to <api_base>/auth if not provided.",
     )
 
     @staticmethod

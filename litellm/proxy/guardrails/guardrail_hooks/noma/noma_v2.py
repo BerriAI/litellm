@@ -11,7 +11,6 @@ import os
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
-from urllib.parse import urljoin
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -22,7 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -51,7 +50,6 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
-        token_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(
@@ -66,7 +64,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
         self.client_id = client_id or os.environ.get("NOMA_CLIENT_ID")
         self.client_secret = client_secret or os.environ.get("NOMA_CLIENT_SECRET")
-        self.token_url = token_url or os.environ.get("NOMA_TOKEN_URL")
+        self.token_url = os.environ.get("NOMA_TOKEN_URL")
 
         self._oauth_access_token: Optional[str] = None
         self._oauth_access_token_expiry_epoch: float = 0.0
@@ -293,18 +291,8 @@ class NomaV2Guardrail(CustomGuardrail):
         if call_id:
             headers["X-Noma-Request-ID"] = call_id
 
-        endpoint = urljoin(f"{self.api_base}/", _AIDR_SCAN_ENDPOINT.lstrip("/"))
-        headers_for_log = {
-            key: ("<redacted>" if key.lower() == "authorization" else value)
-            for key, value in headers.items()
-        }
+        endpoint = f"{self.api_base}{_AIDR_SCAN_ENDPOINT}"
         sanitized_payload = self._sanitize_payload_for_transport(payload)
-        verbose_proxy_logger.debug(
-            "Noma v2 AIDR request: endpoint=%s headers=%s payload=%s",
-            endpoint,
-            safe_dumps(headers_for_log),
-            safe_dumps(sanitized_payload),
-        )
         response = await self.async_handler.post(
             url=endpoint,
             headers=headers,
@@ -340,17 +328,10 @@ class NomaV2Guardrail(CustomGuardrail):
 
         if action == _Action.GUARDRAIL_INTERVENED:
             updated_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
-            texts = response_json.get("texts")
-            if isinstance(texts, list):
-                updated_inputs["texts"] = texts
-
-            images = response_json.get("images")
-            if isinstance(images, list):
-                updated_inputs["images"] = images
-
-            tools = response_json.get("tools")
-            if isinstance(tools, list):
-                updated_inputs["tools"] = tools
+            for field in _INTERVENED_INPUT_FIELDS:
+                value = response_json.get(field)
+                if isinstance(value, list):
+                    updated_inputs[field] = value  # type: ignore[literal-required]
             return updated_inputs
 
         return inputs
@@ -391,11 +372,14 @@ class NomaV2Guardrail(CustomGuardrail):
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
+            guardrail_status: GuardrailStatus = (
+                "success" if action == _Action.NONE else "guardrail_intervened"
+            )
             self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_provider="noma",
+                guardrail_provider="noma_v2",
                 guardrail_json_response=response_json,
                 request_data=request_data,
-                guardrail_status="success" if action == _Action.NONE else "guardrail_intervened",  # type: ignore[arg-type]
+                guardrail_status=guardrail_status,
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=duration,
@@ -406,7 +390,7 @@ class NomaV2Guardrail(CustomGuardrail):
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
             self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_provider="noma",
+                guardrail_provider="noma_v2",
                 guardrail_json_response={"error": "blocked"},
                 request_data=request_data,
                 guardrail_status="guardrail_intervened",
@@ -419,7 +403,7 @@ class NomaV2Guardrail(CustomGuardrail):
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
             self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_provider="noma",
+                guardrail_provider="noma_v2",
                 guardrail_json_response=str(e),
                 request_data=request_data,
                 guardrail_status="guardrail_failed_to_respond",

@@ -36,7 +36,6 @@ class TestNomaV2Configuration:
         assert "application_id" in noma_v2_params
         assert "client_id" in noma_v2_params
         assert "client_secret" in noma_v2_params
-        assert "token_url" in noma_v2_params
         assert "use_v2" not in noma_v2_params
 
     def test_init_requires_auth(self):
