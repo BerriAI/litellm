@@ -142,11 +142,15 @@ class CheckBatchCost:
                     custom_llm_provider=custom_llm_provider,
                 )
 
+                # Pass deployment model_info so custom batch pricing
+                # (input_cost_per_token_batches etc.) is used for cost calc
+                deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
                 batch_cost, batch_usage, batch_models = (
                     await calculate_batch_cost_and_usage(
                         file_content_dictionary=file_content_as_dict,
                         custom_llm_provider=llm_provider,  # type: ignore
                         model_name=model_name,
+                        model_info=deployment_model_info,
                     )
                 )
                 logging_obj = LiteLLMLogging(
