@@ -114,6 +114,14 @@ def test_get_callback_env_vars():
     alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
     assert alias_env_vars == env_vars
 
+    opik_env_vars = CustomLogger.get_callback_env_vars("opik")
+    assert opik_env_vars == [
+        "OPIK_API_KEY",
+        "OPIK_WORKSPACE",
+        "OPIK_PROJECT_NAME",
+        "OPIK_URL_OVERRIDE",
+    ]
+
     missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
     assert missing_env_vars == []
 

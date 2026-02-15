@@ -2786,6 +2786,17 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    opik: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="opik",
+        ui_callback_name="Opik",
+        litellm_callback_params=[
+            "OPIK_API_KEY",
+            "OPIK_WORKSPACE",
+            "OPIK_PROJECT_NAME",
+            "OPIK_URL_OVERRIDE",
+        ],
+    )
+
     otel: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="otel",
         ui_callback_name="OpenTelemetry",
