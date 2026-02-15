@@ -17,8 +17,11 @@ from litellm.llms.custom_httpx.http_handler import (
 
 from . import opik_payload_builder, utils
 
+opik_client: Optional[Any]
 try:
-    from opik.api_objects import opik_client
+    from opik.api_objects import opik_client as _opik_client
+
+    opik_client = _opik_client
 except Exception:
     opik_client = None
 
