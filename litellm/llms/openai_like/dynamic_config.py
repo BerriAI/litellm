@@ -4,6 +4,7 @@ Dynamic configuration class generator for JSON-based providers.
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -98,17 +99,13 @@ def create_config_class(provider: SimpleProviderConfig):
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
-            from litellm._logging import verbose_logger
             from litellm.utils import supports_function_calling
 
             supported_params = super().get_supported_openai_params(model=model)
 
-            try:
-                _supports_fc = supports_function_calling(
-                    model=model, custom_llm_provider=provider.slug
-                )
-            except Exception:
-                _supports_fc = False
+            _supports_fc = supports_function_calling(
+                model=model, custom_llm_provider=provider.slug
+            )
 
             if not _supports_fc:
                 tool_params = ["tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"]
