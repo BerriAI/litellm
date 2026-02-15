@@ -25,27 +25,23 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
+from litellm.proxy.hooks.user_management_event_hooks import \
+    UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    get_daily_activity,
-    get_daily_activity_aggregated,
-)
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    get_daily_activity, get_daily_activity_aggregated)
+from litellm.proxy.management_endpoints.common_utils import \
+    _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    generate_key_helper_fn,
-    prepare_metadata_fields,
-)
+    generate_key_helper_fn, prepare_metadata_fields)
+from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission, handle_update_object_permission_common)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    SpendAnalyticsPaginatedResponse,
-)
+from litellm.types.proxy.management_endpoints.common_daily_activity import \
+    SpendAnalyticsPaginatedResponse
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
-    BulkUpdateUserRequest,
-    BulkUpdateUserResponse,
-    UserListResponse,
-    UserUpdateResult,
-)
+    BulkUpdateUserRequest, BulkUpdateUserResponse, UserListResponse,
+    UserUpdateResult)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -181,9 +177,8 @@ async def _add_user_to_organizations(
     """
     Add a user to organizations
     """
-    from litellm.proxy.management_endpoints.organization_endpoints import (
-        organization_member_add,
-    )
+    from litellm.proxy.management_endpoints.organization_endpoints import \
+        organization_member_add
 
     tasks = []
     for organization_id in organizations:
@@ -215,7 +210,8 @@ async def _add_user_to_team(
     max_budget_in_team: Optional[float] = None,
     user_role: Literal["user", "admin"] = "user",
 ):
-    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+    from litellm.proxy.management_endpoints.team_endpoints import \
+        team_member_add
 
     try:
         await team_member_add(
@@ -436,6 +432,12 @@ async def new_user(
             Optional[List[str]], data_json.pop("organizations", None)
         )
 
+        ## Handle Object Permission - MCP Servers, Vector Stores etc.
+        data_json = await _set_object_permission(
+            data_json=data_json,
+            prisma_client=prisma_client,
+        )
+
         response = await generate_key_helper_fn(request_type="user", **data_json)
         # Admin UI Logic
         # Add User to Team and Organization
@@ -476,6 +478,19 @@ async def new_user(
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
+
+        # Fetch user with object permission to include in response for auditing
+        user_id_from_response = cast(Optional[str], response.get("user_id", None))
+        if user_id_from_response is not None:
+            user_with_permission = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id_from_response},
+                include={"object_permission": True},
+            )
+            if user_with_permission is not None and user_with_permission.object_permission is not None:
+                try:
+                    response_dict["object_permission"] = user_with_permission.object_permission.model_dump()
+                except Exception:
+                    response_dict["object_permission"] = user_with_permission.object_permission.dict()
 
         new_user_response = NewUserResponse(**response_dict)
 
@@ -766,7 +781,8 @@ def _process_keys_for_user_info(
     all_teams: Optional[Union[List[LiteLLM_TeamTable], List[TeamListResponseObject]]],
 ):
     from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-    from litellm.proxy.proxy_server import general_settings, litellm_master_key_hash
+    from litellm.proxy.proxy_server import (general_settings,
+                                            litellm_master_key_hash)
 
     returned_keys = []
     if keys is None:
@@ -835,7 +851,8 @@ def _update_internal_user_params(
         is_internal_user = True
 
     if "budget_duration" in non_default_values:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        from litellm.proxy.common_utils.timezone_utils import \
+            get_budget_reset_time
 
         non_default_values["budget_reset_at"] = get_budget_reset_time(
             budget_duration=non_default_values["budget_duration"]
@@ -854,7 +871,8 @@ def _update_internal_user_params(
             non_default_values["budget_duration"] = (
                 litellm.internal_user_budget_duration
             )
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            from litellm.proxy.common_utils.timezone_utils import \
+                get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
                 budget_duration=non_default_values["budget_duration"]
@@ -874,7 +892,8 @@ async def _update_single_user_helper(
 
     Returns the updated user data or raises an exception on failure.
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import (litellm_proxy_admin_name,
+                                            prisma_client)
 
     if prisma_client is None:
         raise Exception("Not connected to DB!")
@@ -929,6 +948,21 @@ async def _update_single_user_helper(
         existing_metadata=existing_metadata or {},
     )
 
+    # Handle object permission updates (MCP servers, vector stores, etc.)
+    if "object_permission" in non_default_values:
+        existing_object_permission_id = (
+            getattr(existing_user_row, "object_permission_id", None)
+            if existing_user_row is not None
+            else None
+        )
+        object_permission_id = await handle_update_object_permission_common(
+            data_json=non_default_values,
+            existing_object_permission_id=existing_object_permission_id,
+            prisma_client=prisma_client,
+        )
+        if object_permission_id is not None:
+            non_default_values["object_permission_id"] = object_permission_id
+
     # Perform the update
     response: Optional[Dict[str, Any]] = None
 
@@ -972,13 +1006,21 @@ async def _update_single_user_helper(
     if response is not None:
         try:
             updated_user_row = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_id": response["user_id"]}
+                where={"user_id": response["user_id"]},
+                include={"object_permission": True},
             )
 
             if updated_user_row:
                 user_row_typed = LiteLLM_UserTable(
                     **updated_user_row.model_dump(exclude_none=True)
                 )
+
+                # Add object_permission to response for auditing
+                if updated_user_row.object_permission is not None:
+                    try:
+                        response["object_permission"] = updated_user_row.object_permission.model_dump()
+                    except Exception:
+                        response["object_permission"] = updated_user_row.object_permission.dict()
 
                 # Create audit log asynchronously
                 asyncio.create_task(
@@ -1244,7 +1286,8 @@ async def bulk_user_update(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import (litellm_proxy_admin_name,
+                                            prisma_client)
 
     if prisma_client is None:
         raise HTTPException(
@@ -1648,14 +1691,11 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
-    from litellm.proxy.management_endpoints.team_endpoints import (
-        _cleanup_members_with_roles,
-    )
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.management_endpoints.team_endpoints import \
+        _cleanup_members_with_roles
+    from litellm.proxy.proxy_server import (create_audit_log_for_update,
+                                            litellm_proxy_admin_name,
+                                            prisma_client)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
