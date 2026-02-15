@@ -24,6 +24,8 @@ def clean_vertex_env():
         "GOOGLE_APPLICATION_CREDENTIALS",
         "GOOGLE_CLOUD_PROJECT",
         "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_CREDENTIALS",
         "VERTEX_PROJECT",
         "VERTEX_LOCATION",
         "VERTEX_AI_PROJECT",
