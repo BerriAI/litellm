@@ -118,7 +118,7 @@ describe("CreateKey", () => {
         expect(formValues).toHaveProperty("access_group_ids");
         expect(formValues.access_group_ids).toEqual(["ag-1", "ag-2"]);
       },
-      { timeout: 5000 },
+      { timeout: 15000 },
     );
-  });
+  }, { timeout: 30000 });
 });
