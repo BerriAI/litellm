@@ -1842,7 +1842,7 @@ class AmazonConverseConfig(BaseConfig):
                 "arguments"
             )
             if json_mode_content_str is not None:
-                json_mode_content_str = BedrockConverseConfig._unwrap_bedrock_properties(
+                json_mode_content_str = AmazonConverseConfig._unwrap_bedrock_properties(
                     json_mode_content_str
                 )
                 chat_completion_message["content"] = json_mode_content_str
@@ -1854,7 +1854,7 @@ class AmazonConverseConfig(BaseConfig):
         first_idx = json_tool_indices[0]
         json_mode_args = tools[first_idx]["function"].get("arguments")
         if json_mode_args is not None:
-            json_mode_args = BedrockConverseConfig._unwrap_bedrock_properties(
+            json_mode_args = AmazonConverseConfig._unwrap_bedrock_properties(
                 json_mode_args
             )
             existing = chat_completion_message.get("content") or ""
