@@ -1780,6 +1780,33 @@ class AmazonConverseConfig(BaseConfig):
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
     @staticmethod
+    def _unwrap_bedrock_properties(json_str: str) -> str:
+        """
+        Unwrap Bedrock's response_format JSON structure.
+
+        If the JSON has a single "properties" key, extract its value.
+        Otherwise, return the original string.
+
+        Args:
+            json_str: JSON string to unwrap
+
+        Returns:
+            Unwrapped JSON string or original if unwrapping not needed
+        """
+        try:
+            response_data = json.loads(json_str)
+            if (
+                isinstance(response_data, dict)
+                and "properties" in response_data
+                and len(response_data) == 1
+            ):
+                response_data = response_data["properties"]
+                return json.dumps(response_data)
+        except json.JSONDecodeError:
+            pass
+        return json_str
+
+    @staticmethod
     def _filter_json_mode_tools(
         json_mode: Optional[bool],
         tools: List[ChatCompletionToolCallChunk],
@@ -1815,17 +1842,9 @@ class AmazonConverseConfig(BaseConfig):
                 "arguments"
             )
             if json_mode_content_str is not None:
-                try:
-                    response_data = json.loads(json_mode_content_str)
-                    if (
-                        isinstance(response_data, dict)
-                        and "properties" in response_data
-                        and len(response_data) == 1
-                    ):
-                        response_data = response_data["properties"]
-                        json_mode_content_str = json.dumps(response_data)
-                except json.JSONDecodeError:
-                    pass
+                json_mode_content_str = BedrockConverseConfig._unwrap_bedrock_properties(
+                    json_mode_content_str
+                )
                 chat_completion_message["content"] = json_mode_content_str
             return None
 
@@ -1835,17 +1854,9 @@ class AmazonConverseConfig(BaseConfig):
         first_idx = json_tool_indices[0]
         json_mode_args = tools[first_idx]["function"].get("arguments")
         if json_mode_args is not None:
-            try:
-                response_data = json.loads(json_mode_args)
-                if (
-                    isinstance(response_data, dict)
-                    and "properties" in response_data
-                    and len(response_data) == 1
-                ):
-                    response_data = response_data["properties"]
-                    json_mode_args = json.dumps(response_data)
-            except json.JSONDecodeError:
-                pass
+            json_mode_args = BedrockConverseConfig._unwrap_bedrock_properties(
+                json_mode_args
+            )
             existing = chat_completion_message.get("content") or ""
             chat_completion_message["content"] = (
                 existing + json_mode_args if existing else json_mode_args
