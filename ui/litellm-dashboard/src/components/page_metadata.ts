@@ -19,6 +19,7 @@ export const pageDescriptions: Record<string, string> = {
   users: "Manage internal user accounts and permissions",
   teams: "Create and manage teams for access control",
   organizations: "Manage organizations and their members",
+  "access-groups": "Manage access groups for role-based permissions",
   budgets: "Set and monitor spending budgets",
   api_ref: "Browse API documentation and endpoints",
   "model-hub-table": "Explore available AI models and providers",

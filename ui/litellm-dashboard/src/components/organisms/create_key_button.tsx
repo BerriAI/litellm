@@ -20,6 +20,7 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import TeamDropdown from "../common_components/team_dropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -996,6 +997,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                         !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
                       }
                       options={promptsList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Access Groups{" "}
+                        <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="access_group_ids"
+                    className="mt-4"
+                    help="Select access groups to assign to this key"
+                  >
+                    <AccessGroupSelector
+                      placeholder="Select access groups (optional)"
                     />
                   </Form.Item>
                   <Form.Item

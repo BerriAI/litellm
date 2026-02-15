@@ -23,8 +23,8 @@ from typing import (
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
-from starlette.types import Receive, Scope, Send
 from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -35,6 +35,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
+from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -2024,6 +2025,19 @@ if MCP_AVAILABLE:
                         detail="Unauthorized",
                         headers={"www-authenticate": authorization_uri},
                     )
+
+            # Inject masked debug headers when client sends x-litellm-mcp-debug: true
+            _debug_headers = MCPDebug.maybe_build_debug_headers(
+                raw_headers=raw_headers,
+                scope=dict(scope),
+                mcp_servers=mcp_servers,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                client_ip=_client_ip,
+            )
+            if _debug_headers:
+                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
 
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(

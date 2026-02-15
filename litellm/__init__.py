@@ -338,6 +338,10 @@ model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
 )
+anthropic_beta_headers_url: str = os.getenv(
+    "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
+)
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None

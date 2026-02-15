@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -402,7 +402,7 @@ def _update_metadata_fields(updated_kv: dict) -> None:
         updated_kv: The key-value dict being used for the update
     """
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if field in updated_kv and _has_non_empty_value(updated_kv[field]):
+        if field in updated_kv and updated_kv[field] is not None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
