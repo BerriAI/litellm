@@ -920,6 +920,7 @@ model LiteLLM_PolicyTable {
   guardrails_add   String[]  @default([])
   guardrails_remove String[] @default([])
   condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
