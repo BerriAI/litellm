@@ -1603,11 +1603,23 @@ class Router:
                 # Shield from anyio cancellation so the awaits can complete.
                 with anyio.CancelScope(shield=True):
                     if hasattr(model_response, "aclose"):
-                        await model_response.aclose()
+                        try:
+                            await model_response.aclose()
+                        except BaseException as e:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks: error closing model_response: %s",
+                                e,
+                            )
                     if fallback_response is not None and hasattr(
                         fallback_response, "aclose"
                     ):
-                        await fallback_response.aclose()
+                        try:
+                            await fallback_response.aclose()
+                        except BaseException as e:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks: error closing fallback_response: %s",
+                                e,
+                            )
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
