@@ -517,6 +517,7 @@ class TestTokenizerSelection(unittest.TestCase):
     def setUp(self):
         """Clear cache before each test method."""
         _select_tokenizer_helper.cache_clear()
+
     @patch("litellm.utils.Tokenizer.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
