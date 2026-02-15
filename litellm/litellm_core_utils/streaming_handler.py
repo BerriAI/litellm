@@ -7,6 +7,7 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Union, cast
 
+import anyio
 import httpx
 from pydantic import BaseModel
 
@@ -160,8 +161,6 @@ class CustomStreamWrapper:
             # Shield from anyio cancellation so cleanup awaits can complete.
             # Without this, CancelledError is thrown into every await during
             # task group cancellation, preventing HTTP connection release.
-            import anyio
-
             with anyio.CancelScope(shield=True):
                 try:
                     if hasattr(self.completion_stream, "aclose"):

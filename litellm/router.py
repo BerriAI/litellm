@@ -1497,6 +1497,7 @@ class Router:
                 return await self._async_generator.__anext__()
 
         async def stream_with_fallbacks():
+            fallback_response = None  # Track for cleanup in finally
             try:
                 async for item in model_response:
                     yield item
@@ -1596,13 +1597,17 @@ class Router:
                     )
                     raise fallback_error
             finally:
-                # Close the underlying stream to release the HTTP connection
+                # Close the underlying streams to release HTTP connections
                 # back to the connection pool when the generator is closed
                 # (e.g. on client disconnect).
-                # Shield from anyio cancellation so the await can complete.
-                if hasattr(model_response, "aclose"):
-                    with anyio.CancelScope(shield=True):
+                # Shield from anyio cancellation so the awaits can complete.
+                with anyio.CancelScope(shield=True):
+                    if hasattr(model_response, "aclose"):
                         await model_response.aclose()
+                    if fallback_response is not None and hasattr(
+                        fallback_response, "aclose"
+                    ):
+                        await fallback_response.aclose()
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
