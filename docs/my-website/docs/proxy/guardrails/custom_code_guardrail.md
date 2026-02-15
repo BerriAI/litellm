@@ -61,15 +61,23 @@ curl -X POST http://localhost:4000/chat/completions \
 
 ### Function Signature
 
-Your code must define an `apply_guardrail` function:
+Your code must define an `apply_guardrail` function. It can be either sync or async:
 
 ```python
+# Sync version
 def apply_guardrail(inputs, request_data, input_type):
     # inputs: see table below
     # request_data: {"model": "...", "user_id": "...", "team_id": "...", "metadata": {...}}
     # input_type: "request" or "response"
     
     return allow()  # or block() or modify()
+
+# Async version (recommended when using HTTP primitives)
+async def apply_guardrail(inputs, request_data, input_type):
+    response = await http_post("https://api.example.com/check", body={"text": inputs["texts"][0]})
+    if response["success"] and response["body"].get("flagged"):
+        return block("Content flagged")
+    return allow()
 ```
 
 ### `inputs` Parameter
@@ -145,6 +153,29 @@ def apply_guardrail(inputs, request_data, input_type):
 | `char_count(text)` | Count characters |
 | `lower(text)` / `upper(text)` / `trim(text)` | String transforms |
 
+### HTTP Requests (Async)
+
+Make async HTTP requests to external APIs for additional validation or content moderation.
+
+| Function | Description |
+|----------|-------------|
+| `await http_request(url, method, headers, body, timeout)` | General async HTTP request |
+| `await http_get(url, headers, timeout)` | Async GET request |
+| `await http_post(url, body, headers, timeout)` | Async POST request |
+
+**Response format:**
+```python
+{
+    "status_code": 200,        # HTTP status code
+    "body": {...},             # Response body (parsed JSON or string)
+    "headers": {...},          # Response headers
+    "success": True,           # True if status code is 2xx
+    "error": None              # Error message if request failed
+}
+```
+
+**Note:** When using HTTP primitives, define your function as `async def apply_guardrail(...)` for non-blocking execution.
+
 ## Examples
 
 ### Block PII (SSN)
@@ -213,6 +244,29 @@ def apply_guardrail(inputs, request_data, input_type):
     return allow()
 ```
 
+### Call External Moderation API (Async)
+
+```python
+async def apply_guardrail(inputs, request_data, input_type):
+    # Call an external moderation API
+    for text in inputs["texts"]:
+        response = await http_post(
+            "https://api.example.com/moderate",
+            body={"text": text, "user_id": request_data["user_id"]},
+            headers={"Authorization": "Bearer YOUR_API_KEY"},
+            timeout=10
+        )
+        
+        if not response["success"]:
+            # API call failed - decide whether to allow or block
+            return allow()
+        
+        if response["body"].get("flagged"):
+            return block(response["body"].get("reason", "Content flagged"))
+    
+    return allow()
+```
+
 ### Combine Multiple Checks
 
 ```python
@@ -241,8 +295,8 @@ Custom code runs in a restricted environment:
 
 - ❌ No `import` statements
 - ❌ No file I/O
-- ❌ No network access
 - ❌ No `exec()` or `eval()`
+- ✅ HTTP requests via built-in `http_request`, `http_get`, `http_post` primitives
 - ✅ Only LiteLLM-provided primitives available
 
 ## Per-Request Usage

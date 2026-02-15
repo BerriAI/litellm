@@ -7,13 +7,14 @@ import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { PaginationState, SortingState } from "@tanstack/react-table";
-import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
-import { Skeleton, Spin } from "antd";
+import { Grid, TabPanel } from "@tremor/react";
+import { Badge, Select, Skeleton, Space, Typography } from "antd";
 import debounce from "lodash/debounce";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
 type ModelViewMode = "all" | "current_team";
+const { Text } = Typography;
 
 interface AllModelsTabProps {
   selectedModelGroup: string | null;
@@ -197,88 +198,95 @@ const AllModelsTab = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
-                  {isLoading ? (
-                    <Skeleton.Input active style={{ width: 320, height: 36 }} />
-                  ) : (
-                    <Select
-                      className="w-80"
-                      defaultValue="personal"
-                      value={currentTeam === "personal" ? "personal" : currentTeam.team_id}
-                      onValueChange={(value) => {
-                        if (value === "personal") {
-                          setCurrentTeam("personal");
-                          // Reset to page 1 when team changes
-                          setCurrentPage(1);
-                          setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-                        } else {
-                          const team = teams?.find((t) => t.team_id === value);
-                          if (team) {
-                            setCurrentTeam(team);
+                  <div className="w-80">
+                    {isLoading ? (
+                      <Skeleton.Input active block size="large" />
+                    ) : (
+                      <Select
+                        style={{ width: "100%" }}
+                        size="large"
+                        defaultValue="personal"
+                        value={currentTeam === "personal" ? "personal" : currentTeam.team_id}
+                        onChange={(value) => {
+                          if (value === "personal") {
+                            setCurrentTeam("personal");
                             // Reset to page 1 when team changes
                             setCurrentPage(1);
                             setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+                          } else {
+                            const team = teams?.find((t) => t.team_id === value);
+                            if (team) {
+                              setCurrentTeam(team);
+                              // Reset to page 1 when team changes
+                              setCurrentPage(1);
+                              setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+                            }
                           }
-                        }
-                      }}
-                    >
-                      <SelectItem value="personal">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                          <span className="font-medium">Personal</span>
-                        </div>
-                      </SelectItem>
-                      {isLoadingTeams ? (
-                        <SelectItem value="loading">
-                          <div className="flex items-center gap-2">
-                            <Spin size="small" />
-                            <span className="font-medium text-gray-500">Loading teams...</span>
-                          </div>
-                        </SelectItem>
-                      ) : (
-                        teams
-                          ?.filter((team) => team.team_id)
-                          .map((team) => (
-                            <SelectItem key={team.team_id} value={team.team_id}>
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                <span className="font-medium">
-                                  {team.team_alias
-                                    ? `${team.team_alias.slice(0, 30)}...`
-                                    : `Team ${team.team_id.slice(0, 30)}...`}
-                                </span>
-                              </div>
-                            </SelectItem>
-                          ))
-                      )}
-                    </Select>
-                  )}
+                        }}
+                        loading={isLoadingTeams}
+                        options={[
+                          {
+                            value: "personal",
+                            label: (
+                              <Space direction="horizontal" align="center">
+                                <Badge color="blue" size="small" />
+                                <Text style={{ fontSize: 16 }}>Personal</Text>
+                              </Space>
+                            ),
+                          },
+                          ...(teams
+                            ?.filter((team) => team.team_id)
+                            .map((team) => ({
+                              value: team.team_id,
+                              label: (
+                                <Space direction="horizontal" align="center">
+                                  <Badge color="green" size="small" />
+                                  <Text ellipsis style={{ fontSize: 16 }}>
+                                    {team.team_alias ? team.team_alias : team.team_id}
+                                  </Text>
+                                </Space>
+                              ),
+                            })) ?? []),
+                        ]}
+                      />
+                    )}
+                  </div>
                 </div>
-
                 <div className="flex items-center gap-4">
                   <Text className="text-lg font-semibold text-gray-900">View:</Text>
-                  {isLoading ? (
-                    <Skeleton.Input active style={{ width: 256, height: 36 }} />
-                  ) : (
-                    <Select
-                      className="w-64"
-                      defaultValue="current_team"
-                      value={modelViewMode}
-                      onValueChange={(value) => setModelViewMode(value as "current_team" | "all")}
-                    >
-                      <SelectItem value="current_team">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                          <span className="font-medium">Current Team Models</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="all">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
-                          <span className="font-medium">All Available Models</span>
-                        </div>
-                      </SelectItem>
-                    </Select>
-                  )}
+                  <div className="w-64">
+                    {isLoading ? (
+                      <Skeleton.Input active block size="large" />
+                    ) : (
+                      <Select
+                        style={{ width: "100%" }}
+                        size="large"
+                        defaultValue="current_team"
+                        value={modelViewMode}
+                        onChange={(value) => setModelViewMode(value as "current_team" | "all")}
+                        options={[
+                          {
+                            value: "current_team",
+                            label: (
+                              <Space direction="horizontal" align="center">
+                                <Badge color="purple" size="small" />
+                                <Text style={{ fontSize: 16 }}>Current Team Models</Text>
+                              </Space>
+                            ),
+                          },
+                          {
+                            value: "all",
+                            label: (
+                              <Space direction="horizontal" align="center">
+                                <Badge color="gray" size="small" />
+                                <Text style={{ fontSize: 16 }}>All Available Models</Text>
+                              </Space>
+                            ),
+                          },
+                        ]}
+                      />
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -382,34 +390,38 @@ const AllModelsTab = ({
                     {/* Model Name Filter */}
                     <div className="w-64">
                       <Select
+                        className="w-full"
                         value={selectedModelGroup ?? "all"}
-                        onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+                        onChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
                         placeholder="Filter by Public Model Name"
-                      >
-                        <SelectItem value="all">All Models</SelectItem>
-                        <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
-                        {availableModelGroups.map((group, idx) => (
-                          <SelectItem key={idx} value={group}>
-                            {group}
-                          </SelectItem>
-                        ))}
-                      </Select>
+                        showSearch
+                        options={[
+                          { value: "all", label: "All Models" },
+                          { value: "wildcard", label: "Wildcard Models (*)" },
+                          ...availableModelGroups.map((group, idx) => ({
+                            value: group,
+                            label: group,
+                          })),
+                        ]}
+                      />
                     </div>
 
                     {/* Model Access Group Filter */}
                     <div className="w-64">
                       <Select
+                        className="w-full"
                         value={selectedModelAccessGroupFilter ?? "all"}
-                        onValueChange={(value) => setSelectedModelAccessGroupFilter(value === "all" ? null : value)}
+                        onChange={(value) => setSelectedModelAccessGroupFilter(value === "all" ? null : value)}
                         placeholder="Filter by Model Access Group"
-                      >
-                        <SelectItem value="all">All Model Access Groups</SelectItem>
-                        {availableModelAccessGroups.map((accessGroup, idx) => (
-                          <SelectItem key={idx} value={accessGroup}>
-                            {accessGroup}
-                          </SelectItem>
-                        ))}
-                      </Select>
+                        showSearch
+                        options={[
+                          { value: "all", label: "All Model Access Groups" },
+                          ...availableModelAccessGroups.map((accessGroup, idx) => ({
+                            value: accessGroup,
+                            label: accessGroup,
+                          })),
+                        ]}
+                      />
                     </div>
                   </div>
                 )}

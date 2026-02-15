@@ -3,7 +3,7 @@ import { Modal, Form, Button, Select as AntdSelect } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
-import RouterConfigBuilder from "../add_model/router_config_builder";
+import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface EditAutoRouterModalProps {
