@@ -901,31 +901,29 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     ## Cache Controls
     headers = request.headers
-    if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-        verbose_proxy_logger.debug(
-            "Request Headers: %s",
-            clean_headers(
-                headers,
-                litellm_key_header_name=(
-                    general_settings.get("litellm_key_header_name")
-                    if general_settings is not None
-                    else None
-                ),
+    verbose_proxy_logger.debug(
+        "Request Headers: %s",
+        clean_headers(
+            headers,
+            litellm_key_header_name=(
+                general_settings.get("litellm_key_header_name")
+                if general_settings is not None
+                else None
             ),
-        )
+        ),
+    )
     cache_control_header = headers.get("Cache-Control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-        verbose_proxy_logger.debug(
-            "receiving data: %s",
-            {
-                k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
-                for k, v in data.items()
-            },
-        )
+    verbose_proxy_logger.debug(
+        "receiving data: %s",
+        {
+            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+            for k, v in data.items()
+        },
+    )
 
     # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
@@ -1152,14 +1150,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
-    if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-        verbose_proxy_logger.debug(
-            "[PROXY] returned data from litellm_pre_call_utils: %s",
-            {
-                k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
-                for k, v in data.items()
-            },
-        )
+    verbose_proxy_logger.debug(
+        "[PROXY] returned data from litellm_pre_call_utils: %s",
+        {
+            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+            for k, v in data.items()
+        },
+    )
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param

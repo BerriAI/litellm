@@ -9842,22 +9842,29 @@ async def async_queue_request(
         data["proxy_server_request"] = {
             "url": str(request.url),
             "method": request.method,
-            "headers": clean_headers(
+            "headers": dict(request.headers),
+            "body": copy.copy(data),  # use copy instead of deepcopy
+        }
+
+        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            # Use clean_headers only for logging to avoid logging JWT/auth tokens
+            # while preserving all headers (including MCP headers) in the stored data
+            _safe_headers = clean_headers(
                 request.headers,
                 litellm_key_header_name=(
                     general_settings.get("litellm_key_header_name")
                     if general_settings is not None
                     else None
                 ),
-            ),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            )
             verbose_proxy_logger.debug(
                 "receiving data: %s",
                 {
-                    k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+                    k: (
+                        _mask_secret_fields_for_logging(v) if k == "secret_fields"
+                        else {**v, "headers": _safe_headers} if k == "proxy_server_request"
+                        else v
+                    )
                     for k, v in data.items()
                 },
             )
