@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
 import { Button } from "@tremor/react";
-import { Policy, PolicyAttachmentCreateRequest } from "./types";
-import { teamListCall, keyInfoCall, modelAvailableCall } from "../networking";
+import { Policy } from "./types";
+import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { buildAttachmentData } from "./build_attachment_data";
+import ImpactPreviewAlert from "./impact_preview_alert";
 
 const { Text } = Typography;
 
@@ -34,6 +36,8 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const [isLoadingKeys, setIsLoadingKeys] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isEstimating, setIsEstimating] = useState(false);
+  const [impactResult, setImpactResult] = useState<any>(null);
   const { userId, userRole } = useAuthorized();
 
   useEffect(() => {
@@ -46,33 +50,30 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const loadTeamsKeysAndModels = async () => {
     if (!accessToken) return;
 
-    // Load teams
+    // Load teams — teamListCall returns a plain array of team objects
     setIsLoadingTeams(true);
     try {
-      // Pass null for organizationID since we're loading all teams the user has access to
       const teamsResponse = await teamListCall(accessToken, null, userId);
-      if (teamsResponse?.data) {
-        const teamAliases = teamsResponse.data
-          .map((t: any) => t.team_alias)
-          .filter(Boolean);
-        setAvailableTeams(teamAliases);
-      }
+      const teamsArray = Array.isArray(teamsResponse) ? teamsResponse : (teamsResponse?.data || []);
+      const teamAliases = teamsArray
+        .map((t: any) => t.team_alias)
+        .filter(Boolean);
+      setAvailableTeams(teamAliases);
     } catch (error) {
       console.error("Failed to load teams:", error);
     } finally {
       setIsLoadingTeams(false);
     }
 
-    // Load keys
+    // Load keys — keyListCall returns {keys: [...], total_count, ...}
     setIsLoadingKeys(true);
     try {
-      const keysResponse = await keyInfoCall(accessToken, []);
-      if (keysResponse?.data) {
-        const keyAliases = keysResponse.data
-          .map((k: any) => k.key_alias)
-          .filter(Boolean);
-        setAvailableKeys(keyAliases);
-      }
+      const keysResponse = await keyListCall(accessToken, null, null, null, null, null, 1, 100);
+      const keysArray = keysResponse?.keys || keysResponse?.data || [];
+      const keyAliases = keysArray
+        .map((k: any) => k.key_alias)
+        .filter(Boolean);
+      setAvailableKeys(keyAliases);
     } catch (error) {
       console.error("Failed to load keys:", error);
     } finally {
@@ -83,12 +84,11 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     setIsLoadingModels(true);
     try {
       const modelsResponse = await modelAvailableCall(accessToken, userId || "", userRole || "");
-      if (modelsResponse?.data) {
-        const modelIds = modelsResponse.data
-          .map((m: any) => m.id || m.model_name)
-          .filter(Boolean);
-        setAvailableModels(modelIds);
-      }
+      const modelsArray = modelsResponse?.data || (Array.isArray(modelsResponse) ? modelsResponse : []);
+      const modelIds = modelsArray
+        .map((m: any) => m.id || m.model_name)
+        .filter(Boolean);
+      setAvailableModels(modelIds);
     } catch (error) {
       console.error("Failed to load models:", error);
     } finally {
@@ -99,6 +99,28 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const resetForm = () => {
     form.resetFields();
     setScopeType("global");
+    setImpactResult(null);
+  };
+
+  const getAttachmentData = () => buildAttachmentData(form.getFieldsValue(true), scopeType);
+
+  const handlePreviewImpact = async () => {
+    if (!accessToken) return;
+    try {
+      await form.validateFields(["policy_name"]);
+    } catch {
+      return;
+    }
+    setIsEstimating(true);
+    try {
+      const data = getAttachmentData();
+      const result = await estimateAttachmentImpactCall(accessToken, data);
+      setImpactResult(result);
+    } catch (error) {
+      console.error("Failed to estimate impact:", error);
+    } finally {
+      setIsEstimating(false);
+    }
   };
 
   const handleClose = () => {
@@ -110,30 +132,12 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     try {
       setIsSubmitting(true);
       await form.validateFields();
-      const values = form.getFieldsValue(true);
 
       if (!accessToken) {
         throw new Error("No access token available");
       }
 
-      const data: PolicyAttachmentCreateRequest = {
-        policy_name: values.policy_name,
-      };
-
-      if (scopeType === "global") {
-        data.scope = "*";
-      } else {
-        if (values.teams && values.teams.length > 0) {
-          data.teams = values.teams;
-        }
-        if (values.keys && values.keys.length > 0) {
-          data.keys = values.keys;
-        }
-        if (values.models && values.models.length > 0) {
-          data.models = values.models;
-        }
-      }
-
+      const data = getAttachmentData();
       await createAttachment(accessToken, data);
       NotificationsManager.success("Attachment created successfully");
 
@@ -195,8 +199,8 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
             value={scopeType}
             onChange={(e) => setScopeType(e.target.value)}
           >
+            <Radio value="specific">Specific (teams, keys, models, or tags)</Radio>
             <Radio value="global">Global (applies to all requests)</Radio>
-            <Radio value="specific">Specific (teams, keys, or models)</Radio>
           </Radio.Group>
         </Form.Item>
 
@@ -267,13 +271,41 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
                 style={{ width: "100%" }}
               />
             </Form.Item>
+
+            <Form.Item
+              name="tags"
+              label="Tags"
+              tooltip="Match against tags set in key or team metadata. Use exact values (e.g., healthcare) or wildcard patterns (e.g., health-*) where * matches any suffix."
+              extra={
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request body. Use <code>*</code> as a suffix wildcard (e.g., <code>prod-*</code> matches <code>prod-us</code>, <code>prod-eu</code>).
+                </Text>
+              }
+            >
+              <Select
+                mode="tags"
+                placeholder="Type a tag and press Enter (e.g. healthcare, prod-*)"
+                tokenSeparators={[",", " "]}
+                notFoundContent={null}
+                suffixIcon={null}
+                open={false}
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
           </>
         )}
+
+        {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}
 
         <div className="flex justify-end space-x-2 mt-4">
           <Button variant="secondary" onClick={handleClose}>
             Cancel
           </Button>
+          {scopeType === "specific" && (
+            <Button variant="secondary" onClick={handlePreviewImpact} loading={isEstimating}>
+              Estimate Impact
+            </Button>
+          )}
           <Button onClick={handleSubmit} loading={isSubmitting}>
             Create Attachment
           </Button>

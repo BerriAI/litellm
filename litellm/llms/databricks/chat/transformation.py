@@ -60,6 +60,38 @@ from ...anthropic.chat.transformation import AnthropicConfig
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
+def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
+    """
+    Remove or filter content so empty text blocks are not sent.
+    Databricks Model Serving uses Anthropic Messages API spec and rejects empty text blocks.
+    """
+    content = message_dict.get("content")
+    if content is None:
+        message_dict.pop("content", None)
+        return
+    if isinstance(content, str):
+        if not content.strip():
+            message_dict.pop("content")
+        return
+    if isinstance(content, list):
+        if not content:
+            message_dict.pop("content")
+            return
+        filtered = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and not (block.get("text") or "").strip()
+            )
+        ]
+        if not filtered:
+            message_dict.pop("content")
+        else:
+            message_dict["content"] = filtered
+
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -350,6 +382,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
+            _sanitize_empty_content(cast(dict[str, Any], _message))
             new_messages.append(_message)
 
         if is_async:

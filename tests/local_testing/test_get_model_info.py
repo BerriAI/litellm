@@ -311,7 +311,15 @@ def test_get_model_info_bedrock_models():
                 for commitment in potential_commitments:
                     k = k.replace(f"{commitment}/", "")
             base_model = BedrockModelInfo.get_base_model(k)
-            base_model_info = litellm.model_cost[base_model]
+            # get_base_model() returns model id without "bedrock/" prefix; cost map keys use "bedrock/<model>"
+            base_model_key = (
+                base_model
+                if base_model in litellm.model_cost
+                else f"bedrock/{base_model}"
+            )
+            if base_model_key not in litellm.model_cost:
+                continue
+            base_model_info = litellm.model_cost[base_model_key]
             for base_model_key, base_model_value in base_model_info.items():
                 if "invoke/" in k:
                     continue

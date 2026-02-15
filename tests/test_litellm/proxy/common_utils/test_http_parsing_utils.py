@@ -697,3 +697,67 @@ def test_populate_request_with_path_params_does_not_overwrite_existing_values():
     assert result["organization_id"] == "org-existing"  # Should keep original, not "org-query-param"
     # Verify other data is preserved
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.asyncio
+async def test_request_body_with_html_script_tags():
+    """
+    Test that JSON request bodies containing HTML tags like <script> are
+    parsed correctly without being blocked or modified.
+
+    Regression test for GitHub issue #20441:
+    https://github.com/BerriAI/litellm/issues/20441
+
+    LLM message content frequently contains HTML/code snippets.
+    The HTTP parsing layer must not interfere with such content.
+    """
+    test_messages = [
+        {
+            "role": "user",
+            "content": "<script>alert('hello')</script>",
+        },
+        {
+            "role": "user",
+            "content": "<script> test </script>",
+        },
+        {
+            "role": "user",
+            "content": "Can you explain what <script> tags do in HTML?",
+        },
+        {
+            "role": "user",
+            "content": "Here is code: <div><script src='app.js'></script></div>",
+        },
+        {
+            "role": "user",
+            "content": "<img onerror='alert(1)' src='x'>",
+        },
+        {
+            "role": "user",
+            "content": "<iframe src='https://example.com'></iframe>",
+        },
+    ]
+
+    for msg in test_messages:
+        test_payload = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "Hello! How can I help?"},
+                msg,
+            ],
+        }
+
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(return_value=orjson.dumps(test_payload))
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+
+        assert result["model"] == "gpt-4o"
+        assert len(result["messages"]) == 3
+        assert result["messages"][2]["content"] == msg["content"], (
+            f"Message content with HTML was modified during parsing: "
+            f"expected={msg['content']!r}, got={result['messages'][2]['content']!r}"
+        )
