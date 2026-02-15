@@ -230,7 +230,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_file:
             return managed_file.created_by == user_id
-        return False
+        return True  # allow through when record not found — downstream will return 404
 
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
