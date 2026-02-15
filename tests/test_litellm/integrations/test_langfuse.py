@@ -39,7 +39,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
         self.mock_langfuse_generation.trace_id = "test-trace-id"
-        
+
         # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
         self.mock_langfuse_span = MagicMock()
         self.mock_langfuse_span.end = MagicMock()
@@ -109,7 +109,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 response_obj=response_obj,
                 level=level,
                 litellm_call_id=kwargs.get("litellm_call_id", None),
-                print_verbose=True,  # Add the missing parameter
             )
 
         # Bind the method to the instance
@@ -125,7 +124,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
     def tearDown(self):
         self.env_patcher.stop()
-        self.langfuse_module_patcher.stop()
+        self.langfuse_module_patcher.stop()  # patch.dict automatically restores sys.modules
 
     def test_langfuse_usage_details_type(self):
         """Test that LangfuseUsageDetails TypedDict is properly defined with the correct fields"""
