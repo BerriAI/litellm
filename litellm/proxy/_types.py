@@ -2566,6 +2566,21 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    description: Optional[str] = None
+    access_model_names: List[str] = []
+    access_mcp_server_ids: List[str] = []
+    access_agent_ids: List[str] = []
+    assigned_team_ids: List[str] = []
+    assigned_key_ids: List[str] = []
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
 class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     request_id: str
     api_key: str
@@ -3779,7 +3794,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
-        allowed_keys = self.__annotations__.keys()
+        allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
 
         invalid_keys = set(kwargs.keys()) - allowed_keys
         user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
@@ -3953,6 +3968,18 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune", "response"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+
+
+class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
+    """Table for managing vector stores with target_model_names support."""
+    unified_resource_id: str
+    resource_object: Optional[Any] = None  # VectorStoreCreateResponse
+    model_mappings: Dict[str, str]
+    flat_model_resource_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
+    storage_backend: Optional[str] = None
+    storage_url: Optional[str] = None
 
 
 class EnterpriseLicenseData(TypedDict, total=False):

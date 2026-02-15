@@ -129,7 +129,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
 # Maximum number of callbacks that can be registered
 # This prevents callbacks from exponentially growing and consuming CPU resources
 # Override with LITELLM_MAX_CALLBACKS env var for large deployments (e.g., many teams with guardrails)
-MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 30)
+MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 100)
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
@@ -1024,10 +1024,12 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 
 BEDROCK_CONVERSE_MODELS = [
     "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-coder-next",
     "qwen.qwen3-235b-a22b-2507-v1:0",
     "qwen.qwen3-coder-30b-a3b-v1:0",
     "qwen.qwen3-32b-v1:0",
     "deepseek.v3-v1:0",
+    "deepseek.v3.2",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -1070,6 +1072,8 @@ BEDROCK_CONVERSE_MODELS = [
     "amazon.nova-pro-v1:0",
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
+    "minimax.minimax-m2.1",
+    "moonshotai.kimi-k2.5",
 ]
 
 
@@ -1358,6 +1362,9 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
+)
+DEFAULT_ACCESS_GROUP_CACHE_TTL = int(
+    os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
 )
 
 # Sentry Scrubbing Configuration

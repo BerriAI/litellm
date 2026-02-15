@@ -110,14 +110,14 @@ from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
 )
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
+    ModelRateLimitingCheck,
+)
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
 from litellm.router_utils.pre_call_checks.responses_api_deployment_check import (
     ResponsesApiDeploymentCheck,
-)
-from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
-    ModelRateLimitingCheck,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -896,13 +896,10 @@ class Router:
 
     def _initialize_vector_store_endpoints(self):
         """Initialize vector store endpoints."""
-        from litellm.vector_stores.main import acreate, asearch, create, search
+        from litellm.vector_stores.main import asearch, create, search
 
         self.avector_store_search = self.factory_function(
             asearch, call_type="avector_store_search"
-        )
-        self.avector_store_create = self.factory_function(
-            acreate, call_type="avector_store_create"
         )
         self.vector_store_search = self.factory_function(
             search, call_type="vector_store_search"
@@ -1159,6 +1156,8 @@ class Router:
         self._initialize_vector_store_file_endpoints()
         self._initialize_google_genai_endpoints()
         self._initialize_ocr_search_endpoints()
+        # Override vector store methods with router-aware implementations
+        self._override_vector_store_methods_for_router()
         self._initialize_video_endpoints()
         self._initialize_container_endpoints()
         self._initialize_skills_endpoints()
@@ -3821,6 +3820,112 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    #### VECTOR STORES API ####
+    async def avector_store_create(
+        self,
+        model: Union[str, None],
+        **kwargs,
+    ):
+        """
+        Create a vector store for a specific model.
+        
+        Args:
+            model: Model name from router config
+            **kwargs: Vector store creation parameters
+            
+        Returns:
+            VectorStoreCreateResponse
+        """
+        try:            
+            # If model is None, use the factory function approach (direct SDK call)
+            if model is None:
+                from litellm.vector_stores.main import acreate
+
+                # Use the factory function to handle the call
+                factory_fn = self.factory_function(
+                    acreate, call_type="avector_store_create"
+                )
+                return await factory_fn(**kwargs)
+            
+            from litellm.vector_stores import acreate as avector_store_create_sdk
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            deployment = await self.async_get_available_deployment(
+                model=model,
+                messages=[{"role": "user", "content": "vector-store-api-fake-text"}],
+                specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
+            )
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="avector_store_create"
+            )
+
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
+            )
+            self.total_calls[model_name] += 1
+
+            # Get custom provider
+            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            
+            response = avector_store_create_sdk(
+                **{
+                    **data,
+                    "custom_llm_provider": custom_llm_provider,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+
+            rpm_semaphore = self._get_client(
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
+            )
+
+            if rpm_semaphore is not None and isinstance(
+                rpm_semaphore, asyncio.Semaphore
+            ):
+                async with rpm_semaphore:
+                    await self.async_routing_strategy_pre_call_checks(
+                        deployment=deployment, parent_otel_span=parent_otel_span
+                    )
+                    response = await response
+            else:
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
+                response = await response
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.avector_store_create(model={model_name})\033[32m 200 OK\033[0m"
+            )
+
+            return response
+        except Exception as e:
+            verbose_router_logger.exception(
+                f"litellm.avector_store_create(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
+
+    def _override_vector_store_methods_for_router(self):
+        """
+        Override factory-generated vector store methods with router-aware implementations.
+        This is called after _initialize_vector_store_endpoints() to ensure our custom
+        methods that handle deployment selection and credential injection are used instead
+        of the generic factory-generated ones.
+        """
+        # Store references to the custom methods defined above
+        # These methods handle proper routing through deployments
+        pass  # The methods are already defined as instance methods above
+
     async def acreate_batch(
         self,
         model: str,
@@ -4527,9 +4632,21 @@ class Router:
     ):
         """
         Initialize the Vector Store API endpoints on the router.
+        
+        If a model is provided in kwargs, use model-based routing to get
+        the deployment credentials. Otherwise, call the original function directly.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
+        
+        # If model is provided, use generic API call with fallbacks for proper routing
+        if kwargs.get("model"):
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                **kwargs,
+            )
+        
+        # Otherwise, call the original function directly
         return await original_function(**kwargs)
 
     async def _init_containers_api_endpoints(
