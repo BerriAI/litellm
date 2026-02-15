@@ -694,10 +694,14 @@ class BaseResponsesAPITest(ABC):
         """
         base_completion_call_args = self.get_base_completion_call_args()
         model = base_completion_call_args.get("model") or ""
-        # Only run with context_management for OpenAI (OAI) for now
-        if "openai/" not in str(model) and "azure/" not in str(model):
+        # Azure does not support compaction context_management (only clear_tool_results)
+        if "azure/" in str(model):
             pytest.skip(
-                "context_management server-side compaction e2e is only run for OpenAI/Azure"
+                "context_management compaction is not supported on Azure"
+            )
+        if "openai/" not in str(model):
+            pytest.skip(
+                "context_management server-side compaction e2e is only run for OpenAI"
             )
         context_management = [{"type": "compaction", "compact_threshold": 200000}]
         try:
@@ -764,6 +768,10 @@ class BaseResponsesAPITest(ABC):
         model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
             "model"
         ) or "openai/gpt-5.2"
+        if "openai/" not in str(model):
+            pytest.skip(
+                "Shell tool streaming e2e is only run for OpenAI/Azure Responses API"
+            )
         tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
         input_msg = "List files in /mnt/data and run python --version."
 

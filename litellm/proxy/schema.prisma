@@ -131,6 +131,7 @@ model LiteLLM_TeamTable {
     access_group_ids String[] @default([])
     policies         String[] @default([])
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
+    allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
@@ -164,7 +165,8 @@ model LiteLLM_DeletedTeamTable {
     access_group_ids String[] @default([])
     policies                String[] @default([])
     model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
-    
+    allow_team_guardrail_config Boolean @default(false)
+
     // Original timestamps from team creation/updates
     created_at              DateTime? @map("created_at")
     updated_at              DateTime? @map("updated_at")
@@ -781,6 +783,22 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([model_object_id])
 }
 
+model LiteLLM_ManagedVectorStoreTable {
+  id String @id @default(uuid())
+  unified_resource_id String @unique // The base64 encoded unified vector store ID
+  resource_object Json? // Stores the VectorStoreCreateResponse
+  model_mappings Json // Maps model_id -> provider_vector_store_id
+  flat_model_resource_ids String[] @default([]) // Flat list of provider vector store IDs for faster querying
+  storage_backend String? // Storage backend name (if applicable)
+  storage_url String? // Storage URL (if applicable)
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+
+  @@index([unified_resource_id])
+}
+
 model LiteLLM_ManagedVectorStoresTable {
   vector_store_id String @id
   custom_llm_provider String
@@ -804,6 +822,7 @@ model LiteLLM_GuardrailsTable {
   guardrail_name String @unique
   litellm_params Json
   guardrail_info Json?
+  team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
@@ -914,6 +933,7 @@ model LiteLLM_PolicyTable {
   guardrails_add   String[]  @default([])
   guardrails_remove String[] @default([])
   condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
@@ -942,7 +962,7 @@ model LiteLLM_AccessGroupTable {
   description        String?
   
   // Resource memberships - explicit arrays per type
-  access_model_ids        String[] @default([])
+  access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
   access_agent_ids        String[] @default([])
 

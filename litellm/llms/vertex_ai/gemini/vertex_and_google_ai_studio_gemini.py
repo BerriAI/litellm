@@ -480,7 +480,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
             # Handle OpenAI-style web_search and web_search_preview tools
             # Transform them to Gemini's googleSearch tool
-            elif "type" in tool and tool["type"] in ("web_search", "web_search_preview"):
+            elif "type" in tool and tool["type"] in (
+                "web_search",
+                "web_search_preview",
+            ):
                 verbose_logger.info(
                     f"Gemini: Transforming OpenAI-style '{tool['type']}' tool to googleSearch"
                 )
@@ -1196,6 +1199,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
             "IMAGE_SAFETY": "The token generation was stopped as the response was flagged for image safety reasons.",
+            "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
     @staticmethod
@@ -1218,6 +1222,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "SPII": "content_filter",
             "MALFORMED_FUNCTION_CALL": "malformed_function_call",  # openai doesn't have a way of representing this
             "IMAGE_SAFETY": "content_filter",
+            "IMAGE_PROHIBITED_CONTENT": "content_filter",
         }
 
     def translate_exception_str(self, exception_string: str):
@@ -1630,7 +1635,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 completion_image_tokens = response_tokens_details.image_tokens or 0
                 completion_audio_tokens = response_tokens_details.audio_tokens or 0
                 calculated_text_tokens = (
-                    candidates_token_count - completion_image_tokens - completion_audio_tokens
+                    candidates_token_count
+                    - completion_image_tokens
+                    - completion_audio_tokens
                 )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
@@ -2247,6 +2254,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
+
+            ## ADD TRAFFIC TYPE ##
+            traffic_type = completion_response.get("usageMetadata", {}).get(
+                "trafficType"
+            )
+            if traffic_type:
+                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
         except Exception as e:
             raise VertexAIError(
@@ -2905,6 +2919,12 @@ class ModelResponseIterator:
                     cast(
                         PromptTokensDetailsWrapper, usage.prompt_tokens_details
                     ).web_search_requests = web_search_requests
+
+                traffic_type = processed_chunk.get("usageMetadata", {}).get(
+                    "trafficType"
+                )
+                if traffic_type:
+                    model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             setattr(model_response, "usage", usage)  # type: ignore
 

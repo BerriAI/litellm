@@ -8,10 +8,11 @@ Handles:
 - Combining guardrails from multiple matching policies
 """
 
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
+    GuardrailPipeline,
     Policy,
     PolicyMatchContext,
     ResolvedPolicy,
@@ -189,6 +190,67 @@ class PolicyResolver:
         )
 
         return result
+
+    @staticmethod
+    def resolve_pipelines_for_context(
+        context: PolicyMatchContext,
+        policies: Optional[Dict[str, Policy]] = None,
+    ) -> List[Tuple[str, GuardrailPipeline]]:
+        """
+        Resolve pipelines from matching policies for a request context.
+
+        Returns (policy_name, pipeline) tuples for policies that have pipelines.
+        Guardrails managed by pipelines should be excluded from the flat
+        guardrails list to avoid double execution.
+
+        Args:
+            context: The request context
+            policies: Dictionary of all policies (if None, uses global registry)
+
+        Returns:
+            List of (policy_name, GuardrailPipeline) tuples
+        """
+        from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        if policies is None:
+            registry = get_policy_registry()
+            if not registry.is_initialized():
+                return []
+            policies = registry.get_all_policies()
+
+        matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
+        if not matching_policy_names:
+            return []
+
+        pipelines: List[Tuple[str, GuardrailPipeline]] = []
+        for policy_name in matching_policy_names:
+            policy = policies.get(policy_name)
+            if policy is None:
+                continue
+            if policy.pipeline is not None:
+                pipelines.append((policy_name, policy.pipeline))
+                verbose_proxy_logger.debug(
+                    f"Policy '{policy_name}' has pipeline with "
+                    f"{len(policy.pipeline.steps)} steps"
+                )
+
+        return pipelines
+
+    @staticmethod
+    def get_pipeline_managed_guardrails(
+        pipelines: List[Tuple[str, GuardrailPipeline]],
+    ) -> Set[str]:
+        """
+        Get the set of guardrail names managed by pipelines.
+
+        These guardrails should be excluded from normal independent execution.
+        """
+        managed: Set[str] = set()
+        for _policy_name, pipeline in pipelines:
+            for step in pipeline.steps:
+                managed.add(step.guardrail)
+        return managed
 
     @staticmethod
     def get_all_resolved_policies(
