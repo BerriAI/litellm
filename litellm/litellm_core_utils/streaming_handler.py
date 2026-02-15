@@ -169,8 +169,11 @@ class CustomStreamWrapper:
                         result = self.completion_stream.close()
                         if result is not None:
                             await result
-                except BaseException:
-                    pass
+                except BaseException as e:
+                    verbose_logger.debug(
+                        "CustomStreamWrapper.aclose: error closing completion_stream: %s",
+                        e,
+                    )
 
     def check_send_stream_usage(self, stream_options: Optional[dict]):
         return (

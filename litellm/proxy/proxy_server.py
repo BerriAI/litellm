@@ -5149,8 +5149,10 @@ async def async_data_generator(
         if hasattr(response, "aclose"):
             try:
                 await response.aclose()
-            except Exception:
-                pass
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "async_data_generator: error closing response stream: %s", e
+                )
 
 
 def select_data_generator(
