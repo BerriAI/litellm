@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -578,8 +578,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             region_name=self.aws_region_name,
         )
 
-        session_any = cast(Any, session)
-        return session_any.client(service_name)
+        return session.client(service_name)
 
     async def embed(
         self,
@@ -683,3 +682,4 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     break
 
         return str(self.knowledge_base_id) if self.knowledge_base_id else None, s3_key
+

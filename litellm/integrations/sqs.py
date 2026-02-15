@@ -341,8 +341,6 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            if self.sqs_region_name is None:
-                raise ValueError("SQS region name is required for SigV4 signing")
             SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth(
                 aws_request
             )

@@ -573,8 +573,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 url=prepped.url,
                 headers=prepped.headers,
             )
-            if self.s3_region_name is None:
-                raise ValueError("S3 region name is required for SigV4 signing")
             SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
