@@ -3,7 +3,19 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LiteLLM_AccessGroupTable,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import (
+    _cache_access_object,
+    _cache_key_object,
+    _cache_team_object,
+    _delete_cache_access_object,
+    _get_team_object_from_cache,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import get_prisma_client_or_throw
@@ -40,6 +52,45 @@ def _record_to_response(record) -> AccessGroupResponse:
         created_by=record.created_by,
         updated_at=record.updated_at,
         updated_by=record.updated_by,
+    )
+
+
+def _record_to_access_group_table(record) -> LiteLLM_AccessGroupTable:
+    """Convert a Prisma record to a LiteLLM_AccessGroupTable pydantic object for caching."""
+    return LiteLLM_AccessGroupTable(**record.dict())
+
+
+async def _cache_access_group_record(record) -> None:
+    """
+    Cache an access group Prisma record in the user_api_key_cache.
+
+    Uses a lazy import of user_api_key_cache and proxy_logging_obj from proxy_server
+    to avoid circular imports, following the same pattern as key_management_endpoints.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    access_group_table = _record_to_access_group_table(record)
+    await _cache_access_object(
+        access_group_id=record.access_group_id,
+        access_group_table=access_group_table,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _invalidate_cache_access_group(access_group_id: str) -> None:
+    """
+    Invalidate (delete) an access group entry from both in-memory and Redis caches.
+
+    Uses a lazy import of user_api_key_cache and proxy_logging_obj from proxy_server
+    to avoid circular imports, following the same pattern as key_management_endpoints.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    await _delete_cache_access_object(
+        access_group_id=access_group_id,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
 
@@ -87,6 +138,10 @@ async def create_access_group(
                 detail=f"Access group '{data.access_group_name}' already exists",
             )
         raise
+
+    # Cache the newly created access group for read-heavy access patterns
+    await _cache_access_group_record(record)
+
     return _record_to_response(record)
 
 
@@ -166,6 +221,10 @@ async def update_access_group(
                 detail=f"Access group '{update_data.get('access_group_name', '')}' already exists",
             )
         raise
+
+    # Write the updated record into cache (same key, overwrites stale entry)
+    await _cache_access_group_record(record)
+
     return _record_to_response(record)
 
 
@@ -181,6 +240,10 @@ async def delete_access_group(
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
     try:
+        # Track affected team IDs and key tokens for cache invalidation
+        affected_team_ids: list = []
+        affected_key_tokens: list = []
+
         async with prisma_client.db.tx() as tx:
             existing = await tx.litellm_accessgrouptable.find_unique(
                 where={"access_group_id": access_group_id}
@@ -196,6 +259,7 @@ async def delete_access_group(
                 where={"access_group_ids": {"hasSome": [access_group_id]}}
             )
             for team in teams_with_group:
+                affected_team_ids.append(team.team_id)
                 updated_ids = [tid for tid in (team.access_group_ids or []) if tid != access_group_id]
                 await tx.litellm_teamtable.update(
                     where={"team_id": team.team_id},
@@ -206,6 +270,7 @@ async def delete_access_group(
                 where={"access_group_ids": {"hasSome": [access_group_id]}}
             )
             for key in keys_with_group:
+                affected_key_tokens.append(key.token)
                 updated_ids = [kid for kid in (key.access_group_ids or []) if kid != access_group_id]
                 await tx.litellm_verificationtoken.update(
                     where={"token": key.token},
@@ -215,6 +280,48 @@ async def delete_access_group(
             await tx.litellm_accessgrouptable.delete(
                 where={"access_group_id": access_group_id}
             )
+
+        # Invalidate the deleted access group from cache
+        await _invalidate_cache_access_group(access_group_id)
+
+        # Patch cached team and key objects to remove the deleted access_group_id
+        # instead of fully invalidating them (keeps cache warm, avoids DB re-fetch)
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+        for team_id in affected_team_ids:
+            cached_team = await _get_team_object_from_cache(
+                key="team_id:{}".format(team_id),
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+            )
+            if cached_team is not None and cached_team.access_group_ids:
+                cached_team.access_group_ids = [
+                    ag_id for ag_id in cached_team.access_group_ids if ag_id != access_group_id
+                ]
+                await _cache_team_object(
+                    team_id=team_id,
+                    team_table=cached_team,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
+        for token in affected_key_tokens:
+            cached_key = await user_api_key_cache.async_get_cache(key=token)
+            if cached_key is not None:
+                if isinstance(cached_key, dict):
+                    cached_key = UserAPIKeyAuth(**cached_key)
+                if isinstance(cached_key, UserAPIKeyAuth) and cached_key.access_group_ids:
+                    cached_key.access_group_ids = [
+                        ag_id for ag_id in cached_key.access_group_ids if ag_id != access_group_id
+                    ]
+                    await _cache_key_object(
+                        hashed_token=token,
+                        user_api_key_obj=cached_key,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+
     except HTTPException:
         raise
     except Exception as e:

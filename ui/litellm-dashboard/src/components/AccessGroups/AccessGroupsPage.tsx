@@ -59,7 +59,7 @@ function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
     id: r.access_group_id,
     name: r.access_group_name,
     description: r.description ?? "",
-    modelIds: r.access_model_ids,
+    modelIds: r.access_model_names,
     mcpServerIds: r.access_mcp_server_ids,
     agentIds: r.access_agent_ids,
     keyIds: r.assigned_key_ids,
@@ -199,29 +199,32 @@ export function AccessGroupsPage() {
         enableSorting: false,
         cell: ({ row }) => {
           const record = row.original;
+          const modelIds = record.modelIds ?? [];
+          const mcpServerIds = record.mcpServerIds ?? [];
+          const agentIds = record.agentIds ?? [];
           return (
             <Flex gap={12} align="center">
-              <Tooltip title={`${record.modelIds.length} Models`}>
+              <Tooltip title={`${modelIds.length} Models`}>
                 <Tag color="blue" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
                   <Flex align="center" gap={6}>
                     <LayersIcon size={14} />
-                    {record.modelIds.length}
+                    {modelIds.length}
                   </Flex>
                 </Tag>
               </Tooltip>
-              <Tooltip title={`${record.mcpServerIds.length} MCP Servers`}>
+              <Tooltip title={`${mcpServerIds.length} MCP Servers`}>
                 <Tag color="cyan" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
                   <Flex align="center" gap={6}>
                     <ServerIcon size={14} />
-                    {record.mcpServerIds.length}
+                    {mcpServerIds.length}
                   </Flex>
                 </Tag>
               </Tooltip>
-              <Tooltip title={`${record.agentIds.length} Agents`}>
+              <Tooltip title={`${agentIds.length} Agents`}>
                 <Tag color="purple" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
                   <Flex align="center" gap={6}>
                     <BotIcon size={14} />
-                    {record.agentIds.length}
+                    {agentIds.length}
                   </Flex>
                 </Tag>
               </Tooltip>
