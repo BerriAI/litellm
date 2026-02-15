@@ -176,8 +176,12 @@ def test_openai_model_with_thinking_converts_to_reasoning_effort():
         
         # Verify reasoning_effort is set (converted from thinking)
         assert "reasoning_effort" in call_kwargs, "reasoning_effort should be passed to completion"
-        assert call_kwargs["reasoning_effort"] == "minimal", f"reasoning_effort should be 'minimal' for budget_tokens=1024, got {call_kwargs.get('reasoning_effort')}"
-        
+
+        # reasoning_effort is transformed into a dict with effort and summary fields
+        expected_reasoning_effort = {"effort": "minimal", "summary": "detailed"}
+        assert call_kwargs["reasoning_effort"] == expected_reasoning_effort, \
+            f"reasoning_effort should be {expected_reasoning_effort} for budget_tokens=1024, got {call_kwargs.get('reasoning_effort')}"
+
         # Verify thinking is NOT passed (non-Claude model)
         assert "thinking" not in call_kwargs, "thinking should NOT be passed for non-Claude models"
 
