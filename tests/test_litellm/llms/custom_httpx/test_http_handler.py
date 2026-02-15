@@ -141,6 +141,83 @@ async def test_ssl_verification_with_aiohttp_transport():
 
 
 @pytest.mark.asyncio
+async def test_ssl_verification_with_shared_session():
+    """
+    Test that ssl_verify=False is respected even with shared sessions.
+
+    This was a bug where shared sessions bypassed SSL configuration because
+    _create_aiohttp_transport returned immediately without passing ssl_verify
+    to the LiteLLMAiohttpTransport constructor.
+
+    The fix stores ssl_verify in the transport and passes it per-request.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a shared session (simulating what happens in production)
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and ssl_verify=False
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=False,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL setting is stored in the transport for per-request use
+            assert transport._ssl_verify is False
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_ssl_context_with_shared_session():
+    """
+    Test that ssl_context is respected even with shared sessions.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a custom SSL context
+        custom_ssl_context = ssl.create_default_context()
+
+        # Create a shared session
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and custom ssl_context
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_context=custom_ssl_context,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL context is stored in the transport for per-request use
+            assert transport._ssl_verify is custom_ssl_context
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
 async def test_aiohttp_transport_trust_env_setting(monkeypatch):
     """Test that trust_env setting is properly configured in aiohttp transport"""
     # Test 1: Default trust_env behavior
@@ -397,6 +474,85 @@ async def test_session_reuse_integration():
     # Both should be AsyncHTTPHandler instances
     assert isinstance(client1, AsyncHTTPHandler)
     assert isinstance(client2, AsyncHTTPHandler)
+    
+    # Clean up
+    await client1.close()
+    await client2.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_session_bypasses_cache():
+    """
+    Test that when shared_session is provided, the cache is bypassed.
+    
+    This is critical for aiohttp tracing support - users need their custom
+    ClientSession (with trace_configs) to be used, not a cached session.
+    
+    Related: GitHub issue #20174
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+    
+    # First, get a cached client without shared_session
+    cached_client = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=None
+    )
+    
+    # Now create a mock shared session
+    mock_session = MockClientSession()
+    
+    # Get a client WITH shared_session - this should NOT return the cached client
+    client_with_session = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,  # Same provider!
+        shared_session=mock_session  # type: ignore
+    )
+    
+    # The clients should be DIFFERENT - cache should be bypassed when shared_session is provided
+    assert client_with_session is not cached_client, \
+        "Cache should be bypassed when shared_session is provided"
+    
+    # Verify the shared_session handler is using our mock session
+    # The transport should have our mock_session as its client
+    transport = client_with_session.client._transport
+    if hasattr(transport, 'client'):
+        assert transport.client is mock_session, \
+            "Handler should use the provided shared_session"
+    
+    # Clean up
+    await cached_client.close()
+    await client_with_session.close()
+
+
+@pytest.mark.asyncio  
+async def test_shared_session_each_call_gets_new_handler():
+    """
+    Test that each call with shared_session creates a new handler.
+    
+    This ensures user sessions (with their trace_configs, etc.) are always
+    used and not affected by caching.
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+    
+    # Create two different mock sessions
+    mock_session1 = MockClientSession()
+    mock_session2 = MockClientSession()
+    
+    # Get clients with different sessions for the same provider
+    client1 = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session1  # type: ignore
+    )
+    
+    client2 = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,  # Same provider
+        shared_session=mock_session2  # type: ignore  # Different session
+    )
+    
+    # Should be different clients, each using their own session
+    assert client1 is not client2, \
+        "Different shared_sessions should create different handlers"
     
     # Clean up
     await client1.close()

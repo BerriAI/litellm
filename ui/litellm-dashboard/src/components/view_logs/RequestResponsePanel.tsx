@@ -113,7 +113,7 @@ export function RequestResponsePanel({
             onClick={handleCopyResponse}
             className="p-1 hover:bg-gray-200 rounded"
             title="Copy response"
-            disabled={!hasResponse}
+            disabled={!hasResponse && !hasError}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -132,7 +132,7 @@ export function RequestResponsePanel({
           </button>
         </div>
         <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
-          {hasResponse ? (
+          {hasResponse || hasError ? (
             <div className="[&_[role='tree']]:bg-white [&_[role='tree']]:text-slate-900">
               <JsonView data={formattedResponse()} style={defaultStyles} clickToExpandNode />
             </div>

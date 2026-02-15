@@ -35,7 +35,10 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -179,6 +182,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 self._compile_error = f"Failed to compile custom code: {e}"
                 raise CustomCodeCompilationError(self._compile_error) from e
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -212,7 +216,6 @@ class CustomCodeGuardrail(CustomGuardrail):
             HTTPException: If content is blocked
             CustomCodeExecutionError: If execution fails
         """
-
         if self._compiled_function is None:
             if self._compile_error:
                 raise CustomCodeExecutionError(

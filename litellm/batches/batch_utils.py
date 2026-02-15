@@ -39,11 +39,19 @@ async def _handle_completed_batch(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
+    litellm_params: Optional[dict] = None,
 ) -> Tuple[float, Usage, List[str]]:
-    """Helper function to process a completed batch and handle logging"""
+    """Helper function to process a completed batch and handle logging
+    
+    Args:
+        batch: The batch object
+        custom_llm_provider: The LLM provider
+        model_name: Optional model name
+        litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
+    """
     # Get batch results
     file_content_dictionary = await _get_batch_output_file_content_as_dictionary(
-        batch, custom_llm_provider
+        batch, custom_llm_provider, litellm_params=litellm_params
     )
 
     # Calculate costs and usage
@@ -187,9 +195,16 @@ def calculate_vertex_ai_batch_cost_and_usage(
 async def _get_batch_output_file_content_as_dictionary(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
+    litellm_params: Optional[dict] = None,
 ) -> List[dict]:
     """
     Get the batch output file content as a list of dictionaries
+    
+    Args:
+        batch: The batch object
+        custom_llm_provider: The LLM provider
+        litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
+                       Required for Azure and other providers that need authentication
     """
     from litellm.files.main import afile_content
     from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -211,11 +226,48 @@ async def _get_batch_output_file_content_as_dictionary(
         except (IndexError, AttributeError) as e:
             verbose_logger.error(f"Failed to extract LLM output file ID from unified file ID: {batch.output_file_id}, error: {e}")
 
-    _file_content = await afile_content(
-        file_id=file_id,
-        custom_llm_provider=custom_llm_provider,
-    )
+    # Build kwargs for afile_content with credentials from litellm_params
+    file_content_kwargs = {
+        "file_id": file_id,
+        "custom_llm_provider": custom_llm_provider,
+    }
+    
+    # Extract and add credentials for file access
+    credentials = _extract_file_access_credentials(litellm_params)
+    file_content_kwargs.update(credentials)
+    
+    _file_content = await afile_content(**file_content_kwargs)
     return _get_file_content_as_dictionary(_file_content.content)
+
+
+def _extract_file_access_credentials(litellm_params: Optional[dict]) -> dict:
+    """
+    Extract credentials from litellm_params for file access operations.
+    
+    This method extracts relevant authentication and configuration parameters
+    needed for accessing files across different providers (Azure, Vertex AI, etc.).
+    
+    Args:
+        litellm_params: Dictionary containing litellm parameters with credentials
+        
+    Returns:
+        Dictionary containing only the credentials needed for file access
+    """
+    credentials = {}
+    
+    if litellm_params:
+        # List of credential keys that should be passed to file operations
+        credential_keys = [
+            "api_key", "api_base", "api_version", "organization",
+            "azure_ad_token", "azure_ad_token_provider",
+            "vertex_project", "vertex_location", "vertex_credentials",
+            "timeout", "max_retries"
+        ]
+        for key in credential_keys:
+            if key in litellm_params:
+                credentials[key] = litellm_params[key]
+    
+    return credentials
 
 
 def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
