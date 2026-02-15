@@ -2054,9 +2054,10 @@ async def _lookup_deprecated_key(
 
     # Check cache first
     cached = _deprecated_key_cache.get(hashed_token)
+    cached = _deprecated_key_cache.get(hashed_token)
     if cached is not None:
-        active_token_id, cache_expires_at_ts = cached
-        if now_ts < cache_expires_at_ts:
+        active_token_id, cache_expires_at_ts, revoke_at_ts = cached
+        if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
             return active_token_id
         else:
             _deprecated_key_cache.pop(hashed_token, None)
