@@ -13,7 +13,7 @@ import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -439,6 +439,20 @@ class GenericGuardrailAPI(CustomGuardrail):
         except GuardrailRaisedException:
             # Re-raise guardrail exceptions as-is
             raise
+        except Timeout as e:
+            # AsyncHTTPHandler wraps httpx.TimeoutException into litellm.Timeout
+            if self.unreachable_fallback == "fail_open":
+                return self._fail_open_passthrough(
+                    inputs=inputs,
+                    input_type=input_type,
+                    logging_obj=logging_obj,
+                    error=e,
+                )
+
+            verbose_proxy_logger.error(
+                "Generic Guardrail API: failed to make request: %s", str(e)
+            )
+            raise Exception(f"Generic Guardrail API failed: {str(e)}")
         except httpx.HTTPStatusError as e:
             # Common reverse-proxy/LB failures can present as HTTP errors even when the backend is unreachable.
             status_code = getattr(getattr(e, "response", None), "status_code", None)

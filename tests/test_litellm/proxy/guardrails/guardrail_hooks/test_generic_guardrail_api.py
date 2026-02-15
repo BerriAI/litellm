@@ -13,7 +13,7 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm._version import version as litellm_version
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -766,6 +766,32 @@ class TestErrorHandling:
                 "Service Unavailable",
                 request=MagicMock(),
                 response=MagicMock(status_code=503),
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_timeout_fail_open_allows_flow(self, mock_request_data_input):
+        """Test litellm.Timeout allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=Timeout(
+                message="Connection timed out",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
             ),
         ):
             result = await guardrail.apply_guardrail(
