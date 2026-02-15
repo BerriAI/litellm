@@ -268,6 +268,54 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         return result_metadata
 
+    def _fail_open_passthrough(
+        self,
+        *,
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"],
+        error: Exception,
+        http_status_code: Optional[int] = None,
+    ) -> GenericGuardrailAPIInputs:
+        status_suffix = f" http_status_code={http_status_code}" if http_status_code else ""
+        verbose_proxy_logger.critical(
+            "Generic Guardrail API unreachable (fail-open). Proceeding without guardrail.%s "
+            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
+            status_suffix,
+            getattr(self, "guardrail_name", None),
+            getattr(self, "api_base", None),
+            input_type,
+            getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
+            getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
+            exc_info=error,
+        )
+        # Keep flow going - treat as action=NONE (no modifications)
+        return_inputs: GenericGuardrailAPIInputs = {}
+        return_inputs.update(inputs)
+        return return_inputs
+
+    def _build_guardrail_return_inputs(
+        self,
+        *,
+        texts: list,
+        images: Any,
+        tools: Any,
+        guardrail_response: GenericGuardrailAPIResponse,
+    ) -> GenericGuardrailAPIInputs:
+        # Action is NONE or no modifications needed
+        return_inputs = GenericGuardrailAPIInputs(texts=texts)
+        if guardrail_response.texts:
+            return_inputs["texts"] = guardrail_response.texts
+        if guardrail_response.images:
+            return_inputs["images"] = guardrail_response.images
+        elif images:
+            return_inputs["images"] = images
+        if guardrail_response.tools:
+            return_inputs["tools"] = guardrail_response.tools
+        elif tools:
+            return_inputs["tools"] = tools
+        return return_inputs
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -381,48 +429,45 @@ class GenericGuardrailAPI(CustomGuardrail):
                     should_wrap_with_default_message=False,
                 )
 
-            # Action is NONE or no modifications needed
-            return_inputs = GenericGuardrailAPIInputs(texts=texts)
-            if guardrail_response.texts:
-                return_inputs["texts"] = guardrail_response.texts
-            if guardrail_response.images:
-                return_inputs["images"] = guardrail_response.images
-            elif images:
-                return_inputs["images"] = images
-            if guardrail_response.tools:
-                return_inputs["tools"] = guardrail_response.tools
-            elif tools:
-                return_inputs["tools"] = tools
-            return return_inputs
+            return self._build_guardrail_return_inputs(
+                texts=texts,
+                images=images,
+                tools=tools,
+                guardrail_response=guardrail_response,
+            )
 
         except GuardrailRaisedException:
             # Re-raise guardrail exceptions as-is
             raise
+        except httpx.HTTPStatusError as e:
+            # Common reverse-proxy/LB failures can present as HTTP errors even when the backend is unreachable.
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if self.unreachable_fallback == "fail_open" and status_code in (
+                502,
+                503,
+                504,
+            ):
+                return self._fail_open_passthrough(
+                    inputs=inputs,
+                    input_type=input_type,
+                    logging_obj=logging_obj,
+                    error=e,
+                    http_status_code=status_code,
+                )
+
+            verbose_proxy_logger.error(
+                "Generic Guardrail API: failed to make request: %s", str(e)
+            )
+            raise Exception(f"Generic Guardrail API failed: {str(e)}")
         except httpx.RequestError as e:
             # Guardrail endpoint is unreachable (DNS/connect/timeout/etc)
-            if getattr(self, "unreachable_fallback", "fail_closed") == "fail_open":
-                verbose_proxy_logger.critical(
-                    "Generic Guardrail API unreachable (fail-open). Proceeding without guardrail. "
-                    "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
-                    getattr(self, "guardrail_name", None),
-                    getattr(self, "api_base", None),
-                    input_type,
-                    (
-                        getattr(logging_obj, "litellm_call_id", None)
-                        if logging_obj
-                        else None
-                    ),
-                    (
-                        getattr(logging_obj, "litellm_trace_id", None)
-                        if logging_obj
-                        else None
-                    ),
-                    exc_info=True,
+            if self.unreachable_fallback == "fail_open":
+                return self._fail_open_passthrough(
+                    inputs=inputs,
+                    input_type=input_type,
+                    logging_obj=logging_obj,
+                    error=e,
                 )
-                # Keep flow going - treat as action=NONE (no modifications)
-                return_inputs: GenericGuardrailAPIInputs = {}
-                return_inputs.update(inputs)
-                return return_inputs
 
             verbose_proxy_logger.error(
                 "Generic Guardrail API: failed to make request: %s", str(e)

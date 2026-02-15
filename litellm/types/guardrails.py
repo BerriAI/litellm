@@ -655,6 +655,7 @@ class BaseLitellmParams(
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
+            "NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )

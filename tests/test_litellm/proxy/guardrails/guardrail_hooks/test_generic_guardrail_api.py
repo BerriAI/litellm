@@ -750,6 +750,32 @@ class TestErrorHandling:
 
             assert result.get("texts") == ["test"]
 
+    @pytest.mark.asyncio
+    async def test_503_fail_open_allows_flow(self, mock_request_data_input):
+        """Test HTTP 503 allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.HTTPStatusError(
+                "Service Unavailable",
+                request=MagicMock(),
+                response=MagicMock(status_code=503),
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
 
 class TestMultimodalSupport:
     """Test multimodal (image) message handling and serialization"""
