@@ -2760,6 +2760,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse prompt version
     langfuse_prompt_version: Optional[int]
 
+    # Opik dynamic params
+    opik_api_key: Optional[str]
+    opik_workspace: Optional[str]
+    opik_project_name: Optional[str]
+    opik_url_override: Optional[str]
+
     # GCS dynamic params
     gcs_bucket_name: Optional[str]
     gcs_path_service_account: Optional[str]
