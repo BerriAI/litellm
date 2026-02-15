@@ -255,6 +255,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 standard_logging_payload=kwargs.get("standard_logging_object", None),
             )
 
+            # afile_delete and other non-model call types never produce a standard_logging_object,
+            # so s3_batch_logging_element is None. Skip gracefully instead of raising ValueError.
             if s3_batch_logging_element is None:
                 verbose_logger.debug(
                     "s3 Logging - skipping event, no standard_logging_object for call_type=%s",
