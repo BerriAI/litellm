@@ -1318,7 +1318,18 @@ def post_call_processing(
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
-                            if litellm.enable_json_schema_validation is True:
+                            # Per-request flag takes priority over global flag
+                            _per_request_validation = (
+                                optional_params.get("enable_json_schema_validation")
+                                if optional_params is not None
+                                else None
+                            )
+                            _enable_json_schema_validation = (
+                                _per_request_validation
+                                if _per_request_validation is not None
+                                else litellm.enable_json_schema_validation
+                            )
+                            if _enable_json_schema_validation is True:
                                 try:
                                     if (
                                         optional_params is not None
