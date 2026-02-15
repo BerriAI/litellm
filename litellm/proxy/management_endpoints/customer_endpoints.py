@@ -22,7 +22,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import \
     get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission, handle_update_object_permission_common)
+    _set_object_permission, attach_object_permission_to_dict,
+    handle_update_object_permission_common)
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import \
     SpendAnalyticsPaginatedResponse
@@ -294,13 +295,28 @@ async def new_end_user(
             prisma_client=prisma_client,
         )
 
+        # Ensure object_permission is not in the data being sent to create
+        # It should have been converted to object_permission_id by _set_object_permission
+        if "object_permission" in new_end_user_obj:
+            verbose_proxy_logger.warning(
+                f"object_permission still in new_end_user_obj after _set_object_permission: {new_end_user_obj.get('object_permission')}"
+            )
+            new_end_user_obj.pop("object_permission", None)
+
         ## WRITE TO DB ##
         end_user_record = await prisma_client.db.litellm_endusertable.create(
             data=new_end_user_obj,  # type: ignore
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
-        return end_user_record
+        # Convert to dict and clean up recursive fields
+        response_dict = end_user_record.model_dump()
+        if response_dict.get("object_permission"):
+            # Remove reverse relations from object_permission
+            for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+                response_dict["object_permission"].pop(field, None)
+
+        return response_dict
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - {}".format(
@@ -366,7 +382,15 @@ async def end_user_info(
                 code=404,
                 param="end_user_id",
             )
-        return user_info.model_dump(exclude_none=True)
+
+        # Convert to dict and clean up recursive fields
+        response_dict = user_info.model_dump(exclude_none=True)
+        if response_dict.get("object_permission"):
+            # Remove reverse relations from object_permission
+            for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+                response_dict["object_permission"].pop(field, None)
+
+        return response_dict
     
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -520,6 +544,15 @@ async def update_end_user(
 
         ## Update user table, with update params + new budget id (if set) ##
         verbose_proxy_logger.debug("/customer/update: Received data = %s", data)
+
+        # Ensure object_permission is not in the update data
+        # It should have been converted to object_permission_id by handle_update_object_permission_common
+        if "object_permission" in update_end_user_table_data:
+            verbose_proxy_logger.warning(
+                f"object_permission still in update_end_user_table_data: {update_end_user_table_data.get('object_permission')}"
+            )
+            update_end_user_table_data.pop("object_permission", None)
+
         if data.user_id is not None and len(data.user_id) > 0:
             update_end_user_table_data["user_id"] = data.user_id  # type: ignore
             verbose_proxy_logger.debug("In update customer, user_id condition block.")
@@ -533,7 +566,15 @@ async def update_end_user(
             verbose_proxy_logger.debug(
                 f"received response from updating prisma client. response={response}"
             )
-            return response
+
+            # Convert to dict and clean up recursive fields
+            response_dict = response.model_dump()
+            if response_dict.get("object_permission"):
+                # Remove reverse relations from object_permission
+                for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+                    response_dict["object_permission"].pop(field, None)
+
+            return response_dict
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
 
@@ -690,7 +731,12 @@ async def list_end_user(
 
         returned_response: List[LiteLLM_EndUserTable] = []
         for item in response:
-            returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
+            item_dict = item.model_dump()
+            # Remove reverse relations from object_permission
+            if item_dict.get("object_permission"):
+                for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+                    item_dict["object_permission"].pop(field, None)
+            returned_response.append(LiteLLM_EndUserTable(**item_dict))
         return returned_response
     
     except Exception as e:
