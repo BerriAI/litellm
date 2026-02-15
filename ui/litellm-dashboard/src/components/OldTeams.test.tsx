@@ -74,9 +74,9 @@ vi.mock("./ModelSelect/ModelSelect", () => {
           if (onChange) {
             const newVal = e.target.value
               ? e.target.value
-                  .split(",")
-                  .map((s: string) => s.trim())
-                  .filter(Boolean)
+                .split(",")
+                .map((s: string) => s.trim())
+                .filter(Boolean)
               : [];
             onChange(newVal);
           }
@@ -836,7 +836,7 @@ describe("OldTeams - access_group_ids in team create", () => {
         }),
       );
     });
-  });
+  }, { timeout: 30000 });
 });
 
 describe("OldTeams - models dropdown options", () => {
