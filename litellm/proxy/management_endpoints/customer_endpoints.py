@@ -19,11 +19,13 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_daily_activity import \
+    get_daily_activity
+from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission, handle_update_object_permission_common)
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    SpendAnalyticsPaginatedResponse,
-)
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.types.proxy.management_endpoints.common_daily_activity import \
+    SpendAnalyticsPaginatedResponse
 
 router = APIRouter()
 
@@ -107,9 +109,8 @@ async def unblock_user(data: BlockUsers):
     ```
     """
     try:
-        from enterprise.enterprise_hooks.blocked_user_list import (
-            _ENTERPRISE_BlockedUserList,
-        )
+        from enterprise.enterprise_hooks.blocked_user_list import \
+            _ENTERPRISE_BlockedUserList
     except ImportError:
         raise HTTPException(
             status_code=400,
@@ -200,6 +201,7 @@ async def new_end_user(
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     - spend: Optional[float] - Specify initial spend for a given customer.
     - budget_reset_at: Optional[str] - Specify the date and time when the budget should be reset.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permission. Example - {"mcp_servers": ["server_1", "server_2"], "vector_stores": ["vector_store_1"], "agents": ["agent_1"]}. IF null or {} then no object permission.
     
     
     - Allow specifying allowed regions 
@@ -233,11 +235,8 @@ async def new_end_user(
     - end-user object
     - currently allowed models 
     """
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_admin_name,
-        llm_router,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import (litellm_proxy_admin_name,
+                                            llm_router, prisma_client)
 
     if prisma_client is None:
         raise HTTPException(
@@ -289,10 +288,16 @@ async def new_end_user(
             if k not in BudgetNewRequest.model_fields.keys():
                 new_end_user_obj[k] = v
 
+        ## Handle Object Permission - MCP Servers, Vector Stores etc.
+        new_end_user_obj = await _set_object_permission(
+            data_json=new_end_user_obj,
+            prisma_client=prisma_client,
+        )
+
         ## WRITE TO DB ##
         end_user_record = await prisma_client.db.litellm_endusertable.create(
             data=new_end_user_obj,  # type: ignore
-            include={"litellm_budget_table": True},
+            include={"litellm_budget_table": True, "object_permission": True},
         )
 
         return end_user_record
@@ -351,7 +356,7 @@ async def end_user_info(
             )
 
         user_info = await prisma_client.db.litellm_endusertable.find_first(
-            where={"user_id": end_user_id}, include={"litellm_budget_table": True}
+            where={"user_id": end_user_id}, include={"litellm_budget_table": True, "object_permission": True}
         )
 
         if user_info is None:
@@ -401,6 +406,7 @@ async def update_end_user(
     - default_model: Optional[str] = (
         None  # if no equivalent model in allowed region - default all requests to this model
     )
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] = Customer-specific object permission. Example - {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}. IF null or {} then no object permission.
 
     Example curl:
     ```
@@ -416,7 +422,8 @@ async def update_end_user(
     ```
     """
 
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import (litellm_proxy_admin_name,
+                                            prisma_client)
 
     try:
         data_json: dict = data.json()
@@ -467,6 +474,21 @@ async def update_end_user(
             elif k in LiteLLM_EndUserTable.model_fields.keys():
                 update_end_user_table_data[k] = v
 
+        ## Handle object permission updates (MCP servers, vector stores, etc.)
+        if "object_permission" in non_default_values:
+            existing_object_permission_id = (
+                end_user_table_data_typed.object_permission_id
+                if end_user_table_data_typed is not None
+                else None
+            )
+            object_permission_id = await handle_update_object_permission_common(
+                data_json=non_default_values,
+                existing_object_permission_id=existing_object_permission_id,
+                prisma_client=prisma_client,
+            )
+            if object_permission_id is not None:
+                update_end_user_table_data["object_permission_id"] = object_permission_id
+
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
             if end_user_budget_table is None:
@@ -502,7 +524,7 @@ async def update_end_user(
             update_end_user_table_data["user_id"] = data.user_id  # type: ignore
             verbose_proxy_logger.debug("In update customer, user_id condition block.")
             response = await prisma_client.db.litellm_endusertable.update(
-                where={"user_id": data.user_id}, data=update_end_user_table_data, include={"litellm_budget_table": True}  # type: ignore
+                where={"user_id": data.user_id}, data=update_end_user_table_data, include={"litellm_budget_table": True, "object_permission": True}  # type: ignore
             )
             if response is None:
                 raise ValueError(
@@ -663,7 +685,7 @@ async def list_end_user(
             )
 
         response = await prisma_client.db.litellm_endusertable.find_many(
-            include={"litellm_budget_table": True}
+            include={"litellm_budget_table": True, "object_permission": True}
         )
 
         returned_response: List[LiteLLM_EndUserTable] = []
@@ -706,9 +728,7 @@ async def get_customer_daily_activity(
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(
