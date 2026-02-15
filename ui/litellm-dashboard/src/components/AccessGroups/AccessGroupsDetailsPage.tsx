@@ -105,11 +105,11 @@ export function AccessGroupDetail({
         <Flex align="center" gap={8}>
           <LayersIcon size={16} />
           Models
-          <Tag style={{ marginInlineEnd: 0 }}>{modelIds.length}</Tag>
+          <Tag style={{ marginInlineEnd: 0 }}>{modelIds?.length}</Tag>
         </Flex>
       ),
       children:
-        modelIds.length > 0 ? (
+        modelIds?.length > 0 ? (
           <List
             grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
             dataSource={modelIds}
@@ -131,11 +131,11 @@ export function AccessGroupDetail({
         <Flex align="center" gap={8}>
           <ServerIcon size={16} />
           MCP Servers
-          <Tag>{mcpServerIds.length}</Tag>
+          <Tag>{mcpServerIds?.length}</Tag>
         </Flex>
       ),
       children:
-        mcpServerIds.length > 0 ? (
+        mcpServerIds?.length > 0 ? (
           <List
             grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
             dataSource={mcpServerIds}
@@ -157,11 +157,11 @@ export function AccessGroupDetail({
         <Flex align="center" gap={8}>
           <BotIcon size={16} />
           Agents
-          <Tag>{agentIds.length}</Tag>
+          <Tag>{agentIds?.length}</Tag>
         </Flex>
       ),
       children:
-        agentIds.length > 0 ? (
+        agentIds?.length > 0 ? (
           <List
             grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
             dataSource={agentIds}
@@ -253,21 +253,21 @@ export function AccessGroupDetail({
               <Flex align="center" gap={8}>
                 <KeyIcon size={16} />
                 Attached Keys
-                <Tag>{keyIds.length}</Tag>
+                <Tag>{keyIds?.length}</Tag>
               </Flex>
             }
             extra={
-              keyIds.length > MAX_PREVIEW ? (
+              keyIds?.length > MAX_PREVIEW ? (
                 <Button
                   type="link"
                   onClick={() => setShowAllKeys(!showAllKeys)}
                 >
-                  {showAllKeys ? "Show Less" : `View All (${keyIds.length})`}
+                  {showAllKeys ? "Show Less" : `View All (${keyIds?.length})`}
                 </Button>
               ) : null
             }
           >
-            {keyIds.length > 0 ? (
+            {keyIds?.length > 0 ? (
               <Flex wrap="wrap" gap={8}>
                 {displayedKeys.map((id) => (
                   <Tag key={id}>
@@ -293,23 +293,23 @@ export function AccessGroupDetail({
               <Flex align="center" gap={8}>
                 <UsersIcon size={16} />
                 Attached Teams
-                <Tag>{teamIds.length}</Tag>
+                <Tag>{teamIds?.length}</Tag>
               </Flex>
             }
             extra={
-              teamIds.length > MAX_PREVIEW ? (
+              teamIds?.length > MAX_PREVIEW ? (
                 <Button
                   type="link"
                   onClick={() => setShowAllTeams(!showAllTeams)}
                 >
                   {showAllTeams
                     ? "Show Less"
-                    : `View All (${teamIds.length})`}
+                    : `View All (${teamIds?.length})`}
                 </Button>
               ) : null
             }
           >
-            {teamIds.length > 0 ? (
+            {teamIds?.length > 0 ? (
               <Flex wrap="wrap" gap={8}>
                 {displayedTeams.map((id) => (
                   <Tag key={id}>
