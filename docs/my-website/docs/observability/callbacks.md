@@ -16,6 +16,7 @@ liteLLM provides `input_callbacks`, `success_callbacks` and `failure_callbacks`,
 
 - [Lunary](https://lunary.ai/docs)
 - [Langfuse](https://langfuse.com/docs)
+- [Opik](https://www.comet.com/docs/opik/)
 - [LangSmith](https://www.langchain.com/langsmith)
 - [Helicone](https://docs.helicone.ai/introduction)
 - [Traceloop](https://traceloop.com/docs)
@@ -44,8 +45,8 @@ from litellm import completion
 
 # set callbacks
 litellm.input_callback=["sentry"] # for sentry breadcrumbing - logs the input being sent to the api
-litellm.success_callback=["posthog", "helicone", "langfuse", "lunary", "athina"]
-litellm.failure_callback=["sentry", "lunary", "langfuse"]
+litellm.success_callback=["posthog", "helicone", "langfuse", "opik", "lunary", "athina"]
+litellm.failure_callback=["sentry", "lunary", "langfuse", "opik"]
 
 ## set env variables
 os.environ['LUNARY_PUBLIC_KEY'] = ""
@@ -58,6 +59,9 @@ os.environ["ATHINA_API_KEY"] = ""
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LANGFUSE_HOST"] = ""
+os.environ["OPIK_API_KEY"] = ""
+os.environ["OPIK_WORKSPACE"] = ""
+os.environ["OPIK_PROJECT_NAME"] = ""
 
 response = completion(model="gpt-3.5-turbo", messages=messages)
 ```
