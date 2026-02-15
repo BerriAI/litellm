@@ -378,7 +378,8 @@ async def retrieve_batch(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
 
-            # Resolve raw input_file_id to unified ID
+            # async_post_call_success_hook replaces batch.id and output_file_id with unified IDs
+            # but not input_file_id. Look up the unified ID from flat_model_file_ids.
             if (
                 unified_batch_id
                 and hasattr(response, "input_file_id")
@@ -496,7 +497,8 @@ async def retrieve_batch(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
 
-        # Resolve raw input_file_id to unified ID
+        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id (terminal state path)
+        # Same as above — resolve raw provider input_file_id to unified ID.
         if (
             unified_batch_id
             and hasattr(response, "input_file_id")

@@ -107,8 +107,9 @@ class CheckBatchCost:
                     f"Batch ID: {batch_id} is complete, tracking cost and usage"
                 )
 
-                # Extract raw provider file ID from the unified file ID
-                # (async_post_call_success_hook may have replaced output_file_id with a unified ID)
+                # This background job runs as default_user_id, so going through the HTTP endpoint
+                # would trigger check_managed_file_id_access and get 403. Instead, extract the raw
+                # provider file ID and call afile_content directly with deployment credentials.
                 raw_output_file_id = response.output_file_id
                 decoded = _is_base64_encoded_unified_file_id(raw_output_file_id)
                 if decoded:
@@ -117,9 +118,6 @@ class CheckBatchCost:
                     except (IndexError, AttributeError):
                         pass
 
-                # Call litellm.afile_content directly with deployment credentials,
-                # bypassing the managed files access-control hooks that would
-                # reject this background job's default_user_id identity
                 credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
                 _file_content = await afile_content(
                     file_id=raw_output_file_id,

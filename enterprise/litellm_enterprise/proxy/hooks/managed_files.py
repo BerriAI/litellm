@@ -230,7 +230,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_file:
             return managed_file.created_by == user_id
-        return True  # allow through when record not found — downstream will return 404
+        # When DB record is missing (file was deleted), allow through so downstream returns 404.
+        # Matches can_user_call_unified_object_id which also returns True for missing records.
+        return True
 
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
@@ -911,7 +913,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         )
                         setattr(response, file_attr, unified_file_id)
                         
-                        # Fetch the actual file object from the provider
+                        # Use llm_router credentials when available. Without credentials,
+                        # Azure and other auth-required providers return 500/401.
                         file_object = None
                         try:
                             from litellm.proxy.proxy_server import llm_router as _llm_router
@@ -1010,6 +1013,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
         
         # Case 2: Managed file and the file object exists in the database
+        # The stored file_object has the raw provider ID. Replace with the unified ID
+        # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
         if stored_file_object and stored_file_object.file_object:
             stored_file_object.file_object.id = file_id
             return stored_file_object.file_object
