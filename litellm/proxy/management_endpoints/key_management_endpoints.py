@@ -3348,6 +3348,10 @@ async def regenerate_key_fn(  # noqa: PLR0915
         )
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
+        # Normalize litellm_changed_by: if it's a Header object or not a string, convert to None
+        if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
+            litellm_changed_by = None
+
         # Save the old key record to deleted table before regeneration.
         # This preserves key_alias and team_id metadata for historical spend records.
         # If this fails, abort the regeneration to avoid permanently losing the
