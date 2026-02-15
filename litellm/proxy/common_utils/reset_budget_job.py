@@ -76,12 +76,13 @@ class ResetBudgetJob:
         Resets the spend for keys linked to budget tiers that are being reset.
 
         This handles keys that have budget_id but no budget_duration set on the key
-        itself (e.g. keys created before the fix to inherit budget_duration from
-        the linked budget tier).
+        itself. Keys with budget_id rely on their linked budget tier's reset schedule
+        rather than having their own budget_duration.
 
         Keys that have their own budget_duration are already handled by
         reset_budget_for_litellm_keys() and are excluded here to avoid
         double-resetting.
+        """
         """
         budget_ids = [
             budget.budget_id
