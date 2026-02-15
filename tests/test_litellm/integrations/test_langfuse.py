@@ -21,6 +21,9 @@ from litellm.types.integrations.langfuse import *
 
 class TestLangfuseUsageDetails(unittest.TestCase):
     def setUp(self):
+        # Save global Langfuse client counter to restore after test
+        self._original_langfuse_clients_count = litellm.initialized_langfuse_clients
+
         # Set up environment variables for testing
         self.env_patcher = patch.dict(
             "os.environ",
@@ -129,6 +132,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             self.logger.Langfuse = None
             # Delete logger instance to ensure complete cleanup
             del self.logger
+
+        # Restore global Langfuse client counter to prevent cross-test pollution
+        litellm.initialized_langfuse_clients = self._original_langfuse_clients_count
 
         self.env_patcher.stop()
         self.langfuse_module_patcher.stop()  # patch.dict automatically restores sys.modules
