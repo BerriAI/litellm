@@ -5,17 +5,29 @@ This module provides utilities to:
 1. Load beta header configuration from JSON (mapping of supported headers per provider)
 2. Filter and map beta headers based on provider support
 3. Handle provider-specific header name mappings (e.g., advanced-tool-use -> tool-search-tool)
+4. Support remote fetching and caching similar to model cost map
 
 Design:
 - JSON config contains mapping of beta headers for each provider
 - Keys are input header names, values are provider-specific header names (or null if unsupported)
 - Only headers present in mapping keys with non-null values can be forwarded
 - This enforces stricter validation than the previous unsupported list approach
+
+Configuration can be loaded from:
+- Remote URL (default): Fetches from GitHub repository
+- Local file: Set LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True to use bundled config only
+
+Environment Variables:
+- LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS: Set to "True" to disable remote fetching
+- LITELLM_ANTHROPIC_BETA_HEADERS_URL: Custom URL for remote config (optional)
 """
 
 import json
 import os
+from importlib.resources import files
 from typing import Dict, List, Optional, Set
+
+import httpx
 
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 
@@ -23,10 +35,137 @@ from litellm.litellm_core_utils.litellm_logging import verbose_logger
 _BETA_HEADERS_CONFIG: Optional[Dict] = None
 
 
+class GetAnthropicBetaHeadersConfig:
+    """
+    Handles fetching, validating, and loading the Anthropic beta headers configuration.
+    
+    Similar to GetModelCostMap, this class manages the lifecycle of the beta headers
+    configuration with support for remote fetching and local fallback.
+    """
+
+    @staticmethod
+    def load_local_beta_headers_config() -> Dict:
+        """Load the local backup beta headers config bundled with the package."""
+        try:
+            content = json.loads(
+                files("litellm")
+                .joinpath("anthropic_beta_headers_config.json")
+                .read_text(encoding="utf-8")
+            )
+            return content
+        except Exception as e:
+            verbose_logger.error(f"Failed to load local beta headers config: {e}")
+            # Return empty config as fallback
+            return {
+                "anthropic": {},
+                "azure_ai": {},
+                "bedrock": {},
+                "bedrock_converse": {},
+                "vertex_ai": {},
+                "provider_aliases": {}
+            }
+
+    @staticmethod
+    def _check_is_valid_dict(fetched_config: dict) -> bool:
+        """Check if fetched config is a non-empty dict with expected structure."""
+        if not isinstance(fetched_config, dict):
+            verbose_logger.warning(
+                "LiteLLM: Fetched beta headers config is not a dict (type=%s). "
+                "Falling back to local backup.",
+                type(fetched_config).__name__,
+            )
+            return False
+
+        if len(fetched_config) == 0:
+            verbose_logger.warning(
+                "LiteLLM: Fetched beta headers config is empty. "
+                "Falling back to local backup.",
+            )
+            return False
+
+        # Check for at least one provider key
+        provider_keys = ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai"]
+        has_provider = any(key in fetched_config for key in provider_keys)
+        
+        if not has_provider:
+            verbose_logger.warning(
+                "LiteLLM: Fetched beta headers config missing provider keys. "
+                "Falling back to local backup.",
+            )
+            return False
+
+        return True
+
+    @classmethod
+    def validate_beta_headers_config(cls, fetched_config: dict) -> bool:
+        """
+        Validate the integrity of a fetched beta headers config.
+        
+        Returns True if all checks pass, False otherwise.
+        """
+        return cls._check_is_valid_dict(fetched_config)
+
+    @staticmethod
+    def fetch_remote_beta_headers_config(url: str, timeout: int = 5) -> dict:
+        """
+        Fetch the beta headers config from a remote URL.
+        
+        Returns the parsed JSON dict. Raises on network/parse errors
+        (caller is expected to handle).
+        """
+        response = httpx.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+
+
+def get_beta_headers_config(url: str) -> dict:
+    """
+    Public entry point — returns the beta headers config dict.
+    
+    1. If ``LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS`` is set, uses the local backup only.
+    2. Otherwise fetches from ``url``, validates integrity, and falls back
+       to the local backup on any failure.
+    
+    Args:
+        url: URL to fetch the remote beta headers configuration from
+        
+    Returns:
+        Dict containing the beta headers configuration
+    """
+    # Check if local-only mode is enabled
+    if os.getenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "").lower() == "true":
+        # verbose_logger.debug("Using local Anthropic beta headers config (LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True)")
+        return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+    try:
+        content = GetAnthropicBetaHeadersConfig.fetch_remote_beta_headers_config(url)
+    except Exception as e:
+        verbose_logger.warning(
+            "LiteLLM: Failed to fetch remote beta headers config from %s: %s. "
+            "Falling back to local backup.",
+            url,
+            str(e),
+        )
+        return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+    # Validate the fetched config
+    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content):
+        verbose_logger.warning(
+            "LiteLLM: Fetched beta headers config failed integrity check. "
+            "Using local backup instead. url=%s",
+            url,
+        )
+        return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+    return content
+
+
 def _load_beta_headers_config() -> Dict:
     """
-    Load the beta headers configuration from JSON file.
-    Uses caching to avoid repeated file reads.
+    Load the beta headers configuration.
+    Uses caching to avoid repeated fetches/file reads.
+    
+    This function is called by all public API functions and manages the global cache.
     
     Returns:
         Dict containing the beta headers configuration
@@ -36,26 +175,27 @@ def _load_beta_headers_config() -> Dict:
     if _BETA_HEADERS_CONFIG is not None:
         return _BETA_HEADERS_CONFIG
     
-    config_path = os.path.join(
-        os.path.dirname(__file__),
-        "anthropic_beta_headers_config.json"
-    )
+    # Get the URL from environment or use default
+    from litellm import anthropic_beta_headers_url
     
-    try:
-        with open(config_path, "r") as f:
-            _BETA_HEADERS_CONFIG = json.load(f)
-            verbose_logger.debug(f"Loaded beta headers config from {config_path}")
-            return _BETA_HEADERS_CONFIG
-    except Exception as e:
-        verbose_logger.error(f"Failed to load beta headers config: {e}")
-        # Return empty config as fallback (empty mappings)
-        return {
-            "anthropic": {},
-            "azure_ai": {},
-            "bedrock": {},
-            "bedrock_converse": {},
-            "vertex_ai": {}
-        }
+    _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
+    verbose_logger.debug("Loaded and cached beta headers config")
+    
+    return _BETA_HEADERS_CONFIG
+
+
+def reload_beta_headers_config() -> Dict:
+    """
+    Force reload the beta headers configuration from source (remote or local).
+    Clears the cache and fetches fresh configuration.
+    
+    Returns:
+        Dict containing the newly loaded beta headers configuration
+    """
+    global _BETA_HEADERS_CONFIG
+    _BETA_HEADERS_CONFIG = None
+    verbose_logger.info("Reloading beta headers config (cache cleared)")
+    return _load_beta_headers_config()
 
 
 def get_provider_name(provider: str) -> str:

@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -136,10 +136,17 @@ async def vector_store_search(
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
 
+    # Check for legacy vector store registry (non-managed vector stores)
     data = _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
+    # The managed_vector_stores pre-call hook will handle:
+    # 1. Decoding managed vector store IDs
+    # 2. Extracting model and provider resource ID
+    # 3. Setting up proper routing
+    # 4. Authentication checks
+    
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -181,6 +188,14 @@ async def vector_store_create(
 
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/create
+    
+    Supports target_model_names parameter for creating vector stores across multiple models:
+    ```json
+    {
+        "name": "my-vector-store",
+        "target_model_names": "gpt-4,gemini-2.0"
+    }
+    ```
     """
     from litellm.proxy.proxy_server import (
         _read_request_body,
@@ -198,6 +213,47 @@ async def vector_store_create(
     )
 
     data = await _read_request_body(request=request)
+    
+    # Check for target_model_names parameter
+    target_model_names = data.pop("target_model_names", None)
+    
+    if target_model_names:
+        # Use managed vector stores for multi-model support
+        if isinstance(target_model_names, str):
+            target_model_names_list = [m.strip() for m in target_model_names.split(",")]
+        elif isinstance(target_model_names, list):
+            target_model_names_list = target_model_names
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="target_model_names must be a comma-separated string or list of model names",
+            )
+        
+        # Get managed vector stores hook
+        managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
+        if managed_vector_stores is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Managed vector stores not configured. Please ensure the proxy is initialized with database support.",
+            )
+        
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500,
+                detail="LLM Router not initialized. Ensure models are added to proxy.",
+            )
+        
+        # Create vector store across multiple models
+        response = await managed_vector_stores.acreate_vector_store(
+            create_request=data,
+            llm_router=llm_router,
+            target_model_names_list=target_model_names_list,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            user_api_key_dict=user_api_key_dict,
+        )
+        
+        return response
+    
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(

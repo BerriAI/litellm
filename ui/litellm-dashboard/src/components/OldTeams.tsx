@@ -38,6 +38,7 @@ import {
 import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
+import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
@@ -1375,6 +1376,21 @@ const Teams: React.FC<TeamProps> = ({
                             label: name,
                           }))}
                         />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Access Groups{" "}
+                            <Tooltip title="Assign access groups to this team. Access groups control which models, MCP servers, and agents this team can use">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="access_group_ids"
+                        className="mt-8"
+                        help="Select access groups to assign to this team"
+                      >
+                        <AccessGroupSelector placeholder="Select access groups (optional)" />
                       </Form.Item>
                       <Form.Item
                         label={

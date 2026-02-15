@@ -1053,6 +1053,7 @@ async def test_mcp_server_manager_access_groups_from_config():
         mcp_server_manager_mod.global_mcp_server_manager = original_manager
 
 
+@pytest.mark.asyncio
 async def test_mcp_server_manager_config_integration_with_database():
     """
     Test that config-based servers properly integrate with database servers,
