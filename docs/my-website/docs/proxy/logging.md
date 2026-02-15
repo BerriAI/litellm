@@ -7,6 +7,7 @@ import TabItem from '@theme/TabItem';
 Log Proxy input, output, and exceptions using:
 
 - Langfuse
+- Opik
 - OpenTelemetry
 - GCS, s3, Azure (Blob) Buckets
 - AWS SQS

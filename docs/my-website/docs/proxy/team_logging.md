@@ -17,6 +17,7 @@ Team 3 -> Disabled Logging (for GDPR compliance)
 
 ## Supported Logging Integrations
 - `langfuse`
+- `opik`
 - `gcs_bucket`
 - `langsmith`
 - `arize`
@@ -104,12 +105,16 @@ curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/cal
 
 | Field | Supported Values | Notes |
 |-------|------------------|-------|
-| `callback_name` | `"langfuse"`, `"gcs_bucket"`| Currently only supports `"langfuse"`, `"gcs_bucket"` |
+| `callback_name` | `"langfuse"`, `"opik"`, `"gcs_bucket"`| Currently only supports `"langfuse"`, `"opik"`, `"gcs_bucket"` |
 | `callback_type` | `"success"`, `"failure"`, `"success_and_failure"` | |
 | `callback_vars` | | dict of callback settings |
 | &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_public_key` | string | Required for Langfuse |
 | &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_secret_key` | string | Required for Langfuse |
 | &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_host` | string | Optional for Langfuse (defaults to https://cloud.langfuse.com) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`opik_api_key` | string | Required for Opik Cloud |
+| &nbsp;&nbsp;&nbsp;&nbsp;`opik_workspace` | string | Required for Opik Cloud |
+| &nbsp;&nbsp;&nbsp;&nbsp;`opik_project_name` | string | Optional for Opik |
+| &nbsp;&nbsp;&nbsp;&nbsp;`opik_url_override` | string | Optional for Opik (defaults to https://www.comet.com/opik/api) |
 | &nbsp;&nbsp;&nbsp;&nbsp;`gcs_bucket_name` | string | Required for GCS Bucket. Name of your GCS bucket |
 | &nbsp;&nbsp;&nbsp;&nbsp;`gcs_path_service_account` | string | Required for GCS Bucket. Path to your service account json |
 
@@ -548,8 +553,5 @@ curl -i http://localhost:4000/v1/chat/completions \
     ]
   }'
 ```
-
-
-
 
 

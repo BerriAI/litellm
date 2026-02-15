@@ -1170,6 +1170,31 @@ def test_team_callback_metadata_none_values(none_key):
     assert none_key not in resp
 
 
+def test_team_callback_metadata_accepts_opik_callback_vars():
+    from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata
+
+    callback_vars = {
+        "opik_api_key": "opik_api_key",
+        "opik_workspace": "my-workspace",
+        "opik_project_name": "my-project",
+        "opik_url_override": "https://www.comet.com/opik/api",
+    }
+
+    add_resp = AddTeamCallback(
+        callback_name="opik",
+        callback_type="success_and_failure",
+        callback_vars=callback_vars,
+    )
+    team_resp = TeamCallbackMetadata(
+        success_callback=["opik"],
+        failure_callback=[],
+        callback_vars=callback_vars,
+    )
+
+    assert add_resp.callback_vars == callback_vars
+    assert team_resp.callback_vars == callback_vars
+
+
 def test_proxy_config_state_post_init_callback_call():
     """
     Ensures team_id is still in config, after callback is called

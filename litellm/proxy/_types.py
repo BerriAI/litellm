@@ -1651,7 +1651,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
     callbacks: Optional[List[str]] = []
-    # for now - only supported for langfuse
+    # callback_vars for dynamic logging params (langfuse, opik, gcs_bucket, etc.)
     callback_vars: Optional[Dict[str, str]] = {}
 
     @model_validator(mode="before")
@@ -2783,6 +2783,17 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "LANGFUSE_PUBLIC_KEY",
             "LANGFUSE_SECRET_KEY",
             "LANGFUSE_HOST",
+        ],
+    )
+
+    opik: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="opik",
+        ui_callback_name="Opik",
+        litellm_callback_params=[
+            "OPIK_API_KEY",
+            "OPIK_WORKSPACE",
+            "OPIK_PROJECT_NAME",
+            "OPIK_URL_OVERRIDE",
         ],
     )
 

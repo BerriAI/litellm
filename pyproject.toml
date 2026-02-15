@@ -163,6 +163,7 @@ opentelemetry-api = "^1.28.0"
 opentelemetry-sdk = "^1.28.0"
 opentelemetry-exporter-otlp = "^1.28.0"
 langfuse = "^2.45.0"
+opik = { version = "^1.10.13", python = ">=3.10" }
 fastapi-offline = "^1.7.3"
 
 [tool.poetry.group.proxy-dev.dependencies]
@@ -190,6 +191,7 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "-p no:opik -p no:opik.plugins.pytest"
 retries = 20
 retry_delay = 5
 markers = [

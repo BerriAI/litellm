@@ -485,7 +485,7 @@ except OpenAIError as e:
 ```
 
 ### Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-LiteLLM exposes pre defined callbacks to send data to MLflow, Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+LiteLLM exposes pre defined callbacks to send data to MLflow, Lunary, Langfuse, Opik, Helicone, Promptlayer, Traceloop, Slack
 
 ```python
 from litellm import completion
@@ -499,7 +499,7 @@ os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "mlflow", "langfuse", "helicone"] # log input/output to lunary, mlflow, langfuse, helicone
+litellm.success_callback = ["lunary", "mlflow", "langfuse", "opik", "helicone"] # log input/output to lunary, mlflow, langfuse, opik, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])

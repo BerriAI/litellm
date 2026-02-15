@@ -32,6 +32,7 @@ mcp==1.25.0 ; python_version >= "3.10"    # for MCP server
 # google-generativeai removed - deprecated, replaced by google-genai (line 21)
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
+opik>=1.10.13,<2.0.0 ; python_version >= "3.10" # for opik self-hosted logging / native client
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 ddtrace==2.19.0      # for advanced DD tracing / profiling
 orjson==3.11.7 # fast /embedding responses

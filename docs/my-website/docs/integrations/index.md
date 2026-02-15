@@ -10,6 +10,7 @@ This section covers integrations with various tools and services that can be use
 
 ## Observability & Monitoring
 - **[Langfuse](../observability/langfuse_integration.md)** - LLM observability and analytics
+- **[Opik](../observability/opik_integration.md)** - LLM observability, tracing, and evaluation
 - **[Prometheus](../proxy/prometheus.md)** - Metrics collection and monitoring
 - **[PagerDuty](../proxy/pagerduty.md)** - Incident response and alerting
 - **[Datadog](../observability/datadog.md)**
