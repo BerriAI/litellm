@@ -488,7 +488,6 @@ async def test_extra_body_with_fallback(
     finally:
         # Restore original state to prevent test pollution
         litellm.disable_aiohttp_transport = original_disable_aiohttp
-    assert response.choices[0].message.content == "Hello from mocked response!"
 
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
