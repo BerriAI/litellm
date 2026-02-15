@@ -9,7 +9,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIGPTConfig,
+    OpenAIChatCompletionStreamingHandler,
+)
 
 
 class TestOpenAIGPTConfig:
@@ -135,6 +138,75 @@ class TestGetOptionalParamsIntegration:
         # Both should include user
         assert regular_params.get("user") == "my-end-user"
         assert responses_params.get("user") == "my-end-user"
+
+
+class TestOpenAIChatCompletionStreamingHandler:
+    """Tests for OpenAIChatCompletionStreamingHandler.chunk_parser()"""
+
+    def test_chunk_parser_preserves_usage(self):
+        """
+        Test that chunk_parser preserves the usage field from streaming chunks.
+
+        """
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        usage_chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 13797,
+                "completion_tokens": 350,
+                "total_tokens": 14147,
+            },
+        }
+
+        result = handler.chunk_parser(usage_chunk)
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 13797
+        assert result.usage.completion_tokens == 350
+        assert result.usage.total_tokens == 14147
+
+    def test_chunk_parser_without_usage(self):
+        """Test that chunk_parser works normally for chunks without usage."""
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+
+        assert result.id == "gen-123"
+        assert result.choices[0].delta.content == "Hello"
+        assert not hasattr(result, "usage") or result.usage is None
+
+
+class TestPromptCacheKeyIntegration:
+    """Tests for prompt_cache_key support"""
 
     def test_prompt_cache_key_in_optional_params(self):
         """Test that 'prompt_cache_key' flows through get_optional_params for OpenAI models."""
