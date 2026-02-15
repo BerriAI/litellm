@@ -61,6 +61,7 @@ class OpikLogger(CustomBatchLogger):
             )
             or "https://www.comet.com/opik/api"
         )
+        self.opik_base_url: str = opik_base_url
         opik_api_key: Optional[str] = utils.get_opik_config_variable(
             "api_key", user_value=kwargs.get("api_key", None), default_value=None
         )
@@ -97,6 +98,36 @@ class OpikLogger(CustomBatchLogger):
 
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
+    def _get_dynamic_opik_params(self, kwargs: Dict[str, Any]) -> Dict[str, str]:
+        standard_callback_dynamic_params = kwargs.get(
+            "standard_callback_dynamic_params", {}
+        ) or {}
+        dynamic_params = {}
+        for key in (
+            "opik_api_key",
+            "opik_workspace",
+            "opik_project_name",
+            "opik_url_override",
+        ):
+            value = standard_callback_dynamic_params.get(key)
+            if isinstance(value, str) and value:
+                dynamic_params[key] = value
+        return dynamic_params
+
+    def _resolve_request_config(
+        self, kwargs: Dict[str, Any]
+    ) -> tuple[str, str, Dict[str, str], bool]:
+        dynamic_params = self._get_dynamic_opik_params(kwargs)
+        opik_project_name = dynamic_params.get("opik_project_name", self.opik_project_name)
+        opik_base_url = dynamic_params.get("opik_url_override", self.opik_base_url)
+        opik_workspace = dynamic_params.get("opik_workspace", self.opik_workspace)
+        opik_api_key = dynamic_params.get("opik_api_key", self.opik_api_key)
+        headers = self._create_opik_headers(
+            opik_workspace=opik_workspace,
+            opik_api_key=opik_api_key,
+        )
+        return opik_project_name, opik_base_url, headers, len(dynamic_params) > 0
+
     async def async_log_success_event(
         self,
         kwargs: Dict[str, Any],
@@ -108,16 +139,22 @@ class OpikLogger(CustomBatchLogger):
             if _should_skip_event(kwargs):
                 return
 
+            opik_project_name, opik_base_url, request_headers, has_dynamic_params = (
+                self._resolve_request_config(kwargs)
+            )
+            trace_url = f"{opik_base_url}/v1/private/traces/batch"
+            span_url = f"{opik_base_url}/v1/private/spans/batch"
+
             # Build payload using the payload builder
             trace_payload, span_payload = opik_payload_builder.build_opik_payload(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
                 end_time=end_time,
-                project_name=self.opik_project_name,
+                project_name=opik_project_name,
             )
 
-            if self._opik_client is not None:
+            if self._opik_client is not None and not has_dynamic_params:
                 # Opik native client is available, use it to send data
                 if trace_payload is not None:
                     self._opik_client.trace(
@@ -150,6 +187,19 @@ class OpikLogger(CustomBatchLogger):
                     project_name=span_payload.project_name,
                     provider=span_payload.provider,
                     total_cost=span_payload.total_cost,
+                )
+            elif has_dynamic_params:
+                # Per-request team callback vars require per-request headers/endpoints.
+                if trace_payload is not None:
+                    await self._submit_batch(
+                        url=trace_url,
+                        headers=request_headers,
+                        batch={"traces": [trace_payload.__dict__]},
+                    )
+                await self._submit_batch(
+                    url=span_url,
+                    headers=request_headers,
+                    batch={"spans": [span_payload.__dict__]},
                 )
             else:
                 # Add payloads to LiteLLM queue
@@ -197,15 +247,21 @@ class OpikLogger(CustomBatchLogger):
             if _should_skip_event(kwargs):
                 return
 
+            opik_project_name, opik_base_url, request_headers, has_dynamic_params = (
+                self._resolve_request_config(kwargs)
+            )
+            trace_url = f"{opik_base_url}/v1/private/traces/batch"
+            span_url = f"{opik_base_url}/v1/private/spans/batch"
+
             # Build payload using the payload builder
             trace_payload, span_payload = opik_payload_builder.build_opik_payload(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
                 end_time=end_time,
-                project_name=self.opik_project_name,
+                project_name=opik_project_name,
             )
-            if self._opik_client is not None:
+            if self._opik_client is not None and not has_dynamic_params:
                 # Opik native client is available, use it to send data
                 if trace_payload is not None:
                     self._opik_client.trace(
@@ -243,15 +299,15 @@ class OpikLogger(CustomBatchLogger):
                 # Opik native client is not available, use LiteLLM queue to send data
                 if trace_payload is not None:
                     self._sync_send(
-                        url=self.trace_url,
-                        headers=self.headers,
+                        url=trace_url,
+                        headers=request_headers,
                         batch={"traces": [trace_payload.__dict__]},
                     )
 
                 # Always send span
                 self._sync_send(
-                    url=self.span_url,
-                    headers=self.headers,
+                    url=span_url,
+                    headers=request_headers,
                     batch={"spans": [span_payload.__dict__]},
                 )
         except Exception as e:
@@ -279,13 +335,20 @@ class OpikLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception(f"OpikLogger failed to send batch - {str(e)}")
 
-    def _create_opik_headers(self) -> Dict[str, str]:
+    def _create_opik_headers(
+        self,
+        opik_workspace: Optional[str] = None,
+        opik_api_key: Optional[str] = None,
+    ) -> Dict[str, str]:
         headers: Dict[str, str] = {}
-        if self.opik_workspace:
-            headers["Comet-Workspace"] = self.opik_workspace
+        workspace = opik_workspace if opik_workspace is not None else self.opik_workspace
+        api_key = opik_api_key if opik_api_key is not None else self.opik_api_key
 
-        if self.opik_api_key:
-            headers["authorization"] = self.opik_api_key
+        if workspace:
+            headers["Comet-Workspace"] = workspace
+
+        if api_key:
+            headers["authorization"] = api_key
         return headers
 
     async def async_send_batch(self) -> None:
