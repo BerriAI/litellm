@@ -32,9 +32,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         )
         self.env_patcher.start()
 
-        # Store original langfuse module if it exists for cleanup
-        self._original_langfuse_module = sys.modules.get("langfuse")
-
         # Create mock objects
         self.mock_langfuse_client = MagicMock()
         # Mock the client attribute to prevent errors during logger initialization
@@ -127,13 +124,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
     def tearDown(self):
         self.env_patcher.stop()
-        self.langfuse_module_patcher.stop()
-
-        # Restore original langfuse module or remove mock to prevent test pollution
-        if self._original_langfuse_module is not None:
-            sys.modules["langfuse"] = self._original_langfuse_module
-        elif "langfuse" in sys.modules:
-            del sys.modules["langfuse"]
+        self.langfuse_module_patcher.stop()  # patch.dict automatically restores sys.modules
 
     def test_langfuse_usage_details_type(self):
         """Test that LangfuseUsageDetails TypedDict is properly defined with the correct fields"""
