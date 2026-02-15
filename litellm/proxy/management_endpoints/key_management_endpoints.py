@@ -3160,7 +3160,7 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(
+async def regenerate_key_fn(  # noqa: PLR0915
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -3312,6 +3312,10 @@ async def regenerate_key_fn(
             )
 
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
+
+        # Normalize litellm_changed_by: if it's a Header object or not a string, convert to None
+        if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
+            litellm_changed_by = None
 
         # Save the old key record to deleted table before regeneration.
         # This preserves key_alias and team_id metadata for historical spend records.
