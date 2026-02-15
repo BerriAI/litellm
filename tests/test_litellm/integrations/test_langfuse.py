@@ -77,19 +77,12 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
 
         # Create a fresh logger instance for each test
-        # Force a clean state by clearing any class-level cached state
-        if hasattr(LangFuseLogger, '_langfuse_clients'):
-            LangFuseLogger._langfuse_clients = {}
-
         self.logger = LangFuseLogger()
 
         # Explicitly set the Langfuse client to our mock
         self.logger.Langfuse = self.mock_langfuse_client
         # Ensure langfuse_sdk_version is set correctly for _supports_* methods
         self.logger.langfuse_sdk_version = "3.0.0"
-        # Reset any cached client instances
-        if hasattr(self.logger, '_langfuse_client_cache'):
-            self.logger._langfuse_client_cache = None
 
         # Add the log_event_on_langfuse method to the instance
         def log_event_on_langfuse(
@@ -132,11 +125,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
     def tearDown(self):
         # Clean up logger instance to prevent state leakage
         if hasattr(self, 'logger'):
-            # Reset logger's Langfuse client
+            # Reset logger's Langfuse client to break any references
             self.logger.Langfuse = None
-            # Clear any cached state
-            if hasattr(self.logger, '_langfuse_client_cache'):
-                self.logger._langfuse_client_cache = None
+            # Delete logger instance to ensure complete cleanup
             del self.logger
 
         self.env_patcher.stop()
