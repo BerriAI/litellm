@@ -704,6 +704,52 @@ class TestErrorHandling:
 
             assert "Generic Guardrail API failed" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_network_error_defaults_to_fail_closed_when_unreachable_fallback_not_set(
+        self, mock_request_data_input
+    ):
+        """Test default behavior is fail_closed when unreachable_fallback is omitted"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["test"]},
+                    request_data=mock_request_data_input,
+                    input_type="request",
+                )
+
+            assert "Generic Guardrail API failed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_network_error_fail_open_allows_flow(self, mock_request_data_input):
+        """Test network error handling allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
 
 class TestMultimodalSupport:
     """Test multimodal (image) message handling and serialization"""

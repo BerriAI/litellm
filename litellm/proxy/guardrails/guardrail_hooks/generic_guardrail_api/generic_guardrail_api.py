@@ -9,6 +9,8 @@ import fnmatch
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
+import httpx
+
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException
@@ -34,17 +36,19 @@ if TYPE_CHECKING:
 GUARDRAIL_NAME = "generic_guardrail_api"
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
-_HEADER_VALUE_ALLOWLIST = frozenset({
-    "host",
-    "accept-encoding",
-    "connection",
-    "accept",
-    "content-type",
-    "user-agent",
-    "x-stainless-*",
-    "x-litellm-*",
-    "content-length",
-})
+_HEADER_VALUE_ALLOWLIST = frozenset(
+    {
+        "host",
+        "accept-encoding",
+        "connection",
+        "accept",
+        "content-type",
+        "user-agent",
+        "x-stainless-*",
+        "x-litellm-*",
+        "content-length",
+    }
+)
 
 # Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
 _HEADER_PRESENT_PLACEHOLDER = "[present]"
@@ -166,6 +170,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
+        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -194,6 +199,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         self.additional_provider_specific_params = (
             additional_provider_specific_params or {}
+        )
+
+        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
+            unreachable_fallback
         )
 
         # Set supported event hooks
@@ -313,7 +322,9 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
-        inbound_headers = _extract_inbound_headers(request_data=request_data, logging_obj=logging_obj)
+        inbound_headers = _extract_inbound_headers(
+            request_data=request_data, logging_obj=logging_obj
+        )
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
@@ -387,6 +398,36 @@ class GenericGuardrailAPI(CustomGuardrail):
         except GuardrailRaisedException:
             # Re-raise guardrail exceptions as-is
             raise
+        except httpx.RequestError as e:
+            # Guardrail endpoint is unreachable (DNS/connect/timeout/etc)
+            if getattr(self, "unreachable_fallback", "fail_closed") == "fail_open":
+                verbose_proxy_logger.critical(
+                    "Generic Guardrail API unreachable (fail-open). Proceeding without guardrail. "
+                    "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
+                    getattr(self, "guardrail_name", None),
+                    getattr(self, "api_base", None),
+                    input_type,
+                    (
+                        getattr(logging_obj, "litellm_call_id", None)
+                        if logging_obj
+                        else None
+                    ),
+                    (
+                        getattr(logging_obj, "litellm_trace_id", None)
+                        if logging_obj
+                        else None
+                    ),
+                    exc_info=True,
+                )
+                # Keep flow going - treat as action=NONE (no modifications)
+                return_inputs: GenericGuardrailAPIInputs = {}
+                return_inputs.update(inputs)
+                return return_inputs
+
+            verbose_proxy_logger.error(
+                "Generic Guardrail API: failed to make request: %s", str(e)
+            )
+            raise Exception(f"Generic Guardrail API failed: {str(e)}")
         except Exception as e:
             verbose_proxy_logger.error(
                 "Generic Guardrail API: failed to make request: %s", str(e)
