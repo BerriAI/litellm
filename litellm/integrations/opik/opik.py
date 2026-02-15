@@ -296,7 +296,7 @@ class OpikLogger(CustomBatchLogger):
                     total_cost=span_payload.total_cost,
                 )
             else:
-                # Opik native client is not available, use LiteLLM queue to send data
+                # Native client unavailable or dynamic params require per-request HTTP sends.
                 if trace_payload is not None:
                     self._sync_send(
                         url=trace_url,

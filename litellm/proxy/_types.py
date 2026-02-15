@@ -1651,7 +1651,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
     callbacks: Optional[List[str]] = []
-    # for now - only supported for langfuse
+    # callback_vars for dynamic logging params (langfuse, opik, gcs_bucket, etc.)
     callback_vars: Optional[Dict[str, str]] = {}
 
     @model_validator(mode="before")
