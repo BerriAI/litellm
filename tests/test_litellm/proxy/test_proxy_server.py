@@ -262,6 +262,10 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
         "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
         lambda *args, **kwargs: False,
     )
+    # Clear SSO client IDs that may be set in CI, which trigger the premium_user check
+    monkeypatch.delenv("MICROSOFT_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GENERIC_CLIENT_ID", raising=False)
     monkeypatch.setenv("UI_USERNAME", "admin")
 
     response = client_no_auth.get("/sso/key/generate")

@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+import litellm.secret_managers.main as secrets_main
 from litellm.secret_managers.main import get_secret
 
 # Set up logging for debugging
@@ -46,24 +47,19 @@ def mock_env():
         yield os.environ
 
 
-def test_oidc_google_success():
+def test_oidc_google_success(monkeypatch):
     """Test Google OIDC token fetch with mocked handler (no real network calls)."""
     secret_name = "oidc/google/[invalid url, do not cite]"
     mock_handler = MockHTTPHandler(timeout=600.0)
-    mock_get_http_handler = Mock(return_value=mock_handler)
     mock_oidc_cache = Mock()
     mock_oidc_cache.get_cache.return_value = None
 
-    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
-        with patch(
-            "litellm.secret_managers.main._get_oidc_http_handler",
-            mock_get_http_handler,
-        ):
-            with patch(
-                "litellm.secret_managers.main.HTTPHandler",
-                side_effect=lambda timeout=None: mock_handler,
-            ):
-                result = get_secret(secret_name)
+    # Use monkeypatch to directly replace attributes on the module object
+    # This is more robust than unittest.mock.patch in CI with parallel workers
+    monkeypatch.setattr(secrets_main, "oidc_cache", mock_oidc_cache)
+    monkeypatch.setattr(secrets_main, "_get_oidc_http_handler", lambda timeout=None: mock_handler)
+
+    result = get_secret(secret_name)
 
     assert result == "mocked_token"
     assert mock_handler.last_params == {"audience": "[invalid url, do not cite]"}
@@ -72,49 +68,36 @@ def test_oidc_google_success():
     )
 
 
-def test_oidc_google_cached():
+def test_oidc_google_cached(monkeypatch):
     """Test Google OIDC uses cache and does not call HTTP (no real network calls)."""
     secret_name = "oidc/google/[invalid url, do not cite]"
-    mock_get_http_handler = Mock()
     mock_oidc_cache = Mock()
     mock_oidc_cache.get_cache.return_value = "cached_token"
+    mock_get_http_handler = Mock()
 
-    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
-        with patch(
-            "litellm.secret_managers.main._get_oidc_http_handler",
-            mock_get_http_handler,
-        ):
-            with patch(
-                "litellm.secret_managers.main.HTTPHandler",
-                Mock(side_effect=AssertionError("HTTPHandler should not be used")),
-            ):
-                result = get_secret(secret_name)
+    monkeypatch.setattr(secrets_main, "oidc_cache", mock_oidc_cache)
+    monkeypatch.setattr(secrets_main, "_get_oidc_http_handler", mock_get_http_handler)
+
+    result = get_secret(secret_name)
 
     assert result == "cached_token", f"Expected cached token, got {result}"
     mock_oidc_cache.get_cache.assert_called_with(key=secret_name)
     mock_get_http_handler.assert_not_called()
 
 
-def test_oidc_google_failure():
+def test_oidc_google_failure(monkeypatch):
     """Test Google OIDC raises when provider returns error (no real network calls)."""
     secret_name = "oidc/google/https://example.com/api"
     mock_handler = MockHTTPHandler(timeout=600.0)
     mock_handler.status_code = 400
-    mock_get_http_handler = Mock(return_value=mock_handler)
     mock_oidc_cache = Mock()
     mock_oidc_cache.get_cache.return_value = None
 
-    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
-        with patch(
-            "litellm.secret_managers.main._get_oidc_http_handler",
-            mock_get_http_handler,
-        ):
-            with patch(
-                "litellm.secret_managers.main.HTTPHandler",
-                side_effect=lambda timeout=None: mock_handler,
-            ):
-                with pytest.raises(ValueError, match="Google OIDC provider failed"):
-                    get_secret(secret_name)
+    monkeypatch.setattr(secrets_main, "oidc_cache", mock_oidc_cache)
+    monkeypatch.setattr(secrets_main, "_get_oidc_http_handler", lambda timeout=None: mock_handler)
+
+    with pytest.raises(ValueError, match="Google OIDC provider failed"):
+        get_secret(secret_name)
 
 
 def test_oidc_circleci_success(monkeypatch):
