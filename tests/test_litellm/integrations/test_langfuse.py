@@ -76,13 +76,20 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         sys.modules["langfuse"] = self.mock_langfuse
         sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
 
-        # Create the logger
+        # Create a fresh logger instance for each test
+        # Force a clean state by clearing any class-level cached state
+        if hasattr(LangFuseLogger, '_langfuse_clients'):
+            LangFuseLogger._langfuse_clients = {}
+
         self.logger = LangFuseLogger()
-        
+
         # Explicitly set the Langfuse client to our mock
         self.logger.Langfuse = self.mock_langfuse_client
         # Ensure langfuse_sdk_version is set correctly for _supports_* methods
         self.logger.langfuse_sdk_version = "3.0.0"
+        # Reset any cached client instances
+        if hasattr(self.logger, '_langfuse_client_cache'):
+            self.logger._langfuse_client_cache = None
 
         # Add the log_event_on_langfuse method to the instance
         def log_event_on_langfuse(
@@ -123,6 +130,15 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.logger._is_langfuse_v2 = types.MethodType(mock_is_langfuse_v2, self.logger)
 
     def tearDown(self):
+        # Clean up logger instance to prevent state leakage
+        if hasattr(self, 'logger'):
+            # Reset logger's Langfuse client
+            self.logger.Langfuse = None
+            # Clear any cached state
+            if hasattr(self.logger, '_langfuse_client_cache'):
+                self.logger._langfuse_client_cache = None
+            del self.logger
+
         self.env_patcher.stop()
         self.langfuse_module_patcher.stop()  # patch.dict automatically restores sys.modules
 
