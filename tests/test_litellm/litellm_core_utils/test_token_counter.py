@@ -495,27 +495,14 @@ from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 _select_tokenizer_helper.cache_clear()
 
 
-@pytest.fixture(autouse=True, scope="function")
-def clear_tokenizer_cache_before_test():
-    """Clear the LRU cache before each test to ensure test isolation.
-
-    The _select_tokenizer_helper function is decorated with @lru_cache,
-    which can cause cache hits from previous tests when running with
-    --dist=loadscope (tests from same file run on same worker).
-    """
-    # Clear before test
-    _select_tokenizer_helper.cache_clear()
-    yield
-
-
 class TestTokenizerSelection(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        """Clear cache before class starts."""
-        _select_tokenizer_helper.cache_clear()
-
     def setUp(self):
-        """Clear cache before each test method."""
+        """Clear the LRU cache before each test method.
+
+        The _select_tokenizer_helper function is decorated with @lru_cache,
+        which can cause cache hits from previous tests when running with
+        --dist=loadscope (tests from same file run on same worker).
+        """
         _select_tokenizer_helper.cache_clear()
 
     @patch("litellm.utils.Tokenizer.from_pretrained")
