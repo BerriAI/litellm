@@ -1170,16 +1170,24 @@ def test_team_callback_metadata_none_values(none_key):
     assert none_key not in resp
 
 
-def test_proxy_config_state_post_init_callback_call():
+def test_proxy_config_state_post_init_callback_call(monkeypatch):
     """
     Ensures team_id is still in config, after callback is called
 
     Addresses issue: https://github.com/BerriAI/litellm/issues/6787
 
     Where team_id was being popped from config, after callback was called
+
+    Note: Environment variables are mocked to avoid validation errors
+    in parallel execution where env vars may not be set.
     """
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy.proxy_server import ProxyConfig
+
+    # Mock environment variables to avoid Pydantic validation errors
+    # when env vars are resolved to None in parallel execution
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "test_public_key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "test_secret_key")
 
     pc = ProxyConfig()
 
