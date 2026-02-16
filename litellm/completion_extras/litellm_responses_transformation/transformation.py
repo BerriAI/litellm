@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
         ChatCompletionImageObject,
+        ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
@@ -199,6 +200,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
+                # Handle thinking blocks first if present
+                thinking_blocks = msg.get("thinking_blocks")
+                if thinking_blocks and isinstance(thinking_blocks, list):
+                    reasoning_items = self._convert_thinking_blocks_to_reasoning_items(
+                        thinking_blocks
+                    )
+                    input_items.extend(reasoning_items)
+                    verbose_logger.debug(
+                        f"Responses API: Added {len(reasoning_items)} reasoning items before tool calls"
+                    )
+
+                # Then handle tool calls
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     if function:
@@ -214,7 +227,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     else:
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
-                # Regular user/assistant message
+                # Handle thinking blocks first if present (for assistant role)
+                if role == "assistant" and "thinking_blocks" in msg:
+                    thinking_blocks = msg.get("thinking_blocks")
+                    if thinking_blocks and isinstance(thinking_blocks, list):
+                        reasoning_items = self._convert_thinking_blocks_to_reasoning_items(
+                            thinking_blocks
+                        )
+                        input_items.extend(reasoning_items)
+                        verbose_logger.debug(
+                            f"Responses API: Added {len(reasoning_items)} reasoning items before message"
+                        )
+
+                # Then regular user/assistant message
                 input_items.append(
                     {
                         "type": "message",
@@ -226,6 +251,81 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
 
         return input_items, instructions
+
+    def _convert_thinking_blocks_to_reasoning_items(
+        self,
+        thinking_blocks: List[
+            Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]
+        ],
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert thinking_blocks to reasoning items for Responses API.
+
+        Args:
+            thinking_blocks: List of thinking blocks from Chat Completions format
+
+        Returns:
+            List of reasoning items in Responses API format
+
+        Handles two types of thinking blocks:
+        - type: "thinking" -> Creates reasoning item with summary (truncated to 100 chars)
+        - type: "redacted_thinking" -> Creates reasoning item with encrypted_content preserved
+        """
+        reasoning_items: List[Dict[str, Any]] = []
+
+        for block in thinking_blocks:
+            block_type = block.get("type")
+
+            if block_type == "thinking":
+                # Regular thinking -> reasoning with summary
+                thinking_text = block.get("thinking", "")
+
+                # Create summary (truncate to 100 chars if needed)
+                summary_text = thinking_text
+                if len(thinking_text) > 100:
+                    summary_text = thinking_text[:100] + "..."
+
+                reasoning_item: Dict[str, Any] = {
+                    "type": "reasoning",
+                    "role": "assistant",
+                }
+
+                # Only add summary if there's actual thinking text
+                if thinking_text:
+                    reasoning_item["summary"] = [
+                        {"type": "summary_text", "text": summary_text}
+                    ]
+
+                reasoning_items.append(reasoning_item)
+                verbose_logger.debug(
+                    f"Responses API: Converted thinking block to reasoning item with summary"
+                )
+
+            elif block_type == "redacted_thinking":
+                # Redacted thinking -> reasoning with encrypted_content
+                encrypted_data = block.get("data")
+
+                reasoning_item: Dict[str, Any] = {
+                    "type": "reasoning",
+                    "role": "assistant",
+                }
+
+                # Preserve encrypted_content if present
+                if encrypted_data is not None:
+                    reasoning_item["encrypted_content"] = encrypted_data
+
+                reasoning_items.append(reasoning_item)
+                verbose_logger.debug(
+                    f"Responses API: Converted redacted_thinking block, encrypted_content preserved: {encrypted_data is not None}"
+                )
+
+            else:
+                # Unknown type - skip with warning
+                verbose_logger.warning(
+                    f"Responses API: Unknown thinking block type '{block_type}', skipping"
+                )
+
+        return reasoning_items
 
     def _map_optional_params_to_responses_api_request(
         self,
@@ -407,6 +507,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: List[Choices] = []
         index = 0
         reasoning_content: Optional[str] = None
+        thinking_blocks_list: List[Dict[str, Any]] = []
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -415,9 +516,35 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
+                # Extract reasoning_content from summary
                 for summary_item in item.summary:
                     response_text = getattr(summary_item, "text", "")
                     reasoning_content = response_text if response_text else ""
+
+                # Extract encrypted_content and convert to thinking_blocks
+                encrypted_content = getattr(item, "encrypted_content", None)
+                if encrypted_content is not None:
+                    # Create redacted_thinking block with encrypted_content
+                    thinking_block: Dict[str, Any] = {
+                        "type": "redacted_thinking",
+                        "data": encrypted_content,
+                    }
+                    thinking_blocks_list.append(thinking_block)
+                    verbose_logger.debug(
+                        f"Responses API: Extracted encrypted_content from ResponseReasoningItem, "
+                        f"converted to thinking_blocks (type: redacted_thinking)"
+                    )
+                elif reasoning_content:
+                    # If no encrypted_content but have reasoning text, create regular thinking block
+                    thinking_block = {
+                        "type": "thinking",
+                        "thinking": reasoning_content,
+                    }
+                    thinking_blocks_list.append(thinking_block)
+                    verbose_logger.debug(
+                        f"Responses API: Extracted reasoning text from ResponseReasoningItem, "
+                        f"converted to thinking_blocks (type: thinking)"
+                    )
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
@@ -431,6 +558,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
+                        thinking_blocks=thinking_blocks_list if thinking_blocks_list else None,
                         annotations=annotations,
                     )
 
@@ -443,6 +571,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
 
                     reasoning_content = None  # flush reasoning content
+                    thinking_blocks_list = []  # flush thinking blocks
                     index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -471,11 +600,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 content=None,
                 tool_calls=accumulated_tool_calls,
                 reasoning_content=reasoning_content,
+                thinking_blocks=thinking_blocks_list if thinking_blocks_list else None,
             )
             choices.append(
                 Choices(message=msg, finish_reason="tool_calls", index=index)
             )
             reasoning_content = None
+            thinking_blocks_list = []
 
         return choices
 
