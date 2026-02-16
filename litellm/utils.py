@@ -8279,6 +8279,8 @@ class ProviderConfigManager:
         """
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicSkillsConfig()
+        elif litellm.LlmProviders.OPENAI == provider:
+            return litellm.OpenAISkillsConfig()
         return None
 
     @staticmethod

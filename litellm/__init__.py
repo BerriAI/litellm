@@ -1403,6 +1403,7 @@ if TYPE_CHECKING:
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
+    from .llms.openai.skills.transformation import OpenAISkillsConfig as OpenAISkillsConfig
     from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig as BaseSkillsAPIConfig
     from .llms.gradient_ai.chat.transformation import GradientAIConfig as GradientAIConfig
     from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as OpenAIGPTConfig
