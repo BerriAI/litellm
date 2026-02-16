@@ -1,0 +1,533 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'LiteLLM Proxy Server - 4 Instance Deployment on ECS with 4 Workers per Instance (Benchmark Configuration)'
+
+Parameters:
+  VpcCIDR:
+    Description: CIDR block for the VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1CIDR:
+    Description: CIDR block for Public Subnet 1
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnet2CIDR:
+    Description: CIDR block for Public Subnet 2
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnet1CIDR:
+    Description: CIDR block for Private Subnet 1
+    Type: String
+    Default: 10.0.11.0/24
+
+  PrivateSubnet2CIDR:
+    Description: CIDR block for Private Subnet 2
+    Type: String
+    Default: 10.0.12.0/24
+
+  DBUsername:
+    Description: PostgreSQL database master username
+    Type: String
+    Default: litellm
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+
+  DBPassword:
+    Description: PostgreSQL database master password
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: '[a-zA-Z0-9]*'
+
+  MasterKey:
+    Description: LiteLLM Proxy Master Key for API authentication
+    Type: String
+    NoEcho: true
+    MinLength: 16
+
+  LiteLLMDockerImage:
+    Description: LiteLLM Docker image to use
+    Type: String
+    Default: ghcr.io/berriai/litellm-database:main-latest
+
+  DesiredTaskCount:
+    Description: Number of LiteLLM tasks to run (benchmark uses 4)
+    Type: Number
+    Default: 4
+    MinValue: 1
+    MaxValue: 10
+
+  NumWorkersPerTask:
+    Description: Number of workers per LiteLLM task (benchmark uses 4)
+    Type: Number
+    Default: 4
+    MinValue: 1
+    MaxValue: 8
+
+  TaskCPU:
+    Description: CPU units for each task (1024 = 1 vCPU, benchmark uses 4096 = 4 vCPU)
+    Type: Number
+    Default: 4096
+    AllowedValues: [256, 512, 1024, 2048, 4096]
+
+  TaskMemory:
+    Description: Memory for each task in MB (benchmark uses 8192 = 8 GB)
+    Type: Number
+    Default: 8192
+    AllowedValues: [512, 1024, 2048, 4096, 8192, 16384]
+
+Resources:
+  # VPC Configuration
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-IGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-Subnet-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2CIDR
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-Subnet-2
+
+  # Private Subnets
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Private-Subnet-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Private-Subnet-2
+
+  # NAT Gateways for Private Subnets
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Private-Routes-1
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet2
+
+  # Security Groups
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ALB-SG
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 4000
+          ToPort: 4000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ECS-SG
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS PostgreSQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-RDS-SG
+
+  # RDS PostgreSQL Database
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for LiteLLM RDS instance
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-DB-SubnetGroup
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub ${AWS::StackName}-litellm-db
+      Engine: postgres
+      EngineVersion: '16.3'
+      DBInstanceClass: db.t3.medium
+      AllocatedStorage: 100
+      StorageType: gp3
+      DBName: litellm
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-LiteLLM-DB
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-LiteLLM-Cluster
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+
+  # CloudWatch Logs
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${AWS::StackName}-litellm
+      RetentionInDays: 7
+
+  # ECS Task Execution Role
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource:
+                  - !Ref DBPasswordSecret
+                  - !Ref MasterKeySecret
+
+  # ECS Task Role
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+
+  # Secrets Manager for sensitive data
+  DBPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}-db-password
+      Description: PostgreSQL database password
+      SecretString: !Ref DBPassword
+
+  MasterKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}-master-key
+      Description: LiteLLM Proxy Master Key
+      SecretString: !Ref MasterKey
+
+  # ECS Task Definition
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+      - RDSInstance
+      - LogGroup
+    Properties:
+      Family: !Sub ${AWS::StackName}-litellm
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref TaskCPU
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: litellm
+          Image: !Ref LiteLLMDockerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 4000
+              Protocol: tcp
+          Environment:
+            - Name: DATABASE_URL
+              Value: !Sub
+                - 'postgresql://${Username}:${Password}@${Endpoint}:5432/litellm'
+                - Username: !Ref DBUsername
+                  Password: !Ref DBPassword
+                  Endpoint: !GetAtt RDSInstance.Endpoint.Address
+            - Name: STORE_MODEL_IN_DB
+              Value: 'True'
+          Command:
+            - '--port'
+            - '4000'
+            - '--num_workers'
+            - !Ref NumWorkersPerTask
+            - '--detailed_debug'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+            Interval: 30
+            Timeout: 10
+            Retries: 3
+            StartPeriod: 60
+
+  # Application Load Balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${AWS::StackName}-ALB
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ALB
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${AWS::StackName}-TG
+      Port: 4000
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckPath: /health/readiness
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ECS Service
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      ServiceName: !Sub ${AWS::StackName}-litellm-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredTaskCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: litellm
+          ContainerPort: 4000
+          TargetGroupArn: !Ref TargetGroup
+      HealthCheckGracePeriodSeconds: 120
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+
+Outputs:
+  LoadBalancerURL:
+    Description: URL of the Application Load Balancer
+    Value: !Sub 'http://${LoadBalancer.DNSName}'
+    Export:
+      Name: !Sub ${AWS::StackName}-LoadBalancerURL
+
+  APIEndpoint:
+    Description: LiteLLM API Endpoint
+    Value: !Sub 'http://${LoadBalancer.DNSName}/v1'
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpoint
+
+  DatabaseEndpoint:
+    Description: RDS PostgreSQL Endpoint
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseEndpoint
+
+  ECSClusterName:
+    Description: Name of the ECS Cluster
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub ${AWS::StackName}-ECSClusterName
+
+  ECSServiceName:
+    Description: Name of the ECS Service
+    Value: !GetAtt ECSService.Name
+    Export:
+      Name: !Sub ${AWS::StackName}-ECSServiceName
+
+  BenchmarkConfiguration:
+    Description: Benchmark configuration summary
+    Value: !Sub '${DesiredTaskCount} instances × ${NumWorkersPerTask} workers | ${TaskCPU} CPU units | ${TaskMemory} MB RAM per instance'

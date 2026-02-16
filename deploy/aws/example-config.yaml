@@ -1,0 +1,184 @@
+# LiteLLM Proxy Configuration Example for AWS Deployment
+#
+# This is an example configuration file for LiteLLM proxy server.
+# Customize this file with your actual API keys and model configurations.
+#
+# To use this configuration with your AWS deployment:
+# 1. Update the model_list with your actual providers and API keys
+# 2. Store API keys in AWS Secrets Manager
+# 3. Update the ECS task definition to use this config
+#
+# Documentation: https://docs.litellm.ai/docs/proxy/configs
+
+model_list:
+  # OpenAI Models
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4-turbo
+    litellm_params:
+      model: gpt-4-turbo-preview
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic Claude Models
+  - model_name: claude-3-opus
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: anthropic/claude-3-sonnet-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Fake endpoint for testing (used in benchmarks)
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+  # AWS Bedrock Models (using IAM authentication)
+  # - model_name: bedrock-claude
+  #   litellm_params:
+  #     model: bedrock/anthropic.claude-v2
+  #     aws_region_name: us-east-1
+
+  # Azure OpenAI Models
+  # - model_name: azure-gpt-4
+  #   litellm_params:
+  #     model: azure/gpt-4
+  #     api_key: os.environ/AZURE_OPENAI_API_KEY
+  #     api_base: os.environ/AZURE_OPENAI_API_BASE
+  #     api_version: "2024-02-01"
+
+  # Google Vertex AI Models
+  # - model_name: gemini-pro
+  #   litellm_params:
+  #     model: vertex_ai/gemini-pro
+  #     vertex_project: os.environ/VERTEX_PROJECT
+  #     vertex_location: os.environ/VERTEX_LOCATION
+
+litellm_settings:
+  # Enable detailed logging
+  set_verbose: false
+
+  # Request timeout
+  request_timeout: 600
+
+  # Enable fallbacks on errors
+  fallbacks: []
+
+  # Context window fallbacks
+  context_window_fallbacks: []
+
+  # Enable content moderation (requires provider support)
+  # content_policy_fallbacks: []
+
+router_settings:
+  # Routing strategy: "simple-shuffle" | "latency-based-routing" | "least-busy" | "usage-based-routing"
+  routing_strategy: latency-based-routing
+
+  # Enable retry on failure
+  num_retries: 2
+
+  # Timeout for retries
+  timeout: 300
+
+  # Redis for caching router decisions (optional but recommended)
+  # redis_host: os.environ/REDIS_HOST
+  # redis_port: os.environ/REDIS_PORT
+  # redis_password: os.environ/REDIS_PASSWORD
+
+  # Model-specific cooldown after errors (seconds)
+  allowed_fails: 3
+  cooldown_time: 60
+
+general_settings:
+  # Master key for API authentication (required)
+  master_key: os.environ/PROXY_MASTER_KEY
+
+  # Database URL (automatically set by ECS task definition)
+  database_url: os.environ/DATABASE_URL
+
+  # Store model information in database
+  store_model_in_db: true
+
+  # Enable batch writing to reduce database load
+  # Recommended for high throughput (1-2K RPS)
+  proxy_batch_write_at: 60
+
+  # Enable logging to external services
+  # success_callback: ["langsmith", "lunary"]
+  # failure_callback: ["langsmith", "lunary"]
+
+  # Alert webhooks
+  # alerting: ["slack"]
+  # alerting_threshold: 300  # seconds
+
+  # Cost tracking
+  # max_budget: 100  # USD
+  # budget_duration: 30d
+
+# Optional: Cache configuration
+# Reduces database load by 60-80%
+# cache:
+#   type: redis
+#   host: os.environ/REDIS_HOST
+#   port: os.environ/REDIS_PORT
+#   password: os.environ/REDIS_PASSWORD
+#   ttl: 600  # Cache TTL in seconds
+
+# Optional: Prometheus metrics
+# prometheus:
+#   enabled: true
+#   port: 9090
+
+# Optional: Admin UI settings
+# ui_settings:
+#   master_key: os.environ/PROXY_MASTER_KEY
+#   disable_ui: false
+
+# Optional: Rate limiting
+# rate_limit:
+#   rpm: 60  # Requests per minute per key
+#   tpm: 1000  # Tokens per minute per key
+
+# Optional: Team/User management
+# team_settings:
+#   - team_id: team_1
+#     max_budget: 50
+#     budget_duration: 30d
+#     models: ["gpt-4", "gpt-3.5-turbo"]
+
+# Optional: Guardrails (content filtering, PII detection)
+# guardrails:
+#   - guardrail_name: "pii-detection"
+#     litellm_params:
+#       guardrail: presidio
+#       mode: "during_call"
+
+# Optional: Logging integrations
+# langsmith:
+#   api_key: os.environ/LANGSMITH_API_KEY
+#   project: litellm-proxy
+
+# Optional: Alerting integrations
+# slack:
+#   webhook_url: os.environ/SLACK_WEBHOOK_URL
+
+# Environment variables to set in ECS task definition:
+# - OPENAI_API_KEY: Your OpenAI API key
+# - ANTHROPIC_API_KEY: Your Anthropic API key
+# - PROXY_MASTER_KEY: Master key for proxy authentication
+# - DATABASE_URL: PostgreSQL connection string (auto-set)
+# - REDIS_HOST: Redis host (optional)
+# - REDIS_PORT: Redis port (optional)
+# - REDIS_PASSWORD: Redis password (optional)
