@@ -1,13 +1,9 @@
 """
-Regression test: deleted managed files should not return 403.
+Regression test: deleted managed files should return 404, not 403.
 
 When a managed file's DB record has been deleted, can_user_call_unified_file_id()
-returns False (record not found → treated as "access denied"). This causes
-check_managed_file_id_access() to raise 403 instead of allowing the request
-through so downstream code can return a proper 404.
-
-The equivalent method for objects (can_user_call_unified_object_id) already
-returns True when the record is missing.
+raises HTTPException(404) directly — rather than returning True (which would
+weaken access control) or False (which would cause a misleading 403).
 """
 
 import base64
@@ -49,20 +45,19 @@ def _make_managed_files_with_no_db_record():
 
 
 @pytest.mark.asyncio
-async def test_should_not_raise_403_for_deleted_file():
+async def test_should_raise_404_for_deleted_file():
     """
     When a managed file record has been deleted from the DB,
-    check_managed_file_id_access should NOT raise 403.
-    It should allow the request through so downstream can return 404.
+    check_managed_file_id_access should raise 404 (not 403).
     """
     unified_file_id = _make_unified_file_id()
     managed_files = _make_managed_files_with_no_db_record()
     user = _make_user_api_key_dict("any-user")
     data = {"file_id": unified_file_id}
 
-    # This should NOT raise — deleted file should pass through access check
-    result = await managed_files.check_managed_file_id_access(data, user)
-    assert result is True
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.check_managed_file_id_access(data, user)
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
