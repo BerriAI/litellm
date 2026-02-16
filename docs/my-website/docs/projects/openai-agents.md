@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# OpenAI Agents SDK with LiteLLM
+# OpenAI Agents SDK
 
 Use OpenAI Agents SDK with any LLM provider through LiteLLM Proxy.
 
