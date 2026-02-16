@@ -703,10 +703,7 @@
           "mode": "pre_call",
           "patterns": [
             {"pattern_type": "prebuilt", "pattern_name": "fr_nir", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "eu_passport_generic", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_france", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_germany", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_netherlands", "action": "MASK"}
+            {"pattern_type": "prebuilt", "pattern_name": "eu_passport_generic", "action": "MASK"}
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },

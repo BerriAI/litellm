@@ -40,21 +40,6 @@ class TestGDPRPolicyE2E:
                 pattern_name="eu_passport_generic",
                 action=ContentFilterAction.MASK,
             ),
-            ContentFilterPattern(
-                pattern_type="prebuilt",
-                pattern_name="passport_france",
-                action=ContentFilterAction.MASK,
-            ),
-            ContentFilterPattern(
-                pattern_type="prebuilt",
-                pattern_name="passport_germany",
-                action=ContentFilterAction.MASK,
-            ),
-            ContentFilterPattern(
-                pattern_type="prebuilt",
-                pattern_name="passport_netherlands",
-                action=ContentFilterAction.MASK,
-            ),
             # Financial data
             ContentFilterPattern(
                 pattern_type="prebuilt",
