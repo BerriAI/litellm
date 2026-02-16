@@ -155,3 +155,94 @@ async def test_scheduler_queue_cleanup_on_timeout():
 
     # Verify remaining items are in correct priority order (0 should be first)
     assert queue_after[0][1] == "req-0", "Expected req-0 (priority 0) to be at front"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_concurrent_poll_allows_single_request_per_interval():
+    scheduler = Scheduler(polling_interval=1)
+    model_name = "gpt-3.5-turbo"
+
+    for i in range(5):
+        await scheduler.add_request(
+            FlowItem(
+                priority=i,
+                request_id=f"req-{i}",
+                model_name=model_name,
+            )
+        )
+
+    start_event = asyncio.Event()
+
+    async def _poll(req_id: str) -> bool:
+        await start_event.wait()
+        return await scheduler.poll(
+            id=req_id,
+            model_name=model_name,
+            health_deployments=[],
+        )
+
+    tasks = [asyncio.create_task(_poll(f"req-{i}")) for i in range(5)]
+    start_event.set()
+    poll_results = await asyncio.gather(*tasks)
+
+    allowed_count = sum(1 for result in poll_results if result)
+    assert allowed_count == 1, f"Expected 1 admitted request, got {allowed_count}"
+
+    queue_after = await scheduler.get_queue(model_name=model_name)
+    assert len(queue_after) == 4, f"Expected 4 items remaining, got {len(queue_after)}"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_poll_allows_next_request_after_polling_interval():
+    scheduler = Scheduler(polling_interval=0.01)
+    model_name = "gpt-3.5-turbo"
+
+    await scheduler.add_request(
+        FlowItem(priority=0, request_id="req-0", model_name=model_name)
+    )
+    await scheduler.add_request(
+        FlowItem(priority=1, request_id="req-1", model_name=model_name)
+    )
+
+    first_poll = await scheduler.poll(
+        id="req-0",
+        model_name=model_name,
+        health_deployments=[],
+    )
+    assert first_poll is True
+
+    second_poll_immediate = await scheduler.poll(
+        id="req-1",
+        model_name=model_name,
+        health_deployments=[],
+    )
+    assert second_poll_immediate is False
+
+    await asyncio.sleep(0.02)
+
+    second_poll_after_wait = await scheduler.poll(
+        id="req-1",
+        model_name=model_name,
+        health_deployments=[],
+    )
+    assert second_poll_after_wait is True
+
+
+@pytest.mark.asyncio
+async def test_scheduler_get_queue_returns_copy():
+    scheduler = Scheduler()
+    model_name = "gpt-3.5-turbo"
+
+    await scheduler.add_request(
+        FlowItem(priority=0, request_id="req-0", model_name=model_name)
+    )
+
+    queue_a = await scheduler.get_queue(model_name=model_name)
+    queue_b = await scheduler.get_queue(model_name=model_name)
+
+    assert queue_a == queue_b
+    assert queue_a is not queue_b
+
+    queue_a.append((999, "mutated"))
+    queue_after_mutation = await scheduler.get_queue(model_name=model_name)
+    assert (999, "mutated") not in queue_after_mutation
