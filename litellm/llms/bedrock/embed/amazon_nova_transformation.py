@@ -20,7 +20,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 class AmazonNovaEmbeddingConfig:
     """
     Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
-    
+
     Amazon Nova Multimodal Embeddings supports:
     - Text, image, video, and audio inputs
     - Synchronous (InvokeModel) and asynchronous (StartAsyncInvoke) APIs
@@ -46,14 +46,14 @@ class AmazonNovaEmbeddingConfig:
             elif k in self.get_supported_openai_params():
                 optional_params[k] = v
         return optional_params
-    
+
     def _parse_data_url(self, data_url: str) -> tuple:
         """
         Parse a data URL to extract the media type and base64 data.
-        
+
         Args:
             data_url: Data URL in format: data:image/jpeg;base64,/9j/4AAQ...
-        
+
         Returns:
             tuple: (media_type, base64_data)
                 media_type: e.g., "image/jpeg", "video/mp4", "audio/mpeg"
@@ -61,23 +61,25 @@ class AmazonNovaEmbeddingConfig:
         """
         if not data_url.startswith("data:"):
             raise ValueError(f"Invalid data URL format: {data_url[:50]}...")
-        
+
         # Split by comma to separate metadata from data
         # Format: data:image/jpeg;base64,<base64_data>
         if "," not in data_url:
-            raise ValueError(f"Invalid data URL format (missing comma): {data_url[:50]}...")
-        
+            raise ValueError(
+                f"Invalid data URL format (missing comma): {data_url[:50]}..."
+            )
+
         metadata, base64_data = data_url.split(",", 1)
-        
+
         # Extract media type from metadata
         # Remove 'data:' prefix and ';base64' suffix
         metadata = metadata[5:]  # Remove 'data:'
-        
+
         if ";" in metadata:
             media_type = metadata.split(";")[0]
         else:
             media_type = metadata
-        
+
         return media_type, base64_data
 
     def _transform_request(
@@ -90,111 +92,109 @@ class AmazonNovaEmbeddingConfig:
     ) -> dict:
         """
         Transform OpenAI-style input to Nova format.
-        
+
         Only handles OpenAI params (dimensions). All other Nova-specific params
         should be passed via inference_params and will be passed through as-is.
-        
+
         Args:
             input: The input text or media reference
             inference_params: Additional parameters (will be passed through)
             async_invoke_route: Whether this is for async invoke
             model_id: Model ID (for async invoke)
             output_s3_uri: S3 URI for output (for async invoke)
-        
+
         Returns:
             dict: Nova embedding request
         """
         # Determine task type
         task_type = "SEGMENTED_EMBEDDING" if async_invoke_route else "SINGLE_EMBEDDING"
-        
+
         # Build the base request structure
         request: dict = {
             "schemaVersion": "nova-multimodal-embed-v1",
             "taskType": task_type,
         }
-        
+
         # Start with inference_params (user-provided params)
         embedding_params = inference_params.copy()
-        
+
         embedding_params.pop("output_s3_uri", None)
-        
+
         # Map OpenAI dimensions to embeddingDimension if provided
         if "dimensions" in embedding_params:
             embedding_params["embeddingDimension"] = embedding_params.pop("dimensions")
         elif "embedding_dimension" in embedding_params:
-            embedding_params["embeddingDimension"] = embedding_params.pop("embedding_dimension")
-        
+            embedding_params["embeddingDimension"] = embedding_params.pop(
+                "embedding_dimension"
+            )
+
         # Add required embeddingPurpose if not provided (required by Nova API)
         if "embeddingPurpose" not in embedding_params:
             embedding_params["embeddingPurpose"] = "GENERIC_INDEX"
-        
+
         # Add required embeddingDimension if not provided (required by Nova API)
         if "embeddingDimension" not in embedding_params:
             embedding_params["embeddingDimension"] = 3072
-        
+
         # For text/media input, add basic structure if user hasn't provided text/image/video/audio
-        if "text" not in embedding_params and "image" not in embedding_params and "video" not in embedding_params and "audio" not in embedding_params:
+        if (
+            "text" not in embedding_params
+            and "image" not in embedding_params
+            and "video" not in embedding_params
+            and "audio" not in embedding_params
+        ):
             # Check if input is a data URL (e.g., data:image/jpeg;base64,...)
             if input.startswith("data:"):
                 # Parse the data URL to extract media type and base64 data
                 media_type, base64_data = self._parse_data_url(input)
-                
+
                 if media_type.startswith("image/"):
                     # Extract image format from MIME type (e.g., image/jpeg -> jpeg)
                     image_format = media_type.split("/")[1].lower()
                     # Nova API expects specific formats
                     if image_format == "jpg":
                         image_format = "jpeg"
-                    
+
                     embedding_params["image"] = {
                         "format": image_format,
-                        "source": {
-                            "bytes": base64_data
-                        }
+                        "source": {"bytes": base64_data},
                     }
                 elif media_type.startswith("video/"):
                     # Handle video data URLs
                     video_format = media_type.split("/")[1].lower()
                     embedding_params["video"] = {
                         "format": video_format,
-                        "source": {
-                            "bytes": base64_data
-                        }
+                        "source": {"bytes": base64_data},
                     }
                 elif media_type.startswith("audio/"):
                     # Handle audio data URLs
                     audio_format = media_type.split("/")[1].lower()
                     embedding_params["audio"] = {
                         "format": audio_format,
-                        "source": {
-                            "bytes": base64_data
-                        }
+                        "source": {"bytes": base64_data},
                     }
                 else:
                     # Fallback to text for unknown types
-                    embedding_params["text"] = {
-                        "value": input,
-                        "truncationMode": "END"
-                    }
+                    embedding_params["text"] = {"value": input, "truncationMode": "END"}
             elif input.startswith("s3://"):
                 # S3 URL - default to text for now, user should specify modality
                 embedding_params["text"] = {
                     "source": {"s3Location": {"uri": input}},
-                    "truncationMode": "END"  # Required by Nova API
+                    "truncationMode": "END",  # Required by Nova API
                 }
             else:
                 # Plain text input
                 embedding_params["text"] = {
                     "value": input,
-                    "truncationMode": "END"  # Required by Nova API
+                    "truncationMode": "END",  # Required by Nova API
                 }
-        
+
         # Set the embedding params in the request
         if task_type == "SINGLE_EMBEDDING":
             request["singleEmbeddingParams"] = embedding_params
         else:
             request["segmentedEmbeddingParams"] = embedding_params
-        
+
         # For async invoke, wrap in the async invoke format
         if async_invoke_route and model_id:
             return self._wrap_async_invoke_request(
@@ -202,7 +202,7 @@ class AmazonNovaEmbeddingConfig:
                 model_id=model_id,
                 output_s3_uri=output_s3_uri,
             )
-        
+
         return request
 
     def _wrap_async_invoke_request(
@@ -213,12 +213,12 @@ class AmazonNovaEmbeddingConfig:
     ) -> dict:
         """
         Wrap the transformed request in the AWS Bedrock async invoke format.
-        
+
         Args:
             model_input: The transformed Nova embedding request
             model_id: The model identifier (without async_invoke prefix)
             output_s3_uri: S3 URI for output data config
-        
+
         Returns:
             dict: The wrapped async invoke request
         """
@@ -228,19 +228,15 @@ class AmazonNovaEmbeddingConfig:
         unquoted_model_id = urllib.parse.unquote(model_id)
         if unquoted_model_id.startswith("async_invoke/"):
             unquoted_model_id = unquoted_model_id.replace("async_invoke/", "")
-        
+
         # Validate that the S3 URI is not empty
         if not output_s3_uri or output_s3_uri.strip() == "":
             raise ValueError("output_s3_uri is required for async invoke requests")
-        
+
         return {
             "modelId": unquoted_model_id,
             "modelInput": model_input,
-            "outputDataConfig": {
-                "s3OutputDataConfig": {
-                    "s3Uri": output_s3_uri
-                }
-            },
+            "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
         }
 
     def _transform_response(
@@ -248,7 +244,7 @@ class AmazonNovaEmbeddingConfig:
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
-        
+
         Nova response format:
         {
             "embeddings": [
@@ -262,7 +258,7 @@ class AmazonNovaEmbeddingConfig:
         """
         embeddings: List[Embedding] = []
         total_tokens = 0
-        
+
         for response in response_list:
             # Nova response has an "embeddings" array
             if "embeddings" in response and isinstance(response["embeddings"], list):
@@ -274,7 +270,7 @@ class AmazonNovaEmbeddingConfig:
                             object="embedding",
                         )
                         embeddings.append(embedding)
-                        
+
                         # Estimate token count
                         # For text, use truncatedCharLength if available
                         if "truncatedCharLength" in item:
@@ -291,9 +287,9 @@ class AmazonNovaEmbeddingConfig:
                 )
                 embeddings.append(embedding)
                 total_tokens += len(response["embedding"]) // 4
-        
+
         usage = Usage(prompt_tokens=total_tokens, total_tokens=total_tokens)
-        
+
         return EmbeddingResponse(data=embeddings, model=model, usage=usage)
 
     def _transform_async_invoke_response(
@@ -301,36 +297,35 @@ class AmazonNovaEmbeddingConfig:
     ) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
-        
+
         AWS async invoke returns:
         {
             "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
         }
-        
+
         We transform this to a job-like embedding response with the ARN in hidden params.
         """
         invocation_arn = response.get("invocationArn", "")
-        
+
         # Create a placeholder embedding object for the job
         embedding = Embedding(
             embedding=[],  # Empty embedding for async jobs
             index=0,
             object="embedding",
         )
-        
+
         # Create usage object (empty for async jobs)
         usage = Usage(prompt_tokens=0, total_tokens=0)
-        
+
         # Create hidden params with job ID
         from litellm.types.llms.base import HiddenParams
-        
+
         hidden_params = HiddenParams()
         setattr(hidden_params, "_invocation_arn", invocation_arn)
-        
+
         return EmbeddingResponse(
             data=[embedding],
             model=model,
             usage=usage,
             hidden_params=hidden_params,
         )
-

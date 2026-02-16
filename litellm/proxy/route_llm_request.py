@@ -372,7 +372,7 @@ async def route_request(
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
                 )
-                
+
                 result = route_a2a_agent_request(data, route_type)
                 if result is not None:
                     return result

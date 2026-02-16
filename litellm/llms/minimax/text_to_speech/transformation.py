@@ -43,7 +43,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
     Configuration for MiniMax Text-to-Speech
 
     Reference: https://platform.minimax.io/docs
-    
+
     MiniMax TTS API supports both WebSocket and HTTP endpoints.
     This implementation uses the HTTP endpoint for simplicity.
     """
@@ -186,11 +186,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Validate MiniMax environment and set up authentication headers
         """
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("MINIMAX_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("MINIMAX_API_KEY")
 
         if api_key is None:
             raise ValueError(
@@ -224,7 +220,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> TextToSpeechRequestData:
         """
         Build the MiniMax TTS request payload.
-        
+
         MiniMax uses a different structure than OpenAI:
         - model: The TTS model to use
         - text: The input text
@@ -237,16 +233,18 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         voice_id = params.pop("voice_id", voice or "male-qn-qingse")
         speed = params.pop("speed", 1.0)
         audio_format = params.pop("format", "mp3")
-        
+
         # Extract additional voice settings
         vol = params.pop("vol", 1.0)  # Volume (0.1 to 10)
         pitch = params.pop("pitch", 0)  # Pitch adjustment (-12 to 12)
-        
+
         # Extract audio settings
         sample_rate = params.pop("sample_rate", 32000)  # 16000, 24000, 32000
-        bitrate = params.pop("bitrate", 128000)  # For MP3: 64000, 128000, 192000, 256000
+        bitrate = params.pop(
+            "bitrate", 128000
+        )  # For MP3: 64000, 128000, 192000, 256000
         channel = params.pop("channel", 1)  # 1 for mono, 2 for stereo
-        
+
         # Output format: 'url' or 'hex' (default is 'hex')
         output_format = params.pop("output_format", "hex")
 
@@ -289,14 +287,14 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> "HttpxBinaryResponseContent":
         """
         Transform MiniMax response to standard format.
-        
+
         MiniMax returns JSON with base64-encoded audio data:
         {
             "base_resp": {"status_code": 0, "status_msg": "success"},
             "audio_file": "<base64_encoded_audio>",
             "extra_info": {...}
         }
-        
+
         We need to decode the base64 audio and return it as binary content.
         """
         import base64
@@ -307,12 +305,12 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         try:
             # Parse JSON response
             response_json = raw_response.json()
-            
+
             # MiniMax API response format check
             # The API can return different structures:
             # 1. {"data": {"audio": "..."}, "status": 0, ...} for HTTP endpoint
             # 2. {"base_resp": {"status_code": 0, ...}, "audio_file": "..."} for older versions
-            
+
             # Check for errors - MiniMax uses "status" field in HTTP endpoint response
             # status: 0 = success, 2 = invalid api key, etc.
             status = response_json.get("status")
@@ -324,11 +322,11 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                     message=f"MiniMax TTS error: {error_detail}",
                     headers=dict(raw_response.headers),
                 )
-            
+
             # Extract audio data
             # MiniMax returns audio in "data" field
             data = response_json.get("data", {})
-            
+
             # Check if response contains a URL (output_format='url')
             audio_url = data.get("audio_url", None)
             if audio_url:
@@ -339,17 +337,17 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                     message=f"URL output format is not yet supported. Use 'hex' format or fetch from URL: {audio_url}",
                     headers=dict(raw_response.headers),
                 )
-            
+
             # Get hex-encoded audio data
             audio_hex = data.get("audio", "") or response_json.get("audio_file", "")
-            
+
             if not audio_hex:
                 raise MinimaxException(
                     status_code=500,
                     message=f"No audio data in MiniMax response. Response keys: {list(response_json.keys())}",
                     headers=dict(raw_response.headers),
                 )
-            
+
             # MiniMax returns hex-encoded audio by default
             # Try hex decoding first, fall back to base64 if that fails
             try:
@@ -364,15 +362,15 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                         message=f"Failed to decode audio data: {str(e)}",
                         headers=dict(raw_response.headers),
                     )
-            
+
             # Create a new response with binary audio content
             # We need to create a response that contains the decoded audio bytes
             # Remove gzip encoding headers to avoid decompression issues
             clean_headers = dict(raw_response.headers)
-            clean_headers.pop('content-encoding', None)
-            clean_headers.pop('transfer-encoding', None)
-            clean_headers['content-length'] = str(len(audio_bytes))
-            
+            clean_headers.pop("content-encoding", None)
+            clean_headers.pop("transfer-encoding", None)
+            clean_headers["content-length"] = str(len(audio_bytes))
+
             # Create a new response object with the binary content
             binary_response = httpx.Response(
                 status_code=200,
@@ -380,9 +378,9 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 content=audio_bytes,
                 request=raw_response.request,
             )
-            
+
             return HttpxBinaryResponseContent(binary_response)
-            
+
         except json.JSONDecodeError as e:
             raise MinimaxException(
                 status_code=500,
@@ -407,15 +405,10 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Construct the MiniMax endpoint URL.
         """
-        base_url = (
-            api_base
-            or get_secret_str("MINIMAX_API_BASE")
-            or self.TTS_BASE_URL
-        )
+        base_url = api_base or get_secret_str("MINIMAX_API_BASE") or self.TTS_BASE_URL
         base_url = base_url.rstrip("/")
 
         # MiniMax uses a simple endpoint path
         url = f"{base_url}{self.TTS_ENDPOINT_PATH}"
 
         return url
-

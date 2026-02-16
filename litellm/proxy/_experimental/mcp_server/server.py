@@ -148,8 +148,8 @@ if MCP_AVAILABLE:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
-        json_response=False, # enables SSE streaming
-        stateless=False, # enables session state
+        json_response=False,  # enables SSE streaming
+        stateless=False,  # enables session state
     )
 
     # Create SSE session manager
@@ -307,9 +307,9 @@ if MCP_AVAILABLE:
         host_progress_callback = None
         try:
             host_ctx = server.request_context
-            if host_ctx and hasattr(host_ctx, 'meta') and host_ctx.meta:
-                host_token = getattr(host_ctx.meta, 'progressToken', None)
-                if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
+            if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
+                host_token = getattr(host_ctx.meta, "progressToken", None)
+                if host_token and hasattr(host_ctx, "session") and host_ctx.session:
                     host_session = host_ctx.session
 
                     async def forward_progress(progress: float, total: float | None):
@@ -318,14 +318,20 @@ if MCP_AVAILABLE:
                             await host_session.send_progress_notification(
                                 progress_token=host_token,
                                 progress=progress,
-                                total=total
+                                total=total,
                             )
-                            verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                            verbose_logger.debug(
+                                f"Forwarded progress {progress}/{total} to Host"
+                            )
                         except Exception as e:
-                            verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                            verbose_logger.error(
+                                f"Failed to forward progress to Host: {e}"
+                            )
 
                     host_progress_callback = forward_progress
-                    verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+                    verbose_logger.debug(
+                        f"Host progressToken captured: {host_token[:8]}..."
+                    )
         except Exception as e:
             verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
@@ -769,18 +775,15 @@ if MCP_AVAILABLE:
                 )
 
         allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth
-            )
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_server_ids = (
-            global_mcp_server_manager.filter_server_ids_by_ip(
-                allowed_mcp_server_ids, client_ip
-            )
+        allowed_mcp_server_ids = global_mcp_server_manager.filter_server_ids_by_ip(
+            allowed_mcp_server_ids, client_ip
         )
         verbose_logger.debug(
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
-            client_ip, allowed_mcp_server_ids,
+            client_ip,
+            allowed_mcp_server_ids,
         )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
@@ -903,7 +906,6 @@ if MCP_AVAILABLE:
 
             # Attach user identifiers using the standard helper
             if user_api_key_auth is not None:
-
                 LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                     data=list_tools_request_data,
                     user_api_key_dict=user_api_key_auth,
@@ -1956,7 +1958,7 @@ if MCP_AVAILABLE:
 
         # Session doesn't exist - handle based on request method
         method = scope.get("method", "").upper()
-        
+
         if method == "DELETE":
             # Idempotent DELETE: session doesn't exist, return success
             verbose_logger.info(
@@ -1964,8 +1966,7 @@ if MCP_AVAILABLE:
                 "Returning success (idempotent DELETE)."
             )
             success_response = JSONResponse(
-                status_code=200,
-                content={"message": "Session terminated successfully"}
+                status_code=200, content={"message": "Session terminated successfully"}
             )
             await success_response(scope, receive, send)
             return True
@@ -1977,8 +1978,7 @@ if MCP_AVAILABLE:
                 _session_id,
             )
             scope["headers"] = [
-                (k, v) for k, v in scope["headers"]
-                if k != _mcp_session_header
+                (k, v) for k, v in scope["headers"] if k != _mcp_session_header
             ]
             return False
 
@@ -2058,7 +2058,9 @@ if MCP_AVAILABLE:
 
             # Handle stale session IDs - either strip them for reconnection
             # or return success for idempotent DELETE operations
-            handled = await _handle_stale_mcp_session(scope, receive, send, session_manager)
+            handled = await _handle_stale_mcp_session(
+                scope, receive, send, session_manager
+            )
             if handled:
                 # Request was fully handled (e.g., DELETE on non-existent session)
                 return

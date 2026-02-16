@@ -390,9 +390,7 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
         )
 
     if "applied_policies" in _metadata:
-        headers["x-litellm-applied-policies"] = ",".join(
-            _metadata["applied_policies"]
-        )
+        headers["x-litellm-applied-policies"] = ",".join(_metadata["applied_policies"])
 
     if "policy_sources" in _metadata:
         sources = _metadata["policy_sources"]
@@ -449,9 +447,7 @@ def add_policy_to_applied_policies_header(
     request_data["metadata"] = _metadata
 
 
-def add_policy_sources_to_metadata(
-    request_data: Dict, policy_sources: Dict[str, str]
-):
+def add_policy_sources_to_metadata(request_data: Dict, policy_sources: Dict[str, str]):
     """
     Store policy match reasons in metadata for x-litellm-policy-sources header.
 

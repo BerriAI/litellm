@@ -24,9 +24,7 @@ class AzureOpenAIExceptionMapping:
 
         # Prefer the provider message/type/code when present.
         provider_message = (
-            azure_error.get("message")
-            if isinstance(azure_error, dict)
-            else None
+            azure_error.get("message") if isinstance(azure_error, dict) else None
         ) or message
         provider_type = (
             azure_error.get("type") if isinstance(azure_error, dict) else None

@@ -504,7 +504,9 @@ class InMemoryGuardrailHandler:
             guardrail_type,
         )
 
-        _guardrail_class = get_instance_fn(guardrail_type, config_file_path=config_file_path)
+        _guardrail_class = get_instance_fn(
+            guardrail_type, config_file_path=config_file_path
+        )
 
         mode = litellm_params.mode
         if mode is None:

@@ -75,11 +75,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request, tool_name_mapping = (
-            LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
-                anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
-            )
+        (
+            chat_completion_compatible_request,
+            tool_name_mapping,
+        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
+            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
         )
 
         structured_messages = chat_completion_compatible_request.get("messages", [])
@@ -364,10 +365,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            built_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                all_chunks=responses_so_far,
-                litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
-                model="",
+            built_response = (
+                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                    all_chunks=responses_so_far,
+                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                    model="",
+                )
             )
 
             # Check if model_response is valid and has choices before accessing
@@ -396,7 +399,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                     logging_obj=litellm_logging_obj,
                 )
             else:
-                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
+                verbose_proxy_logger.debug(
+                    "Skipping output guardrail - model response has no choices"
+                )
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)

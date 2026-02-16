@@ -102,10 +102,10 @@ class AlertingHangingRequestCheck:
         )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[HangingRequestData] = (
-                await self.hanging_request_cache.async_get_cache(
-                    key=request_id,
-                )
+            hanging_request_data: Optional[
+                HangingRequestData
+            ] = await self.hanging_request_cache.async_get_cache(
+                key=request_id,
             )
 
             if hanging_request_data is None:

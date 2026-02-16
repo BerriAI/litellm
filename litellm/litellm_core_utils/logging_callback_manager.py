@@ -115,11 +115,11 @@ class LoggingCallbackManager:
     def remove_callbacks_by_type(self, callback_list, callback_type):
         """
         Remove all callbacks of a specific type from a callback list.
-        
+
         Args:
             callback_list: The list to remove callbacks from (e.g., litellm.callbacks)
             callback_type: The class type to match (e.g., SemanticToolFilterHook)
-            
+
         Example:
             litellm.logging_callback_manager.remove_callbacks_by_type(
                 litellm.callbacks, SemanticToolFilterHook

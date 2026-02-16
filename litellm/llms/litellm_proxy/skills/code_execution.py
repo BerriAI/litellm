@@ -22,17 +22,18 @@ from litellm._logging import verbose_logger
 class LiteLLMInternalTools(str, Enum):
     """
     Enum for internal LiteLLM tools that are injected into requests.
-    
+
     These tools are handled automatically by LiteLLM hooks and are not
     passed to the underlying LLM provider directly.
     """
+
     CODE_EXECUTION = "litellm_code_execution"
 
 
 def get_litellm_code_execution_tool() -> Dict[str, Any]:
     """
     Returns the litellm_code_execution tool definition in OpenAI format.
-    
+
     This tool enables automatic code execution in a sandboxed environment
     when skills include executable Python code.
     """
@@ -44,21 +45,18 @@ def get_litellm_code_execution_tool() -> Dict[str, Any]:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "Python code to execute"
-                    }
+                    "code": {"type": "string", "description": "Python code to execute"}
                 },
-                "required": ["code"]
-            }
-        }
+                "required": ["code"],
+            },
+        },
     }
 
 
 def get_litellm_code_execution_tool_anthropic() -> Dict[str, Any]:
     """
     Returns the litellm_code_execution tool definition in Anthropic/messages API format.
-    
+
     This tool enables automatic code execution in a sandboxed environment
     when skills include executable Python code.
     """
@@ -68,13 +66,10 @@ def get_litellm_code_execution_tool_anthropic() -> Dict[str, Any]:
         "input_schema": {
             "type": "object",
             "properties": {
-                "code": {
-                    "type": "string",
-                    "description": "Python code to execute"
-                }
+                "code": {"type": "string", "description": "Python code to execute"}
             },
-            "required": ["code"]
-        }
+            "required": ["code"],
+        },
     }
 
 
@@ -85,12 +80,12 @@ LITELLM_CODE_EXECUTION_TOOL = get_litellm_code_execution_tool()
 class CodeExecutionHandler:
     """
     Handles automatic code execution for LiteLLM skills.
-    
+
     When enabled, this handler intercepts LLM responses with code execution
     tool calls, executes them in a sandbox, and continues the conversation
     automatically until completion.
     """
-    
+
     def __init__(
         self,
         max_iterations: Optional[int] = None,
@@ -100,10 +95,10 @@ class CodeExecutionHandler:
             DEFAULT_MAX_ITERATIONS,
             DEFAULT_SANDBOX_TIMEOUT,
         )
-        
+
         self.max_iterations = max_iterations or DEFAULT_MAX_ITERATIONS
         self.sandbox_timeout = sandbox_timeout or DEFAULT_SANDBOX_TIMEOUT
-    
+
     async def execute_with_code_execution(
         self,
         model: str,
@@ -115,14 +110,14 @@ class CodeExecutionHandler:
     ) -> Dict[str, Any]:
         """
         Execute an LLM call with automatic code execution handling.
-        
+
         This method:
         1. Makes the initial LLM call
         2. If model calls litellm_code_execution, executes the code
         3. Continues conversation with results
         4. Repeats until model stops calling tools
         5. Returns final response with generated files inline
-        
+
         Args:
             model: Model to use
             messages: Initial messages
@@ -130,7 +125,7 @@ class CodeExecutionHandler:
             skill_files: Dict of skill files for execution
             skill_id: Optional skill ID for tracking
             **kwargs: Additional args for litellm.acompletion
-            
+
         Returns:
             Dict with:
             - response: Final LLM response
@@ -141,19 +136,19 @@ class CodeExecutionHandler:
         from litellm.llms.litellm_proxy.skills.sandbox_executor import (
             SkillsSandboxExecutor,
         )
-        
+
         current_messages = list(messages)
         generated_files: List[Dict[str, Any]] = []  # Files returned directly
         execution_results: List[Dict] = []
-        
+
         executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         response: Any = None  # Initialize to avoid possibly unbound error
-        
+
         for iteration in range(self.max_iterations):
             verbose_logger.debug(
                 f"CodeExecutionHandler: Iteration {iteration + 1}/{self.max_iterations}"
             )
-            
+
             # Make LLM call
             response = await litellm.acompletion(
                 model=model,
@@ -161,10 +156,10 @@ class CodeExecutionHandler:
                 tools=tools,
                 **kwargs,
             )
-            
+
             assistant_message = response.choices[0].message  # type: ignore
             stop_reason = response.choices[0].finish_reason  # type: ignore
-            
+
             # Build assistant message for conversation history
             assistant_msg_dict: Dict[str, Any] = {
                 "role": "assistant",
@@ -177,13 +172,13 @@ class CodeExecutionHandler:
                         "type": "function",
                         "function": {
                             "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
+                            "arguments": tc.function.arguments,
+                        },
                     }
                     for tc in assistant_message.tool_calls
                 ]
             current_messages.append(assistant_msg_dict)
-            
+
             # Check if we're done (no tool calls or not tool_calls finish reason)
             if stop_reason != "tool_calls" or not assistant_message.tool_calls:
                 verbose_logger.debug(
@@ -195,21 +190,21 @@ class CodeExecutionHandler:
                     "execution_results": execution_results,
                     "messages": current_messages,
                 }
-            
+
             # Handle tool calls
             for tool_call in assistant_message.tool_calls:
                 tool_name = tool_call.function.name
-                
+
                 if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
                     # Execute code in sandbox
                     try:
                         args = json.loads(tool_call.function.arguments)
                         code = args.get("code", "")
-                        
+
                         verbose_logger.debug(
                             f"CodeExecutionHandler: Executing code ({len(code)} chars)"
                         )
-                        
+
                         exec_result = executor.execute(
                             code=code,
                             skill_files=skill_files,
@@ -218,62 +213,74 @@ class CodeExecutionHandler:
                         verbose_logger.debug(
                             f"CodeExecutionHandler: Execution result: {exec_result}"
                         )
-                        
-                        execution_results.append({
-                            "iteration": iteration,
-                            "success": exec_result["success"],
-                            "output": exec_result["output"],
-                            "error": exec_result["error"],
-                            "files": [f["name"] for f in exec_result["files"]],
-                        })
-                        
+
+                        execution_results.append(
+                            {
+                                "iteration": iteration,
+                                "success": exec_result["success"],
+                                "output": exec_result["output"],
+                                "error": exec_result["error"],
+                                "files": [f["name"] for f in exec_result["files"]],
+                            }
+                        )
+
                         # Build tool result content
                         tool_result = exec_result["output"] or ""
-                        
+
                         # Collect generated files (returned directly, no storage)
                         if exec_result["files"]:
                             tool_result += "\n\nGenerated files:"
                             for f in exec_result["files"]:
                                 file_content = base64.b64decode(f["content_base64"])
                                 # Add to generated files list (returned in response)
-                                generated_files.append({
-                                    "name": f["name"],
-                                    "mime_type": f["mime_type"],
-                                    "content_base64": f["content_base64"],
-                                    "size": len(file_content),
-                                })
-                                tool_result += f"\n- {f['name']} ({len(file_content)} bytes)"
-                                
+                                generated_files.append(
+                                    {
+                                        "name": f["name"],
+                                        "mime_type": f["mime_type"],
+                                        "content_base64": f["content_base64"],
+                                        "size": len(file_content),
+                                    }
+                                )
+                                tool_result += (
+                                    f"\n- {f['name']} ({len(file_content)} bytes)"
+                                )
+
                                 verbose_logger.debug(
                                     f"CodeExecutionHandler: Generated file {f['name']} ({len(file_content)} bytes)"
                                 )
-                        
+
                         if exec_result["error"]:
                             tool_result += f"\n\nError:\n{exec_result['error']}"
-                        
+
                     except Exception as e:
                         tool_result = f"Code execution failed: {str(e)}"
-                        execution_results.append({
-                            "iteration": iteration,
-                            "success": False,
-                            "error": str(e),
-                        })
-                    
+                        execution_results.append(
+                            {
+                                "iteration": iteration,
+                                "success": False,
+                                "error": str(e),
+                            }
+                        )
+
                     # Add tool result to messages
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": tool_result,
-                    })
+                    current_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": tool_result,
+                        }
+                    )
                 else:
                     # Non-code-execution tool - pass through
                     # In a full implementation, this would call other tool handlers
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": f"Tool '{tool_name}' not handled by code execution handler",
-                    })
-        
+                    current_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": f"Tool '{tool_name}' not handled by code execution handler",
+                        }
+                    )
+
         # Max iterations reached
         verbose_logger.warning(
             f"CodeExecutionHandler: Max iterations ({self.max_iterations}) reached"
@@ -308,4 +315,3 @@ def add_code_execution_tool(tools: Optional[List[Dict]]) -> List[Dict]:
 
 # Global handler instance
 code_execution_handler = CodeExecutionHandler()
-

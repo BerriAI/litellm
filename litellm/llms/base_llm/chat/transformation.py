@@ -135,7 +135,10 @@ class BaseConfig(ABC):
         if 'thinking' is enabled and 'max_tokens' or 'max_completion_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
         """
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if is_thinking_enabled and ("max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params):
+        if is_thinking_enabled and (
+            "max_tokens" not in non_default_params
+            and "max_completion_tokens" not in non_default_params
+        ):
             thinking_token_budget = cast(dict, optional_params["thinking"]).get(
                 "budget_tokens", None
             )
@@ -443,14 +446,14 @@ class BaseConfig(ABC):
     ) -> Optional[dict]:
         """
         Calculate any additional costs beyond standard token costs.
-        
+
         This is used for provider-specific infrastructure costs, routing fees, etc.
-        
+
         Args:
             model: The model name
             prompt_tokens: Number of prompt tokens
             completion_tokens: Number of completion tokens
-            
+
         Returns:
             Optional dictionary with cost names and amounts, e.g.:
             {"Infrastructure Fee": 0.001, "Routing Cost": 0.0005}

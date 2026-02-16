@@ -70,9 +70,7 @@ class AnthropicCountTokensConfig:
             "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
         }
 
-    def validate_request(
-        self, model: str, messages: List[Dict[str, Any]]
-    ) -> None:
+    def validate_request(self, model: str, messages: List[Dict[str, Any]]) -> None:
         """
         Validate the incoming count tokens request.
 

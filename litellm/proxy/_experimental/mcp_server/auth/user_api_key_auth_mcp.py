@@ -540,13 +540,18 @@ class MCPRequestHandler:
             key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
-            if key_object_permission is None and user_api_key_auth and user_api_key_auth.object_permission_id:
+            if (
+                key_object_permission is None
+                and user_api_key_auth
+                and user_api_key_auth.object_permission_id
+            ):
                 from litellm.proxy.auth.auth_checks import get_object_permission
                 from litellm.proxy.proxy_server import (
                     prisma_client,
                     proxy_logging_obj,
                     user_api_key_cache,
                 )
+
                 if prisma_client is not None:
                     key_object_permission = await get_object_permission(
                         object_permission_id=user_api_key_auth.object_permission_id,

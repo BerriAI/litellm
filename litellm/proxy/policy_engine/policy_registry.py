@@ -88,7 +88,9 @@ class PolicyRegistry:
             )
         else:
             # Handle legacy format where guardrails might be a list
-            guardrails = PolicyGuardrails(add=guardrails_data if guardrails_data else None)
+            guardrails = PolicyGuardrails(
+                add=guardrails_data if guardrails_data else None
+            )
 
         # Parse condition (simple model-based condition)
         condition = None
@@ -108,7 +110,9 @@ class PolicyRegistry:
         )
 
     @staticmethod
-    def _parse_pipeline(pipeline_data: Optional[Dict[str, Any]]) -> Optional[GuardrailPipeline]:
+    def _parse_pipeline(
+        pipeline_data: Optional[Dict[str, Any]]
+    ) -> Optional[GuardrailPipeline]:
         """Parse a pipeline configuration from raw data."""
         if pipeline_data is None:
             return None
@@ -331,7 +335,9 @@ class PolicyRegistry:
             if policy_request.guardrails_remove is not None:
                 update_data["guardrails_remove"] = policy_request.guardrails_remove
             if policy_request.condition is not None:
-                update_data["condition"] = json.dumps(policy_request.condition.model_dump())
+                update_data["condition"] = json.dumps(
+                    policy_request.condition.model_dump()
+                )
             if policy_request.pipeline is not None:
                 validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
                 update_data["pipeline"] = json.dumps(validated_pipeline.model_dump())
@@ -536,22 +542,22 @@ class PolicyRegistry:
     ) -> List[str]:
         """
         Resolve all guardrails for a policy from the database.
-        
+
         Uses the existing PolicyResolver to handle inheritance chain resolution.
-        
+
         Args:
             policy_name: Name of the policy to resolve
             prisma_client: The Prisma client instance
-            
+
         Returns:
             List of resolved guardrail names
         """
         from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
-        
+
         try:
             # Load all policies from DB to ensure we have the full inheritance chain
             policies = await self.get_all_policies_from_db(prisma_client)
-            
+
             # Build a temporary in-memory map for resolution
             temp_policies = {}
             for policy_response in policies:
@@ -569,14 +575,14 @@ class PolicyRegistry:
                     },
                 )
                 temp_policies[policy_response.policy_name] = policy
-            
+
             # Use the existing PolicyResolver to resolve guardrails
             resolved_policy = PolicyResolver.resolve_policy_guardrails(
                 policy_name=policy_name,
                 policies=temp_policies,
                 context=None,  # No context needed for simple resolution
             )
-            
+
             return sorted(resolved_policy.guardrails)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error resolving guardrails from DB: {e}")

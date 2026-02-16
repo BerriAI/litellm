@@ -74,11 +74,7 @@ class ManusFilesConfig(BaseFilesConfig):
         Manus uses API_KEY header instead of Authorization: Bearer.
         For file uploads, don't set Content-Type - httpx will set it for multipart.
         """
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("MANUS_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("MANUS_API_KEY")
 
         if not api_key:
             raise ValueError(
@@ -194,14 +190,14 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        
+
         # Get API key
         api_key = (
             litellm_params.get("api_key")
             or litellm.api_key
             or get_secret_str("MANUS_API_KEY")
         )
-        
+
         if not api_key:
             raise ValueError(
                 "Manus API key is required. Set MANUS_API_KEY environment variable or pass api_key parameter."
@@ -436,4 +432,3 @@ class ManusFilesConfig(BaseFilesConfig):
     ) -> HttpxBinaryResponseContent:
         """Transform file content response."""
         return HttpxBinaryResponseContent(response=raw_response)
-

@@ -600,8 +600,12 @@ def responses(
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
         model_file_id_mapping = kwargs.get("model_file_id_mapping")
-        model_info_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
-        
+        model_info_id = (
+            kwargs.get("model_info", {}).get("id")
+            if isinstance(kwargs.get("model_info"), dict)
+            else None
+        )
+
         input = cast(
             Union[str, ResponseInputParam],
             update_responses_input_with_model_file_ids(
@@ -611,7 +615,7 @@ def responses(
             ),
         )
         local_vars["input"] = input
-        
+
         # Update tools with provider-specific file IDs if needed
         if tools:
             tools = cast(

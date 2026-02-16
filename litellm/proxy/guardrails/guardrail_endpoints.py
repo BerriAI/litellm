@@ -14,21 +14,26 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
-from litellm.types.guardrails import (PII_ENTITY_CATEGORIES_MAP,
-                                      ApplyGuardrailRequest,
-                                      ApplyGuardrailResponse,
-                                      BaseLitellmParams,
-                                      BedrockGuardrailConfigModel, Guardrail,
-                                      GuardrailEventHooks,
-                                      GuardrailInfoResponse,
-                                      GuardrailUIAddGuardrailSettings,
-                                      LakeraV2GuardrailConfigModel,
-                                      ListGuardrailsResponse, LitellmParams,
-                                      PatchGuardrailRequest, PiiAction,
-                                      PiiEntityType,
-                                      PresidioPresidioConfigModelUserInterface,
-                                      SupportedGuardrailIntegrations,
-                                      ToolPermissionGuardrailConfigModel)
+from litellm.types.guardrails import (
+    PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
+    BaseLitellmParams,
+    BedrockGuardrailConfigModel,
+    Guardrail,
+    GuardrailEventHooks,
+    GuardrailInfoResponse,
+    GuardrailUIAddGuardrailSettings,
+    LakeraV2GuardrailConfigModel,
+    ListGuardrailsResponse,
+    LitellmParams,
+    PatchGuardrailRequest,
+    PiiAction,
+    PiiEntityType,
+    PresidioPresidioConfigModelUserInterface,
+    SupportedGuardrailIntegrations,
+    ToolPermissionGuardrailConfigModel,
+)
 
 #### GUARDRAILS ENDPOINTS ####
 
@@ -147,8 +152,7 @@ async def list_guardrails_v2():
     ```
     """
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -288,8 +292,7 @@ async def create_guardrail(request: CreateGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -378,8 +381,7 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -447,8 +449,7 @@ async def delete_guardrail(guardrail_id: str):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -541,8 +542,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -664,8 +664,7 @@ async def get_guardrail_info(guardrail_id: str):
     """
 
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
@@ -740,8 +739,10 @@ async def get_guardrail_ui_settings():
     - Content filter settings (patterns and categories)
     """
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
-        PATTERN_CATEGORIES, get_available_content_categories,
-        get_pattern_metadata)
+        PATTERN_CATEGORIES,
+        get_available_content_categories,
+        get_pattern_metadata,
+    )
 
     # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
     category_maps = []
@@ -1264,9 +1265,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields["ui_friendly_name"] = (
-        ToolPermissionGuardrailConfigModel.ui_friendly_name()
-    )
+    tool_permission_fields[
+        "ui_friendly_name"
+    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1277,8 +1278,7 @@ async def get_provider_specific_params():
     }
 
     ### get the config model for the guardrail - go through the registry and get the config model for the guardrail
-    from litellm.proxy.guardrails.guardrail_registry import \
-        guardrail_class_registry
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
     for guardrail_name, guardrail_class in guardrail_class_registry.items():
         guardrail_config_model = guardrail_class.get_config_model()
@@ -1406,8 +1406,9 @@ async def test_custom_code_guardrail(request: TestCustomCodeGuardrailRequest):
     import concurrent.futures
     import re
 
-    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import \
-        get_custom_code_primitives
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
+        get_custom_code_primitives,
+    )
 
     # Security validation patterns
     FORBIDDEN_PATTERNS = [
@@ -1574,10 +1575,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[CustomGuardrail] = (
-            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-                guardrail_name=request.guardrail_name
-            )
+        active_guardrail: Optional[
+            CustomGuardrail
+        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:
             raise HTTPException(

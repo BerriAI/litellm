@@ -30,8 +30,10 @@ class HeliconeLogger:
         self.is_mock_mode = should_use_helicone_mock()
         if self.is_mock_mode:
             create_mock_helicone_client()
-            verbose_logger.info("[HELICONE MOCK] Helicone logger initialized in mock mode")
-        
+            verbose_logger.info(
+                "[HELICONE MOCK] Helicone logger initialized in mock mode"
+            )
+
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
         self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
@@ -110,7 +112,7 @@ class HeliconeLogger:
         for header_key in proxy_headers:
             if header_key.startswith("helicone_"):
                 metadata[header_key] = proxy_headers.get(header_key)
-        
+
         # Remove OpenTelemetry span from metadata as it's not JSON serializable
         # The span is used internally for tracing but shouldn't be logged to external services
         if "litellm_parent_otel_span" in metadata:
@@ -196,7 +198,9 @@ class HeliconeLogger:
             response = litellm.module_level_client.post(url, headers=headers, json=data)
             if response.status_code == 200:
                 if self.is_mock_mode:
-                    print_verbose("[HELICONE MOCK] Helicone Logging - Successfully mocked!")
+                    print_verbose(
+                        "[HELICONE MOCK] Helicone Logging - Successfully mocked!"
+                    )
                 else:
                     print_verbose("Helicone Logging - Success!")
             else:

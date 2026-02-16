@@ -448,7 +448,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
     if hidden_params is None:
         hidden_params = {}
-    
+
     # Preserve existing additional_headers if they contain important provider headers
     # For responses API, additional_headers may already be set with LLM provider headers
     existing_additional_headers = hidden_params.get("additional_headers", {})
@@ -459,7 +459,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
         # Merge new headers with existing ones
         if existing_additional_headers:
             additional_headers.update(existing_additional_headers)
-    
+
     hidden_params["additional_headers"] = additional_headers
 
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
@@ -571,9 +571,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,

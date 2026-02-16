@@ -124,11 +124,18 @@ class MCPOAuth2TokenCache(InMemoryCache):
         # Safely parse expires_in — providers may return null or non-numeric values
         raw_expires_in = body.get("expires_in")
         try:
-            expires_in = int(raw_expires_in) if raw_expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+            expires_in = (
+                int(raw_expires_in)
+                if raw_expires_in is not None
+                else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+            )
         except (TypeError, ValueError):
             expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
 
-        ttl = max(expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS, MCP_OAUTH2_TOKEN_CACHE_MIN_TTL)
+        ttl = max(
+            expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
+            MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
+        )
 
         verbose_logger.info(
             "Fetched OAuth2 token for MCP server %s (expires in %ds)",

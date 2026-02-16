@@ -11,5 +11,3 @@ def _realtime_request_body(model: Optional[str]) -> bytes:
     string formatting work while keeping memory usage bounded.
     """
     return f'{{"model": "{model or ""}"}}'.encode()
-
-

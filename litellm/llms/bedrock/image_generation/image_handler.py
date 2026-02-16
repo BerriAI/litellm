@@ -180,12 +180,12 @@ class BedrockImageGeneration(BaseAWSLLM):
         headers = {}
         guardrail_identifier = optional_params.pop("guardrailIdentifier", None)
         guardrail_version = optional_params.pop("guardrailVersion", None)
-        
+
         if guardrail_identifier is not None:
             headers["x-amz-bedrock-guardrail-identifier"] = guardrail_identifier
         if guardrail_version is not None:
             headers["x-amz-bedrock-guardrail-version"] = guardrail_version
-            
+
         return headers
 
     def _prepare_request(
@@ -292,7 +292,9 @@ class BedrockImageGeneration(BaseAWSLLM):
             dict: The request body to use for the Bedrock Image Generation API
         """
         config_class = self.get_config_class(model=model)
-        request_body = config_class.transform_request_body(text=prompt, optional_params=optional_params)
+        request_body = config_class.transform_request_body(
+            text=prompt, optional_params=optional_params
+        )
         return dict(request_body)
 
     def _transform_response_dict_to_openai_response(

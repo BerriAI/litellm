@@ -12,7 +12,9 @@ if TYPE_CHECKING:
     from opentelemetry.trace import SpanKind
 
     from litellm.integrations.opentelemetry import OpenTelemetry as _OpenTelemetry
-    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.integrations.opentelemetry import (
+        OpenTelemetryConfig as _OpenTelemetryConfig,
+    )
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
@@ -91,7 +93,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
-        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
+            safe_set_attribute,
+        )
 
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
 
@@ -103,7 +107,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             # Fall back to static config from env var
             config = ArizePhoenixLogger.get_arize_phoenix_config()
             if config.project_name:
-                safe_set_attribute(span, "openinference.project.name", config.project_name)
+                safe_set_attribute(
+                    span, "openinference.project.name", config.project_name
+                )
 
         return
 
@@ -139,14 +145,14 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
         """
         Override to prevent creating duplicate litellm_request spans when a proxy parent span exists.
-        
+
         ArizePhoenixLogger should reuse the proxy parent span instead of creating a new litellm_request span,
         to maintain a shallow span hierarchy as expected by Arize Phoenix.
         """
         from opentelemetry.trace import Status, StatusCode
         from litellm.secret_managers.main import get_secret_bool
         from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME
-        
+
         verbose_logger.debug(
             "ArizePhoenixLogger: Logging kwargs: %s, OTEL config settings=%s",
             kwargs,
@@ -231,7 +237,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         if collector_endpoint:
             # Parse the endpoint to determine protocol
-            if collector_endpoint.startswith("grpc://") or (":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint):
+            if collector_endpoint.startswith("grpc://") or (
+                ":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint
+            ):
                 endpoint = collector_endpoint
                 protocol = "otlp_grpc"
             else:
@@ -275,11 +283,10 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             endpoint=endpoint,
             project_name=project_name,
         )
-    
+
     ## cannot suppress additional proxy server spans, removed previous methods.
 
     async def async_health_check(self):
-
         config = self.get_arize_phoenix_config()
 
         if not config.otlp_auth_headers:

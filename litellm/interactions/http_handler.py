@@ -86,11 +86,17 @@ class InteractionsHTTPHandler:
     ) -> Union[
         InteractionsAPIResponse,
         Iterator[InteractionsAPIStreamingResponse],
-        Coroutine[Any, Any, Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]],
+        Coroutine[
+            Any,
+            Any,
+            Union[
+                InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]
+            ],
+        ],
     ]:
         """
         Create a new interaction (synchronous or async based on _is_async flag).
-        
+
         Per Google's OpenAPI spec, the endpoint is POST /{api_version}/interactions
         """
         if _is_async:
@@ -199,7 +205,9 @@ class InteractionsHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
         stream: Optional[bool] = None,
-    ) -> Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]:
+    ) -> Union[
+        InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]
+    ]:
         """
         Create a new interaction (async version).
         """
@@ -287,7 +295,7 @@ class InteractionsHTTPHandler:
         interactions_api_config: BaseInteractionsAPIConfig,
     ) -> SyncInteractionsAPIStreamingIterator:
         """Create a synchronous streaming iterator.
-        
+
         Google AI's streaming format uses SSE (Server-Sent Events).
         Returns a proper streaming iterator that yields chunks as they arrive.
         """
@@ -306,7 +314,7 @@ class InteractionsHTTPHandler:
         interactions_api_config: BaseInteractionsAPIConfig,
     ) -> InteractionsAPIStreamingIterator:
         """Create an asynchronous streaming iterator.
-        
+
         Google AI's streaming format uses SSE (Server-Sent Events).
         Returns a proper streaming iterator that yields chunks as they arrive.
         """
@@ -687,4 +695,3 @@ class InteractionsHTTPHandler:
 
 # Initialize the HTTP handler singleton
 interactions_http_handler = InteractionsHTTPHandler()
-

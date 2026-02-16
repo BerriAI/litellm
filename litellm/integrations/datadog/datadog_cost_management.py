@@ -93,7 +93,9 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         Aggregates costs by Provider, Model, and Date.
         Returns a list of DatadogFOCUSCostEntry.
         """
-        aggregator: Dict[Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry] = {}
+        aggregator: Dict[
+            Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry
+        ] = {}
 
         for log in logs:
             try:

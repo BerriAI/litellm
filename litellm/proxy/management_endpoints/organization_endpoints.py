@@ -175,12 +175,16 @@ async def new_organization(
     if data.max_budget is not None and data.max_budget < 0:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            detail={
+                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+            },
         )
     if data.soft_budget is not None and data.soft_budget < 0:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            detail={
+                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+            },
         )
 
     user_object_correct_type: Optional[LiteLLM_UserTable] = None
@@ -297,7 +301,7 @@ async def get_organization_daily_activity(
     from litellm.proxy.proxy_server import (
         prisma_client,
     )
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
@@ -433,12 +437,16 @@ async def update_organization(
     if data.max_budget is not None and data.max_budget < 0:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            detail={
+                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+            },
         )
     if data.soft_budget is not None and data.soft_budget < 0:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            detail={
+                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+            },
         )
 
     if data.updated_by is None:
@@ -675,13 +683,15 @@ async def list_organization(
                     response = []
                 else:
                     where_conditions["organization_id"] = org_id
-                    response = await prisma_client.db.litellm_organizationtable.find_many(
-                        where=where_conditions,
-                        include={
-                            "litellm_budget_table": True,
-                            "members": True,
-                            "teams": True,
-                        },
+                    response = (
+                        await prisma_client.db.litellm_organizationtable.find_many(
+                            where=where_conditions,
+                            include={
+                                "litellm_budget_table": True,
+                                "members": True,
+                                "teams": True,
+                            },
+                        )
                     )
             else:
                 # Filter by membership and any additional filters
@@ -716,16 +726,16 @@ async def info_organization(organization_id: str):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
-        await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": organization_id},
-            include={
-                "litellm_budget_table": True,
-                "members": True,
-                "teams": True,
-                "object_permission": True,
-            },
-        )
+    response: Optional[
+        LiteLLM_OrganizationTableWithMembers
+    ] = await prisma_client.db.litellm_organizationtable.find_unique(
+        where={"organization_id": organization_id},
+        include={
+            "litellm_budget_table": True,
+            "members": True,
+            "teams": True,
+            "object_permission": True,
+        },
     )
 
     if response is None:
@@ -1021,16 +1031,16 @@ async def organization_member_update(
                 },
                 data={"budget_id": budget_id},
             )
-        final_organization_membership: Optional[BaseModel] = (
-            await prisma_client.db.litellm_organizationmembership.find_unique(
-                where={
-                    "user_id_organization_id": {
-                        "user_id": data.user_id,
-                        "organization_id": data.organization_id,
-                    }
-                },
-                include={"litellm_budget_table": True},
-            )
+        final_organization_membership: Optional[
+            BaseModel
+        ] = await prisma_client.db.litellm_organizationmembership.find_unique(
+            where={
+                "user_id_organization_id": {
+                    "user_id": data.user_id,
+                    "organization_id": data.organization_id,
+                }
+            },
+            include={"litellm_budget_table": True},
         )
 
         if final_organization_membership is None:

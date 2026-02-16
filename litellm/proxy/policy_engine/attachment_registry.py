@@ -60,9 +60,7 @@ class AttachmentRegistry:
                     f"Loaded attachment for policy: {attachment.policy}"
                 )
             except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Error loading attachment: {str(e)}"
-                )
+                verbose_proxy_logger.error(f"Error loading attachment: {str(e)}")
                 raise ValueError(f"Invalid attachment: {str(e)}") from e
 
         self._initialized = True
@@ -97,7 +95,9 @@ class AttachmentRegistry:
         Returns:
             List of policy names that are attached to matching scopes
         """
-        return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context)]
+        return [
+            r["policy_name"] for r in self.get_attached_policies_with_reasons(context)
+        ]
 
     def get_attached_policies_with_reasons(
         self, context: PolicyMatchContext
@@ -146,7 +146,8 @@ class AttachmentRegistry:
         reasons = []
         if attachment.tags and context.tags:
             matching_tags = [
-                t for t in context.tags
+                t
+                for t in context.tags
                 if PolicyMatcher.matches_pattern(t, attachment.tags)
             ]
             if matching_tags:
@@ -160,9 +161,7 @@ class AttachmentRegistry:
 
         return "+".join(reasons) if reasons else "scope:default"
 
-    def is_policy_attached(
-        self, policy_name: str, context: PolicyMatchContext
-    ) -> bool:
+    def is_policy_attached(self, policy_name: str, context: PolicyMatchContext) -> bool:
         """
         Check if a specific policy is attached to the given context.
 
@@ -465,9 +464,13 @@ class AttachmentRegistry:
                 attachment = PolicyAttachment(
                     policy=attachment_response.policy_name,
                     scope=attachment_response.scope,
-                    teams=attachment_response.teams if attachment_response.teams else None,
+                    teams=attachment_response.teams
+                    if attachment_response.teams
+                    else None,
                     keys=attachment_response.keys if attachment_response.keys else None,
-                    models=attachment_response.models if attachment_response.models else None,
+                    models=attachment_response.models
+                    if attachment_response.models
+                    else None,
                     tags=attachment_response.tags if attachment_response.tags else None,
                 )
                 self._attachments.append(attachment)

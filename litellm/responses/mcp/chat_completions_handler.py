@@ -24,13 +24,13 @@ def _add_mcp_metadata_to_response(
 ) -> None:
     """
     Add MCP metadata to response's provider_specific_fields.
-    
+
     This function adds MCP-related information to the response so that
     clients can access which tools were available, which were called, and
     what results were returned.
-    
+
     For ModelResponse: adds to choices[].message.provider_specific_fields
-    For CustomStreamWrapper: stores in _hidden_params and automatically adds to 
+    For CustomStreamWrapper: stores in _hidden_params and automatically adds to
     final chunk's delta.provider_specific_fields via CustomStreamWrapper._add_mcp_metadata_to_final_chunk()
     """
     if isinstance(response, CustomStreamWrapper):
@@ -39,7 +39,7 @@ def _add_mcp_metadata_to_response(
         # add it to the final chunk's delta.provider_specific_fields
         if not hasattr(response, "_hidden_params"):
             response._hidden_params = {}
-        
+
         mcp_metadata = {}
         if openai_tools:
             mcp_metadata["mcp_list_tools"] = openai_tools
@@ -47,26 +47,24 @@ def _add_mcp_metadata_to_response(
             mcp_metadata["mcp_tool_calls"] = tool_calls
         if tool_results:
             mcp_metadata["mcp_call_results"] = tool_results
-        
+
         if mcp_metadata:
             response._hidden_params["mcp_metadata"] = mcp_metadata
         return
-    
+
     if not isinstance(response, ModelResponse):
         return
-    
+
     if not hasattr(response, "choices") or not response.choices:
         return
-    
+
     # Add MCP metadata to all choices' messages
     for choice in response.choices:
         message = getattr(choice, "message", None)
         if message is not None:
             # Get existing provider_specific_fields or create new dict
-            provider_fields = (
-                getattr(message, "provider_specific_fields", None) or {}
-            )
-            
+            provider_fields = getattr(message, "provider_specific_fields", None) or {}
+
             # Add MCP metadata
             if openai_tools:
                 provider_fields["mcp_list_tools"] = openai_tools
@@ -74,7 +72,7 @@ def _add_mcp_metadata_to_response(
                 provider_fields["mcp_tool_calls"] = tool_calls
             if tool_results:
                 provider_fields["mcp_call_results"] = tool_results
-            
+
             # Set the provider_specific_fields
             setattr(message, "provider_specific_fields", provider_fields)
 
@@ -205,10 +203,22 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
         class MCPStreamingIterator:
             """Custom iterator that collects chunks, detects tool calls, and adds MCP metadata to final chunk."""
-            
-            def __init__(self, stream_wrapper, messages, tool_server_map, user_api_key_auth,
-                        mcp_auth_header, mcp_server_auth_headers, oauth2_headers, raw_headers,
-                        litellm_call_id, litellm_trace_id, openai_tools, base_call_args):
+
+            def __init__(
+                self,
+                stream_wrapper,
+                messages,
+                tool_server_map,
+                user_api_key_auth,
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+                litellm_call_id,
+                litellm_trace_id,
+                openai_tools,
+                base_call_args,
+            ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
                 self.tool_server_map = tool_server_map
@@ -234,93 +244,116 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             async def __aiter__(self):
                 return self
 
-            def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
+            def _add_mcp_list_tools_to_chunk(
+                self, chunk: ModelResponseStream
+            ) -> ModelResponseStream:
                 """Add mcp_list_tools to the first chunk."""
                 from litellm.types.utils import (
                     StreamingChoices,
                     add_provider_specific_fields,
                 )
-                
+
                 if not self.openai_tools:
                     return chunk
-                
+
                 if hasattr(chunk, "choices") and chunk.choices:
                     for choice in chunk.choices:
-                        if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
+                        if (
+                            isinstance(choice, StreamingChoices)
+                            and hasattr(choice, "delta")
+                            and choice.delta
+                        ):
                             # Get existing provider_specific_fields or create new dict
-                            existing_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
-                            provider_fields = dict(existing_fields)  # Create a copy to avoid mutating the original
-                            
+                            existing_fields = (
+                                getattr(choice.delta, "provider_specific_fields", None)
+                                or {}
+                            )
+                            provider_fields = dict(
+                                existing_fields
+                            )  # Create a copy to avoid mutating the original
+
                             # Add only mcp_list_tools to first chunk
                             provider_fields["mcp_list_tools"] = self.openai_tools
-                            
+
                             # Use add_provider_specific_fields to ensure proper setting
                             # This function handles Pydantic model attribute setting correctly
                             add_provider_specific_fields(choice.delta, provider_fields)
-                
+
                 return chunk
 
-            def _add_mcp_tool_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
+            def _add_mcp_tool_metadata_to_final_chunk(
+                self, chunk: ModelResponseStream
+            ) -> ModelResponseStream:
                 """Add mcp_tool_calls and mcp_call_results to the final chunk."""
                 from litellm.types.utils import (
                     StreamingChoices,
                     add_provider_specific_fields,
                 )
-                
+
                 if hasattr(chunk, "choices") and chunk.choices:
                     for choice in chunk.choices:
-                        if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
+                        if (
+                            isinstance(choice, StreamingChoices)
+                            and hasattr(choice, "delta")
+                            and choice.delta
+                        ):
                             # Get existing provider_specific_fields or create new dict
                             # Access the attribute directly to handle Pydantic model attributes correctly
                             existing_fields = {}
                             if hasattr(choice.delta, "provider_specific_fields"):
-                                attr_value = getattr(choice.delta, "provider_specific_fields", None)
+                                attr_value = getattr(
+                                    choice.delta, "provider_specific_fields", None
+                                )
                                 if attr_value is not None:
                                     # Create a copy to avoid mutating the original
-                                    existing_fields = dict(attr_value) if isinstance(attr_value, dict) else {}
-                            
+                                    existing_fields = (
+                                        dict(attr_value)
+                                        if isinstance(attr_value, dict)
+                                        else {}
+                                    )
+
                             provider_fields = existing_fields
-                            
+
                             # Add tool_calls and tool_results if available
                             if self.tool_calls:
                                 provider_fields["mcp_tool_calls"] = self.tool_calls
                             if self.tool_results:
                                 provider_fields["mcp_call_results"] = self.tool_results
-                            
+
                             # Use add_provider_specific_fields to ensure proper setting
                             # This function handles Pydantic model attribute setting correctly
                             add_provider_specific_fields(choice.delta, provider_fields)
-                
+
                 return chunk
 
             async def __anext__(self):
                 # Phase 1: Collect and yield initial stream chunks
                 if not self.stream_exhausted:
                     # Get the iterator from the stream wrapper
-                    if not hasattr(self, '_stream_iterator'):
+                    if not hasattr(self, "_stream_iterator"):
                         self._stream_iterator = self.stream_wrapper.__aiter__()
                         # Add mcp_list_tools to the first chunk (available from the start)
                         _add_mcp_metadata_to_response(
                             response=self.stream_wrapper,
                             openai_tools=self.openai_tools,
                         )
-                    
+
                     try:
                         chunk = await self._stream_iterator.__anext__()
                         self.collected_chunks.append(chunk)
-                        
+
                         # Add mcp_list_tools to the first chunk
                         if len(self.collected_chunks) == 1:
                             chunk = self._add_mcp_list_tools_to_chunk(chunk)
-                        
+
                         # Check if this is the final chunk (has finish_reason)
                         is_final = (
-                            hasattr(chunk, "choices") 
-                            and chunk.choices 
+                            hasattr(chunk, "choices")
+                            and chunk.choices
                             and hasattr(chunk.choices[0], "finish_reason")
                             and chunk.choices[0].finish_reason is not None
                         )
-                        
+
                         if is_final:
                             # This is the final chunk, mark stream as exhausted
                             self.stream_exhausted = True
@@ -331,7 +364,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                             # If we have tool results, prepare follow-up call immediately
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
-                        
+
                         return chunk
                     except StopAsyncIteration:
                         self.stream_exhausted = True
@@ -340,50 +373,61 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                         # If we have chunks, yield the final one with metadata
                         if self.collected_chunks:
                             final_chunk = self.collected_chunks[-1]
-                            final_chunk = self._add_mcp_tool_metadata_to_final_chunk(final_chunk)
+                            final_chunk = self._add_mcp_tool_metadata_to_final_chunk(
+                                final_chunk
+                            )
                             # If we have tool results, prepare follow-up call
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
                             return final_chunk
-                
+
                 # Phase 2: Yield follow-up stream chunks if available
                 if self.follow_up_stream and not self.follow_up_exhausted:
                     if not self.follow_up_iterator:
                         self.follow_up_iterator = self.follow_up_stream.__aiter__()
                         from litellm._logging import verbose_logger
+
                         verbose_logger.debug("Follow-up stream iterator created")
-                    
+
                     try:
                         chunk = await self.follow_up_iterator.__anext__()
                         from litellm._logging import verbose_logger
+
                         verbose_logger.debug(f"Follow-up chunk yielded: {chunk}")
                         return chunk
                     except StopAsyncIteration:
                         self.follow_up_exhausted = True
                         from litellm._logging import verbose_logger
+
                         verbose_logger.debug("Follow-up stream exhausted")
                         # After follow-up stream is exhausted, check if we need to raise StopAsyncIteration
                         raise StopAsyncIteration
-                
+
                 # If we're here and follow_up_stream is None but we expected it, log a warning
-                if self.stream_exhausted and self.tool_results and self.complete_response and self.follow_up_stream is None:
+                if (
+                    self.stream_exhausted
+                    and self.tool_results
+                    and self.complete_response
+                    and self.follow_up_stream is None
+                ):
                     from litellm._logging import verbose_logger
+
                     verbose_logger.warning(
                         "Follow-up stream was not created despite having tool results"
                     )
-                
+
                 raise StopAsyncIteration
 
             async def _process_tool_calls(self):
                 """Process tool calls after streaming completes."""
                 if self.tool_execution_done:
                     return
-                
+
                 self.tool_execution_done = True
-                
+
                 if not self.collected_chunks:
                     return
-                
+
                 # Build complete response from chunks
                 complete_response = stream_chunk_builder(
                     chunks=self.collected_chunks,
@@ -399,31 +443,35 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
                     if self.tool_calls:
                         # Execute tool calls
-                        self.tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-                            tool_server_map=self.tool_server_map,
-                            tool_calls=self.tool_calls,
-                            user_api_key_auth=self.user_api_key_auth,
-                            mcp_auth_header=self.mcp_auth_header,
-                            mcp_server_auth_headers=self.mcp_server_auth_headers,
-                            oauth2_headers=self.oauth2_headers,
-                            raw_headers=self.raw_headers,
-                            litellm_call_id=self.litellm_call_id,
-                            litellm_trace_id=self.litellm_trace_id,
+                        self.tool_results = (
+                            await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+                                tool_server_map=self.tool_server_map,
+                                tool_calls=self.tool_calls,
+                                user_api_key_auth=self.user_api_key_auth,
+                                mcp_auth_header=self.mcp_auth_header,
+                                mcp_server_auth_headers=self.mcp_server_auth_headers,
+                                oauth2_headers=self.oauth2_headers,
+                                raw_headers=self.raw_headers,
+                                litellm_call_id=self.litellm_call_id,
+                                litellm_trace_id=self.litellm_trace_id,
+                            )
                         )
 
             async def _prepare_follow_up_call(self):
                 """Prepare and initiate follow-up call with tool results."""
                 if self.follow_up_stream is not None:
                     return  # Already prepared
-                
+
                 if not self.tool_results or not self.complete_response:
                     return
-                
+
                 # Create follow-up messages with tool results
-                follow_up_messages = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
-                    original_messages=self.messages,
-                    response=self.complete_response,
-                    tool_results=self.tool_results,
+                follow_up_messages = (
+                    LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
+                        original_messages=self.messages,
+                        response=self.complete_response,
+                        tool_results=self.tool_results,
+                    )
                 )
 
                 # Make follow-up call with streaming
@@ -436,16 +484,19 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 # Import litellm here to ensure we get the patched version
                 # This ensures the patch works correctly in tests
                 import litellm
+
                 follow_up_response = await litellm.acompletion(**follow_up_call_args)
-                
+
                 # Ensure follow-up response is a CustomStreamWrapper
                 if isinstance(follow_up_response, CustomStreamWrapper):
                     self.follow_up_stream = follow_up_response
                     from litellm._logging import verbose_logger
+
                     verbose_logger.debug("Follow-up stream created successfully")
                 else:
                     # Unexpected response type - log and set to None
                     from litellm._logging import verbose_logger
+
                     verbose_logger.warning(
                         f"Follow-up response is not a CustomStreamWrapper: {type(follow_up_response)}"
                     )
@@ -476,10 +527,14 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                     completion_stream=None,
                     model=getattr(original_wrapper, "model", "unknown"),
                     logging_obj=getattr(original_wrapper, "logging_obj", None),
-                    custom_llm_provider=getattr(original_wrapper, "custom_llm_provider", None),
+                    custom_llm_provider=getattr(
+                        original_wrapper, "custom_llm_provider", None
+                    ),
                     stream_options=getattr(original_wrapper, "stream_options", None),
                     make_call=getattr(original_wrapper, "make_call", None),
-                    _response_headers=getattr(original_wrapper, "_response_headers", None),
+                    _response_headers=getattr(
+                        original_wrapper, "_response_headers", None
+                    ),
                 )
                 self._original_wrapper = original_wrapper
                 self._custom_iterator = custom_iterator
@@ -497,12 +552,15 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 # For synchronous iteration, create a sync wrapper
                 if self._sync_iterator is None:
                     import asyncio
+
                     try:
                         self._sync_loop = asyncio.get_event_loop()
                     except RuntimeError:
                         self._sync_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(self._sync_loop)
-                    self._sync_iterator = _SyncIteratorWrapper(self._custom_iterator, self._sync_loop)
+                    self._sync_iterator = _SyncIteratorWrapper(
+                        self._custom_iterator, self._sync_loop
+                    )
                 return self._sync_iterator
 
             def __next__(self):
@@ -529,7 +587,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 if self._iterator is None:
                     # __aiter__ might be async, so we need to await it
                     aiter_result = self._async_iterator.__aiter__()
-                    if hasattr(aiter_result, '__await__'):
+                    if hasattr(aiter_result, "__await__"):
                         # It's a coroutine, await it
                         self._iterator = self._loop.run_until_complete(aiter_result)
                     else:

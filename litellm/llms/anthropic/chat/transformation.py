@@ -206,74 +206,30 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
-        
+
         Anthropic's output_format doesn't support certain JSON schema properties:
-        - maxItems/minItems: Not supported for array types
-        - minimum/maximum: Not supported for numeric types
-        - minLength/maxLength: Not supported for string types
-        
-        This mirrors the transformation done by the Anthropic Python SDK.
-        See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
-        
-        The SDK approach:
-        1. Remove unsupported constraints from schema
-        2. Add constraint info to description (e.g., "Must be at least 100")
-        3. Validate responses against original schema
-        
+        - maxItems: Not supported for array types
+        - minItems: Not supported for array types
+
+        This function recursively removes these unsupported fields while preserving
+        all other valid schema properties.
+
         Args:
             schema: The JSON schema dictionary to filter
-            
+
         Returns:
-            A new dictionary with unsupported fields removed and descriptions updated
-            
-        Related issues: 
-        - https://github.com/BerriAI/litellm/issues/19444
+            A new dictionary with unsupported fields removed
+
+        Related issue: https://github.com/BerriAI/litellm/issues/19444
         """
         if not isinstance(schema, dict):
             return schema
 
-        # All numeric/string/array constraints not supported by Anthropic
-        unsupported_fields = {
-            "maxItems", "minItems",           # array constraints
-            "minimum", "maximum",             # numeric constraints  
-            "exclusiveMinimum", "exclusiveMaximum",  # numeric constraints
-            "minLength", "maxLength",         # string constraints
-        }
-
-        # Build description additions from removed constraints
-        constraint_descriptions: list = []
-        constraint_labels = {
-            "minItems": "minimum number of items: {}",
-            "maxItems": "maximum number of items: {}",
-            "minimum": "minimum value: {}",
-            "maximum": "maximum value: {}",
-            "exclusiveMinimum": "exclusive minimum value: {}",
-            "exclusiveMaximum": "exclusive maximum value: {}",
-            "minLength": "minimum length: {}",
-            "maxLength": "maximum length: {}",
-        }
-        for field in unsupported_fields:
-            if field in schema:
-                constraint_descriptions.append(
-                    constraint_labels[field].format(schema[field])
-                )
+        unsupported_fields = {"maxItems", "minItems"}
 
         result: Dict[str, Any] = {}
-
-        # Update description with removed constraint info
-        if constraint_descriptions:
-            existing_desc = schema.get("description", "")
-            constraint_note = "Note: " + ", ".join(constraint_descriptions) + "."
-            if existing_desc:
-                result["description"] = existing_desc + " " + constraint_note
-            else:
-                result["description"] = constraint_note
-
         for key, value in schema.items():
             if key in unsupported_fields:
-                continue
-            if key == "description" and "description" in result:
-                # Already handled above
                 continue
 
             if key == "properties" and isinstance(value, dict):
@@ -705,7 +661,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort(
-        reasoning_effort: Optional[Union[REASONING_EFFORT, str]], 
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
         model: str,
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
@@ -758,10 +714,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if json_schema is None:
             return None
-        
+
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema = self.filter_anthropic_output_schema(json_schema)
-        
+
         return AnthropicOutputSchema(
             type="json_schema",
             schema=filtered_schema,
@@ -850,11 +806,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             if param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
-                    self._map_tool_choice(
-                        tool_choice=non_default_params.get("tool_choice"),
-                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
-                    )
+                _tool_choice: Optional[
+                    AnthropicMessagesToolChoice
+                ] = self._map_tool_choice(
+                    tool_choice=non_default_params.get("tool_choice"),
+                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -991,16 +947,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if not system_message_block["content"]:
                         continue
                     # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith("x-anthropic-billing-header:"):
+                    if system_message_block["content"].startswith(
+                        "x-anthropic-billing-header:"
+                    ):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content["cache_control"] = (
-                            system_message_block["cache_control"]
-                        )
+                        anthropic_system_message_content[
+                            "cache_control"
+                        ] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1012,7 +970,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         if _content.get("type") == "text" and not text_value:
                             continue
                         # Skip system messages containing x-anthropic-billing-header metadata
-                        if _content.get("type") == "text" and text_value and text_value.startswith("x-anthropic-billing-header:"):
+                        if (
+                            _content.get("type") == "text"
+                            and text_value
+                            and text_value.startswith("x-anthropic-billing-header:")
+                        ):
                             continue
                         anthropic_system_message_content = (
                             AnthropicSystemMessageContent(
@@ -1021,9 +983,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content["cache_control"] = (
-                                _content["cache_control"]
-                            )
+                            anthropic_system_message_content[
+                                "cache_control"
+                            ] = _content["cache_control"]
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1076,7 +1038,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         Ensure a beta header value is present in the anthropic-beta header.
         Merges with existing values instead of overriding them.
-        
+
         Args:
             headers: Dictionary of headers to update
             beta_value: The beta header value to add
@@ -1098,34 +1060,35 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         - For all other edits, add context-management-2025-06-27 header
         """
         edits = context_management.get("edits", [])
-        
+
         has_compact = False
         has_other = False
-        
+
         for edit in edits:
             edit_type = edit.get("type", "")
             if edit_type == "compact_20260112":
                 has_compact = True
             else:
                 has_other = True
-        
+
         # Add compact header if any compact edits exist
         if has_compact:
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
             )
-        
+
         # Add context management header if any other edits exist
         if has_other:
             self._ensure_beta_header(
-                headers, ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                headers,
+                ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
             )
 
     def update_headers_with_optional_anthropic_beta(
         self, headers: dict, optional_params: dict
     ) -> dict:
         """Update headers with optional anthropic beta."""
-        
+
         # Skip adding beta headers for Vertex requests
         # Vertex AI handles these headers differently
         is_vertex_request = optional_params.get("is_vertex_request", False)
@@ -1144,7 +1107,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ANTHROPIC_HOSTED_TOOLS.MEMORY.value
             ):
                 self._ensure_beta_header(
-                    headers, ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                    headers,
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
                 )
         if optional_params.get("context_management") is not None:
             self._ensure_context_management_beta_header(
@@ -1310,7 +1274,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1360,7 +1326,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 elif content["type"] == "web_fetch_tool_result":
                     if web_search_results is None:
                         web_search_results = []
-                    web_search_results.append(content)  
+                    web_search_results.append(content)
                 else:
                     # All other tool results (bash_code_execution_tool_result, text_editor_code_execution_tool_result, etc.)
                     if tool_results is None:
@@ -1377,7 +1343,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 thinking_blocks.append(
                     cast(ChatCompletionRedactedThinkingBlock, content)
                 )
-            
+
             ## COMPACTION
             elif content["type"] == "compaction":
                 if compaction_blocks is None:
@@ -1404,7 +1370,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if thinking_content is not None:
                     reasoning_content += thinking_content
 
-        return text_content, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks
+        return (
+            text_content,
+            citations,
+            thinking_blocks,
+            reasoning_content,
+            tool_calls,
+            web_search_results,
+            tool_results,
+            compaction_blocks,
+        )
 
     def calculate_usage(
         self,
@@ -1489,7 +1464,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         completion_token_details = CompletionTokensDetailsWrapper(
             reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else 0,
-            text_tokens=completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens,
+            text_tokens=completion_tokens - reasoning_tokens
+            if reasoning_tokens > 0
+            else completion_tokens,
         )
         total_tokens = prompt_tokens + completion_tokens
 
@@ -1585,7 +1562,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 provider_specific_fields["container"] = container
             if compaction_blocks is not None:
                 provider_specific_fields["compaction_blocks"] = compaction_blocks
-                
+
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,

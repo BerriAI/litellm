@@ -318,7 +318,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             )
         except Exception as e:
             from litellm._logging import verbose_logger
-            
+
             verbose_logger.exception(
                 f"Langfuse Layer Error - Exception occurred while logging success event: {str(e)}"
             )
@@ -351,7 +351,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             )
         except Exception as e:
             from litellm._logging import verbose_logger
-            
+
             verbose_logger.exception(
                 f"Langfuse Layer Error - Exception occurred while logging failure event: {str(e)}"
             )

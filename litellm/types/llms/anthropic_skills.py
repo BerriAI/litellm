@@ -156,4 +156,3 @@ class DeleteSkillVersionResponse(BaseModel):
 
     deleted: bool
     """Whether the version was successfully deleted"""
-

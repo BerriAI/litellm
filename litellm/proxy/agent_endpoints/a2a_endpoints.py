@@ -69,6 +69,7 @@ async def _handle_stream_message(
     from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
 
     if not A2A_SDK_AVAILABLE:
+
         async def _error_stream():
             yield json.dumps(
                 {
@@ -106,7 +107,12 @@ async def _handle_stream_message(
                 proxy_server_request=proxy_server_request,
             )
 
-            if use_proxy_hooks and user_api_key_dict is not None and request_data is not None and proxy_logging_obj is not None:
+            if (
+                use_proxy_hooks
+                and user_api_key_dict is not None
+                and request_data is not None
+                and proxy_logging_obj is not None
+            ):
                 from litellm.proxy.common_request_processing import (
                     ProxyBaseLLMRequestProcessing,
                 )
@@ -119,18 +125,23 @@ async def _handle_stream_message(
                     return json.dumps(obj) + "\n"
 
                 def _ndjson_error(proxy_exc: Any) -> str:
-                    return json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {
-                                "code": -32603,
-                                "message": getattr(
-                                    proxy_exc, "message", f"Streaming error: {proxy_exc!s}"
-                                ),
-                            },
-                        }
-                    ) + "\n"
+                    return (
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "error": {
+                                    "code": -32603,
+                                    "message": getattr(
+                                        proxy_exc,
+                                        "message",
+                                        f"Streaming error: {proxy_exc!s}",
+                                    ),
+                                },
+                            }
+                        )
+                        + "\n"
+                    )
 
                 async for line in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
                     response=a2a_stream,
@@ -151,7 +162,12 @@ async def _handle_stream_message(
                         yield json.dumps(chunk) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
-            if use_proxy_hooks and proxy_logging_obj is not None and user_api_key_dict is not None and request_data is not None:
+            if (
+                use_proxy_hooks
+                and proxy_logging_obj is not None
+                and user_api_key_dict is not None
+                and request_data is not None
+            ):
                 transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=e,

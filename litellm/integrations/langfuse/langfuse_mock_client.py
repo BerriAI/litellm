@@ -9,7 +9,10 @@ Usage:
 """
 
 import httpx
-from litellm.integrations.mock_client_factory import MockClientConfig, create_mock_client_factory
+from litellm.integrations.mock_client_factory import (
+    MockClientConfig,
+    create_mock_client_factory,
+)
 
 # Create mock client using factory
 _config = MockClientConfig(
@@ -26,7 +29,11 @@ _config = MockClientConfig(
     patch_sync_client=True,
 )
 
-_create_mock_langfuse_client_internal, should_use_langfuse_mock = create_mock_client_factory(_config)
+(
+    _create_mock_langfuse_client_internal,
+    should_use_langfuse_mock,
+) = create_mock_client_factory(_config)
+
 
 # Langfuse needs to return an httpx.Client instance
 def create_mock_langfuse_client():

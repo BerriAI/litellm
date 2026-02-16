@@ -39,7 +39,7 @@ else:
 class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     """
     Configuration for Google AI Studio Interactions API.
-    
+
     Minimal config - we follow the OpenAPI spec directly with no transformation.
     """
 
@@ -54,9 +54,18 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     def get_supported_params(self, model: str) -> List[str]:
         """Per OpenAPI spec CreateModelInteractionParams."""
         return [
-            "model", "agent", "input", "tools", "system_instruction",
-            "generation_config", "stream", "store", "background",
-            "response_modalities", "response_format", "response_mime_type",
+            "model",
+            "agent",
+            "input",
+            "tools",
+            "system_instruction",
+            "generation_config",
+            "stream",
+            "store",
+            "background",
+            "response_modalities",
+            "response_format",
+            "response_mime_type",
             "previous_interaction_id",
         ]
 
@@ -83,16 +92,16 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         litellm_params = litellm_params or {}
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
-        
+
         if not api_key:
             raise ValueError(
                 "Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
             )
-        
+
         query_params = f"key={api_key}"
         if stream:
             query_params += "&alt=sse"
-        
+
         return f"{api_base}/{self.api_version}/interactions?{query_params}"
 
     def transform_request(
@@ -108,7 +117,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         Build request body per OpenAPI spec - minimal transformation.
         """
         request_body: Dict[str, Any] = {}
-        
+
         # Model or Agent (one required)
         if model:
             request_body["model"] = GeminiModelInfo.get_base_model(model) or model
@@ -116,21 +125,28 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             request_body["agent"] = agent
         else:
             raise ValueError("Either 'model' or 'agent' must be provided")
-        
+
         # Input
         if input is not None:
             request_body["input"] = input
-        
+
         # Pass through optional params directly (they match the spec)
         optional_keys = [
-            "tools", "system_instruction", "generation_config", "stream", "store",
-            "background", "response_modalities", "response_format",
-            "response_mime_type", "previous_interaction_id",
+            "tools",
+            "system_instruction",
+            "generation_config",
+            "stream",
+            "store",
+            "background",
+            "response_modalities",
+            "response_format",
+            "response_mime_type",
+            "previous_interaction_id",
         ]
         for key in optional_keys:
             if optional_params.get(key) is not None:
                 request_body[key] = optional_params[key]
-        
+
         return request_body
 
     def transform_response(
@@ -152,13 +168,15 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 status_code=raw_response.status_code,
                 headers=dict(raw_response.headers),
             )
-        
+
         verbose_logger.debug("Google AI Interactions response: %s", raw_json)
-        
+
         response = InteractionsAPIResponse(**raw_json)
         response._hidden_params["headers"] = dict(raw_response.headers)
-        response._hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
-        
+        response._hidden_params["additional_headers"] = process_response_headers(
+            dict(raw_response.headers)
+        )
+
         return response
 
     def transform_streaming_response(
@@ -172,7 +190,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         return InteractionsAPIStreamingResponse(**parsed_chunk)
 
     # GET / DELETE / CANCEL - just build URLs, responses match spec directly
-    
+
     def transform_get_interaction_request(
         self,
         interaction_id: str,
@@ -185,7 +203,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         api_key = GeminiModelInfo.get_api_key(litellm_params.api_key)
         if not api_key:
             raise ValueError("Google API key is required")
-        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}?key={api_key}", {}
+        return (
+            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}?key={api_key}",
+            {},
+        )
 
     def transform_get_interaction_response(
         self,
@@ -216,7 +237,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         api_key = GeminiModelInfo.get_api_key(litellm_params.api_key)
         if not api_key:
             raise ValueError("Google API key is required")
-        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}?key={api_key}", {}
+        return (
+            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}?key={api_key}",
+            {},
+        )
 
     def transform_delete_interaction_response(
         self,
@@ -244,7 +268,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         api_key = GeminiModelInfo.get_api_key(litellm_params.api_key)
         if not api_key:
             raise ValueError("Google API key is required")
-        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}:cancel?key={api_key}", {}
+        return (
+            f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}:cancel?key={api_key}",
+            {},
+        )
 
     def transform_cancel_interaction_response(
         self,

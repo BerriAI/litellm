@@ -37,7 +37,9 @@ class CategoryKeywordDetection(TypedDict):
     action: str  # ContentFilterAction.value
 
 
-ContentFilterDetection = Union[PatternDetection, BlockedWordDetection, CategoryKeywordDetection]
+ContentFilterDetection = Union[
+    PatternDetection, BlockedWordDetection, CategoryKeywordDetection
+]
 
 
 class ContentFilterCategoryConfig(BaseLiteLLMOpenAIResponseObject):

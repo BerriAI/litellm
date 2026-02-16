@@ -194,6 +194,7 @@ class VertexAIBatchPrediction(VertexLLM):
         # Log the request using logging_obj if available
         if logging_obj is not None:
             from litellm.litellm_core_utils.litellm_logging import Logging
+
             if isinstance(logging_obj, Logging):
                 logging_obj.pre_call(
                     input="",
@@ -235,10 +236,11 @@ class VertexAIBatchPrediction(VertexLLM):
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
-        
+
         # Log the request using logging_obj if available
         if logging_obj is not None:
             from litellm.litellm_core_utils.litellm_logging import Logging
+
             if isinstance(logging_obj, Logging):
                 logging_obj.pre_call(
                     input="",
@@ -256,7 +258,7 @@ class VertexAIBatchPrediction(VertexLLM):
                         ),
                     },
                 )
-    
+
         response = await client.get(
             url=api_base,
             headers=headers,

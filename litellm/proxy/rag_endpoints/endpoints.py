@@ -33,12 +33,12 @@ def _build_file_metadata_entry(
 ) -> Dict[str, Any]:
     """
     Build a file metadata entry for storing in vector_store_metadata.
-    
+
     Args:
         response: The response from litellm.aingest containing file_id
         file_data: Optional tuple of (filename, content, content_type)
         file_url: Optional URL if file was ingested from URL
-    
+
     Returns:
         Dictionary with file metadata (file_id, filename, file_url, ingested_at, etc.)
     """
@@ -50,17 +50,17 @@ def _build_file_metadata_entry(
         file_id = response.get("file_id")
     elif hasattr(response, "file_id"):
         file_id = response.file_id
-    
+
     # Extract file information from file_data tuple
     filename = None
     file_size = None
     content_type = None
-    
+
     if file_data:
         filename = file_data[0]
         file_size = len(file_data[1]) if len(file_data) > 1 else None
         content_type = file_data[2] if len(file_data) > 2 else None
-    
+
     # Build file metadata entry
     file_entry = {
         "file_id": file_id,
@@ -68,13 +68,13 @@ def _build_file_metadata_entry(
         "file_url": file_url,
         "ingested_at": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     # Add optional fields if available
     if file_size is not None:
         file_entry["file_size"] = file_size
     if content_type is not None:
         file_entry["content_type"] = content_type
-    
+
     return file_entry
 
 
@@ -88,14 +88,14 @@ async def _save_vector_store_to_db_from_rag_ingest(
 ) -> None:
     """
     Helper function to save a newly created vector store from RAG ingest to the database.
-    
+
     This function:
     - Extracts vector store ID and config from the ingest response
     - Checks if the vector store already exists in the database
     - Creates a new database entry if it doesn't exist
     - Adds the vector store to the registry
     - Tracks team_id and user_id for access control
-    
+
     Args:
         response: The response from litellm.aingest()
         ingest_options: The ingest options containing vector store config
@@ -125,12 +125,14 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
     vector_store_config = ingest_options.get("vector_store", {})
     custom_llm_provider = vector_store_config.get("custom_llm_provider")
-    
+
     # Extract litellm_vector_store_params for custom name and description
     litellm_vector_store_params = ingest_options.get("litellm_vector_store_params", {})
     custom_vector_store_name = litellm_vector_store_params.get("vector_store_name")
-    custom_vector_store_description = litellm_vector_store_params.get("vector_store_description")
-    
+    custom_vector_store_description = litellm_vector_store_params.get(
+        "vector_store_description"
+    )
+
     # Extract provider-specific params from vector_store_config to save as litellm_params
     # This ensures params like aws_region_name, embedding_model, etc. are available for search
     provider_specific_params = {}
@@ -161,13 +163,15 @@ async def _save_vector_store_to_db_from_rag_ingest(
             )
 
             # Initialize metadata with first file
-            initial_metadata = {
-                "ingested_files": [file_entry]
-            }
-            
+            initial_metadata = {"ingested_files": [file_entry]}
+
             # Use custom name if provided, otherwise default
-            vector_store_name = custom_vector_store_name or f"RAG Vector Store - {vector_store_id[:8]}"
-            vector_store_description = custom_vector_store_description or "Created via RAG ingest endpoint"
+            vector_store_name = (
+                custom_vector_store_name or f"RAG Vector Store - {vector_store_id[:8]}"
+            )
+            vector_store_description = (
+                custom_vector_store_description or "Created via RAG ingest endpoint"
+            )
 
             await create_vector_store_in_db(
                 vector_store_id=vector_store_id,
@@ -176,7 +180,9 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 vector_store_name=vector_store_name,
                 vector_store_description=vector_store_description,
                 vector_store_metadata=initial_metadata,
-                litellm_params=provider_specific_params if provider_specific_params else None,
+                litellm_params=provider_specific_params
+                if provider_specific_params
+                else None,
                 team_id=user_api_key_dict.team_id,
                 user_id=user_api_key_dict.user_id,
             )
@@ -188,24 +194,26 @@ async def _save_vector_store_to_db_from_rag_ingest(
             verbose_proxy_logger.info(
                 f"Vector store {vector_store_id} already exists, appending file to metadata"
             )
-            
+
             # Update existing vector store with new file
             existing_metadata = existing_vector_store.vector_store_metadata or {}
             if isinstance(existing_metadata, str):
                 import json
+
                 existing_metadata = json.loads(existing_metadata)
-            
+
             ingested_files = existing_metadata.get("ingested_files", [])
             ingested_files.append(file_entry)
             existing_metadata["ingested_files"] = ingested_files
-            
+
             # Update the vector store
             from litellm.proxy.utils import safe_dumps
+
             await prisma_client.db.litellm_managedvectorstorestable.update(
                 where={"vector_store_id": vector_store_id},
-                data={"vector_store_metadata": safe_dumps(existing_metadata)}
+                data={"vector_store_metadata": safe_dumps(existing_metadata)},
             )
-            
+
             verbose_proxy_logger.info(
                 f"Added file {file_entry.get('filename') or file_entry.get('file_url', 'Unknown')} to vector store {vector_store_id} metadata"
             )
@@ -218,7 +226,9 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
 async def parse_rag_ingest_request(
     request: Request,
-) -> Tuple[Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]]:
+) -> Tuple[
+    Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]
+]:
     """
     Parse RAG ingest request.
 
@@ -289,7 +299,9 @@ async def parse_rag_ingest_request(
     if "vector_store" not in ingest_options:
         raise HTTPException(
             status_code=400,
-            detail={"error": "ingest_options must contain 'vector_store' configuration"},
+            detail={
+                "error": "ingest_options must contain 'vector_store' configuration"
+            },
         )
 
     return ingest_options, file_data, file_url, file_id
@@ -355,7 +367,9 @@ async def rag_ingest(
 
     try:
         # Parse request
-        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
+        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
+            request
+        )
 
         # Add litellm data
         request_data: Dict[str, Any] = {}
@@ -384,7 +398,7 @@ async def rag_ingest(
         verbose_proxy_logger.debug(
             f"RAG Ingest - Checking database save conditions: prisma_client={prisma_client is not None}, response={response is not None}, response_type={type(response)}"
         )
-        
+
         if prisma_client is not None and response is not None:
             await _save_vector_store_to_db_from_rag_ingest(
                 response=response,

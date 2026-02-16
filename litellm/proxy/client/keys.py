@@ -89,7 +89,9 @@ class KeysManagementClient:
         if include_team_keys is not None:
             params["include_team_keys"] = str(include_team_keys).lower()
 
-        request = requests.Request("GET", url, headers=self._get_headers(), params=params)
+        request = requests.Request(
+            "GET", url, headers=self._get_headers(), params=params
+        )
 
         if return_request:
             return request
@@ -257,7 +259,7 @@ class KeysManagementClient:
         url = f"{self._base_url}/key/update"
 
         data: Dict[str, Any] = {"key": key}
-        
+
         if key_alias is not None:
             data["key_alias"] = key_alias
         if user_id is not None:
@@ -283,8 +285,9 @@ class KeysManagementClient:
         except Exception:
             raise Exception(f"Error updating key: {response_text}")
 
-
-    def info(self, key: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
+    def info(
+        self, key: str, return_request: bool = False
+    ) -> Union[Dict[str, Any], requests.Request]:
         """
         Get information about API keys.
 

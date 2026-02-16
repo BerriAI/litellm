@@ -70,7 +70,9 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                         parsed_body = json.loads(body_str)
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
-                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        verbose_proxy_logger.error(
+                            f"Invalid JSON payload received: {str(e)}"
+                        )
                         raise ProxyException(
                             message=f"Invalid JSON payload: {str(e)}",
                             type="invalid_request_error",
@@ -106,6 +108,7 @@ def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
         return {key: parsed_body[key] for key in accepted_keys}
     return None
 
+
 def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
     if request is None:
         return {}
@@ -118,6 +121,7 @@ def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
             "Unexpected error reading request query params - {}".format(e)
         )
         return {}
+
 
 def _safe_set_request_parsed_body(
     request: Optional[Request],
@@ -239,16 +243,16 @@ async def convert_upload_files_to_file_data(
 ) -> Dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
-    
+
     Converts UploadFile objects to tuples of (filename, content, content_type)
     which is the format expected by httpx and litellm's HTTP handlers.
-    
+
     Args:
         form_data: Dictionary containing form data with potential UploadFile objects
-        
+
     Returns:
         Dictionary with UploadFile objects converted to file data tuples
-        
+
     Example:
         ```python
         form_data = await get_form_data(request)
@@ -286,9 +290,10 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     if request.method == "POST":
         if request.headers.get("content-type", "") == "application/json":
             return await _read_request_body(request)
-        elif (
-            "multipart/form-data" in request.headers.get("content-type", "")
-            or "application/x-www-form-urlencoded" in request.headers.get("content-type", "")
+        elif "multipart/form-data" in request.headers.get(
+            "content-type", ""
+        ) or "application/x-www-form-urlencoded" in request.headers.get(
+            "content-type", ""
         ):
             return await get_form_data(request)
         else:
@@ -299,25 +304,24 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
 
 
 def extract_nested_form_metadata(
-    form_data: Dict[str, Any],
-    prefix: str = "litellm_metadata["
+    form_data: Dict[str, Any], prefix: str = "litellm_metadata["
 ) -> Dict[str, Any]:
     """
     Extract nested metadata from form data with bracket notation.
-    
+
     Handles form data that uses bracket notation to represent nested dictionaries,
     such as litellm_metadata[spend_logs_metadata][owner] = "value".
-    
+
     This is commonly encountered when SDKs or clients send form data with nested
     structures using bracket notation instead of JSON.
-    
+
     Args:
         form_data: Dictionary containing form data (from request.form())
         prefix: The prefix to look for in form keys (default: "litellm_metadata[")
-        
+
     Returns:
         Dictionary with nested structure reconstructed from bracket notation
-        
+
     Example:
         Input form_data:
         {
@@ -326,7 +330,7 @@ def extract_nested_form_metadata(
             "litellm_metadata[tags]": "production",
             "other_field": "value"
         }
-        
+
         Output:
         {
             "spend_logs_metadata": {
@@ -338,36 +342,36 @@ def extract_nested_form_metadata(
     """
     if not form_data:
         return {}
-    
+
     metadata: Dict[str, Any] = {}
-    
+
     for key, value in form_data.items():
         # Skip keys that don't start with the prefix
         if not isinstance(key, str) or not key.startswith(prefix):
             continue
-        
+
         # Skip UploadFile objects - they should not be in metadata
         if isinstance(value, UploadFile):
             verbose_proxy_logger.warning(
                 f"Skipping UploadFile in metadata extraction for key: {key}"
             )
             continue
-        
+
         # Extract the nested path from bracket notation
         # Example: "litellm_metadata[spend_logs_metadata][owner]" -> ["spend_logs_metadata", "owner"]
         try:
             # Remove the prefix and strip trailing ']'
             path_string = key.replace(prefix, "").rstrip("]")
-            
+
             # Split by "][" to get individual path parts
             parts = path_string.split("][")
-            
+
             if not parts or not parts[0]:
                 verbose_proxy_logger.warning(
                     f"Invalid metadata key format (empty path): {key}"
                 )
                 continue
-            
+
             # Navigate/create nested dictionary structure
             current = metadata
             for part in parts[:-1]:
@@ -385,23 +389,21 @@ def extract_nested_form_metadata(
                     verbose_proxy_logger.warning(
                         f"Cannot set value - parent is not a dict for key: {key}"
                     )
-        
+
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error parsing metadata key '{key}': {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {str(e)}")
             continue
-    
+
     return metadata
 
 
 def get_tags_from_request_body(request_body: dict) -> List[str]:
     """
     Extract tags from request body metadata.
-    
+
     Args:
         request_body: The request body dictionary
-        
+
     Returns:
         List of tag names (strings), empty list if no valid tags found
     """
@@ -422,30 +424,28 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
     return [tag for tag in combined_tags if isinstance(tag, str)]
 
 
-def populate_request_with_path_params(
-    request_data: dict, request: Request
-) -> dict:
+def populate_request_with_path_params(request_data: dict, request: Request) -> dict:
     """
     Copy FastAPI path params and query params into the request payload so downstream checks
     (e.g. vector store RBAC, organization RBAC) see them the same way as body params.
-    
+
     Since path_params may not be available during dependency injection,
     we parse the URL path directly for known patterns.
-    
+
     Args:
         request_data: The request data dictionary to populate
         request: The FastAPI Request object
-        
+
     Returns:
         dict: Updated request_data with path parameters and query parameters added
-    """    
+    """
     # Add query parameters to request_data (for GET requests, etc.)
     query_params = _safe_get_request_query_params(request)
     if query_params:
         for key, value in query_params.items():
             # Don't overwrite existing values from request body
             request_data.setdefault(key, value)
-    
+
     # Try to get path_params if available (sometimes populated by FastAPI)
     path_params = getattr(request, "path_params", None)
     if isinstance(path_params, dict) and path_params:
@@ -476,7 +476,7 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
     Parse the request path to find /vector_stores/{vector_store_id}/... segments.
 
     When found, ensure both vector_store_id and vector_store_ids are populated.
-    
+
     Args:
         request_data: The request data dictionary to populate
         request: The FastAPI Request object
@@ -502,4 +502,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         verbose_proxy_logger.debug(
             f"populate_request_with_path_params: No vector_store_id present in path={path}"
         )
-

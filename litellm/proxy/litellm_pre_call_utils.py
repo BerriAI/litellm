@@ -564,11 +564,15 @@ class LiteLLMProxyRequestSetup:
         trace_id_from_header = headers.get("x-litellm-trace-id")
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
-            verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
-        
+            verbose_proxy_logger.debug(
+                f"Extracted agent_id from header: {agent_id_from_header}"
+            )
+
         if trace_id_from_header:
             metadata_from_headers["trace_id"] = trace_id_from_header
-            verbose_proxy_logger.debug(f"Extracted trace_id from header: {trace_id_from_header}")
+            verbose_proxy_logger.debug(
+                f"Extracted trace_id from header: {trace_id_from_header}"
+            )
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -1583,9 +1587,7 @@ def _match_and_track_policies(
         for name in applied_policy_names
         if name in policy_reasons
     }
-    add_policy_sources_to_metadata(
-        request_data=data, policy_sources=applied_reasons
-    )
+    add_policy_sources_to_metadata(request_data=data, policy_sources=applied_reasons)
 
     return applied_policy_names, policy_reasons
 
@@ -1620,9 +1622,9 @@ def _apply_resolved_guardrails_to_metadata(
             pipelines
         )
         data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
-        data[metadata_variable_name]["_pipeline_managed_guardrails"] = (
-            pipeline_managed_guardrails
-        )
+        data[metadata_variable_name][
+            "_pipeline_managed_guardrails"
+        ] = pipeline_managed_guardrails
         verbose_proxy_logger.debug(
             f"Policy engine: resolved {len(pipelines)} pipeline(s), "
             f"managed guardrails: {pipeline_managed_guardrails}"

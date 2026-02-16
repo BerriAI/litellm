@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -24,30 +24,30 @@ def _check_vector_store_access(
 ) -> bool:
     """
     Check if the user has access to the vector store based on team membership.
-    
+
     Args:
         vector_store: The vector store to check access for
         user_api_key_dict: User API key authentication info
-        
+
     Returns:
         True if user has access, False otherwise
-        
+
     Access rules:
     - If vector store has no team_id, it's accessible to all (legacy behavior)
     - If user's team_id matches the vector store's team_id, access is granted
     - Otherwise, access is denied
     """
     vector_store_team_id = vector_store.get("team_id")
-    
+
     # If vector store has no team_id, it's accessible to all (legacy behavior)
     if vector_store_team_id is None:
         return True
-    
+
     # Check if user's team matches the vector store's team
     user_team_id = user_api_key_dict.team_id
     if user_team_id == vector_store_team_id:
         return True
-    
+
     return False
 
 
@@ -58,30 +58,32 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 ) -> Dict:
     """
     Update the request data with the litellm managed vector store registry.
-    
+
     Args:
         data: Request data to update
         vector_store_id: ID of the vector store
         user_api_key_dict: User API key authentication info for access control
-        
+
     Raises:
         HTTPException: If user doesn't have access to the vector store
     """
     if litellm.vector_store_registry is not None:
-        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
-            litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
-                vector_store_id=vector_store_id
-            )
+        vector_store_to_run: Optional[
+            LiteLLM_ManagedVectorStore
+        ] = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+            vector_store_id=vector_store_id
         )
         if vector_store_to_run is not None:
             # Check access control if user_api_key_dict is provided
             if user_api_key_dict is not None:
-                if not _check_vector_store_access(vector_store_to_run, user_api_key_dict):
+                if not _check_vector_store_access(
+                    vector_store_to_run, user_api_key_dict
+                ):
                     raise HTTPException(
                         status_code=403,
                         detail="Access denied: You do not have permission to access this vector store",
                     )
-            
+
             if "custom_llm_provider" in vector_store_to_run:
                 data["custom_llm_provider"] = vector_store_to_run.get(
                     "custom_llm_provider"
@@ -103,7 +105,8 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.post(
-    "/vector_stores/{vector_store_id:path}/search", dependencies=[Depends(user_api_key_auth)]
+    "/vector_stores/{vector_store_id:path}/search",
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def vector_store_search(
     request: Request,
@@ -146,7 +149,7 @@ async def vector_store_search(
     # 2. Extracting model and provider resource ID
     # 3. Setting up proper routing
     # 4. Authentication checks
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -188,7 +191,7 @@ async def vector_store_create(
 
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/create
-    
+
     Supports target_model_names parameter for creating vector stores across multiple models:
     ```json
     {
@@ -213,10 +216,10 @@ async def vector_store_create(
     )
 
     data = await _read_request_body(request=request)
-    
+
     # Check for target_model_names parameter
     target_model_names = data.pop("target_model_names", None)
-    
+
     if target_model_names:
         # Use managed vector stores for multi-model support
         if isinstance(target_model_names, str):
@@ -228,21 +231,23 @@ async def vector_store_create(
                 status_code=400,
                 detail="target_model_names must be a comma-separated string or list of model names",
             )
-        
+
         # Get managed vector stores hook
-        managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
+        managed_vector_stores = proxy_logging_obj.get_proxy_hook(
+            "managed_vector_stores"
+        )
         if managed_vector_stores is None:
             raise HTTPException(
                 status_code=500,
                 detail="Managed vector stores not configured. Please ensure the proxy is initialized with database support.",
             )
-        
+
         if llm_router is None:
             raise HTTPException(
                 status_code=500,
                 detail="LLM Router not initialized. Ensure models are added to proxy.",
             )
-        
+
         # Create vector store across multiple models
         response = await managed_vector_stores.acreate_vector_store(
             create_request=data,
@@ -251,9 +256,9 @@ async def vector_store_create(
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             user_api_key_dict=user_api_key_dict,
         )
-        
+
         return response
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(

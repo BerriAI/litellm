@@ -85,7 +85,7 @@ class UISettings(BaseModel):
 
     require_auth_for_public_ai_hub: bool = Field(
         default=False,
-        description="If true, requires authentication for accessing the public AI Hub."
+        description="If true, requires authentication for accessing the public AI Hub.",
     )
 
 
@@ -365,7 +365,9 @@ async def update_default_team_member_budget(
 
 
 async def _update_litellm_setting(
-    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
+    settings: Union[
+        DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings
+    ],
     settings_key: str,
     in_memory_var: Any,
     success_message: str,

@@ -37,7 +37,9 @@ def _is_user_agent_tag(tag: Optional[str]) -> bool:
     if not tag:
         return False
     normalized_tag = tag.strip().lower()
-    return normalized_tag.startswith("user-agent:") or normalized_tag.startswith("user agent:")
+    return normalized_tag.startswith("user-agent:") or normalized_tag.startswith(
+        "user agent:"
+    )
 
 
 def compute_tag_metadata_totals(records: List[Any]) -> SpendMetrics:
@@ -92,26 +94,24 @@ def update_breakdown_metrics(
 
         # Update API key breakdown for this model
         if record.api_key not in breakdown.models[record.model].api_key_breakdown:
-            breakdown.models[record.model].api_key_breakdown[record.api_key] = (
-                KeyMetricWithMetadata(
-                    metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get(
-                            "key_alias", None
-                        ),
-                        team_id=api_key_metadata.get(record.api_key, {}).get(
-                            "team_id", None
-                        ),
+            breakdown.models[record.model].api_key_breakdown[
+                record.api_key
+            ] = KeyMetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=KeyMetadata(
+                    key_alias=api_key_metadata.get(record.api_key, {}).get(
+                        "key_alias", None
                     ),
-                )
+                    team_id=api_key_metadata.get(record.api_key, {}).get(
+                        "team_id", None
+                    ),
+                ),
             )
-        breakdown.models[record.model].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
-                breakdown.models[record.model]
-                .api_key_breakdown[record.api_key]
-                .metrics,
-                record,
-            )
+        breakdown.models[record.model].api_key_breakdown[
+            record.api_key
+        ].metrics = update_metrics(
+            breakdown.models[record.model].api_key_breakdown[record.api_key].metrics,
+            record,
         )
 
     # Update model group breakdown
@@ -207,24 +207,22 @@ def update_breakdown_metrics(
 
     # Update API key breakdown for this provider
     if record.api_key not in breakdown.providers[provider].api_key_breakdown:
-        breakdown.providers[provider].api_key_breakdown[record.api_key] = (
-            KeyMetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get(
-                        "key_alias", None
-                    ),
-                    team_id=api_key_metadata.get(record.api_key, {}).get(
-                        "team_id", None
-                    ),
+        breakdown.providers[provider].api_key_breakdown[
+            record.api_key
+        ] = KeyMetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=KeyMetadata(
+                key_alias=api_key_metadata.get(record.api_key, {}).get(
+                    "key_alias", None
                 ),
-            )
+                team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
+            ),
         )
-    breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = (
-        update_metrics(
-            breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
-            record,
-        )
+    breakdown.providers[provider].api_key_breakdown[
+        record.api_key
+    ].metrics = update_metrics(
+        breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
+        record,
     )
 
     # Update endpoint breakdown
@@ -240,26 +238,26 @@ def update_breakdown_metrics(
 
         # Update API key breakdown for this endpoint
         if record.api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
-            breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key] = (
-                KeyMetricWithMetadata(
-                    metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get(
-                            "key_alias", None
-                        ),
-                        team_id=api_key_metadata.get(record.api_key, {}).get(
-                            "team_id", None
-                        ),
+            breakdown.endpoints[record.endpoint].api_key_breakdown[
+                record.api_key
+            ] = KeyMetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=KeyMetadata(
+                    key_alias=api_key_metadata.get(record.api_key, {}).get(
+                        "key_alias", None
                     ),
-                )
+                    team_id=api_key_metadata.get(record.api_key, {}).get(
+                        "team_id", None
+                    ),
+                ),
             )
-        breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
-                breakdown.endpoints[record.endpoint]
-                .api_key_breakdown[record.api_key]
-                .metrics,
-                record,
-            )
+        breakdown.endpoints[record.endpoint].api_key_breakdown[
+            record.api_key
+        ].metrics = update_metrics(
+            breakdown.endpoints[record.endpoint]
+            .api_key_breakdown[record.api_key]
+            .metrics,
+            record,
         )
 
     # Update api key breakdown
@@ -298,26 +296,24 @@ def update_breakdown_metrics(
 
         # Update API key breakdown for this entity
         if record.api_key not in breakdown.entities[entity_value].api_key_breakdown:
-            breakdown.entities[entity_value].api_key_breakdown[record.api_key] = (
-                KeyMetricWithMetadata(
-                    metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get(
-                            "key_alias", None
-                        ),
-                        team_id=api_key_metadata.get(record.api_key, {}).get(
-                            "team_id", None
-                        ),
+            breakdown.entities[entity_value].api_key_breakdown[
+                record.api_key
+            ] = KeyMetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=KeyMetadata(
+                    key_alias=api_key_metadata.get(record.api_key, {}).get(
+                        "key_alias", None
                     ),
-                )
+                    team_id=api_key_metadata.get(record.api_key, {}).get(
+                        "team_id", None
+                    ),
+                ),
             )
-        breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
-                breakdown.entities[entity_value]
-                .api_key_breakdown[record.api_key]
-                .metrics,
-                record,
-            )
+        breakdown.entities[entity_value].api_key_breakdown[
+            record.api_key
+        ].metrics = update_metrics(
+            breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics,
+            record,
         )
 
     return breakdown
@@ -336,8 +332,7 @@ async def get_api_key_metadata(
         where={"token": {"in": list(api_keys)}}
     )
     result = {
-        k.token: {"key_alias": k.key_alias, "team_id": k.team_id}
-        for k in key_records
+        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
     }
 
     # For any keys not found in the active table, check the deleted keys table
@@ -676,8 +671,12 @@ async def get_daily_activity_aggregated(
                 total_api_requests=aggregated["totals"].api_requests,
                 total_successful_requests=aggregated["totals"].successful_requests,
                 total_failed_requests=aggregated["totals"].failed_requests,
-                total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
-                total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                total_cache_read_input_tokens=aggregated[
+                    "totals"
+                ].cache_read_input_tokens,
+                total_cache_creation_input_tokens=aggregated[
+                    "totals"
+                ].cache_creation_input_tokens,
                 page=1,
                 total_pages=1,
                 has_more=False,
