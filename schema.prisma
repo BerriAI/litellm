@@ -325,6 +325,19 @@ model LiteLLM_VerificationToken {
     @@index([budget_reset_at, expires])
 }
 
+// Deprecated keys during grace period - allows old key to work until revoke_at
+model LiteLLM_DeprecatedVerificationToken {
+    id               String   @id @default(uuid())
+    token            String   // Hashed old key
+    active_token_id  String   // Current token hash in LiteLLM_VerificationToken
+    revoke_at        DateTime // When the old key stops working
+    created_at       DateTime @default(now()) @map("created_at")
+
+    @@unique([token])
+    @@index([token, revoke_at])
+    @@index([revoke_at])
+}
+
 // Audit table for deleted keys - preserves spend and key information for historical tracking
 model LiteLLM_DeletedVerificationToken {
     id                      String   @id @default(uuid())
