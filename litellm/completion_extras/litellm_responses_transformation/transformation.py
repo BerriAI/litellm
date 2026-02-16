@@ -306,6 +306,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
                 reasoning_item: Dict[str, Any] = {
                     "type": "reasoning",
+                    # OpenAI requires empty summary array with encrypted_content
+                    # See: https://developers.openai.com/cookbook/examples/responses_api/reasoning_items
+                    "summary": [],
                 }
 
                 # Preserve encrypted_content if present
