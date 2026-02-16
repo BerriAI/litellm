@@ -29,6 +29,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
+    resolve_input_file_id_to_unified,
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
@@ -379,22 +380,9 @@ async def retrieve_batch(
             )
 
             # async_post_call_success_hook replaces batch.id and output_file_id with unified IDs
-            # but not input_file_id. Look up the unified ID from flat_model_file_ids.
-            if (
-                unified_batch_id
-                and hasattr(response, "input_file_id")
-                and response.input_file_id
-                and not _is_base64_encoded_unified_file_id(response.input_file_id)
-                and prisma_client
-            ):
-                try:
-                    _managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
-                        where={"flat_model_file_ids": {"has": response.input_file_id}}
-                    )
-                    if _managed_file:
-                        response.input_file_id = _managed_file.unified_file_id
-                except Exception:
-                    pass
+            # but not input_file_id. Resolve raw provider ID to unified ID.
+            if unified_batch_id:
+                await resolve_input_file_id_to_unified(response, prisma_client)
             
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -497,23 +485,10 @@ async def retrieve_batch(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
 
-        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id (terminal state path)
-        # Same as above — resolve raw provider input_file_id to unified ID.
-        if (
-            unified_batch_id
-            and hasattr(response, "input_file_id")
-            and response.input_file_id
-            and not _is_base64_encoded_unified_file_id(response.input_file_id)
-            and prisma_client
-        ):
-            try:
-                _managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
-                    where={"flat_model_file_ids": {"has": response.input_file_id}}
-                )
-                if _managed_file:
-                    response.input_file_id = _managed_file.unified_file_id
-            except Exception:
-                pass
+        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
+        # Resolve raw provider input_file_id to unified ID.
+        if unified_batch_id:
+            await resolve_input_file_id_to_unified(response, prisma_client)
 
         ### ALERTING ###
         asyncio.create_task(

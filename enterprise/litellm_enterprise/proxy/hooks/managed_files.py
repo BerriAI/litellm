@@ -230,14 +230,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_file:
             return managed_file.created_by == user_id
-        # When DB record is missing (file was deleted), allow through so downstream returns 404.
-        # Matches can_user_call_unified_object_id which also returns True for missing records.
-        return True
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {unified_file_id}",
+        )
 
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
-        ## check if the user has access to the unified object id
         ## check if the user has access to the unified object id
         user_id = user_api_key_dict.user_id
         managed_object = (
@@ -248,7 +248,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_object:
             return managed_object.created_by == user_id
-        return True  # don't raise error if managed object is not found
+        raise HTTPException(
+            status_code=404,
+            detail=f"Object not found: {unified_object_id}",
+        )
 
     async def list_user_batches(
         self,
