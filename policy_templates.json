@@ -674,5 +674,96 @@
       ],
       "guardrails_remove": []
     }
+  },
+  {
+    "id": "gdpr-eu-pii-protection",
+    "title": "GDPR Art. 32 — EU PII Protection",
+    "description": "GDPR Article 32 compliance for EU personal data protection. Masks French national IDs (NIR/INSEE), EU IBANs, French phone numbers, EU VAT numbers, EU passport numbers, and email addresses. Suitable for applications processing EU citizen data requiring GDPR compliance.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-indigo-500",
+    "iconBg": "bg-indigo-50",
+    "guardrails": [
+      "gdpr-eu-national-identifiers",
+      "gdpr-eu-financial-data",
+      "gdpr-eu-contact-information",
+      "gdpr-eu-business-identifiers"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "gdpr-eu-national-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "fr_nir", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "eu_passport_generic", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_france", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_germany", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_netherlands", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU national identification numbers including French NIR/INSEE and EU passport numbers for GDPR compliance"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-financial-data",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "eu_iban_enhanced", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[IBAN_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU bank account numbers (IBANs) to protect financial data under GDPR Article 32"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-contact-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "fr_phone", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "fr_postal_code", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks contact information including emails, French phone numbers, and postal codes for EU data subjects"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-business-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "eu_vat", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[VAT_NUMBER_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU VAT identification numbers to protect business entity information under GDPR"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "gdpr-eu-pii-protection",
+      "description": "GDPR Article 32 compliance policy for EU personal data protection. Masks French national IDs, EU IBANs, phone numbers, VAT numbers, passports, and contact information.",
+      "guardrails_add": [
+        "gdpr-eu-national-identifiers",
+        "gdpr-eu-financial-data",
+        "gdpr-eu-contact-information",
+        "gdpr-eu-business-identifiers"
+      ],
+      "guardrails_remove": []
+    }
   }
 ]
