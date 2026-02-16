@@ -4,6 +4,7 @@ import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.types.utils import GuardrailTracingDetail
 
 
 class TestCustomGuardrailDeploymentHook:
@@ -726,7 +727,7 @@ class TestEventTypeLogging:
 
 
 class TestTracingFieldsPopulation:
-    """Verify add_standard_logging_guardrail_information_to_request_data passes new tracing fields via **extra_fields."""
+    """Verify add_standard_logging_guardrail_information_to_request_data passes tracing_detail fields."""
 
     def test_new_fields_set_on_slg(self):
         cg = CustomGuardrail(guardrail_name="test-rail")
@@ -735,13 +736,15 @@ class TestTracingFieldsPopulation:
             guardrail_json_response={"result": "ok"},
             request_data=request_data,
             guardrail_status="success",
-            guardrail_id="rail-123",
-            policy_template="EU AI Act Article 5",
-            detection_method="regex",
-            confidence_score=0.95,
-            match_details=[{"type": "pattern", "action_taken": "BLOCK"}],
-            patterns_checked=12,
-            alert_recipients=["admin@example.com"],
+            tracing_detail=GuardrailTracingDetail(
+                guardrail_id="rail-123",
+                policy_template="EU AI Act Article 5",
+                detection_method="regex",
+                confidence_score=0.95,
+                match_details=[{"type": "pattern", "action_taken": "BLOCK"}],
+                patterns_checked=12,
+                alert_recipients=["admin@example.com"],
+            ),
         )
         slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
         assert len(slg_list) == 1
@@ -755,7 +758,7 @@ class TestTracingFieldsPopulation:
         assert len(slg["match_details"]) == 1
 
     def test_new_fields_default_to_absent(self):
-        """When extra_fields are not passed, new fields are absent from the SLG dict."""
+        """When tracing_detail is not passed, new fields are absent from the SLG dict."""
         cg = CustomGuardrail(guardrail_name="test-rail")
         request_data = {"metadata": {}}
         cg.add_standard_logging_guardrail_information_to_request_data(
@@ -778,13 +781,13 @@ class TestTracingFieldsPopulation:
             guardrail_json_response="ok",
             request_data=request_data,
             guardrail_status="success",
-            policy_template="GDPR",
+            tracing_detail=GuardrailTracingDetail(policy_template="GDPR"),
         )
         cg2.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response="blocked",
             request_data=request_data,
             guardrail_status="guardrail_intervened",
-            policy_template="EU AI Act Article 5",
+            tracing_detail=GuardrailTracingDetail(policy_template="EU AI Act Article 5"),
         )
 
         slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
@@ -807,9 +810,13 @@ class TestTracingFieldsPopulation:
             guardrail_json_response="blocked",
             request_data=request_data,
             guardrail_status="guardrail_intervened",
-            classification=classification,
-            detection_method="llm-judge",
+            tracing_detail=GuardrailTracingDetail(
+                classification=classification,
+                detection_method="llm-judge",
+                confidence_score=0.94,
+            ),
         )
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["classification"] == classification
         assert slg["detection_method"] == "llm-judge"
+        assert slg["confidence_score"] == 0.94
