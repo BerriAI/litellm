@@ -11,10 +11,10 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import (
-    filter_and_transform_beta_headers,
+from litellm.constants import (
+    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     filter_internal_params,
@@ -436,6 +436,25 @@ class AmazonConverseConfig(BaseConfig):
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort, model=model
             )
+
+    @staticmethod
+    def _clamp_thinking_budget_tokens(optional_params: dict) -> None:
+        """
+        Clamp thinking.budget_tokens to the Bedrock minimum (1024).
+
+        Bedrock returns a 400 error if budget_tokens < 1024.
+        """
+        thinking = optional_params.get("thinking")
+        if isinstance(thinking, dict):
+            budget = thinking.get("budget_tokens")
+            if isinstance(budget, int) and budget < BEDROCK_MIN_THINKING_BUDGET_TOKENS:
+                verbose_logger.debug(
+                    "Bedrock requires thinking.budget_tokens >= %d, got %d. "
+                    "Clamping to minimum.",
+                    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+                    budget,
+                )
+                thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
@@ -874,8 +893,13 @@ class AmazonConverseConfig(BaseConfig):
         Checks 'non_default_params' for 'thinking' and 'max_tokens'
 
         if 'thinking' is enabled and 'max_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
+
+        Also clamps thinking.budget_tokens to the Bedrock minimum (1024) to
+        prevent 400 errors from the Bedrock API.
         """
         from litellm.constants import DEFAULT_MAX_TOKENS
+
+        self._clamp_thinking_budget_tokens(optional_params)
 
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
         is_max_tokens_in_request = self.is_max_tokens_in_request(non_default_params)
@@ -1132,24 +1156,9 @@ class AmazonConverseConfig(BaseConfig):
 
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
-        # and will error with "unknown variant anthropic_beta" if included
         base_model = BedrockModelInfo.get_base_model(model)
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            # Remove duplicates while preserving order
-            unique_betas = []
-            seen = set()
-            for beta in anthropic_beta_list:
-                if beta not in seen:
-                    unique_betas.append(beta)
-                    seen.add(beta)
-
-            filtered_betas = filter_and_transform_beta_headers(
-                beta_headers=unique_betas,
-                provider="bedrock_converse",
-            )
-            
-            if filtered_betas:
-                additional_request_params["anthropic_beta"] = filtered_betas
+            additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
 

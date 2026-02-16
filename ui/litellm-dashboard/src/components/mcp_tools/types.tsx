@@ -13,13 +13,18 @@ export const AUTH_TYPE = {
   OAUTH2: "oauth2",
 };
 
+export const OAUTH_FLOW = {
+  INTERACTIVE: "interactive",
+  M2M: "m2m",
+};
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
+  STDIO: "stdio",
 };
 
 export const handleTransport = (transport?: string | null): string => {
-  console.log(transport);
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
   }
@@ -133,7 +138,11 @@ export interface MCPServer {
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;
-  url: string;
+  /**
+   * Only required for HTTP/SSE transports.
+   * For `stdio`, the backend can return null/undefined.
+   */
+  url?: string | null;
   transport?: string | null;
   auth_type?: string | null;
   authorization_url?: string | null;
@@ -154,10 +163,35 @@ export interface MCPServer {
   allowed_tools?: string[];
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
+
+  /** Stdio-only fields (present when transport === 'stdio') */
+  command?: string | null;
+  args?: string[] | null;
+  env?: Record<string, string> | null;
 }
 
 export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+}
+
+// Discoverable MCP server from the curated registry
+export interface DiscoverableMCPServer {
+  name: string;
+  title: string;
+  description: string;
+  icon_url?: string | null;
+  category: string;
+  registry_url?: string | null;
+  transport: string;
+  url?: string | null;
+  command?: string | null;
+  args?: string[] | null;
+  env_vars?: Array<{ name: string; description?: string; secret?: boolean }> | null;
+}
+
+export interface DiscoverMCPServersResponse {
+  servers: DiscoverableMCPServer[];
+  categories: string[];
 }

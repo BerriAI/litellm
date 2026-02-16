@@ -58,7 +58,6 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -111,14 +110,14 @@ from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
 )
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
+    ModelRateLimitingCheck,
+)
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
 from litellm.router_utils.pre_call_checks.responses_api_deployment_check import (
     ResponsesApiDeploymentCheck,
-)
-from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
-    ModelRateLimitingCheck,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -619,11 +618,12 @@ class Router:
                 self.retry_policy = RetryPolicy(**retry_policy)
             elif isinstance(retry_policy, RetryPolicy):
                 self.retry_policy = retry_policy
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
-                    self.retry_policy.model_dump(exclude_none=True)
+            if self.retry_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
+                        self.retry_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.model_group_retry_policy: Optional[
             Dict[str, RetryPolicy]
@@ -636,11 +636,12 @@ class Router:
             elif isinstance(allowed_fails_policy, AllowedFailsPolicy):
                 self.allowed_fails_policy = allowed_fails_policy
 
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
-                    self.allowed_fails_policy.model_dump(exclude_none=True)
+            if self.allowed_fails_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
+                        self.allowed_fails_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.alerting_config: Optional[AlertingConfig] = alerting_config
 
@@ -895,13 +896,10 @@ class Router:
 
     def _initialize_vector_store_endpoints(self):
         """Initialize vector store endpoints."""
-        from litellm.vector_stores.main import acreate, asearch, create, search
+        from litellm.vector_stores.main import asearch, create, search
 
         self.avector_store_search = self.factory_function(
             asearch, call_type="avector_store_search"
-        )
-        self.avector_store_create = self.factory_function(
-            acreate, call_type="avector_store_create"
         )
         self.vector_store_search = self.factory_function(
             search, call_type="vector_store_search"
@@ -1158,6 +1156,8 @@ class Router:
         self._initialize_vector_store_file_endpoints()
         self._initialize_google_genai_endpoints()
         self._initialize_ocr_search_endpoints()
+        # Override vector store methods with router-aware implementations
+        self._override_vector_store_methods_for_router()
         self._initialize_video_endpoints()
         self._initialize_container_endpoints()
         self._initialize_skills_endpoints()
@@ -1269,13 +1269,16 @@ class Router:
 
             if silent_model is not None:
                 # Mirroring traffic to a secondary model
-                # Use shared thread pool for background calls
-                executor.submit(
-                    self._silent_experiment_completion,
-                    silent_model,
-                    messages,
-                    **kwargs,
+                # Use threading.Thread (not ThreadPoolExecutor) - executor.submit()
+                # requires pickling args, which fails when kwargs contain unpicklable
+                # objects (e.g. _thread.RLock from OTEL spans, loggers) in deployment.
+                thread = threading.Thread(
+                    target=self._silent_experiment_completion,
+                    args=(silent_model, messages),
+                    kwargs=kwargs,
+                    daemon=True,
                 )
+                thread.start()
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
@@ -1924,6 +1927,17 @@ class Router:
                 "deployment_model_name": deployment_model_name,
             }
         )
+
+        ## DEPLOYMENT-LEVEL TAGS
+        deployment_tags = deployment.get("litellm_params", {}).get("tags")
+        if deployment_tags:
+            existing_tags = kwargs[metadata_variable_name].get("tags") or []
+            merged_tags = list(existing_tags)
+            for tag in deployment_tags:
+                if tag not in merged_tags:
+                    merged_tags.append(tag)
+            kwargs[metadata_variable_name]["tags"] = merged_tags
+
         kwargs["model_info"] = model_info
 
         kwargs["timeout"] = self._get_timeout(
@@ -2268,7 +2282,7 @@ class Router:
         item = FlowItem(
             priority=priority,  # 👈 SET PRIORITY FOR REQUEST
             request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name="gpt-3.5-turbo",  # 👈 SAME as 'Router'
+            model_name=model,  # 👈 SAME as 'Router'
         )
         ### [fin] ###
 
@@ -2310,6 +2324,10 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            # Clean up the request from the scheduler queue also before raising the timeout exception
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,
@@ -2371,6 +2389,10 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            # Clean up the request from the scheduler queue also before raising the timeout exception
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,
@@ -3798,6 +3820,112 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    #### VECTOR STORES API ####
+    async def avector_store_create(
+        self,
+        model: Union[str, None],
+        **kwargs,
+    ):
+        """
+        Create a vector store for a specific model.
+        
+        Args:
+            model: Model name from router config
+            **kwargs: Vector store creation parameters
+            
+        Returns:
+            VectorStoreCreateResponse
+        """
+        try:            
+            # If model is None, use the factory function approach (direct SDK call)
+            if model is None:
+                from litellm.vector_stores.main import acreate
+
+                # Use the factory function to handle the call
+                factory_fn = self.factory_function(
+                    acreate, call_type="avector_store_create"
+                )
+                return await factory_fn(**kwargs)
+            
+            from litellm.vector_stores import acreate as avector_store_create_sdk
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            deployment = await self.async_get_available_deployment(
+                model=model,
+                messages=[{"role": "user", "content": "vector-store-api-fake-text"}],
+                specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
+            )
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="avector_store_create"
+            )
+
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
+            )
+            self.total_calls[model_name] += 1
+
+            # Get custom provider
+            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            
+            response = avector_store_create_sdk(
+                **{
+                    **data,
+                    "custom_llm_provider": custom_llm_provider,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+
+            rpm_semaphore = self._get_client(
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
+            )
+
+            if rpm_semaphore is not None and isinstance(
+                rpm_semaphore, asyncio.Semaphore
+            ):
+                async with rpm_semaphore:
+                    await self.async_routing_strategy_pre_call_checks(
+                        deployment=deployment, parent_otel_span=parent_otel_span
+                    )
+                    response = await response
+            else:
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
+                response = await response
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.avector_store_create(model={model_name})\033[32m 200 OK\033[0m"
+            )
+
+            return response
+        except Exception as e:
+            verbose_router_logger.exception(
+                f"litellm.avector_store_create(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
+
+    def _override_vector_store_methods_for_router(self):
+        """
+        Override factory-generated vector store methods with router-aware implementations.
+        This is called after _initialize_vector_store_endpoints() to ensure our custom
+        methods that handle deployment selection and credential injection are used instead
+        of the generic factory-generated ones.
+        """
+        # Store references to the custom methods defined above
+        # These methods handle proper routing through deployments
+        pass  # The methods are already defined as instance methods above
+
     async def acreate_batch(
         self,
         model: str,
@@ -4504,9 +4632,21 @@ class Router:
     ):
         """
         Initialize the Vector Store API endpoints on the router.
+        
+        If a model is provided in kwargs, use model-based routing to get
+        the deployment credentials. Otherwise, call the original function directly.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
+        
+        # If model is provided, use generic API call with fallbacks for proper routing
+        if kwargs.get("model"):
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                **kwargs,
+            )
+        
+        # Otherwise, call the original function directly
         return await original_function(**kwargs)
 
     async def _init_containers_api_endpoints(
@@ -5024,7 +5164,7 @@ class Router:
                     else:
                         _healthy_deployments = []
                     _timeout = self._time_to_sleep_before_retry(
-                        e=original_exception,
+                        e=e,
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
                         healthy_deployments=_healthy_deployments,
@@ -5925,9 +6065,20 @@ class Router:
                     deployment.litellm_params.custom_llm_provider + "/" + _model_name
                 )
 
+            # For the shared backend key, strip custom pricing fields so that
+            # one deployment's pricing overrides don't pollute another
+            # deployment sharing the same backend model name.
+            # Each deployment's full pricing is already stored under its
+            # unique model_id above.
+            _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
+            _shared_model_info = {
+                k: v
+                for k, v in _model_info.items()
+                if k not in _custom_pricing_fields
+            }
             litellm.register_model(
                 model_cost={
-                    _model_name: _model_info,
+                    _model_name: _shared_model_info,
                 }
             )
 
