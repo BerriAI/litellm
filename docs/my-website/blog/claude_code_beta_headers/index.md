@@ -1,6 +1,26 @@
-import Image from '@theme/IdealImage';
+---
+slug: claude_code_beta_headers
+title: "Claude Code - Managing Anthropic Beta Headers"
+date: 2026-02-05T10:00:00
+authors:
+  - name: Sameer Kankute
+    title: SWE @ LiteLLM (LLM Translation)
+    url: https://www.linkedin.com/in/sameer-kankute/
+    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
+  - name: Ishaan Jaff
+    title: "CTO, LiteLLM"
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - name: Krrish Dholakia
+    title: "CEO, LiteLLM"
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+description: "How to manage and configure Anthropic beta headers with Claude Code in LiteLLM: filtering, mapping, and dynamic updates across providers."
+tags: [anthropic, claude, beta headers, configuration, liteLLM]
+hide_table_of_contents: false
 
-# Claude Code - Managing Anthropic Beta Headers
+---
+import Image from '@theme/IdealImage';
 
 When using Claude Code with LiteLLM and non-Anthropic providers (Bedrock, Azure AI, Vertex AI), you need to ensure that only supported beta headers are sent to each provider. This guide explains how to add support for new beta headers or fix invalid beta header errors.
 
