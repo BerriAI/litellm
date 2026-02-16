@@ -24,6 +24,15 @@ interface MaskedEntityCount {
   [key: string]: number;
 }
 
+interface MatchDetail {
+  type: string;
+  detection_method?: string;
+  action_taken?: string;
+  snippet?: string;
+  category?: string;
+  position?: number;
+}
+
 interface GuardrailInformation {
   duration: number;
   end_time: number;
@@ -33,7 +42,15 @@ interface GuardrailInformation {
   guardrail_status: string;
   guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse | any;
   masked_entity_count: MaskedEntityCount;
-  guardrail_provider?: string; // "presidio" | "bedrock" | "litellm_content_filter" | other providers
+  guardrail_provider?: string;
+  guardrail_id?: string;
+  policy_template?: string;
+  detection_method?: string;
+  confidence_score?: number;
+  classification?: Record<string, any>;
+  match_details?: MatchDetail[];
+  patterns_checked?: number;
+  alert_recipients?: string[];
 }
 
 interface GuardrailViewerProps {
@@ -87,6 +104,179 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
   );
 };
 
+const PolicyDetectionRow = ({ entry }: { entry: GuardrailInformation }) => {
+  const hasData = entry.policy_template || entry.detection_method || entry.confidence_score != null || entry.patterns_checked != null;
+  if (!hasData) return null;
+
+  return (
+    <div className="mt-4 pt-4 border-t">
+      <div className="flex flex-wrap gap-4">
+        {entry.policy_template && (
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">Policy:</span>
+            <span className="px-2 py-1 bg-purple-50 text-purple-700 rounded-md text-xs font-medium">
+              {entry.policy_template}
+            </span>
+          </div>
+        )}
+        {entry.detection_method && (
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">Detection:</span>
+            {entry.detection_method.split(",").map((method) => (
+              <span key={method} className="px-2 py-1 bg-slate-100 text-slate-700 rounded-md text-xs font-medium">
+                {method.trim()}
+              </span>
+            ))}
+          </div>
+        )}
+        {entry.confidence_score != null && (
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">Confidence:</span>
+            <span className={`px-2 py-1 rounded-md text-xs font-medium ${
+              entry.confidence_score >= 0.8 ? "bg-red-100 text-red-800" :
+              entry.confidence_score >= 0.5 ? "bg-amber-100 text-amber-800" :
+              "bg-green-100 text-green-800"
+            }`}>
+              {(entry.confidence_score * 100).toFixed(0)}%
+            </span>
+          </div>
+        )}
+        {entry.patterns_checked != null && (
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">Patterns checked:</span>
+            <span className="text-sm text-gray-600">{entry.patterns_checked}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const MatchDetailsTable = ({ matchDetails }: { matchDetails: MatchDetail[] }) => {
+  if (!matchDetails || matchDetails.length === 0) return null;
+
+  return (
+    <div className="mt-4 pt-4 border-t">
+      <h5 className="font-medium mb-2">Match Details ({matchDetails.length})</h5>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-gray-500">
+              <th className="pb-2 pr-4">Type</th>
+              <th className="pb-2 pr-4">Method</th>
+              <th className="pb-2 pr-4">Action</th>
+              <th className="pb-2">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matchDetails.map((match, idx) => (
+              <tr key={idx} className="border-b border-gray-100">
+                <td className="py-2 pr-4">{match.type}</td>
+                <td className="py-2 pr-4">
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-xs">
+                    {match.detection_method ?? "-"}
+                  </span>
+                </td>
+                <td className="py-2 pr-4">
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    match.action_taken === "BLOCK" ? "bg-red-100 text-red-800" : "bg-blue-50 text-blue-700"
+                  }`}>
+                    {match.action_taken ?? "-"}
+                  </span>
+                </td>
+                <td className="py-2 font-mono text-xs text-gray-600 break-all">
+                  {match.category ? `[${match.category}] ` : ""}{match.snippet ?? "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const ClassificationDetails = ({ classification }: { classification: Record<string, any> }) => {
+  if (!classification) return null;
+
+  return (
+    <div className="mt-4 pt-4 border-t">
+      <h5 className="font-medium mb-2">Classification</h5>
+      <div className="space-y-2 bg-gray-50 rounded-lg p-3">
+        {classification.category && (
+          <div className="flex">
+            <span className="font-medium w-1/3 text-sm">Category:</span>
+            <span className="text-sm">{classification.category}</span>
+          </div>
+        )}
+        {classification.article_reference && (
+          <div className="flex">
+            <span className="font-medium w-1/3 text-sm">Reference:</span>
+            <span className="text-sm font-mono">{classification.article_reference}</span>
+          </div>
+        )}
+        {classification.confidence != null && (
+          <div className="flex">
+            <span className="font-medium w-1/3 text-sm">Confidence:</span>
+            <span className="text-sm">{(classification.confidence * 100).toFixed(0)}%</span>
+          </div>
+        )}
+        {classification.reason && (
+          <div className="flex">
+            <span className="font-medium w-1/3 text-sm">Reason:</span>
+            <span className="text-sm">{classification.reason}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ExecutionTimeline = ({ entries }: { entries: GuardrailInformation[] }) => {
+  if (entries.length <= 1) return null;
+
+  const sorted = [...entries].sort((a, b) => (a.start_time ?? 0) - (b.start_time ?? 0));
+
+  return (
+    <div className="mb-4">
+      <h5 className="font-medium mb-3">Execution Timeline</h5>
+      <div className="relative pl-4 border-l-2 border-gray-200 space-y-3">
+        {sorted.map((e, idx) => {
+          const isSuccess = (e.guardrail_status ?? "").toLowerCase() === "success";
+          return (
+            <div key={idx} className="relative">
+              <div
+                className={`absolute -left-[calc(1rem+5px)] w-2.5 h-2.5 rounded-full mt-1.5 ${
+                  isSuccess ? "bg-green-500" : "bg-red-500"
+                }`}
+              />
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-xs text-gray-500">
+                  {e.duration?.toFixed(3)}s
+                </span>
+                <span className="text-sm font-medium">{e.guardrail_name}</span>
+                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
+                  {e.guardrail_mode}
+                </span>
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                  isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                }`}>
+                  {e.guardrail_status}
+                </span>
+                {e.policy_template && (
+                  <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded text-xs">
+                    {e.policy_template}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const GuardrailDetails = ({ entry, index, total }: GuardrailDetailsProps) => {
   const guardrailProvider = entry.guardrail_provider ?? "presidio";
   const statusLabel = entry.guardrail_status ?? "unknown";
@@ -127,6 +317,12 @@ const GuardrailDetails = ({ entry, index, total }: GuardrailDetailsProps) => {
             <span className="font-medium w-1/3">Guardrail Name:</span>
             <span className="font-mono break-words">{entry.guardrail_name}</span>
           </div>
+          {entry.guardrail_id && entry.guardrail_id !== entry.guardrail_name && (
+            <div className="flex">
+              <span className="font-medium w-1/3">Guardrail ID:</span>
+              <span className="font-mono break-words text-gray-600">{entry.guardrail_id}</span>
+            </div>
+          )}
           <div className="flex">
             <span className="font-medium w-1/3">Mode:</span>
             <span className="font-mono break-words">{entry.guardrail_mode}</span>
@@ -160,6 +356,17 @@ const GuardrailDetails = ({ entry, index, total }: GuardrailDetailsProps) => {
           </div>
         </div>
       </div>
+
+      {/* Policy, detection method, confidence, patterns checked */}
+      <PolicyDetectionRow entry={entry} />
+
+      {/* Classification details (LLM-judge) */}
+      {entry.classification && <ClassificationDetails classification={entry.classification} />}
+
+      {/* Match details table */}
+      {entry.match_details && entry.match_details.length > 0 && (
+        <MatchDetailsTable matchDetails={entry.match_details} />
+      )}
 
       {totalMaskedEntities > 0 && (
         <div className="mt-4 pt-4 border-t">
@@ -222,6 +429,10 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
     );
   }, 0);
 
+  const policyTemplates = Array.from(
+    new Set(guardrailEntries.map((e) => e.policy_template).filter(Boolean))
+  );
+
   const tooltipTitle = allSucceeded ? null : "Guardrail failed to run.";
 
   if (guardrailEntries.length === 0) {
@@ -237,7 +448,7 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
           {
             key: "1",
             label: (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-lg font-medium text-gray-900">Guardrail Information</h3>
 
                 <Tooltip title={tooltipTitle} placement="top" arrow destroyTooltipOnHide>
@@ -257,10 +468,17 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
                     {totalMaskedEntities} masked {totalMaskedEntities === 1 ? "entity" : "entities"}
                   </span>
                 )}
+
+                {policyTemplates.map((pt) => (
+                  <span key={pt} className="px-2 py-1 bg-purple-50 text-purple-700 rounded-md text-xs font-medium">
+                    {pt}
+                  </span>
+                ))}
               </div>
             ),
             children: (
               <div className="p-4 space-y-6">
+                <ExecutionTimeline entries={guardrailEntries} />
                 {guardrailEntries.map((entry, index) => (
                   <GuardrailDetails
                     key={`${entry.guardrail_name ?? "guardrail"}-${index}`}
