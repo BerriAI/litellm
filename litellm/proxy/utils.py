@@ -1229,7 +1229,8 @@ class ProxyLogging:
 
         if result.terminal_action == "modify_response":
             raise ModifyResponseException(
-                message=result.modify_response_message or "Response modified by pipeline",
+                message=result.modify_response_message
+                or "Response modified by pipeline",
                 model=data.get("model", "unknown"),
                 request_data=data,
                 guardrail_name=f"pipeline:{policy_name}",
@@ -1327,7 +1328,10 @@ class ProxyLogging:
                     and data is not None
                 ):
                     # Skip guardrails managed by a pipeline
-                    if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                    if (
+                        _callback.guardrail_name
+                        and _callback.guardrail_name in pipeline_managed
+                    ):
                         continue
 
                     result = await self._process_guardrail_callback(
@@ -1875,7 +1879,6 @@ class ProxyLogging:
 
         from litellm.types.guardrails import GuardrailEventHooks
 
-
         guardrail_callbacks: List[CustomGuardrail] = []
         other_callbacks: List[CustomLogger] = []
         try:
@@ -2147,11 +2150,49 @@ def jsonify_object(data: dict) -> dict:
     for k, v in db_data.items():
         if isinstance(v, dict):
             try:
-                db_data[k] = json.dumps(v)
+                db_data[k] = json.dumps(v).replace("\\u0000", "")
             except Exception:
                 # This avoids Prisma retrying this 5 times, and making 5 clients
                 db_data[k] = "failed-to-serialize-json"
+        elif isinstance(v, str):
+            db_data[k] = v.replace("\x00", "").replace("\\u0000", "")
     return db_data
+
+
+def _sanitize_null_bytes(value: Any) -> Any:
+    """Recursively strip NULL bytes (\x00) from strings.
+
+    Postgres does not allow NULL bytes in text/JSON fields.
+    """
+
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            decoded = value.decode("utf-8", errors="replace")
+        except Exception:
+            decoded = str(value)
+        return decoded.replace("\x00", "")
+
+    if isinstance(value, dict):
+        sanitized: dict = {}
+        for k, v in value.items():
+            sanitized_key = k.replace("\x00", "") if isinstance(k, str) else k
+            sanitized[sanitized_key] = _sanitize_null_bytes(v)
+        return sanitized
+
+    if isinstance(value, list):
+        return [_sanitize_null_bytes(item) for item in value]
+
+    if isinstance(value, tuple):
+        return tuple(_sanitize_null_bytes(item) for item in value)
+
+    if isinstance(value, set):
+        # Sets are not JSON-serializable; normalize to list.
+        return [_sanitize_null_bytes(item) for item in value]
+
+    return value
 
 
 class PrismaClient:
@@ -2291,8 +2332,7 @@ class PrismaClient:
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(
-                f"""
+            ret = await self.db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -2304,8 +2344,7 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """
-            )
+                """)
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
@@ -2314,8 +2353,7 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw(
-                        """
+                    await self.db.execute_raw("""
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -2325,8 +2363,7 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """
-                    )
+                        """)
 
                     verbose_proxy_logger.info(
                         "LiteLLM_VerificationTokenView Created in DB!"
@@ -2551,7 +2588,7 @@ class PrismaClient:
                     and reset_at is not None
                 ):
                     response = await self.db.litellm_verificationtoken.find_many(
-                        where={  # type:ignore
+                        where={  # type: ignore
                             "OR": [
                                 {"expires": None},
                                 {"expires": {"gt": expires}},
@@ -2611,7 +2648,7 @@ class PrismaClient:
                     )  # type: ignore
                 elif query_type == "find_all" and reset_at is not None:
                     response = await self.db.litellm_usertable.find_many(
-                        where={  # type:ignore
+                        where={  # type: ignore
                             "budget_reset_at": {"lt": reset_at},
                         }
                     )
@@ -2623,10 +2660,10 @@ class PrismaClient:
                     if expires is not None:
                         response = await self.db.litellm_usertable.find_many(  # type: ignore
                             order={"spend": "desc"},
-                            where={  # type:ignore
+                            where={  # type: ignore
                                 "OR": [
-                                    {"expires": None},  # type:ignore
-                                    {"expires": {"gt": expires}},  # type:ignore
+                                    {"expires": None},  # type: ignore
+                                    {"expires": {"gt": expires}},  # type: ignore
                                 ],
                             },
                         )
@@ -2673,7 +2710,7 @@ class PrismaClient:
             elif table_name == "budget" and reset_at is not None:
                 if query_type == "find_all":
                     response = await self.db.litellm_budgettable.find_many(
-                        where={  # type:ignore
+                        where={  # type: ignore
                             "OR": [
                                 {
                                     "AND": [
@@ -2701,7 +2738,7 @@ class PrismaClient:
                     )
                 elif query_type == "find_all" and reset_at is not None:
                     response = await self.db.litellm_teamtable.find_many(
-                        where={  # type:ignore
+                        where={  # type: ignore
                             "budget_reset_at": {"lt": reset_at},
                         }
                     )
@@ -3851,16 +3888,19 @@ class ProxyUpdateSpend:
         try:
             for i in range(n_retry_times + 1):
                 try:
+                    sanitized_logs_to_process = cast(
+                        List[dict], _sanitize_null_bytes(logs_to_process)
+                    )
                     base_url = os.getenv("SPEND_LOGS_URL", None)
                     if (
-                        len(logs_to_process) > 0
+                        len(sanitized_logs_to_process) > 0
                         and base_url is not None
                         and db_writer_client is not None
                     ):
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: {}".format(base_url))
-                        json_data = json.dumps(logs_to_process)
+                        json_data = json.dumps(sanitized_logs_to_process)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -3871,8 +3911,8 @@ class ProxyUpdateSpend:
                             # Items already removed from queue at start of function
                             pass
                     else:
-                        for j in range(0, len(logs_to_process), BATCH_SIZE):
-                            batch = logs_to_process[j : j + BATCH_SIZE]
+                        for j in range(0, len(sanitized_logs_to_process), BATCH_SIZE):
+                            batch = sanitized_logs_to_process[j : j + BATCH_SIZE]
                             batch_with_dates = [
                                 prisma_client.jsonify_object({**entry})
                                 for entry in batch
@@ -3890,7 +3930,7 @@ class ProxyUpdateSpend:
                         async with prisma_client._spend_log_transactions_lock:
                             remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
-                            f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
+                            f"{len(sanitized_logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
                 except DB_CONNECTION_ERROR_TYPES:
