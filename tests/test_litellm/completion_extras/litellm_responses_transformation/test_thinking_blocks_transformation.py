@@ -122,9 +122,8 @@ def test_redacted_thinking_block_conversion():
     assert (
         reasoning_item["encrypted_content"] == encrypted_blob
     ), "encrypted_content should match data field"
-    assert (
-        "summary" not in reasoning_item
-    ), "Redacted thinking should not have summary"
+    # OpenAI requires empty summary array with encrypted_content (per OpenAI spec)
+    assert reasoning_item["summary"] == [], "Redacted thinking should have empty summary"
 
 
 def test_multiple_thinking_blocks():
@@ -369,8 +368,8 @@ def test_empty_thinking_text():
     reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
     assert len(reasoning_items) == 1, "Should create reasoning item even with empty text"
     assert reasoning_items[0]["type"] == "reasoning"
-    # Empty thinking should not add summary
-    assert "summary" not in reasoning_items[0], "Empty thinking should not have summary"
+    # OpenAI requires summary field (even if empty) - use empty array for empty thinking
+    assert reasoning_items[0]["summary"] == [], "Empty thinking should have empty summary array"
 
 
 def test_thinking_blocks_only_no_content():

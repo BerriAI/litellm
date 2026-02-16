@@ -287,13 +287,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
                 reasoning_item: Dict[str, Any] = {
                     "type": "reasoning",
+                    # OpenAI requires summary field (can be empty array if no text)
+                    "summary": [{"type": "summary_text", "text": summary_text}] if thinking_text else [],
                 }
-
-                # Only add summary if there's actual thinking text
-                if thinking_text:
-                    reasoning_item["summary"] = [
-                        {"type": "summary_text", "text": summary_text}
-                    ]
 
                 reasoning_items.append(reasoning_item)
                 verbose_logger.debug(
@@ -517,6 +513,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
+                # Reset reasoning_content for each reasoning item to avoid stale data
+                reasoning_content = None
+
                 # Extract reasoning_content from summary
                 for summary_item in item.summary:
                     response_text = getattr(summary_item, "text", "")
