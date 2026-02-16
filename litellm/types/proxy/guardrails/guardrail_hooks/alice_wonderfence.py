@@ -12,7 +12,7 @@ class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
 
     api_key: Optional[str] = Field(
         default=None,
-        description="API key for WonderFence. Can also be set via WONDERFENCE_API_KEY.",
+        description="API key for WonderFence. Can also be set via ALICE_API_KEY.",
     )
     api_base: Optional[str] = Field(
         default=None,
@@ -20,10 +20,10 @@ class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
     )
     app_name: Optional[str] = Field(
         default="litellm",
-        description="Application name for WonderFence. Can also be set via WONDERFENCE_APP_NAME.",
+        description="Application name for WonderFence. Can also be set via ALICE_APP_NAME.",
     )
     api_timeout: Optional[float] = Field(
-        default=10.0,
+        default=20.0,
         description="Timeout in seconds for API calls.",
     )
     platform: Optional[str] = Field(

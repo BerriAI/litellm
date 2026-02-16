@@ -20,14 +20,14 @@ def initialize_guardrail(
 
     guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
-        raise ValueError("WonderFence guardrail requires a guardrail_name")
+        raise ValueError("Alice WonderFence guardrail requires a guardrail_name")
 
     wonderfence_guardrail = WonderFenceGuardrail(
         guardrail_name=guardrail_name,
         api_key=litellm_params.api_key or "",
         api_base=getattr(litellm_params, "api_base", None),
         app_name=getattr(litellm_params, "app_name", None),
-        api_timeout=getattr(litellm_params, "api_timeout", None) or 10.0,
+        api_timeout=getattr(litellm_params, "api_timeout", None) or 20.0,
         platform=getattr(litellm_params, "platform", None),
         event_hook=litellm_params.mode,  # type: ignore[arg-type]
         default_on=litellm_params.default_on if litellm_params.default_on is not None else True,
@@ -38,12 +38,12 @@ def initialize_guardrail(
 
 
 guardrail_initializer_registry = {
-    SupportedGuardrailIntegrations.WONDERFENCE.value: initialize_guardrail,
+    SupportedGuardrailIntegrations.ALICE_WONDERFENCE.value: initialize_guardrail,
 }
 
 
 guardrail_class_registry = {
-    SupportedGuardrailIntegrations.WONDERFENCE.value: WonderFenceGuardrail,
+    SupportedGuardrailIntegrations.ALICE_WONDERFENCE.value: WonderFenceGuardrail,
 }
 
 

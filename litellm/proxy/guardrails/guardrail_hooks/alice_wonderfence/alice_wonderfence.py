@@ -29,14 +29,14 @@ if TYPE_CHECKING:
 
 
 class WonderFenceMissingSecrets(Exception):
-    """Raised when WonderFence API key is missing."""
+    """Raised when Alice API key is missing."""
 
 
 class WonderFenceGuardrail(CustomGuardrail):
     """
     Alice WonderFence guardrail handler to evaluate prompts and responses.
 
-    This class implements hooks to call the WonderFence SDK for:
+    This class implements hooks to call the Alice WonderFence SDK for:
     - Pre-call: Evaluating user prompts before sending to the LLM
     - Post-call: Evaluating LLM responses before returning to users
     """
@@ -47,19 +47,19 @@ class WonderFenceGuardrail(CustomGuardrail):
         api_key: str = "",
         api_base: Optional[str] = None,
         app_name: Optional[str] = None,
-        api_timeout: float = 10.0,
+        api_timeout: float =20.0,
         platform: Optional[str] = None,
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
         default_on: bool = True,
     ):
         """
-        Initialize the WonderFence guardrail.
+        Initialize the Alice WonderFence guardrail.
 
         Args:
             guardrail_name: The name of the guardrail instance
-            api_key: WonderFence API key (can also be set via WONDERFENCE_API_KEY)
-            api_base: Optional base URL for WonderFence API
-            app_name: Application name (reads from WONDERFENCE_APP_NAME or defaults to 'litellm')
+            api_key: Alice API key (can also be set via ALICE_API_KEY)
+            api_base: Optional base URL for Alice WonderFence API
+            app_name: Application name (reads from ALICE_APP_NAME or defaults to 'litellm')
             api_timeout: Timeout in seconds for API calls
             platform: Cloud platform (e.g., aws, azure, databricks)
             event_hook: Event hook mode
@@ -69,17 +69,17 @@ class WonderFenceGuardrail(CustomGuardrail):
             from wonderfence_sdk.client import WonderFenceClient
         except ImportError:
             raise ImportError(
-                "WonderFence SDK not installed. Install with: pip install wonderfence-sdk"
+                "Alice WonderFence SDK not installed. Install with: pip install wonderfence-sdk"
             )
 
         # Allow fallback to environment variable if api_key is empty string
-        self.api_key = api_key if api_key else os.environ.get("WONDERFENCE_API_KEY")
+        self.api_key = api_key if api_key else os.environ.get("ALICE_API_KEY")
         if not self.api_key:
             raise WonderFenceMissingSecrets(
-                "WonderFence API key not found. Set WONDERFENCE_API_KEY environment variable or pass it in litellm_params."
+                "Alice WonderFence API key not found. Set ALICE_API_KEY environment variable or pass it in litellm_params."
             )
 
-        self.app_name = app_name or os.environ.get("WONDERFENCE_APP_NAME", "litellm")
+        self.app_name = app_name or os.environ.get("ALICE_APP_NAME", "litellm")
         self.api_base = api_base
         self.api_timeout = api_timeout
         self.platform = platform
@@ -236,7 +236,7 @@ class WonderFenceGuardrail(CustomGuardrail):
 
         if not text:
             verbose_proxy_logger.debug(
-                f"WonderFence (apply_guardrail): No relevant text found for {input_type}"
+                f"Alice WonderFence (apply_guardrail): No relevant text found for {input_type}"
             )
             return inputs
 
@@ -247,12 +247,12 @@ class WonderFenceGuardrail(CustomGuardrail):
             # Call appropriate WonderFence API
             if input_type == "request":
                 verbose_proxy_logger.debug(
-                    f"WonderFence (apply_guardrail): Evaluating prompt for {self.guardrail_name}"
+                    f"Alice WonderFence (apply_guardrail): Evaluating prompt for {self.guardrail_name}"
                 )
                 result = await self.client.evaluate_prompt(prompt=text, context=context)
             else:
                 verbose_proxy_logger.debug(
-                    f"WonderFence (apply_guardrail): Evaluating response for {self.guardrail_name}"
+                    f"Alice WonderFence (apply_guardrail): Evaluating response for {self.guardrail_name}"
                 )
                 result = await self.client.evaluate_response(response=text, context=context)
 
@@ -261,7 +261,7 @@ class WonderFenceGuardrail(CustomGuardrail):
             if action == "BLOCK":
                 # Hard block - return 400 error
                 detail = {
-                    "error": "Blocked by WonderFence guardrail",
+                    "error": "Blocked by Alice WonderFence guardrail",
                     "guardrail_name": self.guardrail_name,
                     "action": "BLOCK",
                 }
@@ -280,13 +280,13 @@ class WonderFenceGuardrail(CustomGuardrail):
                     inputs["texts"] = texts
 
                 verbose_proxy_logger.info(
-                    f"WonderFence (apply_guardrail): MASK action applied to {self.guardrail_name}"
+                    f"Alice WonderFence (apply_guardrail): MASK action applied to {self.guardrail_name}"
                 )
 
             else:  # DETECT, NO_ACTION
                 if action == "DETECT":
                     verbose_proxy_logger.warning(
-                        "WonderFence (apply_guardrail): DETECT action"
+                        "Alice WonderFence (apply_guardrail): DETECT action"
                     )
 
         except HTTPException:
@@ -295,7 +295,7 @@ class WonderFenceGuardrail(CustomGuardrail):
             raise HTTPException(
                 status_code=500,
                 detail={
-                    "error": "Error in WonderFence Guardrail",
+                    "error": "Error in Alice WonderFence Guardrail",
                     "guardrail_name": self.guardrail_name,
                     "exception": str(e),
                 },
