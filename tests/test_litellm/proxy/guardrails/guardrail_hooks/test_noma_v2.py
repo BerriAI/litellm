@@ -5,6 +5,9 @@ import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.noma import NomaV2Guardrail
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
+from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
+    NomaV2GuardrailConfigModel,
+)
 
 
 @pytest.fixture
@@ -59,9 +62,7 @@ class TestNomaV2Configuration:
 
     @pytest.mark.asyncio
     async def test_api_key_auth_path(self, noma_v2_guardrail):
-        assert (
-            await noma_v2_guardrail._get_authorization_header() == "Bearer test-api-key"
-        )
+        assert noma_v2_guardrail._get_authorization_header() == "Bearer test-api-key"
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -180,8 +181,35 @@ class TestNomaV2Configuration:
         json.dumps(sent_payload)
         assert sent_payload["request_data"]["response"]["id"] == "resp-1"
 
+    def test_sanitize_payload_for_transport_falls_back_to_safe_dumps(
+        self, noma_v2_guardrail
+    ):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.json.dumps",
+            side_effect=TypeError("cannot serialize"),
+        ):
+            with patch(
+                "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.safe_dumps",
+                return_value='{"fallback": true}',
+            ) as mock_safe_dumps:
+                sanitized = noma_v2_guardrail._sanitize_payload_for_transport(
+                    {"inputs": {"texts": ["hello"]}}
+                )
+
+        mock_safe_dumps.assert_called_once()
+        assert sanitized == {"fallback": True}
+
+    def test_get_config_model_returns_noma_v2_config_model(self):
+        assert NomaV2Guardrail.get_config_model() is NomaV2GuardrailConfigModel
+
 
 class TestNomaV2ActionBehavior:
+    def test_resolve_action_from_response_raises_on_unknown_action(
+        self, noma_v2_guardrail
+    ):
+        with pytest.raises(ValueError, match="missing valid action"):
+            noma_v2_guardrail._resolve_action_from_response({"action": "INVALID"})
+
     @pytest.mark.asyncio
     async def test_native_action_none(self, noma_v2_guardrail):
         inputs = {"texts": ["hello"]}

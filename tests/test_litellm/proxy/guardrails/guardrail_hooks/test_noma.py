@@ -203,6 +203,7 @@ class TestNomaGuardrailConfiguration:
             assert result.application_id == "test-app"
             mock_add.assert_called_once_with(result)
 
+
 class TestNomaApplicationIdResolution:
     """Tests for determining which applicationId is sent to Noma."""
 

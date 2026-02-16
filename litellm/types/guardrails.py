@@ -438,18 +438,6 @@ class NomaGuardrailConfigModel(BaseModel):
         default=False,
         description="If True and guardrail='noma', route to the new Noma v2 implementation instead of the legacy implementation.",
     )
-    client_id: Optional[str] = Field(
-        default=None,
-        description="Noma OAuth client ID. Used by Noma v2 when api_key is not provided.",
-    )
-    client_secret: Optional[str] = Field(
-        default=None,
-        description="Noma OAuth client secret. Used by Noma v2 when api_key is not provided.",
-    )
-    token_url: Optional[str] = Field(
-        default=None,
-        description="Optional OAuth token URL for Noma v2. Defaults to <api_base>/auth if not provided.",
-    )
     application_id: Optional[str] = Field(
         default=None,
         description="Application ID for Noma Security. Defaults to 'litellm' if not provided",

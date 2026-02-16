@@ -10,18 +10,6 @@ class NomaGuardrailConfigModel(GuardrailConfigModel):
         default=False,
         description="If True and guardrail='noma', route to the new Noma v2 implementation.",
     )
-    client_id: Optional[str] = Field(
-        default=None,
-        description="Noma OAuth client ID. Used when api_key is not provided.",
-    )
-    client_secret: Optional[str] = Field(
-        default=None,
-        description="Noma OAuth client secret. Used when api_key is not provided.",
-    )
-    token_url: Optional[str] = Field(
-        default=None,
-        description="Optional OAuth token URL for Noma integrations.",
-    )
     api_key: Optional[str] = Field(
         default=None,
         description="The Noma API key. Reads from NOMA_API_KEY env var if None.",

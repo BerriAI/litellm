@@ -796,31 +796,31 @@ class NomaGuardrail(CustomGuardrail):
         endpoint = urljoin(
             self.api_base or "https://api.noma.security/", NomaGuardrail._AIDR_ENDPOINT
         )
-        noma_payload = {
-            **payload,
-            "x-noma-context": {
-                "applicationId": extra_data.get("application_id")
-                or request_data.get("metadata", {})
-                .get("headers", {})
-                .get("x-noma-application-id")
-                or self.application_id
-                or user_auth.key_alias
-                or self.default_application_id,
-                "ipAddress": request_data.get("metadata", {}).get(
-                    "requester_ip_address", None
-                ),
-                "userId": (
-                    user_auth.user_email if user_auth.user_email else user_auth.user_id
-                ),
-                "sessionId": call_id,
-                "requestId": llm_request_id,
-            },
-        }
-
         response = await self.async_handler.post(
             endpoint,
             headers=headers,
-            json=noma_payload,
+            json={
+                **payload,
+                "x-noma-context": {
+                    "applicationId": extra_data.get("application_id")
+                    or request_data.get("metadata", {})
+                    .get("headers", {})
+                    .get("x-noma-application-id")
+                    or self.application_id
+                    or user_auth.key_alias
+                    or self.default_application_id,
+                    "ipAddress": request_data.get("metadata", {}).get(
+                        "requester_ip_address", None
+                    ),
+                    "userId": (
+                        user_auth.user_email
+                        if user_auth.user_email
+                        else user_auth.user_id
+                    ),
+                    "sessionId": call_id,
+                    "requestId": llm_request_id,
+                },
+            },
         )
         response.raise_for_status()
         return response.json()

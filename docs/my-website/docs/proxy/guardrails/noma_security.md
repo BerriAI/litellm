@@ -10,7 +10,8 @@ Use [Noma Security](https://noma.security/) to protect your LLM applications wit
 `guardrail: noma` is deprecated and users should migrate to `guardrail: noma_v2`.
 
 For easier migration of existing integrations, you can keep `guardrail: noma` and set `use_v2: true`.
-When `use_v2: true`, legacy flags `monitor_mode`, `block_failures`, and `anonymize_input` are ignored, so behavior may change.
+When `use_v2: true`, requests are routed to the `noma_v2` implementation.
+`monitor_mode` and `block_failures` still apply, while `anonymize_input` is legacy-only and ignored.
 :::
 
 ## Noma guardrails (Legacy)
@@ -325,7 +326,6 @@ When content is blocked, Noma provides detailed information about the violations
   }
 }
 ```
-
 
 ## Noma v2 guardrails (Recommended)
 
