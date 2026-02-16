@@ -27,6 +27,7 @@ _supported_callback_params = [
     "braintrust_host",
     "slack_webhook_url",
     "lunary_public_key",
+    "turn_off_message_logging",
 ]
 
 

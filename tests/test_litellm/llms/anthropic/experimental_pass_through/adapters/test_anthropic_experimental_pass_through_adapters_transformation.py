@@ -341,10 +341,10 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 1
-    assert result[0].type == "tool_use"
-    assert result[0].id == "call_empty_args"
-    assert result[0].name == "test_function"
-    assert result[0].input == {}, "Empty function arguments should result in empty dict"
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "call_empty_args"
+    assert result[0]["name"] == "test_function"
+    assert result[0]["input"] == {}, "Empty function arguments should result in empty dict"
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
@@ -372,12 +372,12 @@ def test_translate_openai_content_to_anthropic_text_and_tool_calls():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 2
-    assert result[0].type == "text"
-    assert result[0].text == "Calling get_weather now."
-    assert result[1].type == "tool_use"
-    assert result[1].id == "call_weather"
-    assert result[1].name == "get_weather"
-    assert result[1].input == {"location": "Boston"}
+    assert result[0]["type"] == "text"
+    assert result[0]["text"] == "Calling get_weather now."
+    assert result[1]["type"] == "tool_use"
+    assert result[1]["id"] == "call_weather"
+    assert result[1]["name"] == "get_weather"
+    assert result[1]["input"] == {"location": "Boston"}
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
@@ -414,11 +414,11 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     anthropic_content = anthropic_response.get("content")
     assert anthropic_content is not None
     assert len(anthropic_content) == 2
-    assert cast(Any, anthropic_content[0]).type == "text"
-    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
-    assert cast(Any, anthropic_content[1]).type == "tool_use"
-    assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
-    assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
+    assert anthropic_content[0]["type"] == "text"
+    assert anthropic_content[0]["text"] == "Let me grab the current weather."
+    assert anthropic_content[1]["type"] == "tool_use"
+    assert anthropic_content[1]["id"] == "call_tool_combo"
+    assert anthropic_content[1]["input"] == {"location": "Paris"}
     assert anthropic_response.get("stop_reason") == "tool_use"
 
 
@@ -484,11 +484,11 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 2
-    assert result[0].type == "thinking"
-    assert result[0].thinking == "I need to summar"
-    assert result[0].signature == "sigsig"
-    assert result[1].type == "redacted_thinking"
-    assert result[1].data == "REDACTED"
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "I need to summar"
+    assert result[0]["signature"] == "sigsig"
+    assert result[1]["type"] == "redacted_thinking"
+    assert result[1]["data"] == "REDACTED"
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
@@ -1443,13 +1443,13 @@ def test_translate_openai_content_to_anthropic_reasoning_content_without_thinkin
 
     assert len(result) == 2
     # First block should be thinking block with reasoning_content
-    assert result[0].type == "thinking"
-    assert "Considering Letter Frequency" in result[0].thinking
-    assert "Calculating the Count" in result[0].thinking
-    assert result[0].signature is None
+    assert result[0]["type"] == "thinking"
+    assert "Considering Letter Frequency" in result[0]["thinking"]
+    assert "Calculating the Count" in result[0]["thinking"]
+    assert result[0]["signature"] is None
     # Second block should be text block with content
-    assert result[1].type == "text"
-    assert result[1].text == "There are **3** \"r\"s in the word strawberry."
+    assert result[1]["type"] == "text"
+    assert result[1]["text"] == "There are **3** \"r\"s in the word strawberry."
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without_thinking_blocks():
@@ -1522,13 +1522,13 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     assert len(anthropic_content) == 2
     
     # First block should be thinking
-    assert cast(Any, anthropic_content[0]).type == "thinking"
-    assert "Considering Letter Frequency" in cast(Any, anthropic_content[0]).thinking
-    assert cast(Any, anthropic_content[0]).signature is None
+    assert anthropic_content[0]["type"] == "thinking"
+    assert "Considering Letter Frequency" in anthropic_content[0]["thinking"]
+    assert anthropic_content[0].get("signature") is None
     
     # Second block should be text
-    assert cast(Any, anthropic_content[1]).type == "text"
-    assert cast(Any, anthropic_content[1]).text == "There are **3** \"r\"s in the word strawberry."
+    assert anthropic_content[1]["type"] == "text"
+    assert anthropic_content[1]["text"] == "There are **3** \"r\"s in the word strawberry."
     
     assert anthropic_response.get("stop_reason") == "end_turn"
 
@@ -1702,7 +1702,112 @@ def test_translate_openai_response_restores_tool_names():
     )
 
     # Find the tool_use block in the response
-    tool_use_blocks = [c for c in result["content"] if getattr(c, "type", None) == "tool_use"]
+    tool_use_blocks = [c for c in result["content"] if c.get("type") == "tool_use"]
     assert len(tool_use_blocks) == 1
     # Name should be restored to original
-    assert getattr(tool_use_blocks[0], "name", None) == original_name
+    assert tool_use_blocks[0]["name"] == original_name
+
+
+def test_translate_openai_response_to_anthropic_input_tokens_excludes_cached_tokens():
+    """
+    Regression test: input_tokens in Anthropic format should NOT include cached tokens.
+    
+    Issue: v1/messages API was returning incorrect input_token count when using prompt caching.
+    The OpenAI format includes cached tokens in prompt_tokens, but Anthropic format should not.
+    
+    According to Anthropic's spec:
+    - input_tokens = uncached input tokens only
+    - cache_read_input_tokens = tokens read from cache
+    
+    In OpenAI format:
+    - prompt_tokens = all input tokens (including cached)
+    - prompt_tokens_details.cached_tokens = cached tokens
+    
+    Expected: anthropic.input_tokens = openai.prompt_tokens - openai.prompt_tokens_details.cached_tokens
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Create OpenAI format response with cached tokens
+    # Scenario: 100 total prompt tokens, 30 of which are cached
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30
+        ),
+        cache_read_input_tokens=30,  # Anthropic format cache info
+    )
+    
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    
+    # Convert to Anthropic format
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+    
+    # Validate: input_tokens should be 70 (100 - 30 cached), not 100
+    assert anthropic_response["usage"]["input_tokens"] == 70, (
+        f"Expected input_tokens=70 (100 total - 30 cached), "
+        f"but got {anthropic_response['usage']['input_tokens']}. "
+        f"input_tokens should NOT include cached tokens per Anthropic spec."
+    )
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+
+
+def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
+    """
+    Regression test: input_tokens should equal prompt_tokens when there are no cached tokens.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Create OpenAI format response without cached tokens
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    
+    # Convert to Anthropic format
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+    
+    # Validate: input_tokens should equal prompt_tokens when no caching
+    assert anthropic_response["usage"]["input_tokens"] == 100
+    assert anthropic_response["usage"]["output_tokens"] == 50

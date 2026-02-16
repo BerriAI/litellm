@@ -203,6 +203,10 @@ except Exception as e:
     EnterpriseStandardLoggingPayloadSetupVAR = None
 _in_memory_loggers: List[Any] = []
 
+_STANDARD_LOGGING_METADATA_KEYS: frozenset = frozenset(
+    StandardLoggingMetadata.__annotations__.keys()
+)
+
 ### GLOBAL VARIABLES ###
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
@@ -522,7 +526,8 @@ class Logging(LiteLLMLoggingBaseClass):
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
-        verbose_logger.debug(f"self.optional_params: {self.optional_params}")
+        if _is_debugging_on() or self.litellm_request_debug:
+            verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
         self.model_call_details.update(
             {
@@ -1330,7 +1335,11 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         # Store additional costs if provided (free-form dict for extensibility)
-        if additional_costs and isinstance(additional_costs, dict) and len(additional_costs) > 0:
+        if (
+            additional_costs
+            and isinstance(additional_costs, dict)
+            and len(additional_costs) > 0
+        ):
             self.cost_breakdown["additional_costs"] = additional_costs
 
         # Store discount information if provided
@@ -2326,7 +2335,7 @@ class Logging(LiteLLMLoggingBaseClass):
             result, LiteLLMBatch
         ):
             litellm_params = self.litellm_params or {}
-            litellm_metadata = litellm_params.get("litellm_metadata", {})
+            litellm_metadata = litellm_params.get("litellm_metadata") or {}
             if (
                 litellm_metadata.get("batch_ignore_default_logging", False) is True
             ):  # polling job will query these frequently, don't spam db logs
@@ -2364,6 +2373,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ) = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
+                    litellm_params=self.litellm_params,
                 )
 
                 result._hidden_params["response_cost"] = response_cost
@@ -3121,9 +3131,65 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_combined_callback_list(
         self, dynamic_success_callbacks: Optional[List], global_callbacks: List
     ) -> List:
+        # Combine dynamic and global callbacks
         if dynamic_success_callbacks is None:
-            return global_callbacks
-        return list(set(dynamic_success_callbacks + global_callbacks))
+            combined = list(global_callbacks)
+        else:
+            combined = list(dynamic_success_callbacks) + list(global_callbacks)
+
+        verbose_logger.debug(
+            f"[LANGFUSE DEBUG] Combined callbacks BEFORE filtering: {[self._get_callback_name(cb) for cb in combined]}"
+        )
+        verbose_logger.debug(
+            f"[LANGFUSE DEBUG] Dynamic callbacks: {[self._get_callback_name(cb) for cb in (dynamic_success_callbacks or [])]}"
+        )
+        verbose_logger.debug(
+            f"[LANGFUSE DEBUG] Global callbacks: {[self._get_callback_name(cb) for cb in global_callbacks]}"
+        )
+
+        # Filter duplicate Langfuse loggers to prevent trace leakage
+        # Only keep ONE Langfuse logger per request (prefer dynamic over global)
+        langfuse_logger_found = None
+        filtered = []
+
+        for cb in combined:
+            cb_name = self._get_callback_name(cb)
+
+            # Check if this is a Langfuse logger (vanilla or OTEL)
+            is_langfuse = (
+                cb_name.lower()
+                in ["langfuse", "langfuselogger", "langfuse_otel", "langfuseotellogger"]
+                or "langfuse" in cb_name.lower()
+            )
+
+            if is_langfuse:
+                if langfuse_logger_found is None:
+                    # First Langfuse logger found - keep it (dynamic has priority)
+                    langfuse_logger_found = cb
+                    filtered.append(cb)
+                    verbose_logger.debug(
+                        f"LiteLLM Logging: Using Langfuse logger: {cb_name} (other Langfuse loggers will be filtered out)"
+                    )
+                else:
+                    # Skip duplicate Langfuse logger to prevent trace leakage
+                    verbose_logger.debug(
+                        f"LiteLLM Logging: Skipping duplicate Langfuse logger: {cb_name} (already have {self._get_callback_name(langfuse_logger_found)})"
+                    )
+            else:
+                # Keep all non-Langfuse callbacks
+                filtered.append(cb)
+
+        verbose_logger.debug(
+            f"[LANGFUSE DEBUG] Filtered callbacks AFTER filtering: {[self._get_callback_name(cb) for cb in filtered]}"
+        )
+        if langfuse_logger_found:
+            verbose_logger.debug(
+                f"[LANGFUSE DEBUG] Langfuse logger kept: {self._get_callback_name(langfuse_logger_found)}"
+            )
+
+        # Don't use set() - it breaks deduplication for callback instances
+        # The filtering logic above already handles deduplication
+        return filtered
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """
@@ -3759,7 +3825,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.opentelemetry import OpenTelemetry
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, OpenTelemetry):
+                if type(callback) is OpenTelemetry:
                     return callback  # type: ignore
             otel_logger = OpenTelemetry(
                 **_get_custom_logger_settings_from_proxy_server(
@@ -4515,17 +4581,16 @@ class StandardLoggingPayloadSetup:
             user_api_key_auth_metadata=None,
         )
         if isinstance(metadata, dict):
-            # Filter the metadata dictionary to include only the specified keys
-            supported_keys = StandardLoggingMetadata.__annotations__.keys()
-            for key in supported_keys:
-                if key in metadata:
-                    clean_metadata[key] = metadata[key]  # type: ignore
+            for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
+                clean_metadata[key] = metadata[key]  # type: ignore
 
-            if metadata.get("user_api_key") is not None:
-                if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
-                    clean_metadata["user_api_key_hash"] = metadata.get(
-                        "user_api_key"
-                    )  # this is the hash
+            user_api_key = metadata.get("user_api_key")
+            if (
+                user_api_key
+                and isinstance(user_api_key, str)
+                and is_valid_sha256_hash(user_api_key)
+            ):
+                clean_metadata["user_api_key_hash"] = user_api_key
             _potential_requester_metadata = metadata.get(
                 "metadata", None
             )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields

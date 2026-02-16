@@ -1,6 +1,7 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
+import asyncio
 import os
 import sys
 from datetime import datetime, timedelta
@@ -28,7 +29,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.integrations.prometheus import *
-from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
+from litellm.types.integrations.prometheus import (
+    _sanitize_prometheus_label_name,
+    _sanitize_prometheus_label_value,
+)
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -1188,28 +1192,34 @@ class PrometheusLogger(CustomLogger):
         _user_spend = _metadata.get("user_api_key_user_spend", None)
         _user_max_budget = _metadata.get("user_api_key_user_max_budget", None)
 
-        await self._set_api_key_budget_metrics_after_api_request(
-            user_api_key=user_api_key,
-            user_api_key_alias=user_api_key_alias,
-            response_cost=response_cost,
-            key_max_budget=_api_key_max_budget,
-            key_spend=_api_key_spend,
+        results = await asyncio.gather(
+            self._set_api_key_budget_metrics_after_api_request(
+                user_api_key=user_api_key,
+                user_api_key_alias=user_api_key_alias,
+                response_cost=response_cost,
+                key_max_budget=_api_key_max_budget,
+                key_spend=_api_key_spend,
+            ),
+            self._set_team_budget_metrics_after_api_request(
+                user_api_team=user_api_team,
+                user_api_team_alias=user_api_team_alias,
+                team_spend=_team_spend,
+                team_max_budget=_team_max_budget,
+                response_cost=response_cost,
+            ),
+            self._set_user_budget_metrics_after_api_request(
+                user_id=user_id,
+                user_spend=_user_spend,
+                user_max_budget=_user_max_budget,
+                response_cost=response_cost,
+            ),
+            return_exceptions=True,
         )
-
-        await self._set_team_budget_metrics_after_api_request(
-            user_api_team=user_api_team,
-            user_api_team_alias=user_api_team_alias,
-            team_spend=_team_spend,
-            team_max_budget=_team_max_budget,
-            response_cost=response_cost,
-        )
-
-        await self._set_user_budget_metrics_after_api_request(
-            user_id=user_id,
-            user_spend=_user_spend,
-            user_max_budget=_user_max_budget,
-            response_cost=response_cost,
-        )
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                verbose_logger.debug(
+                    f"[Non-Blocking] Prometheus: Budget metric lookup {['key', 'team', 'user'][i]} failed: {r}"
+                )
 
     def _increment_top_level_request_and_spend_metrics(
         self,
@@ -1269,11 +1279,17 @@ class PrometheusLogger(CustomLogger):
         )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
-            user_api_key, user_api_key_alias, model_group, model_id
+            _sanitize_prometheus_label_value(user_api_key),
+            _sanitize_prometheus_label_value(user_api_key_alias),
+            _sanitize_prometheus_label_value(model_group),
+            _sanitize_prometheus_label_value(model_id),
         ).set(remaining_requests)
 
         self.litellm_remaining_api_key_tokens_for_model.labels(
-            user_api_key, user_api_key_alias, model_group, model_id
+            _sanitize_prometheus_label_value(user_api_key),
+            _sanitize_prometheus_label_value(user_api_key_alias),
+            _sanitize_prometheus_label_value(model_group),
+            _sanitize_prometheus_label_value(model_id),
         ).set(remaining_tokens)
 
     def _set_latency_metrics(
@@ -1394,14 +1410,14 @@ class PrometheusLogger(CustomLogger):
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
-                end_user_id,
-                user_api_key,
-                user_api_key_alias,
-                model,
-                user_api_team,
-                user_api_team_alias,
-                user_id,
-                standard_logging_payload.get("model_id", ""),
+                _sanitize_prometheus_label_value(end_user_id),
+                _sanitize_prometheus_label_value(user_api_key),
+                _sanitize_prometheus_label_value(user_api_key_alias),
+                _sanitize_prometheus_label_value(model),
+                _sanitize_prometheus_label_value(user_api_team),
+                _sanitize_prometheus_label_value(user_api_team_alias),
+                _sanitize_prometheus_label_value(user_id),
+                _sanitize_prometheus_label_value(standard_logging_payload.get("model_id", "")),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
@@ -1683,6 +1699,108 @@ class PrometheusLogger(CustomLogger):
             )
             pass
 
+    def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
+        """Get value from dict or Pydantic model."""
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _extract_deployment_failure_label_values(
+        self, request_kwargs: dict
+    ) -> Dict[str, Optional[str]]:
+        """
+        Extract label values for deployment failure metrics from all available
+        sources in request_kwargs. Falls back to litellm_params metadata and
+        user_api_key_auth when standard_logging_payload has None values.
+        """
+        standard_logging_payload = (
+            request_kwargs.get("standard_logging_object", {}) or {}
+        )
+        _litellm_params = request_kwargs.get("litellm_params", {}) or {}
+        _metadata_raw = self._safe_get(standard_logging_payload, "metadata") or {}
+        if isinstance(_metadata_raw, dict):
+            _metadata = _metadata_raw
+        else:
+            _metadata = {
+                "user_api_key_alias": getattr(
+                    _metadata_raw, "user_api_key_alias", None
+                ),
+                "user_api_key_team_id": getattr(
+                    _metadata_raw, "user_api_key_team_id", None
+                ),
+                "user_api_key_team_alias": getattr(
+                    _metadata_raw, "user_api_key_team_alias", None
+                ),
+                "user_api_key_hash": getattr(_metadata_raw, "user_api_key_hash", None),
+                "requester_ip_address": getattr(
+                    _metadata_raw, "requester_ip_address", None
+                ),
+                "user_agent": getattr(_metadata_raw, "user_agent", None),
+            }
+        _litellm_params_metadata = _litellm_params.get("metadata", {}) or {}
+
+        # Extract user_api_key_auth if present (proxy injects this, skipped in merge)
+        user_api_key_auth = _litellm_params_metadata.get("user_api_key_auth")
+
+        def _get_api_key_alias() -> Optional[str]:
+            val = _metadata.get("user_api_key_alias")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_alias")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "key_alias", None)
+            return None
+
+        def _get_team_id() -> Optional[str]:
+            val = _metadata.get("user_api_key_team_id")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_team_id")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "team_id", None)
+            return None
+
+        def _get_team_alias() -> Optional[str]:
+            val = _metadata.get("user_api_key_team_alias")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_team_alias")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "team_alias", None)
+            return None
+
+        def _get_hashed_api_key() -> Optional[str]:
+            val = _metadata.get("user_api_key_hash")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_hash")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return getattr(user_api_key_auth, "api_key", None) or getattr(
+                    user_api_key_auth, "api_key_hash", None
+                )
+            return None
+
+        return {
+            "api_key_alias": _get_api_key_alias(),
+            "team": _get_team_id(),
+            "team_alias": _get_team_alias(),
+            "hashed_api_key": _get_hashed_api_key(),
+            "client_ip": _metadata.get("requester_ip_address")
+            or _litellm_params_metadata.get("requester_ip_address"),
+            "user_agent": _metadata.get("user_agent")
+            or _litellm_params_metadata.get("user_agent"),
+        }
+
     def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
         """
         Sets Failure metrics when an LLM API call fails
@@ -1707,6 +1825,21 @@ class PrometheusLogger(CustomLogger):
             model_id = standard_logging_payload.get("model_id", None)
             exception = request_kwargs.get("exception", None)
 
+            # Fallback: model_id from litellm_metadata.model_info
+            if model_id is None:
+                _model_info = (
+                    (_litellm_params.get("litellm_metadata") or {}).get("model_info")
+                    or (_litellm_params.get("metadata") or {}).get("model_info")
+                    or {}
+                )
+                model_id = _model_info.get("id")
+
+            # Fallback: model_group from litellm_metadata
+            if model_group is None:
+                model_group = (_litellm_params.get("litellm_metadata") or {}).get(
+                    "model_group"
+                ) or (_litellm_params.get("metadata") or {}).get("model_group")
+
             llm_provider = _litellm_params.get("custom_llm_provider", None)
 
             if self._should_skip_metrics_for_invalid_key(
@@ -1714,9 +1847,37 @@ class PrometheusLogger(CustomLogger):
                 standard_logging_payload=standard_logging_payload,
             ):
                 return
-            hashed_api_key = standard_logging_payload.get("metadata", {}).get(
+
+            # Extract context labels from all available sources (fix for None labels)
+            fallback_values = self._extract_deployment_failure_label_values(
+                request_kwargs
+            )
+            _metadata = standard_logging_payload.get("metadata", {}) or {}
+            hashed_api_key = fallback_values.get("hashed_api_key") or _metadata.get(
                 "user_api_key_hash"
             )
+            api_key_alias = fallback_values.get("api_key_alias") or _metadata.get(
+                "user_api_key_alias"
+            )
+            team = fallback_values.get("team") or _metadata.get("user_api_key_team_id")
+            team_alias = fallback_values.get("team_alias") or _metadata.get(
+                "user_api_key_team_alias"
+            )
+            client_ip = fallback_values.get("client_ip") or _metadata.get(
+                "requester_ip_address"
+            )
+            user_agent = fallback_values.get("user_agent") or _metadata.get(
+                "user_agent"
+            )
+
+            # exception_status: prefer status_code, fallback to exception class for known types
+            exception_status = None
+            if exception is not None:
+                exception_status = str(getattr(exception, "status_code", None))
+                if exception_status == "None" or not exception_status:
+                    code = getattr(exception, "code", None)
+                    if code is not None:
+                        exception_status = str(code)
 
             # Create enum_values for the label factory (always create for use in different metrics)
             enum_values = UserAPIKeyLabelValues(
@@ -1724,26 +1885,18 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
-                exception_status=(
-                    str(getattr(exception, "status_code", None)) if exception else None
-                ),
+                exception_status=exception_status,
                 exception_class=(
                     self._get_exception_class_name(exception) if exception else None
                 ),
-                requested_model=model_group,
+                requested_model=model_group or litellm_model_name,
                 hashed_api_key=hashed_api_key,
-                api_key_alias=standard_logging_payload["metadata"][
-                    "user_api_key_alias"
-                ],
-                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                team_alias=standard_logging_payload["metadata"][
-                    "user_api_key_team_alias"
-                ],
+                api_key_alias=api_key_alias,
+                team=team,
+                team_alias=team_alias,
                 tags=standard_logging_payload.get("request_tags", []),
-                client_ip=standard_logging_payload["metadata"].get(
-                    "requester_ip_address"
-                ),
-                user_agent=standard_logging_payload["metadata"].get("user_agent"),
+                client_ip=client_ip,
+                user_agent=user_agent,
             )
 
             """
@@ -2210,7 +2363,11 @@ class PrometheusLogger(CustomLogger):
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
         self.litellm_deployment_cooled_down.labels(
-            litellm_model_name, model_id, api_base, api_provider, exception_status
+            _sanitize_prometheus_label_value(litellm_model_name),
+            _sanitize_prometheus_label_value(model_id),
+            _sanitize_prometheus_label_value(api_base),
+            _sanitize_prometheus_label_value(api_provider),
+            _sanitize_prometheus_label_value(exception_status),
         ).inc()
 
     def increment_callback_logging_failure(
@@ -2761,12 +2918,14 @@ class PrometheusLogger(CustomLogger):
             max_budget=max_budget,
         )
         try:
+            # Note: Setting check_db_only=True bypasses cache and hits DB on every request,
+            # causing huge latency increase and CPU spikes. Keep check_db_only=False.
             user_info = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
-                check_db_only=True,
+                check_db_only=False,
             )
         except Exception as e:
             verbose_logger.debug(
@@ -2928,9 +3087,10 @@ def prometheus_label_factory(
     # Extract dictionary from Pydantic object
     enum_dict = enum_values.model_dump()
 
-    # Filter supported labels
+    # Filter supported labels and sanitize values to prevent breaking
+    # the Prometheus text format (e.g. U+2028 Line Separator in label values)
     filtered_labels = {
-        label: value
+        label: _sanitize_prometheus_label_value(value)
         for label, value in enum_dict.items()
         if label in supported_enum_labels
     }
@@ -2948,14 +3108,14 @@ def prometheus_label_factory(
             # check sanitized key
             sanitized_key = _sanitize_prometheus_label_name(key)
             if sanitized_key in supported_enum_labels:
-                filtered_labels[sanitized_key] = value
+                filtered_labels[sanitized_key] = _sanitize_prometheus_label_value(value)
 
     # Add custom tags if configured
     if enum_values.tags is not None:
         custom_tag_labels = get_custom_labels_from_tags(enum_values.tags)
         for key, value in custom_tag_labels.items():
             if key in supported_enum_labels:
-                filtered_labels[key] = value
+                filtered_labels[key] = _sanitize_prometheus_label_value(value)
 
     for label in supported_enum_labels:
         if label not in filtered_labels:

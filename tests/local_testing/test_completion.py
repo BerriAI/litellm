@@ -2185,20 +2185,6 @@ async def test_acompletion_ollama_function_call_stream(model):
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_openrouter1():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="openrouter/mistralai/mistral-tiny",
-            messages=messages,
-            max_tokens=5,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_openrouter_reasoning_effort():
     try:
         litellm.set_verbose = True
