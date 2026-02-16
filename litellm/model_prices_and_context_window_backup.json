@@ -1083,7 +1083,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "apac.anthropic.claude-opus-4-6-v1": {
+    "au.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
