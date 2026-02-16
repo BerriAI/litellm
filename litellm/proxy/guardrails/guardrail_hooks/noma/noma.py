@@ -796,6 +796,7 @@ class NomaGuardrail(CustomGuardrail):
         endpoint = urljoin(
             self.api_base or "https://api.noma.security/", NomaGuardrail._AIDR_ENDPOINT
         )
+
         response = await self.async_handler.post(
             endpoint,
             headers=headers,
@@ -823,6 +824,7 @@ class NomaGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
+
         return response.json()
 
     async def _check_verdict(

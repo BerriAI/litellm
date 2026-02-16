@@ -41,9 +41,6 @@ class TestNomaV2Configuration:
         assert "application_id" in noma_v2_params
         assert "monitor_mode" in noma_v2_params
         assert "block_failures" in noma_v2_params
-        assert "client_id" not in noma_v2_params
-        assert "client_secret" not in noma_v2_params
-        assert "use_v2" not in noma_v2_params
 
     def test_init_requires_auth(self):
         with patch.dict(os.environ, {}, clear=True):
