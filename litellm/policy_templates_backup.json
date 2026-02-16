@@ -2,7 +2,7 @@
   {
     "id": "advanced-au-pii-protection",
     "title": "Advanced PII Protection (Australia)",
-    "description": "Comprehensive PII detection and masking for Australia. Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
+    "description": "Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
     "icon": "ShieldCheckIcon",
     "iconColor": "text-purple-500",
     "iconBg": "bg-purple-50",
@@ -271,6 +271,406 @@
         "au-pii-tax-identifiers",
         "credentials-api-keys",
         "financial-pii"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "nsfw-content-filter-australia",
+    "title": "NSFW Content Filter (Australia)",
+    "description": "Blocks profanity, sexual content, NSFW requests, self-harm content, and child safety violations using English and Australian-specific slang. Protects against inappropriate content including sexual solicitation, explicit content, Australian profanity, self-harm, and content involving minors.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "nsfw-content-filter-english",
+      "nsfw-content-filter-australian",
+      "nsfw-self-harm-filter",
+      "nsfw-child-safety-filter",
+      "nsfw-racial-bias-filter"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "nsfw-content-filter-english",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks profanity, sexual content, slurs, and NSFW terms in English"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-content-filter-australian",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_au",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks Australian-specific slang and profanity (root, perv, bogan, wanker, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-self-harm-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_self_harm",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content related to self-harm, suicide, and eating disorders"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-child-safety-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_child_safety",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks inappropriate content involving minors using identifier + block word combinations"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-racial-bias-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "bias_racial",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks racial and ethnic discrimination, hate speech, and supremacist content"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "nsfw-content-filter-australia",
+      "description": "NSFW content filter for Australia. Blocks profanity, sexual content, inappropriate requests, self-harm content, child safety violations, and racial bias in English and Australian slang.",
+      "guardrails_add": [
+        "nsfw-content-filter-english",
+        "nsfw-content-filter-australian",
+        "nsfw-self-harm-filter",
+        "nsfw-child-safety-filter",
+        "nsfw-racial-bias-filter"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "nsfw-content-filter-basic",
+    "title": "NSFW Content Filter (Basic)",
+    "description": "Basic NSFW content filtering for English only. Blocks profanity, sexual content, slurs, solicitation, explicit requests, self-harm content, and child safety violations. Suitable for most applications requiring content moderation.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-orange-500",
+    "iconBg": "bg-orange-50",
+    "guardrails": [
+      "nsfw-content-filter-english-only",
+      "nsfw-self-harm-filter-basic",
+      "nsfw-child-safety-filter-basic",
+      "nsfw-racial-bias-filter-basic"
+    ],
+    "complexity": "Low",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "nsfw-content-filter-english-only",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks profanity, sexual content, slurs, and NSFW terms. Includes 485+ keywords covering explicit content, solicitation, sexual behavior, and exploitation."
+        }
+      },
+      {
+        "guardrail_name": "nsfw-self-harm-filter-basic",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_self_harm",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content related to self-harm, suicide, and eating disorders"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-child-safety-filter-basic",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_child_safety",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks inappropriate content involving minors using identifier + block word combinations"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-racial-bias-filter-basic",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "bias_racial",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks racial and ethnic discrimination, hate speech, and supremacist content"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "nsfw-content-filter-basic",
+      "description": "Basic NSFW content filter. Blocks profanity, sexual content, inappropriate requests, self-harm content, child safety violations, and racial bias in English.",
+      "guardrails_add": [
+        "nsfw-content-filter-english-only",
+        "nsfw-self-harm-filter-basic",
+        "nsfw-child-safety-filter-basic",
+        "nsfw-racial-bias-filter-basic"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "nsfw-content-filter-all-regions",
+    "title": "NSFW Content Filter (All Regions)",
+    "description": "Comprehensive multi-language NSFW content filtering. Blocks profanity, sexual content, inappropriate requests, self-harm content, and child safety violations in English, Spanish, French, German, and Australian. Best for global applications.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-purple-500",
+    "iconBg": "bg-purple-50",
+    "guardrails": [
+      "nsfw-filter-english",
+      "nsfw-filter-spanish",
+      "nsfw-filter-french",
+      "nsfw-filter-german",
+      "nsfw-filter-australian",
+      "nsfw-self-harm-filter-global",
+      "nsfw-child-safety-filter-global",
+      "nsfw-racial-bias-filter-global"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "nsfw-filter-english",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "English profanity, sexual content, slurs, and NSFW terms (485+ keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-spanish",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_es",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Spanish profanity and offensive terms (68 keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-french",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_fr",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "French profanity and offensive terms (91 keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-german",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_de",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "German profanity and offensive terms (65 keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-australian",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_au",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Australian slang and profanity (32 keywords: root, perv, bogan, wanker, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-self-harm-filter-global",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_self_harm",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content related to self-harm, suicide, and eating disorders"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-child-safety-filter-global",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_child_safety",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks inappropriate content involving minors using identifier + block word combinations"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-racial-bias-filter-global",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "bias_racial",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks racial and ethnic discrimination, hate speech, and supremacist content"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "nsfw-content-filter-all-regions",
+      "description": "Comprehensive multi-language NSFW content filter. Blocks profanity, inappropriate content, self-harm, child safety violations, and racial bias in English, Spanish, French, German, and Australian. Total coverage: 741+ keywords across all languages plus self-harm, child safety, and racial bias protection.",
+      "guardrails_add": [
+        "nsfw-filter-english",
+        "nsfw-filter-spanish",
+        "nsfw-filter-french",
+        "nsfw-filter-german",
+        "nsfw-filter-australian",
+        "nsfw-self-harm-filter-global",
+        "nsfw-child-safety-filter-global",
+        "nsfw-racial-bias-filter-global"
       ],
       "guardrails_remove": []
     }

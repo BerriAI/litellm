@@ -5831,6 +5831,7 @@ class ProxyStartupEvent:
             verbose_proxy_logger.debug(
                 "LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
             )
+            return
         try:
             import pyroscope
 

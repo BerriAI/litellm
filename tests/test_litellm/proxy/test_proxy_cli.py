@@ -218,6 +218,12 @@ class TestProxyInitializationHelpers:
             assert "connection_limit=10" in modified_url
             assert "pool_timeout=60" in modified_url
 
+    def test_append_query_params_handles_missing_url(self):
+        from litellm.proxy.proxy_cli import append_query_params
+
+        modified_url = append_query_params(None, {"connection_limit": 10})
+        assert modified_url == ""
+
     @patch("uvicorn.run")
     @patch("atexit.register")  # 🔥 critical
     def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):

@@ -1638,6 +1638,41 @@ def test_effort_with_claude_opus_45():
     assert result["model"] == "claude-opus-4-5-20251101"
 
 
+def test_effort_validation_with_opus_46():
+    """Test that all four effort levels are accepted for Claude Opus 4.6."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    for effort in ["high", "medium", "low", "max"]:
+        optional_params = {"output_config": {"effort": effort}}
+        result = config.transform_request(
+            model="claude-opus-4-6-20260205",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+        assert result["output_config"]["effort"] == effort
+
+
+def test_max_effort_rejected_for_opus_45():
+    """Test that effort='max' is rejected when using Claude Opus 4.5."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+        optional_params = {"output_config": {"effort": "max"}}
+        config.transform_request(
+            model="claude-opus-4-5-20251101",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+
+
 def test_effort_with_other_features():
     """Test effort works alongside other features (thinking, tools)."""
     config = AnthropicConfig()

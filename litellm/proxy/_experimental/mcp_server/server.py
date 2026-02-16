@@ -149,7 +149,7 @@ if MCP_AVAILABLE:
         app=server,
         event_store=None,
         json_response=False, # enables SSE streaming
-        stateless=False, # enables session state
+        stateless=True,
     )
 
     # Create SSE session manager

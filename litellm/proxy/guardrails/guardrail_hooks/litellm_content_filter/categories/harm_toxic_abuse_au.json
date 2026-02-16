@@ -1,0 +1,345 @@
+[
+  {
+    "id": "root",
+    "match": "root|rooting|rooted|rooter",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "tree",
+      "plant",
+      "square",
+      "cube",
+      "directory",
+      "access",
+      "cause",
+      "beer"
+    ]
+  },
+  {
+    "id": "ranga",
+    "match": "ranga|rangas",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "whangarei"
+    ]
+  },
+  {
+    "id": "minge",
+    "match": "minge|minges",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "perv",
+    "match": "perv|perve|perving|perved|have a perv|perve on",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "pervade",
+      "perverse"
+    ]
+  },
+  {
+    "id": "slapper",
+    "match": "slapper|slappers",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "moll",
+    "match": "moll|molls",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "flanders"
+    ]
+  },
+  {
+    "id": "sheila",
+    "match": "sheila|sheilas",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 1,
+    "exceptions": [
+      "name",
+      "saint"
+    ]
+  },
+  {
+    "id": "arsehole-au",
+    "match": "arsehole|arseholes",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bloody-au",
+    "match": "bloody hell|bloody oath|bloody bastard|bloody idiot",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "bugger-au",
+    "match": "bugger off|bugger all|bugger me|buggered",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "bollocks-au",
+    "match": "bollocks|bollock",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "wanker-au",
+    "match": "wanker|wankers|wank",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "tosser-au",
+    "match": "tosser|tossers",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "bogan",
+    "match": "bogan|bogans|filthy bogan",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "drongo",
+    "match": "drongo|drongos",
+    "tags": [
+      "insult",
+      "australian"
+    ],
+    "severity": 1
+  },
+  {
+    "id": "yobbo",
+    "match": "yobbo|yobbos|yob",
+    "tags": [
+      "insult",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "ratbag",
+    "match": "ratbag|ratbags",
+    "tags": [
+      "insult",
+      "australian"
+    ],
+    "severity": 1
+  },
+  {
+    "id": "dole-bludger",
+    "match": "dole bludger|dole-bludger|bludger",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "harry potter",
+      "quidditch"
+    ]
+  },
+  {
+    "id": "fuck-spiders",
+    "match": "fuck spiders|fucking spiders",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "root-rat",
+    "match": "root rat|rootrat",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bush-pig",
+    "match": "bush pig|bushpig",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "seppo",
+    "match": "seppo|seppos",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "seppo"
+    ]
+  },
+  {
+    "id": "pom",
+    "match": "pom|pommie|pommy bastard",
+    "tags": [
+      "offensive",
+      "australian"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "pomegranate",
+      "pomeranian"
+    ]
+  },
+  {
+    "id": "spunk-rat",
+    "match": "spunk rat|spunkrat",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "fanny-au",
+    "match": "fanny",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "pack",
+      "bag",
+      "adams"
+    ]
+  },
+  {
+    "id": "knob",
+    "match": "knob|knobhead|knob-head",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 2,
+    "exceptions": [
+      "door",
+      "control",
+      "volume"
+    ]
+  },
+  {
+    "id": "gash",
+    "match": "gash",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 3,
+    "exceptions": [
+      "cut",
+      "wound",
+      "injury"
+    ]
+  },
+  {
+    "id": "norks",
+    "match": "norks",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "dag",
+    "match": "dag|dags",
+    "tags": [
+      "insult",
+      "australian"
+    ],
+    "severity": 1,
+    "exceptions": [
+      "acyclic",
+      "graph",
+      "directed"
+    ]
+  },
+  {
+    "id": "sook",
+    "match": "sook|sooky|sooky la la",
+    "tags": [
+      "insult",
+      "australian"
+    ],
+    "severity": 1
+  },
+  {
+    "id": "up-the-duff",
+    "match": "up the duff|upduff",
+    "tags": [
+      "sexual",
+      "australian"
+    ],
+    "severity": 2
+  },
+  {
+    "id": "get-stuffed",
+    "match": "get stuffed",
+    "tags": [
+      "profanity",
+      "australian"
+    ],
+    "severity": 2
+  }
+]

@@ -230,12 +230,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_file:
             return managed_file.created_by == user_id
-        return False
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {unified_file_id}",
+        )
 
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
-        ## check if the user has access to the unified object id
         ## check if the user has access to the unified object id
         user_id = user_api_key_dict.user_id
         managed_object = (
@@ -246,7 +248,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_object:
             return managed_object.created_by == user_id
-        return True  # don't raise error if managed object is not found
+        raise HTTPException(
+            status_code=404,
+            detail=f"Object not found: {unified_object_id}",
+        )
 
     async def list_user_batches(
         self,
@@ -911,15 +916,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         )
                         setattr(response, file_attr, unified_file_id)
                         
-                        # Fetch the actual file object from the provider
+                        # Use llm_router credentials when available. Without credentials,
+                        # Azure and other auth-required providers return 500/401.
                         file_object = None
                         try:
-                            # Use litellm to retrieve the file object from the provider
-                            from litellm import afile_retrieve
-                            file_object = await afile_retrieve(
-                                custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
-                                file_id=original_file_id
-                            )
+                            from litellm.proxy.proxy_server import llm_router as _llm_router
+                            if _llm_router is not None and model_id:
+                                _creds = _llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                                file_object = await litellm.afile_retrieve(
+                                    file_id=original_file_id,
+                                    **_creds,
+                                )
+                            else:
+                                file_object = await litellm.afile_retrieve(
+                                    custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                                    file_id=original_file_id,
+                                )
                             verbose_logger.debug(
                                 f"Successfully retrieved file object for {file_attr}={original_file_id}"
                             )
@@ -1004,7 +1016,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
         
         # Case 2: Managed file and the file object exists in the database
+        # The stored file_object has the raw provider ID. Replace with the unified ID
+        # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
         if stored_file_object and stored_file_object.file_object:
+            stored_file_object.file_object.id = file_id
             return stored_file_object.file_object
 
         # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)

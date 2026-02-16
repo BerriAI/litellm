@@ -2619,6 +2619,8 @@ def test_empty_assistant_message_handling():
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
+    # Import the litellm module that factory.py uses to ensure we patch the correct reference
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -2627,11 +2629,9 @@ def test_empty_assistant_message_handling():
         {"role": "user", "content": "How are you?"}
     ]
 
-    # Enable modify_params to prevent consecutive user message merging
-    original_modify_params = litellm.modify_params
-    litellm.modify_params = True
-
-    try:
+    # Use patch to ensure we modify the litellm reference that factory.py actually uses
+    # This avoids issues with module reloading during parallel test execution
+    with patch.object(factory_module.litellm, "modify_params", True):
         result = _bedrock_converse_messages_pt(
             messages=messages,
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2645,6 +2645,7 @@ def test_empty_assistant_message_handling():
         assert result[2]["role"] == "user"
 
         # Assistant message should have placeholder text instead of empty content
+        # When modify_params=True, empty assistant messages get replaced with DEFAULT_ASSISTANT_CONTINUE_MESSAGE
         assert len(result[1]["content"]) == 1
         assert result[1]["content"][0]["text"] == "Please continue."
 
@@ -2698,10 +2699,6 @@ def test_empty_assistant_message_handling():
         # Assistant message should keep original content
         assert len(result[1]["content"]) == 1
         assert result[1]["content"][0]["text"] == "I'm doing well, thank you!"
-
-    finally:
-        # Restore original modify_params setting
-        litellm.modify_params = original_modify_params
 
 
 def test_is_nova_lite_2_model():
@@ -3377,3 +3374,47 @@ def test_output_config_applies_additional_properties():
     parsed = json.loads(output_config["textFormat"]["structure"]["jsonSchema"]["schema"])
     assert parsed["additionalProperties"] is False
     assert parsed["properties"]["nested"]["additionalProperties"] is False
+
+
+class TestBedrockMinThinkingBudgetTokens:
+    """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
+
+    def _map_params(
+        self, thinking_value, model="anthropic.claude-3-7-sonnet-20250219-v1:0"
+    ):
+        """Helper to call map_openai_params with the given thinking value."""
+        config = AmazonConverseConfig()
+        non_default_params = {"thinking": thinking_value}
+        optional_params = {"thinking": thinking_value}
+        return config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+
+    def test_budget_tokens_below_minimum_is_clamped(self):
+        """budget_tokens < 1024 should be clamped to 1024."""
+        result = self._map_params({"type": "enabled", "budget_tokens": 499})
+        assert result["thinking"]["budget_tokens"] == 1024
+
+    def test_budget_tokens_at_minimum_is_unchanged(self):
+        """budget_tokens == 1024 should remain 1024."""
+        result = self._map_params({"type": "enabled", "budget_tokens": 1024})
+        assert result["thinking"]["budget_tokens"] == 1024
+
+    def test_budget_tokens_above_minimum_is_unchanged(self):
+        """budget_tokens > 1024 should remain unchanged."""
+        result = self._map_params({"type": "enabled", "budget_tokens": 2048})
+        assert result["thinking"]["budget_tokens"] == 2048
+
+    def test_no_thinking_param_does_not_error(self):
+        """When thinking is not provided, map_openai_params should not raise."""
+        config = AmazonConverseConfig()
+        result = config.map_openai_params(
+            non_default_params={},
+            optional_params={},
+            model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+            drop_params=False,
+        )
+        assert "thinking" not in result or result.get("thinking") is None
