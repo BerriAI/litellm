@@ -1600,3 +1600,154 @@ def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_fro
     assert "messages" in data
     assert data["messages"] == [{"role": "user", "content": "Hello"}]
     assert "metadata" in data
+
+
+class TestMoveGuardrailsFromModelDeployment:
+    """
+    Test that per-model guardrails from deployment litellm_params.guardrails
+    are propagated into request metadata by move_guardrails_to_metadata.
+    """
+
+    def test_model_deployment_guardrails_added_to_metadata(self):
+        """
+        When a model deployment has guardrails in litellm_params, they should
+        be merged into request metadata.
+        """
+        from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+
+        data = {
+            "model": "anthropic/claude-3-sonnet",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {},
+        }
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", metadata={})
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "anthropic/claude-3-sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-sonnet",
+                    "guardrails": ["presidio", "content-filter"],
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
+        ):
+            move_guardrails_to_metadata(
+                data=data,
+                _metadata_variable_name="metadata",
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert "guardrails" in data["metadata"]
+        assert set(data["metadata"]["guardrails"]) == {
+            "presidio",
+            "content-filter",
+        }
+
+    def test_model_deployment_guardrails_merged_with_existing(self):
+        """
+        When both key-level and model-level guardrails exist, they should be
+        merged (union) without duplicates.
+        """
+        from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+
+        data = {
+            "model": "anthropic/claude-3-sonnet",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {"guardrails": ["secret-filter"]},
+        }
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", metadata={})
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "anthropic/claude-3-sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-sonnet",
+                    "guardrails": ["presidio", "secret-filter"],
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
+        ):
+            move_guardrails_to_metadata(
+                data=data,
+                _metadata_variable_name="metadata",
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert set(data["metadata"]["guardrails"]) == {
+            "presidio",
+            "secret-filter",
+        }
+
+    def test_no_guardrails_when_deployment_has_none(self):
+        """
+        When a model deployment has no guardrails, metadata should not be
+        modified (beyond what other sources add).
+        """
+        from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+
+        data = {
+            "model": "openai/gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {},
+        }
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", metadata={})
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "openai/gpt-4",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
+        ):
+            move_guardrails_to_metadata(
+                data=data,
+                _metadata_variable_name="metadata",
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert data["metadata"].get("guardrails") is None or data["metadata"].get(
+            "guardrails"
+        ) == []
+
+    def test_no_crash_when_router_is_none(self):
+        """
+        When llm_router is None (e.g. during startup), the function should
+        not crash.
+        """
+        from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+
+        data = {
+            "model": "anthropic/claude-3-sonnet",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {},
+        }
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", metadata={})
+
+        with patch(
+            "litellm.proxy.litellm_pre_call_utils.llm_router", None
+        ):
+            move_guardrails_to_metadata(
+                data=data,
+                _metadata_variable_name="metadata",
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        # Should not crash, metadata should be unchanged
+        assert data["metadata"].get("guardrails") is None or data["metadata"].get(
+            "guardrails"
+        ) == []

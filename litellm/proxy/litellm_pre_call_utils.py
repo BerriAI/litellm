@@ -1516,6 +1516,34 @@ def move_guardrails_to_metadata(
                 "guardrail_config"
             ] = request_body_guardrail_config
 
+    #########################################################################################
+    # Add guardrails from model deployment's litellm_params.guardrails
+    # This enables per-model guardrail scoping via the "Guardrails" field in model settings
+    #########################################################################################
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is not None:
+            _model_name = data.get("model", "")
+            _deployments = llm_router.get_model_list(model_name=_model_name)
+            if _deployments:
+                _model_guardrails = (
+                    _deployments[0]
+                    .get("litellm_params", {})
+                    .get("guardrails", [])
+                )
+                if _model_guardrails and isinstance(_model_guardrails, list):
+                    if _metadata_variable_name not in data:
+                        data[_metadata_variable_name] = {}
+                    _existing = data[_metadata_variable_name].get("guardrails", [])
+                    if isinstance(_existing, list):
+                        _merged = list(set(_existing) | set(_model_guardrails))
+                    else:
+                        _merged = list(_model_guardrails)
+                    data[_metadata_variable_name]["guardrails"] = _merged
+    except Exception:
+        pass  # Never break request processing for guardrail lookup failures
+
 
 def _match_and_track_policies(
     data: dict,
