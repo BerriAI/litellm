@@ -1109,13 +1109,72 @@ class Logging(LiteLLMLoggingBaseClass):
             headers, ignore_sensitive_values=ignore_sensitive_headers
         )
 
+    def _truncate_large_payload_for_logging(
+        self,
+        obj: Any,
+        *,
+        max_string_len: int = 2000,
+        max_list_items: int = 20,
+        max_depth: int = 10,
+        _depth: int = 0,
+    ) -> Any:
+        """
+        Truncate large payloads before json.dumps to avoid multi-second serialization
+        latency (see embedding_profile_percentages.md). Handles embeddings, long
+        completions, and other big JSON payloads.
+        """
+        if _depth > max_depth:
+            return "[max depth reached]"
+
+        if isinstance(obj, str):
+            if len(obj) > max_string_len:
+                return obj[:max_string_len] + f"... [truncated, {len(obj)} chars total]"
+            return obj
+
+        if isinstance(obj, list):
+            if len(obj) <= max_list_items:
+                return [
+                    self._truncate_large_payload_for_logging(
+                        x, max_string_len=max_string_len, max_list_items=max_list_items,
+                        max_depth=max_depth, _depth=_depth + 1
+                    )
+                    for x in obj
+                ]
+            head = [
+                self._truncate_large_payload_for_logging(
+                    x, max_string_len=max_string_len, max_list_items=max_list_items,
+                    max_depth=max_depth, _depth=_depth + 1
+                )
+                for x in obj[:max_list_items]
+            ]
+            head.append(f"... +{len(obj) - max_list_items} more items")
+            return head
+
+        if isinstance(obj, dict):
+            result: Dict[str, Any] = {}
+            for k, v in obj.items():
+                if k == "embedding" and isinstance(v, (list, tuple)):
+                    result[k] = f"[{len(v)} dims, truncated]"
+                else:
+                    result[k] = self._truncate_large_payload_for_logging(
+                        v, max_string_len=max_string_len, max_list_items=max_list_items,
+                        max_depth=max_depth, _depth=_depth + 1
+                    )
+            return result
+
+        return obj
+
     def post_call(
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         litellm.error_logs["POST_CALL"] = locals()
         if isinstance(original_response, dict):
-            original_response = json.dumps(original_response)
+            # Truncate large payloads to avoid multi-second json.dumps
+            to_serialize = self._truncate_large_payload_for_logging(
+                original_response
+            )
+            original_response = json.dumps(to_serialize)
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key

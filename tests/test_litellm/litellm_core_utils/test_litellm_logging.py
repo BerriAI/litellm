@@ -1058,3 +1058,162 @@ def test_append_system_prompt_messages():
         kwargs=None, messages=messages
     )
     assert result == messages
+
+
+class TestTruncateLargePayloadForLogging:
+    """Tests for _truncate_large_payload_for_logging (latency fix for large payloads)."""
+
+    @pytest.fixture
+    def logging_obj(self):
+        return LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="embedding",
+            start_time=time.time(),
+            litellm_call_id="trunc-test",
+            function_id="trunc-fn",
+        )
+
+    def test_huge_embedding_payload_truncated(self, logging_obj):
+        """Huge embedding response (100 vectors x 3072 dims) should be truncated."""
+        huge_embedding = [
+            {"embedding": [0.1] * 3072, "index": i} for i in range(100)
+        ]
+        payload = {"data": huge_embedding, "model": "text-embedding-3-large", "usage": {"total_tokens": 100}}
+        result = logging_obj._truncate_large_payload_for_logging(payload)
+
+        assert result["model"] == "text-embedding-3-large"
+        assert result["usage"] == {"total_tokens": 100}
+        assert len(result["data"]) == 21  # 20 items + "... +80 more items"
+        assert result["data"][0]["embedding"] == "[3072 dims, truncated]"
+        assert result["data"][0]["index"] == 0
+        assert result["data"][-1] == "... +80 more items"
+
+    def test_truncated_payload_serializes_fast(self, logging_obj):
+        """Truncated huge payload should json.dumps quickly (no multi-second hang)."""
+        huge_embedding = [
+            {"embedding": [0.1] * 3072, "index": i} for i in range(500)
+        ]
+        payload = {"data": huge_embedding, "model": "text-embedding-3-large"}
+        result = logging_obj._truncate_large_payload_for_logging(payload)
+        serialized = json.dumps(result)
+        assert len(serialized) < 100_000  # Small output vs millions for raw
+
+    def test_large_string_truncated(self, logging_obj):
+        """Strings over 2000 chars should be truncated."""
+        long_str = "x" * 5000
+        result = logging_obj._truncate_large_payload_for_logging(long_str)
+        assert len(result) == 2000 + len("... [truncated, 5000 chars total]")
+        assert result.endswith("... [truncated, 5000 chars total]")
+
+    def test_short_string_unchanged(self, logging_obj):
+        """Strings under limit should pass through."""
+        short = "hello"
+        result = logging_obj._truncate_large_payload_for_logging(short)
+        assert result == "hello"
+
+    def test_string_exactly_at_limit(self, logging_obj):
+        """String of exactly 2000 chars should pass through (no truncation)."""
+        exact = "x" * 2000
+        result = logging_obj._truncate_large_payload_for_logging(
+            exact, max_string_len=2000
+        )
+        assert result == exact
+
+    def test_large_list_truncated(self, logging_obj):
+        """Lists over 20 items should be truncated."""
+        big_list = list(range(100))
+        result = logging_obj._truncate_large_payload_for_logging(big_list)
+        assert result[:20] == list(range(20))
+        assert result[-1] == "... +80 more items"
+        assert len(result) == 21
+
+    def test_list_exactly_at_limit(self, logging_obj):
+        """List of exactly 20 items should be kept (no extra item)."""
+        lst = list(range(20))
+        result = logging_obj._truncate_large_payload_for_logging(
+            lst, max_list_items=20
+        )
+        assert result == list(range(20))
+        assert "... more items" not in str(result)
+
+    def test_empty_payload_unchanged(self, logging_obj):
+        """Empty dict/list should pass through."""
+        assert logging_obj._truncate_large_payload_for_logging({}) == {}
+        assert logging_obj._truncate_large_payload_for_logging([]) == []
+
+    def test_non_dict_non_list_unchanged(self, logging_obj):
+        """int, float, None, bool should pass through."""
+        assert logging_obj._truncate_large_payload_for_logging(42) == 42
+        assert logging_obj._truncate_large_payload_for_logging(3.14) == 3.14
+        assert logging_obj._truncate_large_payload_for_logging(None) is None
+        assert logging_obj._truncate_large_payload_for_logging(True) is True
+
+    def test_embedding_as_tuple_truncated(self, logging_obj):
+        """embedding key with tuple (not list) should be truncated."""
+        payload = {"embedding": (0.1,) * 1024}
+        result = logging_obj._truncate_large_payload_for_logging(payload)
+        assert result["embedding"] == "[1024 dims, truncated]"
+
+    def test_nested_structure_truncated(self, logging_obj):
+        """Nested dict with embedding and long list should truncate both."""
+        payload = {
+            "choices": [
+                {"message": {"content": "x" * 3000}},
+                {"message": {"content": "short"}},
+            ] * 30,  # 60 items
+        }
+        result = logging_obj._truncate_large_payload_for_logging(payload)
+        # List truncated to 21 items (20 + "... +N more items")
+        assert len(result["choices"]) == 21
+        assert result["choices"][-1] == "... +40 more items"  # 60 - 20 = 40
+        # Long string in first item truncated
+        first_content = result["choices"][0]["message"]["content"]
+        assert "... [truncated" in first_content
+
+    def test_max_depth_reached(self, logging_obj):
+        """Deeply nested structure should hit max depth."""
+        deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": "deep"}}}}}}}}}}
+        result = logging_obj._truncate_large_payload_for_logging(
+            deep, max_depth=5
+        )
+        # At some depth we should see "[max depth reached]"
+        def find_max_depth_reached(obj, depth=0):
+            if obj == "[max depth reached]":
+                return True
+            if isinstance(obj, dict):
+                return any(find_max_depth_reached(v, depth + 1) for v in obj.values())
+            if isinstance(obj, list):
+                return any(find_max_depth_reached(x, depth + 1) for x in obj)
+            return False
+        assert find_max_depth_reached(result)
+
+    def test_completion_like_large_content(self, logging_obj):
+        """Completion response with huge content should truncate."""
+        payload = {
+            "choices": [
+                {"message": {"content": "A" * 10000}, "index": 0}
+            ],
+            "usage": {"total_tokens": 2500},
+        }
+        result = logging_obj._truncate_large_payload_for_logging(payload)
+        content = result["choices"][0]["message"]["content"]
+        assert len(content) < 2500
+        assert "... [truncated, 10000 chars total]" in content
+        assert result["usage"] == {"total_tokens": 2500}
+
+    def test_embedding_response_empty_data(self, logging_obj):
+        """Embedding-like dict with empty data should pass through data unchanged."""
+        payload = {"data": [], "model": "text-embedding-3"}
+        result = logging_obj._truncate_large_payload_for_logging(payload)
+        assert result["data"] == []
+        assert result["model"] == "text-embedding-3"
+
+    def test_data_without_embedding_key_processed(self, logging_obj):
+        """data with items that don't have 'embedding' key should still truncate list."""
+        payload = {"data": [{"index": i, "other": "x"} for i in range(50)]}
+        result = logging_obj._truncate_large_payload_for_logging(payload)
+        assert len(result["data"]) == 21
+        assert result["data"][0]["index"] == 0
+        assert result["data"][-1] == "... +30 more items"
