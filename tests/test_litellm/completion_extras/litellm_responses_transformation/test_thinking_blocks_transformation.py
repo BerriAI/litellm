@@ -5,13 +5,8 @@ Tests the conversion of thinking_blocks from Chat Completion format to
 OpenAI Responses API reasoning items format.
 """
 
-import json
 import os
 import sys
-from typing import List
-from unittest.mock import MagicMock
-
-import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -410,3 +405,207 @@ def test_thinking_blocks_only_no_content():
     reasoning_index = input_items.index(reasoning_items[0])
     message_index = input_items.index(message_items[0])
     assert reasoning_index < message_index, "Reasoning should come before message"
+
+
+def test_output_transformation_encrypted_content():
+    """
+    Test OUTPUT transformation: ResponseReasoningItem with encrypted_content → thinking_blocks.
+
+    This tests the response direction where we extract encrypted_content from
+    ResponseReasoningItem and convert it to thinking_blocks format.
+    """
+    from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Mock ResponseReasoningItem with encrypted_content (what OpenAI returns)
+    reasoning_item = ResponseReasoningItem.model_construct(
+        id="rs_test_123",
+        type="reasoning",
+        summary=[{"type": "summary_text", "text": "Thinking..."}],
+        encrypted_content="ENCRYPTED_BLOB_XYZ789",  # This should be extracted
+        status="completed",
+    )
+
+    message_item = ResponseOutputMessage.model_construct(
+        id="msg_test_456",
+        role="assistant",
+        content=[{"type": "output_text", "text": "The answer is 42", "annotations": []}],
+        type="message",
+        status="completed",
+    )
+
+    output_items = [reasoning_item, message_item]
+
+    # Convert to Chat Completion format
+    choices = handler._convert_response_output_to_choices(output_items)
+
+    assert len(choices) == 1, "Should have 1 choice"
+
+    message = choices[0].message
+
+    # Verify thinking_blocks extracted
+    assert hasattr(message, "thinking_blocks"), "Message should have thinking_blocks"
+    assert message.thinking_blocks is not None, "thinking_blocks should not be None"
+    assert len(message.thinking_blocks) == 1, "Should have 1 thinking block"
+
+    # Verify correct type and encrypted_content
+    thinking_block = message.thinking_blocks[0]
+    assert thinking_block["type"] == "redacted_thinking", "Should be redacted_thinking type"
+    assert (
+        thinking_block["data"] == "ENCRYPTED_BLOB_XYZ789"
+    ), "encrypted_content should be in 'data' field"
+
+
+def test_output_transformation_multiple_reasoning_items():
+    """
+    Test OUTPUT transformation with multiple ResponseReasoningItems.
+
+    Verify that all encrypted_content blocks are extracted and converted to thinking_blocks.
+    """
+    from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Multiple reasoning items with encrypted_content
+    reasoning_item1 = ResponseReasoningItem.model_construct(
+        id="rs_1",
+        type="reasoning",
+        summary=[{"type": "summary_text", "text": "First thought"}],
+        encrypted_content="ENCRYPTED_1",
+        status="completed",
+    )
+
+    reasoning_item2 = ResponseReasoningItem.model_construct(
+        id="rs_2",
+        type="reasoning",
+        summary=[{"type": "summary_text", "text": "Second thought"}],
+        encrypted_content="ENCRYPTED_2",
+        status="completed",
+    )
+
+    message_item = ResponseOutputMessage.model_construct(
+        id="msg_1",
+        role="assistant",
+        content=[{"type": "output_text", "text": "Final answer", "annotations": []}],
+        type="message",
+        status="completed",
+    )
+
+    output_items = [reasoning_item1, reasoning_item2, message_item]
+
+    # Convert to Chat Completion format
+    choices = handler._convert_response_output_to_choices(output_items)
+
+    assert len(choices) == 1, "Should have 1 choice"
+
+    message = choices[0].message
+
+    # Verify all thinking_blocks extracted
+    assert message.thinking_blocks is not None, "thinking_blocks should not be None"
+    assert len(message.thinking_blocks) == 2, "Should have 2 thinking blocks"
+
+    # Verify order and content
+    assert message.thinking_blocks[0]["type"] == "redacted_thinking"
+    assert message.thinking_blocks[0]["data"] == "ENCRYPTED_1"
+
+    assert message.thinking_blocks[1]["type"] == "redacted_thinking"
+    assert message.thinking_blocks[1]["data"] == "ENCRYPTED_2"
+
+
+def test_output_transformation_reasoning_without_encrypted_content():
+    """
+    Test OUTPUT transformation: ResponseReasoningItem WITHOUT encrypted_content.
+
+    When there's no encrypted_content, should create a regular "thinking" block
+    from the summary text.
+    """
+    from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Reasoning item WITHOUT encrypted_content (only summary)
+    reasoning_item = ResponseReasoningItem.model_construct(
+        id="rs_test",
+        type="reasoning",
+        summary=[
+            {"type": "summary_text", "text": "Let me think about this problem step by step"}
+        ],
+        # No encrypted_content field
+        status="completed",
+    )
+
+    message_item = ResponseOutputMessage.model_construct(
+        id="msg_test",
+        role="assistant",
+        content=[{"type": "output_text", "text": "Answer", "annotations": []}],
+        type="message",
+        status="completed",
+    )
+
+    output_items = [reasoning_item, message_item]
+
+    # Convert to Chat Completion format
+    choices = handler._convert_response_output_to_choices(output_items)
+
+    assert len(choices) == 1, "Should have 1 choice"
+
+    message = choices[0].message
+
+    # Verify thinking_blocks extracted from summary
+    assert message.thinking_blocks is not None, "thinking_blocks should not be None"
+    assert len(message.thinking_blocks) == 1, "Should have 1 thinking block"
+
+    # Verify it's a regular "thinking" block with text from summary
+    thinking_block = message.thinking_blocks[0]
+    assert thinking_block["type"] == "thinking", "Should be 'thinking' type (not redacted)"
+    assert (
+        thinking_block["thinking"] == "Let me think about this problem step by step"
+    ), "Should extract text from summary"
+
+
+def test_output_transformation_no_reasoning_items():
+    """
+    Test OUTPUT transformation with no ResponseReasoningItems.
+
+    Verify that messages without reasoning items don't have thinking_blocks.
+    """
+    from openai.types.responses import ResponseOutputMessage
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Only message item, no reasoning
+    message_item = ResponseOutputMessage.model_construct(
+        id="msg_test",
+        role="assistant",
+        content=[{"type": "output_text", "text": "Simple answer", "annotations": []}],
+        type="message",
+        status="completed",
+    )
+
+    output_items = [message_item]
+
+    # Convert to Chat Completion format
+    choices = handler._convert_response_output_to_choices(output_items)
+
+    assert len(choices) == 1, "Should have 1 choice"
+
+    message = choices[0].message
+
+    # Verify no thinking_blocks or thinking_blocks is None/empty
+    if hasattr(message, "thinking_blocks"):
+        assert (
+            message.thinking_blocks is None or len(message.thinking_blocks) == 0
+        ), "Should have no thinking_blocks"
