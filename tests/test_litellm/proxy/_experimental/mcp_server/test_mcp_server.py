@@ -780,6 +780,30 @@ async def test_concurrent_initialize_session_managers():
 
 
 @pytest.mark.asyncio
+async def test_streamable_http_session_manager_is_stateless():
+    """
+    Test that the StreamableHTTPSessionManager is initialized with stateless=True.
+
+    Regression test for GitHub issue #20242 / PR #19809.
+    When stateless=False, the mcp library rejects non-initialize requests
+    that lack an mcp-session-id header, breaking clients like MCP Inspector,
+    curl, and any HTTP client without automatic session management.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import session_manager
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # The session manager must be stateless to avoid requiring mcp-session-id
+    # on every request. This was regressed by PR #19809 (stateless=True -> False).
+    assert session_manager.stateless is True, (
+        "StreamableHTTPSessionManager must be initialized with stateless=True. "
+        "stateless=False breaks MCP clients that don't manage session IDs. "
+        "See: https://github.com/BerriAI/litellm/issues/20242"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.no_parallel
 async def test_mcp_routing_with_conflicting_alias_and_group_name():
     """
