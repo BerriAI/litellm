@@ -332,72 +332,23 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """
-        Get list of allowed MCP servers for the given user/key based on permissions
+        Get list of allowed MCP servers for the given user/key based on permissions.
+
+        Permission hierarchy (all rules are intersections):
+        1. Get allowed servers from key permissions
+        2. Get allowed servers from team permissions
+        3. Get allowed servers from end_user permissions
+        4. Final result = intersection of key/team AND end_user (if end_user has permissions set)
 
         Returns:
             List[str]: List of allowed MCP servers by server id
         """
         from typing import List
 
-        from litellm.proxy.proxy_server import general_settings, prisma_client
+        from litellm.proxy.proxy_server import general_settings
 
         try:
-            # Check if end user MCP access enforcement is enabled
-            require_end_user_mcp_access = general_settings.get(
-                "require_end_user_mcp_access_defined", False
-            )
-
-            # If flag is enabled and this is an end_user request, check for explicit permissions
-            if (
-                require_end_user_mcp_access
-                and user_api_key_auth
-                and user_api_key_auth.end_user_id
-                and prisma_client
-            ):
-                try:
-                    # Fetch end user object with object_permission
-                    end_user_obj = await prisma_client.db.litellm_endusertable.find_unique(
-                        where={"user_id": user_api_key_auth.end_user_id},
-                        include={"object_permission": True},
-                    )
-
-                    # If end user exists but has no object_permission defined, block all MCP access
-                    if end_user_obj and end_user_obj.object_permission is None:
-                        verbose_logger.debug(
-                            f"require_end_user_mcp_access_defined=True and end_user {user_api_key_auth.end_user_id} has no object_permission - blocking MCP access"
-                        )
-                        return []
-
-                    # If end user has object_permission, check their allowed MCP servers
-                    if end_user_obj and end_user_obj.object_permission:
-                        end_user_mcp_servers = end_user_obj.object_permission.mcp_servers or []
-                        end_user_access_groups = end_user_obj.object_permission.mcp_access_groups or []
-
-                        # Get servers from access groups
-                        access_group_servers = (
-                            await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                                end_user_access_groups
-                            )
-                        )
-
-                        # Combine direct servers and access group servers for end user
-                        end_user_allowed = list(set(end_user_mcp_servers + access_group_servers))
-
-                        # If end user has explicit permissions, use only those
-                        if len(end_user_allowed) > 0:
-                            verbose_logger.debug(
-                                f"require_end_user_mcp_access_defined=True - using end_user explicit permissions: {end_user_allowed}"
-                            )
-                            return end_user_allowed
-
-                except Exception as e:
-                    verbose_logger.warning(
-                        f"Failed to check end_user MCP permissions: {str(e)}"
-                    )
-                    # On error, block access if flag is enabled
-                    return []
-
-            allowed_mcp_servers: List[str] = []
+            # Get allowed servers from key and team
             allowed_mcp_servers_for_key = (
                 await MCPRequestHandler._get_allowed_mcp_servers_for_key(
                     user_api_key_auth
@@ -410,8 +361,9 @@ class MCPRequestHandler:
             )
 
             #########################################################
-            # If team has mcp_servers, handle inheritance and intersection logic
+            # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
+            allowed_mcp_servers: List[str] = []
             if len(allowed_mcp_servers_for_team) > 0:
                 if len(allowed_mcp_servers_for_key) > 0:
                     # Key has its own MCP permissions - use intersection with team permissions
@@ -423,6 +375,51 @@ class MCPRequestHandler:
                     allowed_mcp_servers = allowed_mcp_servers_for_team
             else:
                 allowed_mcp_servers = allowed_mcp_servers_for_key
+
+            #########################################################
+            # Check end_user permissions if end_user_id is set
+            #########################################################
+            if user_api_key_auth and user_api_key_auth.end_user_id:
+                allowed_mcp_servers_for_end_user = (
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_end_user(
+                        user_api_key_auth
+                    )
+                )
+
+
+                # If end_user has explicit MCP server permissions, apply intersection
+                if len(allowed_mcp_servers_for_end_user) > 0:
+                    verbose_logger.debug(
+                        f"End user {user_api_key_auth.end_user_id} has explicit MCP permissions: {allowed_mcp_servers_for_end_user}"
+                    )
+
+                    # Check if require_end_user_mcp_access flag is enabled
+                    require_end_user_mcp_access = general_settings.get(
+                        "require_end_user_mcp_access_defined", False
+                    )
+
+                    # If the flag is enabled and end_user has permissions, use ONLY end_user permissions
+                    if require_end_user_mcp_access:
+                        verbose_logger.debug(
+                            "require_end_user_mcp_access_defined=True - using only end_user permissions"
+                        )
+                        allowed_mcp_servers = allowed_mcp_servers_for_end_user
+                    else:
+                        # Otherwise, apply intersection: key/team AND end_user
+                        filtered_servers = []
+                        for _mcp_server in allowed_mcp_servers:
+                            if _mcp_server in allowed_mcp_servers_for_end_user:
+                                filtered_servers.append(_mcp_server)
+                        allowed_mcp_servers = filtered_servers
+                        verbose_logger.debug(
+                            f"Applied end_user intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                        )
+                # If flag is enabled but end_user has no permissions, block all access
+                elif general_settings.get("require_end_user_mcp_access_defined", False):
+                    verbose_logger.debug(
+                        f"require_end_user_mcp_access_defined=True and end_user {user_api_key_auth.end_user_id} has no MCP permissions - blocking MCP access"
+                    )
+                    return []
 
             return list(set(allowed_mcp_servers))
         except Exception as e:
@@ -661,6 +658,64 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_end_user(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an end user.
+
+        Returns the MCP servers from the end_user's object_permission.
+        """
+        from litellm.proxy.auth.auth_checks import get_end_user_object
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
+
+        if not user_api_key_auth or not user_api_key_auth.end_user_id:
+            return []
+
+        if prisma_client is None:
+
+            verbose_logger.debug("prisma_client is None")
+            return []
+
+        try:
+            # Use optimized get_end_user_object function with caching
+            end_user_obj = await get_end_user_object(
+                end_user_id=user_api_key_auth.end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route="/mcp",
+            )
+
+
+            if end_user_obj is None or end_user_obj.object_permission is None:
+                return []
+
+            # Get direct MCP servers
+            direct_mcp_servers = end_user_obj.object_permission.mcp_servers or []
+
+
+
+            # Get MCP servers from access groups
+            access_group_servers = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    end_user_obj.object_permission.mcp_access_groups or []
+                )
+            )
+
+            # Combine both lists
+            all_servers = direct_mcp_servers + access_group_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed MCP servers for end_user: {str(e)}"
             )
             return []
 

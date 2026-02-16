@@ -22,8 +22,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import \
     get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission, attach_object_permission_to_dict,
-    handle_update_object_permission_common)
+    _set_object_permission, handle_update_object_permission_common)
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import \
     SpendAnalyticsPaginatedResponse
@@ -164,6 +163,38 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
     if budget_kv_pairs:
         return BudgetNewRequest(**budget_kv_pairs)
     return None
+
+
+async def _handle_customer_object_permission_update(
+    non_default_values: dict,
+    end_user_table_data_typed: Optional[LiteLLM_EndUserTable],
+    update_end_user_table_data: dict,
+    prisma_client,
+) -> None:
+    """
+    Handle object permission updates for customer endpoints.
+
+    Updates the update_end_user_table_data dict in place with the new object_permission_id.
+
+    Args:
+        non_default_values: Dictionary containing the update values including object_permission
+        end_user_table_data_typed: Existing end user table data
+        update_end_user_table_data: Dictionary to update with new object_permission_id
+        prisma_client: Prisma database client
+    """
+    if "object_permission" in non_default_values:
+        existing_object_permission_id = (
+            end_user_table_data_typed.object_permission_id
+            if end_user_table_data_typed is not None
+            else None
+        )
+        object_permission_id = await handle_update_object_permission_common(
+            data_json=non_default_values,
+            existing_object_permission_id=existing_object_permission_id,
+            prisma_client=prisma_client,
+        )
+        if object_permission_id is not None:
+            update_end_user_table_data["object_permission_id"] = object_permission_id
 
 
 @router.post(
@@ -499,19 +530,12 @@ async def update_end_user(
                 update_end_user_table_data[k] = v
 
         ## Handle object permission updates (MCP servers, vector stores, etc.)
-        if "object_permission" in non_default_values:
-            existing_object_permission_id = (
-                end_user_table_data_typed.object_permission_id
-                if end_user_table_data_typed is not None
-                else None
-            )
-            object_permission_id = await handle_update_object_permission_common(
-                data_json=non_default_values,
-                existing_object_permission_id=existing_object_permission_id,
-                prisma_client=prisma_client,
-            )
-            if object_permission_id is not None:
-                update_end_user_table_data["object_permission_id"] = object_permission_id
+        await _handle_customer_object_permission_update(
+            non_default_values=non_default_values,
+            end_user_table_data_typed=end_user_table_data_typed,
+            update_end_user_table_data=update_end_user_table_data,
+            prisma_client=prisma_client,
+        )
 
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
