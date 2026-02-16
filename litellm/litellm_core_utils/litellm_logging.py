@@ -3152,11 +3152,12 @@ class Logging(LiteLLMLoggingBaseClass):
             cb_name = self._get_callback_name(cb)
 
             # Check if this is a Langfuse logger (vanilla or OTEL)
-            is_langfuse = (
-                cb_name.lower()
-                in ["langfuse", "langfuselogger", "langfuse_otel", "langfuseotellogger"]
-                or "langfuse" in cb_name.lower()
-            )
+            is_langfuse = cb_name.lower() in [
+                "langfuse",
+                "langfuselogger",
+                "langfuse_otel",
+                "langfuseotellogger",
+            ]
 
             if is_langfuse:
                 if langfuse_logger_found is None:
