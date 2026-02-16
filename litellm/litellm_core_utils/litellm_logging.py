@@ -3176,12 +3176,15 @@ class Logging(LiteLLMLoggingBaseClass):
                 # Keep all non-Langfuse callbacks
                 filtered.append(cb)
 
-        verbose_logger.debug(
-            f"[LANGFUSE DEBUG] Filtered callbacks AFTER filtering: {[self._get_callback_name(cb) for cb in filtered]}"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                "[LANGFUSE DEBUG] Filtered callbacks AFTER filtering: %s",
+                [self._get_callback_name(cb) for cb in filtered],
+            )
         if langfuse_logger_found:
             verbose_logger.debug(
-                f"[LANGFUSE DEBUG] Langfuse logger kept: {self._get_callback_name(langfuse_logger_found)}"
+                "[LANGFUSE DEBUG] Langfuse logger kept: %s",
+                self._get_callback_name(langfuse_logger_found),
             )
 
         # After Langfuse filtering, deduplicate remaining callbacks
