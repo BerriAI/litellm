@@ -501,7 +501,7 @@ def rerank(  # noqa: PLR0915
             api_key = credentials["api_key"]
             api_base = credentials["api_base"]
 
-            if "token" in credentials:
+            if credentials.get("token") is not None:
                 optional_rerank_params["token"] = credentials["token"]
 
             response = base_llm_http_handler.rerank(
