@@ -30,8 +30,15 @@ else:
 
 
 def redact_message_input_output_from_custom_logger(
-    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+    litellm_logging_obj: LiteLLMLoggingObject,
+    result,
+    custom_logger: CustomLogger,
+    global_redaction_applied: bool = False,
 ):
+    # skip redundant redaction if global redaction was already applied
+    if global_redaction_applied:
+        return result
+
     if (
         hasattr(custom_logger, "message_logging")
         and custom_logger.message_logging is not True
@@ -72,6 +79,44 @@ def _redact_responses_api_output(output_items):
                         summary_item.text = "redacted-by-litellm"
 
 
+def _redact_standard_logging_object(model_call_details: dict):
+    """Redact messages and response inside standard_logging_object if present."""
+    standard_logging_object = model_call_details.get("standard_logging_object")
+    if standard_logging_object is None:
+        return
+
+    redacted_str = "redacted-by-litellm"
+
+    if standard_logging_object.get("messages") is not None:
+        standard_logging_object["messages"] = [
+            {"role": "user", "content": redacted_str}
+        ]
+
+    response = standard_logging_object.get("response")
+    if response is not None:
+        if isinstance(response, dict) and "output" in response:
+            # ResponsesAPIResponse format - redact content in output items
+            if isinstance(response.get("output"), list):
+                for output_item in response["output"]:
+                    if isinstance(output_item, dict) and "content" in output_item:
+                        if isinstance(output_item["content"], list):
+                            for content_item in output_item["content"]:
+                                if (
+                                    isinstance(content_item, dict)
+                                    and "text" in content_item
+                                ):
+                                    content_item["text"] = redacted_str
+        elif isinstance(response, str):
+            standard_logging_object["response"] = redacted_str
+        else:
+            # Standard ModelResponse dict format
+            standard_logging_object["response"] = {
+                "choices": [
+                    {"message": {"content": redacted_str}}
+                ]
+            }
+
+
 def perform_redaction(model_call_details: dict, result):
     """
     Performs the actual redaction on the logging object and result.
@@ -82,6 +127,9 @@ def perform_redaction(model_call_details: dict, result):
     ]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
+
+    # Redact standard_logging_object if present
+    _redact_standard_logging_object(model_call_details)
 
     # Redact streaming response
     if (
@@ -182,13 +230,18 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
 
 
 def redact_message_input_output_from_logging(
-    model_call_details: dict, result, input: Optional[Any] = None
+    model_call_details: dict,
+    result,
+    input: Optional[Any] = None,
+    should_redact: Optional[bool] = None,
 ) -> Any:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
     """
-    if should_redact_message_logging(model_call_details):
+    if should_redact is None:
+        should_redact = should_redact_message_logging(model_call_details)
+    if should_redact:
         return perform_redaction(model_call_details, result)
     return result
 

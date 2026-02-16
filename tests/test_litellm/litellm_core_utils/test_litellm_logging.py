@@ -1443,3 +1443,276 @@ class TestProcessDynamicCallbacksOrdering:
             obj.process_dynamic_callbacks()
 
         assert call_order.index("failure") < call_order.index("async_failure")
+
+
+def test_global_redaction_skips_per_callback_redaction():
+    """
+    When global_redaction_applied=True, per-callback redaction functions should
+    return early without processing to avoid redundant work.
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_custom_logger,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+
+    # Test redact_message_input_output_from_custom_logger skips when global redaction applied
+    custom_logger = CustomLogger()
+    custom_logger.message_logging = False  # Would normally trigger redaction
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {"messages": [{"content": "secret"}]}
+
+    original_result = {"response": "already-redacted"}
+
+    result = redact_message_input_output_from_custom_logger(
+        litellm_logging_obj=mock_logging_obj,
+        result=original_result,
+        custom_logger=custom_logger,
+        global_redaction_applied=True,
+    )
+
+    assert result is original_result  # Should return unchanged (early return)
+
+    # Test CustomLogger.redact_standard_logging_payload_from_model_call_details skips
+    custom_logger.turn_off_message_logging = True
+
+    model_call_details = {
+        "messages": [{"content": "secret"}],
+        "standard_logging_object": {"response": "sensitive"},
+    }
+
+    result = custom_logger.redact_standard_logging_payload_from_model_call_details(
+        model_call_details=model_call_details,
+        global_redaction_applied=True,
+    )
+
+    assert result is model_call_details  # Should return unchanged (early return)
+
+
+def test_perform_redaction_redacts_standard_logging_object():
+    """
+    When perform_redaction runs (global redaction path), it should also redact
+    the standard_logging_object inside model_call_details.
+
+    This prevents sensitive data from leaking to callbacks (e.g. Langfuse, Datadog)
+    when per-callback redaction is skipped due to global_redaction_applied=True.
+    """
+    from litellm.litellm_core_utils.redact_messages import perform_redaction
+
+    # Standard ModelResponse format
+    model_call_details = {
+        "messages": [{"role": "user", "content": "my secret prompt"}],
+        "prompt": "my secret prompt",
+        "input": "my secret input",
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "my secret prompt"}],
+            "response": {
+                "choices": [
+                    {"message": {"content": "sensitive response data"}}
+                ]
+            },
+        },
+    }
+
+    perform_redaction(model_call_details, result=None)
+
+    slo = model_call_details["standard_logging_object"]
+    # Messages should be redacted
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    # Response should be redacted
+    assert slo["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
+
+    # ResponsesAPIResponse format
+    model_call_details_responses = {
+        "messages": [{"role": "user", "content": "my secret prompt"}],
+        "prompt": "",
+        "input": "",
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "my secret prompt"}],
+            "response": {
+                "output": [
+                    {
+                        "content": [
+                            {"type": "output_text", "text": "sensitive response"}
+                        ]
+                    }
+                ]
+            },
+        },
+    }
+
+    perform_redaction(model_call_details_responses, result=None)
+
+    slo = model_call_details_responses["standard_logging_object"]
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert slo["response"]["output"][0]["content"][0]["text"] == "redacted-by-litellm"
+
+    # No standard_logging_object - should not raise
+    model_call_details_none = {
+        "messages": [{"role": "user", "content": "prompt"}],
+        "prompt": "",
+        "input": "",
+    }
+    perform_redaction(model_call_details_none, result=None)  # should not raise
+
+
+def test_global_redaction_covers_standard_logging_object_for_callbacks():
+    """
+    End-to-end test: when global redaction is applied, per-callback redaction
+    is skipped, but standard_logging_object must still be redacted because
+    perform_redaction (the global path) now handles it.
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_custom_logger,
+        redact_message_input_output_from_logging,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+
+    model_call_details = {
+        "messages": [{"role": "user", "content": "secret prompt"}],
+        "prompt": "secret prompt",
+        "input": "secret input",
+        "litellm_params": {},
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "secret prompt"}],
+            "response": "sensitive response string",
+        },
+    }
+
+    # Step 1: Global redaction (simulates what async_success_handler does)
+    redact_message_input_output_from_logging(
+        model_call_details=model_call_details,
+        result=None,
+        should_redact=True,
+    )
+
+    # Verify standard_logging_object was redacted by the global path
+    slo = model_call_details["standard_logging_object"]
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert slo["response"] == "redacted-by-litellm"
+
+    # Step 2: Per-callback redaction is skipped (as expected)
+    custom_logger = CustomLogger()
+    custom_logger.message_logging = False
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = model_call_details
+
+    result = redact_message_input_output_from_custom_logger(
+        litellm_logging_obj=mock_logging_obj,
+        result=None,
+        custom_logger=custom_logger,
+        global_redaction_applied=True,
+    )
+
+    # Per-callback redaction skipped, but standard_logging_object is still redacted
+    # from the global path above
+    assert slo["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert slo["response"] == "redacted-by-litellm"
+
+
+def test_per_callback_redaction_proceeds_when_global_redaction_not_applied():
+    """
+    When global_redaction_applied=False, per-callback redaction should still
+    proceed normally if the callback has redaction enabled.
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_custom_logger,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+
+    # Test redact_message_input_output_from_custom_logger proceeds when global redaction NOT applied
+    custom_logger = CustomLogger()
+    custom_logger.message_logging = False  # Triggers redaction
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {"messages": [{"content": "secret"}]}
+
+    original_result = {"response": "sensitive-data"}
+
+    result = redact_message_input_output_from_custom_logger(
+        litellm_logging_obj=mock_logging_obj,
+        result=original_result,
+        custom_logger=custom_logger,
+        global_redaction_applied=False,
+    )
+
+    # Result should be different (redacted), not the same object
+    assert result is not original_result
+
+
+def test_method_override_detection_walks_full_mro():
+    """
+    Test that method override detection correctly walks the full Method Resolution Order (MRO),
+    not just the immediate class's __dict__.
+
+    This tests the fix for a bug where:
+    - `method_name in type(self).__dict__` only checks the immediate class
+    - `getattr(type(self), method_name) is not getattr(CustomLogger, method_name)` walks the full MRO
+
+    The bug caused incorrect behavior when:
+    - ClassA(CustomLogger) overrides a method
+    - ClassB(ClassA) does NOT override the method
+    - ClassB instance should still detect the override from ClassA
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+
+    # Case 1: Direct override - should be detected
+    class DirectOverrideLogger(CustomLogger):
+        def redact_standard_logging_payload_from_model_call_details(
+            self, model_call_details, global_redaction_applied=False
+        ):
+            # Custom implementation
+            return {"custom": "redacted"}
+
+    direct_logger = DirectOverrideLogger()
+    method_name = "redact_standard_logging_payload_from_model_call_details"
+
+    # Using the correct MRO-aware check
+    is_overridden_mro = getattr(type(direct_logger), method_name) is not getattr(
+        CustomLogger, method_name
+    )
+    assert is_overridden_mro is True, "Direct override should be detected"
+
+    # Case 2: Inherited override (the bug case) - should also be detected
+    class InheritedOverrideLogger(DirectOverrideLogger):
+        # Does NOT override the method - inherits from DirectOverrideLogger
+        pass
+
+    inherited_logger = InheritedOverrideLogger()
+
+    # The buggy check (only checks immediate class __dict__) would return False
+    buggy_check = method_name in type(inherited_logger).__dict__
+    assert buggy_check is False, "Buggy check incorrectly misses inherited override"
+
+    # The correct MRO-aware check should return True
+    is_overridden_mro = getattr(type(inherited_logger), method_name) is not getattr(
+        CustomLogger, method_name
+    )
+    assert is_overridden_mro is True, "MRO check should detect inherited override"
+
+    # Case 3: No override - should NOT be detected as overridden
+    class NoOverrideLogger(CustomLogger):
+        # Does NOT override the method
+        pass
+
+    no_override_logger = NoOverrideLogger()
+    is_overridden_mro = getattr(type(no_override_logger), method_name) is not getattr(
+        CustomLogger, method_name
+    )
+    assert is_overridden_mro is False, "No override should not be detected"
+
+    # Case 4: Verify actual behavior - inherited override should NOT skip redaction
+    model_call_details = {
+        "messages": [{"content": "secret"}],
+        "standard_logging_object": {"response": "sensitive"},
+    }
+
+    # With global_redaction_applied=True and an inherited override,
+    # the method should NOT early-return (should proceed to custom implementation)
+    result = inherited_logger.redact_standard_logging_payload_from_model_call_details(
+        model_call_details=model_call_details,
+        global_redaction_applied=True,
+    )
+    # DirectOverrideLogger returns {"custom": "redacted"}
+    assert result == {"custom": "redacted"}, "Inherited override should execute custom logic"
