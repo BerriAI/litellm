@@ -1042,6 +1042,9 @@ async def test_reset_budget_for_litellm_team_members_called():
     prisma_client.db.litellm_teammembership.update_many = AsyncMock(
         return_value={"count": 2}
     )
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
