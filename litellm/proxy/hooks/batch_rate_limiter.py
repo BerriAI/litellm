@@ -259,9 +259,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             from litellm.proxy.openai_files_endpoints.common_utils import (
                 _is_base64_encoded_unified_file_id,
             )
+            # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
+            # and calling the managed files hook directly with the user's credentials.
             is_managed_file = _is_base64_encoded_unified_file_id(file_id)
             if is_managed_file and user_api_key_dict is not None:
-                # For managed files, use the managed files hook directly
                 file_content = await self._fetch_managed_file_content(
                     file_id=file_id,
                     user_api_key_dict=user_api_key_dict,
