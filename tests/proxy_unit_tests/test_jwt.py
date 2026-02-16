@@ -941,6 +941,9 @@ async def test_allow_access_by_email(
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/5605
     """
+    # FIX: Mock the license so the test runs on the free version
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    
     import jwt
     from starlette.datastructures import URL
 

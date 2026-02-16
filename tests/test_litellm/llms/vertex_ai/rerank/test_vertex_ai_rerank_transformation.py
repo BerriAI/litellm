@@ -45,9 +45,12 @@ class TestVertexAIRerankTransform:
         # Mock _ensure_access_token to return (token, project_id)
         mock_ensure_access_token.return_value = ("mock-token", None)
         
+        # Create config AFTER the patch is applied
+        config = VertexAIRerankConfig()
+        
         # Test with project ID from environment
         with patch.dict(os.environ, {"VERTEXAI_PROJECT": "test-project-123"}):
-            url = self.config.get_complete_url(api_base=None, model=self.model)
+            url = config.get_complete_url(api_base=None, model=self.model)
             expected_url = "https://discoveryengine.googleapis.com/v1/projects/test-project-123/locations/global/rankingConfigs/default_ranking_config:rank"
             assert url == expected_url
 
@@ -61,7 +64,7 @@ class TestVertexAIRerankTransform:
             original_project = litellm.vertex_project
             litellm.vertex_project = "litellm-project-456"
             try:
-                url = self.config.get_complete_url(api_base=None, model=self.model)
+                url = config.get_complete_url(api_base=None, model=self.model)
                 expected_url = "https://discoveryengine.googleapis.com/v1/projects/litellm-project-456/locations/global/rankingConfigs/default_ranking_config:rank"
                 assert url == expected_url
             finally:
@@ -78,7 +81,7 @@ class TestVertexAIRerankTransform:
             litellm.vertex_project = None
             try:
                 with pytest.raises(ValueError, match="Vertex AI project ID is required"):
-                    self.config.get_complete_url(api_base=None, model=self.model)
+                    config.get_complete_url(api_base=None, model=self.model)
             finally:
                 litellm.vertex_project = original_project
 
@@ -88,11 +91,14 @@ class TestVertexAIRerankTransform:
         # Mock the authentication
         mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
         
+        # Create config AFTER the patch is applied
+        config = VertexAIRerankConfig()
+        
         # Mock the credential and project methods
-        with patch.object(self.config, 'get_vertex_ai_credentials', return_value=None), \
-             patch.object(self.config, 'get_vertex_ai_project', return_value="test-project-123"):
+        with patch.object(config, 'get_vertex_ai_credentials', return_value=None), \
+             patch.object(config, 'get_vertex_ai_project', return_value="test-project-123"):
             
-            headers = self.config.validate_environment(
+            headers = config.validate_environment(
                 headers={},
                 model=self.model,
                 api_key=None
@@ -105,8 +111,12 @@ class TestVertexAIRerankTransform:
             }
             assert headers == expected_headers
 
-    def test_transform_rerank_request_basic(self):
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_transform_rerank_request_basic(self, mock_ensure_access_token):
         """Test basic request transformation for Vertex AI Discovery Engine format."""
+        mock_ensure_access_token.return_value = ("mock-token", None)
+        config = VertexAIRerankConfig()
+        
         optional_params = {
             "query": "What is Google Gemini?",
             "documents": [
@@ -116,7 +126,7 @@ class TestVertexAIRerankTransform:
             "top_n": 2
         }
         
-        request_data = self.config.transform_rerank_request(
+        request_data = config.transform_rerank_request(
             model=self.model,
             optional_rerank_params=optional_params,
             headers={}
@@ -137,8 +147,12 @@ class TestVertexAIRerankTransform:
             assert record["id"] == str(i)  # 0-based indexing
             assert len(record["title"].split()) <= 3  # First 3 words as title
 
-    def test_transform_rerank_request_with_dict_documents(self):
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_transform_rerank_request_with_dict_documents(self, mock_ensure_access_token):
         """Test request transformation with dictionary documents."""
+        mock_ensure_access_token.return_value = ("mock-token", None)
+        config = VertexAIRerankConfig()
+        
         optional_params = {
             "query": "What is Google Gemini?",
             "documents": [
@@ -147,7 +161,7 @@ class TestVertexAIRerankTransform:
             ]
         }
         
-        request_data = self.config.transform_rerank_request(
+        request_data = config.transform_rerank_request(
             model=self.model,
             optional_rerank_params=optional_params,
             headers={}
@@ -157,8 +171,12 @@ class TestVertexAIRerankTransform:
         assert request_data["records"][0]["title"] == "Custom Title 1"
         assert request_data["records"][1]["title"] == "The Gemini zodiac"  # First 3 words
 
-    def test_transform_rerank_request_return_documents_mapping(self):
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_transform_rerank_request_return_documents_mapping(self, mock_ensure_access_token):
         """Test return_documents to ignoreRecordDetailsInResponse mapping."""
+        mock_ensure_access_token.return_value = ("mock-token", None)
+        config = VertexAIRerankConfig()
+        
         # Test return_documents=True (default)
         optional_params_true = {
             "query": "test query",
@@ -166,7 +184,7 @@ class TestVertexAIRerankTransform:
             "return_documents": True
         }
         
-        request_data_true = self.config.transform_rerank_request(
+        request_data_true = config.transform_rerank_request(
             model=self.model,
             optional_rerank_params=optional_params_true,
             headers={}
@@ -180,7 +198,7 @@ class TestVertexAIRerankTransform:
             "return_documents": False
         }
         
-        request_data_false = self.config.transform_rerank_request(
+        request_data_false = config.transform_rerank_request(
             model=self.model,
             optional_rerank_params=optional_params_false,
             headers={}
@@ -193,18 +211,22 @@ class TestVertexAIRerankTransform:
             "documents": ["doc1", "doc2"]
         }
         
-        request_data_default = self.config.transform_rerank_request(
+        request_data_default = config.transform_rerank_request(
             model=self.model,
             optional_rerank_params=optional_params_default,
             headers={}
         )
         assert request_data_default["ignoreRecordDetailsInResponse"] == False
 
-    def test_transform_rerank_request_missing_required_params(self):
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_transform_rerank_request_missing_required_params(self, mock_ensure_access_token):
         """Test that transform_rerank_request handles missing required parameters."""
+        mock_ensure_access_token.return_value = ("mock-token", None)
+        config = VertexAIRerankConfig()
+        
         # Test missing query
         with pytest.raises(ValueError, match="query is required for Vertex AI rerank"):
-            self.config.transform_rerank_request(
+            config.transform_rerank_request(
                 model=self.model,
                 optional_rerank_params={"documents": ["doc1"]},
                 headers={}
@@ -212,7 +234,7 @@ class TestVertexAIRerankTransform:
         
         # Test missing documents
         with pytest.raises(ValueError, match="documents is required for Vertex AI rerank"):
-            self.config.transform_rerank_request(
+            config.transform_rerank_request(
                 model=self.model,
                 optional_rerank_params={"query": "test query"},
                 headers={}

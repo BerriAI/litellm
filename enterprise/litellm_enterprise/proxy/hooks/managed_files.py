@@ -352,15 +352,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             else False
         )
         if potential_file_id and retrieve_file_id:
-            if await self.can_user_call_unified_file_id(
-                retrieve_file_id, user_api_key_dict
-            ):
-                return True
-            else:
+            # Check if file exists in DB
+            db_record = await self.prisma_client.db.litellm_managedfiletable.find_first(
+                where={"unified_file_id": retrieve_file_id}
+            )
+            
+            # If record is None, it means file is deleted/missing -> Raise 404
+            if db_record is None or getattr(db_record, "deleted", False):
                 raise HTTPException(
-                    status_code=403,
-                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {retrieve_file_id}",
+                    status_code=404,
+                    detail=f"Managed file '{retrieve_file_id}' not found or has been deleted"
                 )
+            # Check access control
+            if db_record.created_by != user_api_key_dict.user_id:
+                raise HTTPException(status_code=403, detail="User does not have access to this file")
+            return True
         return False
 
     async def check_file_ids_access(
@@ -1019,8 +1025,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # The stored file_object has the raw provider ID. Replace with the unified ID
         # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
         if stored_file_object and stored_file_object.file_object:
-            stored_file_object.file_object.id = file_id
-            return stored_file_object.file_object
+            file_obj = stored_file_object.file_object
+            # Ensure we return the Unified ID, not the raw provider ID
+            file_obj.id = file_id
+            return file_obj
 
         # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
         # So we fetch the file object from the provider. We deliberately do not store the result to avoid interfering with batch cost tracking code.

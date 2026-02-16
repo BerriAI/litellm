@@ -816,22 +816,20 @@ def test_video_content_handler_uses_get_for_openai():
     mock_response.content = b"mp4-bytes"
     mock_client.get.return_value = mock_response
 
-    # Patch _get_httpx_client to ensure no real HTTP client is created
-    # This prevents test isolation issues where isinstance check might fail
-    with patch('litellm.llms.custom_httpx.llm_http_handler._get_httpx_client') as mock_get_client:
-        mock_get_client.return_value = mock_client
-
-        result = handler.video_content_handler(
-            video_id="video_abc",
-            video_content_provider_config=config,
-            custom_llm_provider="openai",
-            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1"),
-            logging_obj=MagicMock(),
-            timeout=5.0,
-            api_key="sk-test",
-            client=mock_client,
-            _is_async=False,
-        )
+    # Patch _get_httpx_client and validate_environment to ensure no real HTTP client or API call is made
+    with patch('litellm.llms.custom_httpx.llm_http_handler._get_httpx_client', return_value=mock_client):
+        with patch.object(config, 'validate_environment', return_value={"Authorization": "Bearer sk-test"}):
+            result = handler.video_content_handler(
+                video_id="video_abc",
+                video_content_provider_config=config,
+                custom_llm_provider="openai",
+                litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1"),
+                logging_obj=MagicMock(),
+                timeout=5.0,
+                api_key="sk-test",
+                client=mock_client,
+                _is_async=False,
+            )
 
     assert result == b"mp4-bytes"
     mock_client.get.assert_called_once()
