@@ -103,9 +103,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata[
-        "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -606,6 +606,8 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
+            # Strip null bytes that PostgreSQL cannot store in text/jsonb columns
+            value = value.replace("\x00", "").replace("\\u0000", "")
             if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
                 # This split ensures we keep more context from the end of conversations
@@ -661,20 +663,20 @@ def _convert_to_json_serializable_dict(
     if max_depth <= 0:
         # Return a placeholder if max depth is exceeded
         return "<max_depth_exceeded>"
-    
+
     if visited is None:
         visited = set()
-    
+
     # Get the object's memory address to track visited objects
     obj_id = id(obj)
     if obj_id in visited:
         # Circular reference detected, return placeholder
         return "<circular_reference>"
-    
+
     # Only track mutable objects (dict, list, objects with __dict__)
     if isinstance(obj, (dict, list)) or hasattr(obj, "__dict__"):
         visited.add(obj_id)
-    
+
     try:
         if isinstance(obj, BaseModel):
             # Use Pydantic's model_dump() instead of pickle
@@ -693,7 +695,9 @@ def _convert_to_json_serializable_dict(
             ]
         elif hasattr(obj, "__dict__"):
             # Handle objects with __dict__ attribute
-            return _convert_to_json_serializable_dict(obj.__dict__, visited, max_depth - 1)
+            return _convert_to_json_serializable_dict(
+                obj.__dict__, visited, max_depth - 1
+            )
         else:
             # Primitives (str, int, float, bool, None) pass through
             return obj
@@ -719,7 +723,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
-            
+
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
@@ -734,12 +738,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
                         "standard_callback_dynamic_params"
                     ),
                 }
-                
+
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
                     _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
-            
+
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
@@ -781,14 +785,14 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
-        
+
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
                 perform_redaction,
                 should_redact_message_logging,
             )
-            
+
             litellm_params = kwargs.get("litellm_params", {})
             model_call_details = {
                 "litellm_params": litellm_params,
@@ -796,11 +800,13 @@ def _get_response_for_spend_logs_payload(
                     "standard_callback_dynamic_params"
                 ),
             }
-            
+
             # If redaction is enabled, convert to serializable dict before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
                 response_obj = _convert_to_json_serializable_dict(response_obj)
-                response_obj = perform_redaction(model_call_details={}, result=response_obj)
+                response_obj = perform_redaction(
+                    model_call_details={}, result=response_obj
+                )
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}
@@ -822,7 +828,7 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Check general_settings (from DB or proxy_config.yaml)
     store_prompts_value = general_settings.get("store_prompts_in_spend_logs")
-    
+
     # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
     if store_prompts_value is True:
         return True
@@ -830,7 +836,7 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
         # Case-insensitive string comparison
         if store_prompts_value.lower() == "true":
             return True
-    
+
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
 
