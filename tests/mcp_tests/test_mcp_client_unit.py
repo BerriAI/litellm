@@ -5,7 +5,7 @@ import base64
 import os
 import sys
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 # Add the project root to the path
 sys.path.insert(0, os.path.abspath("../../.."))
@@ -76,6 +76,27 @@ class TestMCPClientUnitTests:
         assert headers == {
             "Authorization": "Token custom_token",
         }
+
+        # OAuth2
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="oauth2-access-token-xyz",
+        )
+        headers = client._get_auth_headers()
+        assert headers == {
+            "Authorization": "Bearer oauth2-access-token-xyz",
+        }
+
+        # OAuth2 with extra_headers (per-user flow overrides auth_value)
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="static-server-token",
+            extra_headers={"Authorization": "Bearer per-user-token"},
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"] == "Bearer per-user-token"
 
         # No auth
         client = MCPClient("http://example.com")
@@ -183,7 +204,7 @@ class TestMCPClientUnitTests:
         assert result == mock_result
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.call_tool.assert_called_once_with(
-            name="test_tool", arguments={"arg1": "value1"}
+            name="test_tool", arguments={"arg1": "value1"},progress_callback=ANY
         )
 
 

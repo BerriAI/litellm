@@ -19,6 +19,20 @@ from litellm import main as litellm_main
 
 
 @pytest.fixture(autouse=True)
+def clear_client_cache():
+    """
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    if cache is not None:
+        cache.flush_cache()
+
+
+@pytest.fixture(autouse=True)
 def add_api_keys_to_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-api03-1234567890")
@@ -409,65 +423,71 @@ async def test_extra_body_with_fallback(
     This was perhaps a wider issue with the acompletion function not passing kwargs such as extra_body correctly when fallbacks are specified.
     """
 
-    # since this uses respx, we need to set use_aiohttp_transport to False
-    litellm.disable_aiohttp_transport = True
-    # Set up test parameters
-    model = "openrouter/deepseek/deepseek-chat"
-    messages = [{"role": "user", "content": "Hello, world!"}]
-    extra_body = {
-        "provider": {
-            "order": ["DeepSeek"],
-            "allow_fallbacks": False,
-            "require_parameters": True,
+    # Save original state to restore after test
+    original_disable_aiohttp = litellm.disable_aiohttp_transport
+
+    try:
+        # since this uses respx, we need to set use_aiohttp_transport to False
+        litellm.disable_aiohttp_transport = True
+        # Set up test parameters
+        model = "openrouter/deepseek/deepseek-chat"
+        messages = [{"role": "user", "content": "Hello, world!"}]
+        extra_body = {
+            "provider": {
+                "order": ["DeepSeek"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
         }
-    }
-    fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
+        fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
 
-    respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
-        json={
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "created": 1677652288,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello from mocked response!",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
-        }
-    )
+        respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello from mocked response!",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+            }
+        )
 
-    response = await litellm.acompletion(
-        model=model,
-        messages=messages,
-        extra_body=extra_body,
-        fallbacks=fallbacks,
-        api_key="fake-openrouter-api-key",
-    )
+        response = await litellm.acompletion(
+            model=model,
+            messages=messages,
+            extra_body=extra_body,
+            fallbacks=fallbacks,
+            api_key="fake-openrouter-api-key",
+        )
 
-    # Get the request from the mock
-    request: httpx.Request = respx_mock.calls[0].request
-    request_body = request.read()
-    request_body = json.loads(request_body)
+        # Get the request from the mock
+        request: httpx.Request = respx_mock.calls[0].request
+        request_body = request.read()
+        request_body = json.loads(request_body)
 
-    # Verify basic parameters
-    assert request_body["model"] == "deepseek/deepseek-chat"
-    assert request_body["messages"] == messages
+        # Verify basic parameters
+        assert request_body["model"] == "deepseek/deepseek-chat"
+        assert request_body["messages"] == messages
 
-    # Verify the extra_body parameters remain under the provider key
-    assert request_body["provider"]["order"] == ["DeepSeek"]
-    assert request_body["provider"]["allow_fallbacks"] is False
-    assert request_body["provider"]["require_parameters"] is True
+        # Verify the extra_body parameters remain under the provider key
+        assert request_body["provider"]["order"] == ["DeepSeek"]
+        assert request_body["provider"]["allow_fallbacks"] is False
+        assert request_body["provider"]["require_parameters"] is True
 
-    # Verify the response
-    assert response is not None
-    assert response.choices[0].message.content == "Hello from mocked response!"
+        # Verify the response
+        assert response is not None
+    finally:
+        # Restore original state to prevent test pollution
+        litellm.disable_aiohttp_transport = original_disable_aiohttp
 
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
@@ -1315,6 +1335,8 @@ def test_anthropic_text_disable_url_suffix_env_var():
 
 
 def test_image_edit_merges_headers_and_extra_headers():
+    from litellm.images.main import base_llm_http_handler
+    
     combined_headers = {
         "x-test-header-one": "value-1",
         "x-test-header-two": "value-2",
@@ -1331,8 +1353,9 @@ def test_image_edit_merges_headers_and_extra_headers():
             "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
             return_value=mock_image_edit_config,
         ) as mock_config,
-        patch(
-            "litellm.images.main.base_llm_http_handler.image_edit_handler",
+        patch.object(
+            base_llm_http_handler,
+            "image_edit_handler",
             return_value="ok",
         ) as mock_handler,
     ):

@@ -17,6 +17,11 @@ from typing import Any, Dict, Optional, Tuple
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.integrations.posthog_mock_client import (
+    should_use_posthog_mock,
+    create_mock_posthog_client,
+)
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -40,6 +45,12 @@ class PostHogLogger(CustomBatchLogger):
         """
         try:
             verbose_logger.debug("PostHog: in init posthog logger")
+            
+            self.is_mock_mode = should_use_posthog_mock()
+            if self.is_mock_mode:
+                create_mock_posthog_client()
+                verbose_logger.debug("[POSTHOG MOCK] PostHog logger initialized in mock mode")
+            
             if os.getenv("POSTHOG_API_KEY", None) is None:
                 raise Exception("POSTHOG_API_KEY is not set, set 'POSTHOG_API_KEY=<>'")
 
@@ -90,7 +101,7 @@ class PostHogLogger(CustomBatchLogger):
 
             response = self.sync_client.post(
                 url=capture_url,
-                json=payload,
+                content=safe_dumps(payload),
                 headers=headers,
             )
             response.raise_for_status()
@@ -100,7 +111,10 @@ class PostHogLogger(CustomBatchLogger):
                     f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
                 )
 
-            verbose_logger.debug("PostHog: Sync event successfully sent")
+            if self.is_mock_mode:
+                verbose_logger.debug("[POSTHOG MOCK] Sync event successfully mocked")
+            else:
+                verbose_logger.debug("PostHog: Sync event successfully sent")
 
         except Exception as e:
             verbose_logger.exception(f"PostHog Sync Layer Error - {str(e)}")
@@ -320,6 +334,9 @@ class PostHogLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"PostHog: Sending batch of {len(self.log_queue)} events"
             )
+            
+            if self.is_mock_mode:
+                verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             # Group events by credentials for batch sending
             batches_by_credentials: Dict[tuple[str, str], list] = {}
@@ -340,7 +357,7 @@ class PostHogLogger(CustomBatchLogger):
 
                 response = await self.async_client.post(
                     url=capture_url,
-                    json=payload,
+                    content=safe_dumps(payload),
                     headers=headers,
                 )
                 response.raise_for_status()
@@ -350,9 +367,12 @@ class PostHogLogger(CustomBatchLogger):
                         f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
                     )
 
-            verbose_logger.debug(
-                f"PostHog: Batch of {len(self.log_queue)} events successfully sent"
-            )
+            if self.is_mock_mode:
+                verbose_logger.debug(f"[POSTHOG MOCK] Batch of {len(self.log_queue)} events successfully mocked")
+            else:
+                verbose_logger.debug(
+                    f"PostHog: Batch of {len(self.log_queue)} events successfully sent"
+                )
         except Exception as e:
             verbose_logger.exception(f"PostHog Error sending batch API - {str(e)}")
 
@@ -419,7 +439,7 @@ class PostHogLogger(CustomBatchLogger):
 
                 response = self.sync_client.post(
                     url=capture_url,
-                    json=payload,
+                    content=safe_dumps(payload),
                     headers=headers,
                 )
                 response.raise_for_status()
@@ -429,9 +449,14 @@ class PostHogLogger(CustomBatchLogger):
                         f"PostHog: Failed to flush on exit - status {response.status_code}"
                     )
 
-            verbose_logger.debug(
-                f"PostHog: Successfully flushed {len(self.log_queue)} events on exit"
-            )
+            if self.is_mock_mode:
+                verbose_logger.debug(
+                    f"[POSTHOG MOCK] Successfully flushed {len(self.log_queue)} events on exit"
+                )
+            else:
+                verbose_logger.debug(
+                    f"PostHog: Successfully flushed {len(self.log_queue)} events on exit"
+                )
             self.log_queue.clear()
 
         except Exception as e:

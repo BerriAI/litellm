@@ -24,6 +24,7 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
+    update_responses_tools_with_model_file_ids,
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -180,6 +181,7 @@ async def aresponses_api_with_mcp(
     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        litellm_trace_id=kwargs.get("litellm_trace_id"),
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -434,6 +436,8 @@ async def aresponses(
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model, api_base=local_vars.get("base_url", None)
             )
+            # Update local_vars with detected provider (fixes #19782)
+            local_vars["custom_llm_provider"] = custom_llm_provider
 
         func = partial(
             responses,
@@ -583,6 +587,9 @@ def responses(
             api_key=litellm_params.api_key,
         )
 
+        # Update local_vars with detected provider (fixes #19782)
+        local_vars["custom_llm_provider"] = custom_llm_provider
+
         # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
         if dynamic_api_key is not None:
             litellm_params.api_key = dynamic_api_key
@@ -590,13 +597,36 @@ def responses(
             litellm_params.api_base = dynamic_api_base
 
         #########################################################
-        # Update input with provider-specific file IDs if managed files are used
+        # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
+        model_file_id_mapping = kwargs.get("model_file_id_mapping")
+        model_info_id = (
+            kwargs.get("model_info", {}).get("id")
+            if isinstance(kwargs.get("model_info"), dict)
+            else None
+        )
+
         input = cast(
             Union[str, ResponseInputParam],
-            update_responses_input_with_model_file_ids(input=input),
+            update_responses_input_with_model_file_ids(
+                input=input,
+                model_id=model_info_id,
+                model_file_id_mapping=model_file_id_mapping,
+            ),
         )
         local_vars["input"] = input
+
+        # Update tools with provider-specific file IDs if needed
+        if tools:
+            tools = cast(
+                Optional[Iterable[ToolParam]],
+                update_responses_tools_with_model_file_ids(
+                    tools=cast(Optional[List[Dict[str, Any]]], tools),
+                    model_id=model_info_id,
+                    model_file_id_mapping=model_file_id_mapping,
+                ),
+            )
+            local_vars["tools"] = tools
 
         #########################################################
         # Native MCP Responses API
@@ -656,6 +686,7 @@ def responses(
                 _is_async=_is_async,
                 stream=stream,
                 extra_headers=extra_headers,
+                extra_body=extra_body,
                 **kwargs,
             )
 
@@ -669,7 +700,10 @@ def responses(
             )
         )
 
-        # Pre Call logging
+        # Pre Call logging - preserve metadata for custom callbacks
+        # When called from completion bridge (codex models), metadata is in litellm_metadata
+        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
+
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
@@ -678,7 +712,7 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
-                "metadata": metadata,
+                "metadata": metadata_for_callbacks,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -1411,6 +1445,8 @@ async def acompact_responses(
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model, api_base=local_vars.get("base_url", None)
             )
+            # Update local_vars with detected provider (fixes #19782)
+            local_vars["custom_llm_provider"] = custom_llm_provider
 
         func = partial(
             compact_responses,
@@ -1497,6 +1533,9 @@ def compact_responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+
+        # Update local_vars with detected provider (fixes #19782)
+        local_vars["custom_llm_provider"] = custom_llm_provider
 
         # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
         if dynamic_api_key is not None:

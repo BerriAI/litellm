@@ -9,10 +9,10 @@
 
 
 import asyncio
-import threading
 import json
-from datetime import datetime
+import threading
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -38,8 +38,11 @@ if TYPE_CHECKING:
 
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
-from litellm.exceptions import BlockedPiiEntityError
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -113,6 +116,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Track main thread ID to safely identity when we are running in main loop vs background thread
 
         self._main_thread_id = threading.get_ident()
+
+        # Loop-bound session cache for background threads
+        self._loop_sessions: Dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
 
         if mock_testing is True:  # for testing purposes only
             return
@@ -189,9 +195,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Logic:
         1. If running in the main thread (where the object was initialized/destined to live normally),
            use the shared `self._http_session` (protected by a lock).
-        2. If running in a background thread (e.g. logging hook), yield a NEW ephemeral session
-           and ensure it is closed after use.
+        2. If running in a background thread (e.g. logging hook), use a cached session for that loop.
         """
+        current_loop = asyncio.get_running_loop()
 
         # Check if we are in the stored main thread
         if threading.get_ident() == self._main_thread_id:
@@ -201,25 +207,38 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     self._http_session = aiohttp.ClientSession()
                 yield self._http_session
         else:
-            # Background thread -> create ephemeral session
+            # Background thread/loop -> use loop-bound session cache
             # This avoids "attached to a different loop" or "no running event loop" errors
             # when accessing the shared session created in the main loop
-            session = aiohttp.ClientSession()
-            try:
-                yield session
-            finally:
-                if not session.closed:
-                    await session.close()
+            if (
+                current_loop not in self._loop_sessions
+                or self._loop_sessions[current_loop].closed
+            ):
+                self._loop_sessions[current_loop] = aiohttp.ClientSession()
+            yield self._loop_sessions[current_loop]
 
     async def _close_http_session(self) -> None:
-        """Close the shared HTTP session if it exists."""
+        """Close all cached HTTP sessions."""
         if self._http_session is not None and not self._http_session.closed:
             await self._http_session.close()
             self._http_session = None
 
+        for session in self._loop_sessions.values():
+            if not session.closed:
+                await session.close()
+        self._loop_sessions.clear()
+
     def __del__(self):
         """Cleanup: we try to close, but doing async cleanup in __del__ is risky."""
         pass
+
+    def _has_block_action(self) -> bool:
+        """Return True if pii_entities_config has any BLOCK action (fail-closed on analyzer errors)."""
+        if not self.pii_entities_config:
+            return False
+        return any(
+            action == PiiAction.BLOCK for action in self.pii_entities_config.values()
+        )
 
     def _get_presidio_analyze_request_payload(
         self,
@@ -305,13 +324,30 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                 # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
                 # Presidio may return a dict instead of a list when errors occur
+                def _fail_on_invalid_response(
+                    reason: str,
+                ) -> List[PresidioAnalyzeResponseItem]:
+                    should_fail_closed = (
+                        bool(self.pii_entities_config)
+                        or self.output_parse_pii
+                        or self.apply_to_output
+                    )
+                    if should_fail_closed:
+                        raise GuardrailRaisedException(
+                            guardrail_name=self.guardrail_name,
+                            message=f"Presidio analyzer returned invalid response; cannot verify PII when PII protection is configured: {reason}",
+                            should_wrap_with_default_message=False,
+                        )
+                    verbose_proxy_logger.warning(
+                        "Presidio analyzer %s, returning empty list", reason
+                    )
+                    return []
+
                 if isinstance(analyze_results, dict):
                     if "error" in analyze_results:
-                        verbose_proxy_logger.warning(
-                            "Presidio analyzer returned error: %s, returning empty list",
-                            analyze_results.get("error"),
+                        return _fail_on_invalid_response(
+                            f"error: {analyze_results.get('error')}"
                         )
-                        return []
                     # If it's a dict but not an error, try to process it as a single item
                     verbose_proxy_logger.debug(
                         "Presidio returned dict (not list), attempting to process as single item"
@@ -319,28 +355,45 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     try:
                         return [PresidioAnalyzeResponseItem(**analyze_results)]
                     except Exception as e:
-                        verbose_proxy_logger.warning(
-                            "Failed to parse Presidio dict response: %s, returning empty list",
-                            e,
+                        return _fail_on_invalid_response(
+                            f"failed to parse dict response: {e}"
                         )
-                        return []
+
+                # Handle unexpected types (str, None, etc.) - e.g. from malformed/error
+                if not isinstance(analyze_results, list):
+                    return _fail_on_invalid_response(
+                        f"unexpected type {type(analyze_results).__name__} (expected list or dict), response: {str(analyze_results)[:200]}"
+                    )
 
                 # Normal case: list of results
                 final_results = []
                 for item in analyze_results:
+                    if not isinstance(item, dict):
+                        verbose_proxy_logger.warning(
+                            "Skipping invalid Presidio result item (expected dict, got %s): %s",
+                            type(item).__name__,
+                            str(item)[:100],
+                        )
+                        continue
                     try:
                         final_results.append(PresidioAnalyzeResponseItem(**item))
-                    except TypeError as te:
-                        # Handle case where item is not a dict (shouldn't happen, but be defensive)
+                    except Exception as e:
                         verbose_proxy_logger.warning(
-                            "Skipping invalid Presidio result item: %s (error: %s)",
+                            "Failed to parse Presidio result item: %s (error: %s)",
                             item,
-                            te,
+                            e,
                         )
                         continue
                 return final_results
+        except GuardrailRaisedException:
+            # Re-raise GuardrailRaisedException without wrapping
+            raise
         except Exception as e:
-            raise e
+            # Sanitize exception to avoid leaking the original text (which may
+            # contain API keys or other secrets) in error responses.
+            raise Exception(
+                f"Presidio PII analysis failed: {type(e).__name__}"
+            ) from e
 
     async def anonymize_text(
         self,
@@ -397,9 +450,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                 return redacted_text["text"]
             else:
-                raise Exception(f"Invalid anonymizer response: {redacted_text}")
+                raise Exception("Invalid anonymizer response: received None")
         except Exception as e:
-            raise e
+            # Sanitize exception to avoid leaking the original text (which may
+            # contain API keys or other secrets) in error responses.
+            if "Invalid anonymizer response" in str(e):
+                raise
+            raise Exception(
+                f"Presidio PII anonymization failed: {type(e).__name__}"
+            ) from e
 
     def filter_analyze_results_by_score(
         self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
@@ -501,12 +560,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
 
                 # Then anonymize the text using the analysis results
-                return await self.anonymize_text(
+                anonymized_text = await self.anonymize_text(
                     text=text,
                     analyze_results=analyze_results,
                     output_parse_pii=output_parse_pii,
                     masked_entity_count=masked_entity_count,
                 )
+                return anonymized_text
             return redacted_text["text"]
         except Exception as e:
             status = "guardrail_failed_to_respond"
@@ -559,9 +619,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -662,9 +722,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
@@ -783,11 +843,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Type narrowing: StreamingChoices doesn't have .message attribute
             if not hasattr(choice, "message"):
                 continue
-            content = getattr(choice.message, "content", None)
+            content = getattr(choice.message, "content", None)  # type: ignore
             if content is None:
                 continue
             if isinstance(content, str):
-                choice.message.content = await self.check_pii(
+                choice.message.content = await self.check_pii(  # type: ignore
                     text=content,
                     output_parse_pii=False,
                     presidio_config=presidio_config,
@@ -980,6 +1040,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception:
             pass
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",

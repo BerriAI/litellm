@@ -43,6 +43,11 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import ServerToolUse
 
+# Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
+StreamChunkSerializer = Callable[[Any], str]
+# Type alias for streaming error serializer (ProxyException -> wire format)
+StreamErrorSerializer = Callable[[ProxyException], str]
+
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
 
@@ -237,6 +242,90 @@ async def create_response(
     )
 
 
+def _override_openai_response_model(
+    *,
+    response_obj: Any,
+    requested_model: str,
+    log_context: str,
+) -> None:
+    """
+    Force the OpenAI-compatible `model` field in the response to match what the client requested.
+
+    LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
+    That internal identifier should not be returned to clients in the OpenAI `model` field.
+
+    Note: This is intentionally verbose. A model mismatch is a useful signal that an internal
+    model identifier is being stamped/preserved somewhere in the request/response pipeline.
+    We log mismatches as warnings (and then restamp to the client-requested value) so these
+    paths stay observable for maintainers/operators without breaking client compatibility.
+
+    Errors are reserved for cases where the proxy cannot read/override the response model field.
+
+    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
+    we should preserve the actual model that was used (the fallback model) rather than
+    overriding it with the originally requested model.
+    """
+    if not requested_model:
+        return
+
+    # Check if a fallback occurred - if so, preserve the actual model used
+    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
+    if isinstance(hidden_params, dict):
+        fallback_headers = hidden_params.get("additional_headers", {}) or {}
+        attempted_fallbacks = fallback_headers.get(
+            "x-litellm-attempted-fallbacks", None
+        )
+        if attempted_fallbacks is not None and attempted_fallbacks > 0:
+            # A fallback occurred - preserve the actual model that was used
+            verbose_proxy_logger.debug(
+                "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
+                log_context,
+                attempted_fallbacks,
+            )
+            return
+
+    if isinstance(response_obj, dict):
+        downstream_model = response_obj.get("model")
+        if downstream_model != requested_model:
+            verbose_proxy_logger.debug(
+                "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
+                log_context,
+                requested_model,
+                downstream_model,
+            )
+        response_obj["model"] = requested_model
+        return
+
+    if not hasattr(response_obj, "model"):
+        verbose_proxy_logger.error(
+            "%s: cannot override response model; missing `model` attribute. response_type=%s",
+            log_context,
+            type(response_obj),
+        )
+        return
+
+    downstream_model = getattr(response_obj, "model", None)
+    if downstream_model != requested_model:
+        verbose_proxy_logger.debug(
+            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
+            log_context,
+            requested_model,
+            downstream_model,
+        )
+
+    try:
+        setattr(response_obj, "model", requested_model)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "%s: failed to override response.model=%r on response_type=%s. error=%s",
+            log_context,
+            requested_model,
+            type(response_obj),
+            str(e),
+            exc_info=True,
+        )
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: Optional[LiteLLMLoggingObj],
 ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
@@ -392,8 +481,10 @@ class ProxyBaseLLMRequestProcessing:
             "acreate_batch",
             "aretrieve_batch",
             "alist_batches",
+            "acancel_batch",
             "afile_content",
             "afile_retrieve",
+            "afile_delete",
             "atext_completion",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -433,6 +524,8 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
+            "asend_message",
+            "call_mcp_tool",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -532,30 +625,37 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
 
-        # Apply hierarchical router_settings (Key > Team > Global)
+        # Apply hierarchical router_settings (Key > Team)
+        # Global router_settings are already on the Router object itself.
         if llm_router is not None and proxy_config is not None:
             from litellm.proxy.proxy_server import prisma_client
 
             router_settings = await proxy_config._get_hierarchical_router_settings(
                 user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
-            # If router_settings found (from key, team, or global), apply them
-            # This ensures key/team settings override global settings
-            if router_settings is not None and router_settings:
-                # Get model_list from current router
-                model_list = llm_router.get_model_list()
-                if model_list is not None:
-                    # Create user_config with model_list and router_settings
-                    # This creates a per-request router with the hierarchical settings
-                    user_config = {"model_list": model_list, **router_settings}
-                    self.data["user_config"] = user_config
+            # If router_settings found (from key or team), apply them
+            # Pass settings as per-request overrides instead of creating a new Router
+            # This avoids expensive Router instantiation on each request
+            if router_settings is not None:
+                self.data["router_settings_override"] = router_settings
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
 
         return self.data, logging_obj
+
+    @staticmethod
+    def _get_model_id_from_response(hidden_params: dict, data: dict) -> str:
+        """Extract model_id from hidden_params with fallback to litellm_metadata."""
+        model_id = hidden_params.get("model_id", None) or ""
+        if not model_id:
+            litellm_metadata = data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+        return model_id
 
     async def base_process_llm_request(
         self,
@@ -606,6 +706,8 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
+            "acancel_batch",
+            "afile_delete",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -625,6 +727,9 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
+        requested_model_from_client: Optional[str] = (
+            self.data.get("model") if isinstance(self.data.get("model"), str) else None
+        )
         if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
             verbose_proxy_logger.debug(
                 "Request received by LiteLLM:\n{}".format(
@@ -650,11 +755,15 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         tasks = []
+        # Start the moderation check (during_call_hook) as early as possible
+        # This gives it a head start to mask/validate input while the proxy handles routing
         tasks.append(
-            proxy_logging_obj.during_call_hook(
-                data=self.data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=route_type,  # type: ignore
+            asyncio.create_task(
+                proxy_logging_obj.during_call_hook(
+                    data=self.data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=route_type,  # type: ignore
+                )
             )
         )
 
@@ -682,21 +791,17 @@ class ProxyBaseLLMRequestProcessing:
         response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
+        model_id = self._get_model_id_from_response(hidden_params, self.data)
 
-        # Fallback: extract model_id from litellm_metadata if not in hidden_params
-        if not model_id:
-            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
-            model_info = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", "") or ""
-
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        fastest_response_batch_completion = hidden_params.get(
-            "fastest_response_batch_completion", None
+        cache_key, api_base, response_cost = (
+            hidden_params.get("cache_key", None) or "",
+            hidden_params.get("api_base", None) or "",
+            hidden_params.get("response_cost", None) or "",
         )
-        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+        fastest_response_batch_completion, additional_headers = (
+            hidden_params.get("fastest_response_batch_completion", None),
+            hidden_params.get("additional_headers", {}) or {},
+        )
 
         # Post Call Processing
         if llm_router is not None:
@@ -726,6 +831,24 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_logging_obj=logging_obj,
                 **additional_headers,
             )
+
+            # Call response headers hook for streaming success
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+            if callback_headers:
+                custom_headers.update(callback_headers)
+
+            # Preserve the original client-requested model (pre-alias mapping) for downstream
+            # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
+            # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
+            # what the client sent.
+            if requested_model_from_client:
+                self.data["_litellm_client_requested_model"] = (
+                    requested_model_from_client
+                )
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -785,6 +908,15 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data, user_api_key_dict=user_api_key_dict, response=response
         )
 
+        # Always return the client-requested model name (not provider-prefixed internal identifiers)
+        # for OpenAI-compatible responses.
+        if requested_model_from_client:
+            _override_openai_response_model(
+                response_obj=response,
+                requested_model=requested_model_from_client,
+                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+            )
+
         hidden_params = (
             getattr(response, "_hidden_params", {}) or {}
         )  # get any updated response headers
@@ -807,6 +939,16 @@ class ProxyBaseLLMRequestProcessing:
                 **additional_headers,
             )
         )
+
+        # Call response headers hook for non-streaming success
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
+
         await check_response_size_is_safe(response=response)
 
         return response
@@ -965,6 +1107,18 @@ class ProxyBaseLLMRequestProcessing:
                     headers = get_response_headers(dict(_response_headers))
         headers.update(custom_headers)
 
+        # Call response headers hook for failure
+        try:
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=None,
+            )
+            if callback_headers:
+                headers.update(callback_headers)
+        except Exception:
+            pass
+
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
@@ -1044,22 +1198,24 @@ class ProxyBaseLLMRequestProcessing:
             return chunk
 
     @staticmethod
-    async def async_sse_data_generator(
-        response,
+    async def async_streaming_data_generator(
+        response: Any,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
-    ):
+        *,
+        serialize_chunk: StreamChunkSerializer,
+        serialize_error: StreamErrorSerializer,
+    ) -> AsyncGenerator[str, None]:
         """
-        Anthropic /messages and Google /generateContent streaming data generator require SSE events
+        Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
+        cost injection, then yields chunks via serialize_chunk; on exception runs
+        failure hook and yields via serialize_error. Use for SSE or NDJSON.
         """
-
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for (
-                chunk
-            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -1067,7 +1223,6 @@ class ProxyBaseLLMRequestProcessing:
                 verbose_proxy_logger.debug(
                     "async_data_generator: received streaming chunk - {}".format(chunk)
                 )
-                ### CALL HOOKS ### - modify outgoing data
                 chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                     user_api_key_dict=user_api_key_dict,
                     response=chunk,
@@ -1078,30 +1233,34 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                     response_str = litellm.get_response_string(response_obj=chunk)
                     str_so_far += response_str
+                elif hasattr(chunk, "model_dump"):
+                    try:
+                        d = chunk.model_dump(mode="json", exclude_none=True)
+                        if isinstance(d, dict):
+                            str_so_far += str(d.get("content", ""))
+                    except Exception:
+                        pass
+                elif isinstance(chunk, dict):
+                    str_so_far += str(chunk.get("content", ""))
 
-                # Inject cost into Anthropic-style SSE usage for /v1/messages for any provider
                 model_name = request_data.get("model", "")
                 chunk = (
                     ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                         chunk, model_name
                     )
                 )
-
-                # Format chunk using helper function
-                yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
+                yield serialize_chunk(chunk)
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
                     str(e)
                 )
             )
-            # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=request_data,
             )
-            # Use transformed exception if callback returned one, otherwise use original
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
@@ -1110,18 +1269,36 @@ class ProxyBaseLLMRequestProcessing:
 
             if isinstance(e, HTTPException):
                 raise e
-            else:
-                error_traceback = traceback.format_exc()
-                error_msg = f"{str(e)}\n\n{error_traceback}"
-
+            error_traceback = traceback.format_exc()
+            error_msg = f"{str(e)}\n\n{error_traceback}"
             proxy_exception = ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
-            error_returned = json.dumps({"error": proxy_exception.to_dict()})
-            yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+            yield serialize_error(proxy_exception)
+
+    @staticmethod
+    async def async_sse_data_generator(
+        response: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
+        proxy_logging_obj: ProxyLogging,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Anthropic /messages and Google /generateContent streaming data generator require SSE events.
+        Delegates to async_streaming_data_generator with SSE serializers.
+        """
+        async for chunk in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_error=lambda proxy_exc: f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n",
+        ):
+            yield chunk
 
     @staticmethod
     def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
@@ -1266,9 +1443,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

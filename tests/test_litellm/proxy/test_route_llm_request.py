@@ -1,9 +1,7 @@
-import json
 import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -49,7 +47,13 @@ async def test_route_request_dynamic_credentials(route_type):
 @pytest.mark.asyncio
 async def test_route_request_no_model_required():
     """Test route types that don't require model parameter"""
-    test_cases = ["amoderation", "aget_responses", "adelete_responses", "avector_store_create", "avector_store_search"]
+    test_cases = [
+        "amoderation",
+        "aget_responses",
+        "adelete_responses",
+        "avector_store_create",
+        "avector_store_search",
+    ]
 
     for route_type in test_cases:
         # Test data without model parameter
@@ -72,7 +76,13 @@ async def test_route_request_no_model_required():
 @pytest.mark.asyncio
 async def test_route_request_no_model_required_with_router_settings():
     """Test route types that don't require model parameter with router settings"""
-    test_cases = ["amoderation", "aget_responses", "adelete_responses", "avector_store_create", "avector_store_search"]
+    test_cases = [
+        "amoderation",
+        "aget_responses",
+        "adelete_responses",
+        "avector_store_create",
+        "avector_store_search",
+    ]
 
     for route_type in test_cases:
         # Test data with model parameter (it will be ignored for these route types)
@@ -121,6 +131,109 @@ async def test_route_request_no_model_required_with_router_settings_and_no_route
     with patch.object(
         litellm, "acompletion", return_value="fake_response"
     ) as mock_completion:
-        response = await route_request(data, None, "gpt-3.5-turbo", "acompletion")
+        await route_request(data, None, "gpt-3.5-turbo", "acompletion")
 
         mock_completion.assert_called_once_with(**data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override():
+    """
+    Test that route_request handles router_settings_override by merging settings into kwargs
+    instead of creating a new Router (which is expensive and was the old behavior).
+    """
+    # Mock data with router_settings_override containing per-request settings
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4"]}],
+            "num_retries": 5,
+            "timeout": 30,
+            "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
+            # These settings should be ignored (not in per_request_settings list)
+            "routing_strategy": "least-busy",
+            "model_group_alias": {"alias": "real_model"},
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    # Verify the router method was called with merged settings
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+    assert call_kwargs["num_retries"] == 5
+    assert call_kwargs["timeout"] == 30
+    assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    # Verify unsupported settings were NOT merged
+    assert "routing_strategy" not in call_kwargs
+    assert "model_group_alias" not in call_kwargs
+    # Verify router_settings_override was removed from data
+    assert "router_settings_override" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_no_router():
+    """
+    Test that router_settings_override works when no router is provided,
+    falling back to litellm module directly.
+    """
+    import litellm
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4"]}],
+            "num_retries": 3,
+        },
+    }
+
+    # Use MagicMock explicitly to avoid auto-AsyncMock behavior in Python 3.12+
+    mock_completion = MagicMock(return_value="success")
+    original_acompletion = litellm.acompletion
+    litellm.acompletion = mock_completion
+
+    try:
+        response = await route_request(data, None, None, "acompletion")
+
+        assert response == "success"
+        # Verify litellm.acompletion was called with merged settings
+        call_kwargs = mock_completion.call_args[1]
+        assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+        assert call_kwargs["num_retries"] == 3
+    finally:
+        litellm.acompletion = original_acompletion
+
+
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_preserves_existing():
+    """
+    Test that router_settings_override does not override settings already in the request.
+    Request-level settings take precedence over key/team settings.
+    """
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "num_retries": 10,  # Request-level setting
+        "router_settings_override": {
+            "num_retries": 3,  # Key/team setting - should NOT override
+            "timeout": 30,  # Key/team setting - should be applied
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    # Request-level num_retries should take precedence
+    assert call_kwargs["num_retries"] == 10
+    # Key/team timeout should be applied since not in request
+    assert call_kwargs["timeout"] == 30

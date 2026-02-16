@@ -108,7 +108,7 @@
     {
       "name": "ipv6",
       "display_name": "IP Address (IPv6)",
-      "pattern": "\\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\\b",
+      "pattern": "(?<![0-9a-fA-F:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|::|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6})(?![0-9a-fA-F:])",
       "category": "Network Patterns",
       "description": "Detects IPv6 addresses"
     },
@@ -122,9 +122,9 @@
     {
       "name": "passport_us",
       "display_name": "Passport (US)",
-      "pattern": "\\b[0-9]{9}\\b",
+      "pattern": "\\b([A-Z][0-9]{8}|[0-9]{9})\\b",
       "category": "PII Patterns",
-      "description": "US passport numbers (9 digits)"
+      "description": "US passport numbers (9 digits or alphanumeric letter + 8 digits)"
     },
     {
       "name": "passport_uk",
@@ -157,9 +157,9 @@
     {
       "name": "passport_canada",
       "display_name": "Passport (Canada)",
-      "pattern": "\\b[A-Z]{2}[0-9]{6}\\b",
+      "pattern": "\\b([A-Z]{2}[0-9]{6}|[A-Z][0-9]{6}[A-Z]{2})\\b",
       "category": "PII Patterns",
-      "description": "Canadian passport numbers (2 letters + 6 digits)"
+      "description": "Canadian passport numbers (old: 2 letters + 6 digits; new: 1 letter + 6 digits + 2 letters)"
     },
     {
       "name": "passport_india",
@@ -367,6 +367,43 @@
       "pattern": "\\b\\d{1,2}\\.\\d{3}\\.\\d{3}-[\\dXx]\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian RG identity card numbers (common pattern for SP, RJ, MG states)"
+    },
+    {
+      "name": "au_tfn",
+      "display_name": "TFN (Australian Tax File Number)",
+      "pattern": "\\b\\d{8,9}\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Tax File Numbers (8-9 digits) only when near TFN/tax file context to avoid false positives on arbitrary numbers",
+      "keyword_pattern": "\\b(?:TFN|T\\.F\\.N\\.|tax\\s*file\\s*(?:number|no\\.?)|tax\\s*file\\s*#?|ATO\\s*number)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "au_abn",
+      "display_name": "ABN (Australian Business Number)",
+      "pattern": "\\b\\d{2}\\s?\\d{3}\\s?\\d{3}\\s?\\d{3}\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Business Numbers (11 digits, optional spaces: XX XXX XXX XXX)"
+    },
+    {
+      "name": "au_medicare",
+      "display_name": "Medicare Number (Australia)",
+      "pattern": "\\b(?:\\d{4}\\s?\\d{5}\\s?\\d{1}|\\d{11})\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Medicare numbers (formatted XXXX XXXXX X or 11 consecutive digits)"
+    },
+    {
+      "name": "iban",
+      "display_name": "IBAN (International Bank Account Number)",
+      "pattern": "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b",
+      "category": "Payment Card Patterns",
+      "description": "Detects IBANs (2 letter country code + 2 check digits + 4 char bank code + 7 digit base + optional 0-16 alphanumeric)"
+    },
+    {
+      "name": "street_address",
+      "display_name": "Street Address",
+      "pattern": "\\b\\d{1,6}\\s+[A-Za-z0-9][A-Za-z0-9\\s.'-]*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\\b",
+      "category": "PII Patterns",
+      "description": "Detects street addresses (number + street name + street type)"
     }
   ]
 }
