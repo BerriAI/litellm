@@ -287,7 +287,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
                 reasoning_item: Dict[str, Any] = {
                     "type": "reasoning",
-                    "role": "assistant",
                 }
 
                 # Only add summary if there's actual thinking text
@@ -307,7 +306,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
                 reasoning_item: Dict[str, Any] = {
                     "type": "reasoning",
-                    "role": "assistant",
                 }
 
                 # Preserve encrypted_content if present

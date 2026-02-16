@@ -47,7 +47,6 @@ def test_regular_thinking_block_conversion():
 
     reasoning_item = reasoning_items[0]
     assert reasoning_item["type"] == "reasoning"
-    assert reasoning_item["role"] == "assistant"
     assert "summary" in reasoning_item
     assert len(reasoning_item["summary"]) == 1
     assert reasoning_item["summary"][0]["type"] == "summary_text"
@@ -119,7 +118,6 @@ def test_redacted_thinking_block_conversion():
 
     reasoning_item = reasoning_items[0]
     assert reasoning_item["type"] == "reasoning"
-    assert reasoning_item["role"] == "assistant"
     assert "encrypted_content" in reasoning_item
     assert (
         reasoning_item["encrypted_content"] == encrypted_blob
@@ -371,7 +369,6 @@ def test_empty_thinking_text():
     reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
     assert len(reasoning_items) == 1, "Should create reasoning item even with empty text"
     assert reasoning_items[0]["type"] == "reasoning"
-    assert reasoning_items[0]["role"] == "assistant"
     # Empty thinking should not add summary
     assert "summary" not in reasoning_items[0], "Empty thinking should not have summary"
 
