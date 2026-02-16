@@ -1,6 +1,6 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Text } from "@tremor/react";
-import { Checkbox, InputNumber, Slider, Tooltip } from "antd";
+import { Checkbox, InputNumber, Popover, Slider, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 
 interface AdditionalModelSettingsProps {
@@ -69,17 +69,42 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
       </Checkbox>
 
       {onMockTestFallbacksChange && (
-        <Tooltip title="Causes the first request to fail so the router tries fallbacks (if configured). Use this to verify your fallback setup.">
-          <div className="flex items-center gap-1">
-            <Checkbox
-              checked={mockTestFallbacks ?? false}
-              onChange={(e) => onMockTestFallbacksChange(e.target.checked)}
-            >
-              <span className="font-medium">Simulate failure to test fallbacks</span>
-            </Checkbox>
-            <InfoCircleOutlined className="text-xs text-gray-400 cursor-help shrink-0" />
-          </div>
-        </Tooltip>
+        <div className="flex items-center gap-1">
+          <Checkbox
+            checked={mockTestFallbacks ?? false}
+            onChange={(e) => onMockTestFallbacksChange(e.target.checked)}
+          >
+            <span className="font-medium">Simulate failure to test fallbacks</span>
+          </Checkbox>
+          <Popover
+            trigger="hover"
+            placement="right"
+            content={
+              <div style={{ maxWidth: 340 }}>
+                <Typography.Paragraph className="text-sm" style={{ marginBottom: 8 }}>
+                  Causes the first request to fail so the router tries fallbacks (if configured). Use
+                  this to verify your fallback setup.
+                </Typography.Paragraph>
+                <Typography.Paragraph className="text-sm" style={{ marginBottom: 0 }}>
+                  Behavior can differ when keys, teams, or router settings are configured.{" "}
+                  <a
+                    href="https://docs.litellm.ai/docs/proxy/keys_teams_router_settings"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:text-blue-800"
+                  >
+                    Learn more
+                  </a>
+                </Typography.Paragraph>
+              </div>
+            }
+          >
+            <InfoCircleOutlined
+              className="text-xs text-gray-400 cursor-pointer shrink-0 hover:text-gray-600"
+              aria-label="Help: Simulate failure to test fallbacks"
+            />
+          </Popover>
+        </div>
       )}
 
       <div className="space-y-4 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
