@@ -1737,22 +1737,9 @@ class DBSpendUpdateWriter:
                 "agent_id is None for request. Skipping incrementing agent spend."
             )
             return
-        payload_with_agent_id = cast(
-            SpendLogsPayload,
-            {
-                **payload,
-                "agent_id": payload["agent_id"],
-            },
-        )
-        base_daily_transaction = (
-            await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload_with_agent_id, prisma_client, "agent"
-            )
-        )
-        if base_daily_transaction is None:
-            return
+
         endpoint_str = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyAgentSpendTransaction(
             agent_id=payload['agent_id'], **base_daily_transaction
         )

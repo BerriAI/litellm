@@ -791,6 +791,53 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_skips_when_a
 
 
 @pytest.mark.asyncio
+async def test_daily_agent_transaction_calls_common_helper_once():
+    """
+    Regression test for #21181: _common_add_spend_log_transaction_to_daily_transaction
+    should be called exactly once per request in the agent spend path, not twice.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-dedup",
+        "agent_id": "agent-dedup",
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "spend": 0.3,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_agent_spend_update_queue.add_update = AsyncMock()
+
+    with patch.object(
+        writer,
+        "_common_add_spend_log_transaction_to_daily_transaction",
+        wraps=writer._common_add_spend_log_transaction_to_daily_transaction,
+    ) as mock_common:
+        await writer.add_spend_log_transaction_to_daily_agent_transaction(
+            payload=payload,
+            prisma_client=mock_prisma,
+        )
+
+        # The common helper should be called exactly once, not twice
+        assert mock_common.call_count == 1, (
+            f"Expected _common_add_spend_log_transaction_to_daily_transaction to be "
+            f"called once, but it was called {mock_common.call_count} times"
+        )
+
+    # Verify the transaction was still queued correctly
+    writer.daily_agent_spend_update_queue.add_update.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_endpoint_field_is_correctly_mapped_from_call_type():
     """
     Test that the endpoint field is correctly mapped from call_type using ROUTE_ENDPOINT_MAPPING.
