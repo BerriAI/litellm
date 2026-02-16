@@ -5,10 +5,9 @@ This test file verifies that Pydantic models with various constraints
 are properly converted to Anthropic-compatible JSON schemas.
 """
 
-from typing import List
-
 import pytest
 from pydantic import BaseModel, Field
+from typing import List
 
 
 class TestAnthropicStructuredOutput:
@@ -24,7 +23,7 @@ class TestAnthropicStructuredOutput:
         Related issue: https://github.com/BerriAI/litellm/issues/19444
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-
+        
         # Define a Pydantic model with max_length on a List field
         class ResponseModel(BaseModel):
             items: List[str] = Field(max_length=5, description="List of items")
@@ -131,12 +130,10 @@ class TestAnthropicStructuredOutput:
 
     def test_other_constraints_preserved(self):
         """
-        Test that string and numeric constraints are moved to description.
+        Test that constraints are properly handled (removed from schema, added to description).
 
-        Anthropic's output_format API doesn't support minLength/maxLength for
-        strings or minimum/maximum for numbers. Per Anthropic's SDK approach,
-        these constraints are removed from the schema and added to the
-        description text instead.
+        Per Anthropic API requirements, constraints like minLength/maxLength and
+        minimum/maximum must be removed from the schema but documented in descriptions.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
@@ -150,7 +147,7 @@ class TestAnthropicStructuredOutput:
 
         response_format = {
             "type": "json_schema",
-            "json_schema": json_schema["json_schema"],
+            "json_schema": json_schema["json_schema"]
         }
 
         output_format = config.map_response_format_to_anthropic_output_format(
@@ -160,16 +157,20 @@ class TestAnthropicStructuredOutput:
         assert output_format is not None
         transformed_schema = output_format["schema"]
 
-        # String constraints moved to description (not preserved in schema)
+        # String constraints should be REMOVED from schema (Anthropic doesn't support them)
         name_schema = transformed_schema["properties"]["name"]
         assert "maxLength" not in name_schema
         assert "minLength" not in name_schema
-        assert "maximum length: 100" in name_schema["description"]
+        # But constraint info should be added to description
+        assert "description" in name_schema
         assert "minimum length: 1" in name_schema["description"]
+        assert "maximum length: 100" in name_schema["description"]
 
-        # Number constraints moved to description (not preserved in schema)
+        # Number constraints should be REMOVED from schema (Anthropic doesn't support them)
         age_schema = transformed_schema["properties"]["age"]
         assert "minimum" not in age_schema
         assert "maximum" not in age_schema
+        # But constraint info should be added to description
+        assert "description" in age_schema
         assert "minimum value: 0" in age_schema["description"]
         assert "maximum value: 150" in age_schema["description"]

@@ -2934,3 +2934,47 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
     finally:
         # Restore original modify_params setting
         litellm.modify_params = original_modify_params
+
+
+class TestBedrockMinThinkingBudgetTokens:
+    """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
+
+    def _map_params(
+        self, thinking_value, model="anthropic.claude-3-7-sonnet-20250219-v1:0"
+    ):
+        """Helper to call map_openai_params with the given thinking value."""
+        config = AmazonConverseConfig()
+        non_default_params = {"thinking": thinking_value}
+        optional_params = {"thinking": thinking_value}
+        return config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+
+    def test_budget_tokens_below_minimum_is_clamped(self):
+        """budget_tokens < 1024 should be clamped to 1024."""
+        result = self._map_params({"type": "enabled", "budget_tokens": 499})
+        assert result["thinking"]["budget_tokens"] == 1024
+
+    def test_budget_tokens_at_minimum_is_unchanged(self):
+        """budget_tokens == 1024 should remain 1024."""
+        result = self._map_params({"type": "enabled", "budget_tokens": 1024})
+        assert result["thinking"]["budget_tokens"] == 1024
+
+    def test_budget_tokens_above_minimum_is_unchanged(self):
+        """budget_tokens > 1024 should remain unchanged."""
+        result = self._map_params({"type": "enabled", "budget_tokens": 2048})
+        assert result["thinking"]["budget_tokens"] == 2048
+
+    def test_no_thinking_param_does_not_error(self):
+        """When thinking is not provided, map_openai_params should not raise."""
+        config = AmazonConverseConfig()
+        result = config.map_openai_params(
+            non_default_params={},
+            optional_params={},
+            model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+            drop_params=False,
+        )
+        assert "thinking" not in result or result.get("thinking") is None
