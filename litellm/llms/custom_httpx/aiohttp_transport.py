@@ -119,8 +119,9 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
 
 
 class AiohttpTransport(httpx.AsyncBaseTransport):
-    def __init__(self, client: Union[ClientSession, Callable[[], ClientSession]]) -> None:
+    def __init__(self, client: Union[ClientSession, Callable[[], ClientSession]], _owns_session: bool = True) -> None:
         self.client = client
+        self._owns_session = _owns_session
 
         #########################################################
         # Class variables for proxy settings
@@ -128,7 +129,7 @@ class AiohttpTransport(httpx.AsyncBaseTransport):
         self.proxy_cache: Dict[str, Optional[str]] = {}
 
     async def aclose(self) -> None:
-        if isinstance(self.client, ClientSession):
+        if self._owns_session and isinstance(self.client, ClientSession):
             await self.client.close()
 
 
@@ -147,7 +148,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     ):
         self.client = client
         self._ssl_verify = ssl_verify  # Store for per-request SSL override
-        super().__init__(client=client)
+        # If a pre-existing ClientSession is passed in, we don't own it
+        # and should not close it. If a factory is passed, we own sessions
+        # we create from it.
+        owns_session = not isinstance(client, ClientSession)
+        super().__init__(client=client, _owns_session=owns_session)
         # Store the client factory for recreating sessions when needed
         if callable(client):
             self._client_factory = client
@@ -167,6 +172,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            self._owns_session = True  # We created this session, so we own it
             # Don't return yet - check if the newly created session is valid
 
         # Check if the session itself is closed
@@ -177,6 +183,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            self._owns_session = True  # We created this session, so we own it
             return self.client
 
         # Check if the existing session is still valid for the current event loop
@@ -186,23 +193,25 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
             # If session is from a different or closed loop, recreate it
             if session_loop is None or session_loop != current_loop or session_loop.is_closed():
-                # Close old session to prevent leaks
+                # Close old session to prevent leaks (only if we own it)
                 old_session = self.client
-                try:
-                    if not old_session.closed:
-                        try:
-                            asyncio.create_task(old_session.close())
-                        except RuntimeError:
-                            # Different event loop - can't schedule task, rely on GC
-                            verbose_logger.debug("Old session from different loop, relying on GC")
-                except Exception as e:
-                    verbose_logger.debug(f"Error closing old session: {e}")
+                if self._owns_session:
+                    try:
+                        if not old_session.closed:
+                            try:
+                                asyncio.create_task(old_session.close())
+                            except RuntimeError:
+                                # Different event loop - can't schedule task, rely on GC
+                                verbose_logger.debug("Old session from different loop, relying on GC")
+                    except Exception as e:
+                        verbose_logger.debug(f"Error closing old session: {e}")
 
                 # Create a new session in the current event loop
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
                 else:
                     self.client = ClientSession()
+                self._owns_session = True  # We created this session, so we own it
 
         except (RuntimeError, AttributeError):
             # If we can't check the loop or session is invalid, recreate it
@@ -210,6 +219,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            self._owns_session = True  # We created this session, so we own it
 
         return self.client
 
@@ -305,6 +315,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     self.client = self._client_factory()
                 else:
                     self.client = ClientSession()
+                self._owns_session = True  # We created this session, so we own it
                 client_session = self.client
 
                 # Retry the request with the new session

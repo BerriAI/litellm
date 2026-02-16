@@ -396,12 +396,12 @@ async def test_handle_async_request_streaming_does_not_timeout_on_total_duration
         # but each chunk arrives quickly
         response = web.StreamResponse()
         await response.prepare(request)
-        
+
         # Send 5 chunks over 0.5 seconds total (0.1s between chunks)
         for i in range(5):
             await asyncio.sleep(0.05)  # Less than sock_read timeout
             await response.write(f"chunk{i}\n".encode())
-        
+
         await response.write_eof()
         return response
 
@@ -436,12 +436,12 @@ async def test_handle_async_request_streaming_does_not_timeout_on_total_duration
         # This should succeed without timing out
         response = await transport.handle_async_request(request)
         assert response.status_code == 200
-        
+
         # Read the streaming response
         chunks = []
         async for chunk in response.aiter_bytes():
             chunks.append(chunk)
-        
+
         # Verify we got all chunks
         full_response = b"".join(chunks).decode()
         assert "chunk0" in full_response
@@ -512,3 +512,43 @@ async def test_handle_session_closed_during_request():
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_shared_session_not_closed_by_transport():
+    """Test that aclose() does NOT close a shared ClientSession passed to the transport (#21116)."""
+    import aiohttp
+
+    shared_session = aiohttp.ClientSession()
+    try:
+        transport = LiteLLMAiohttpTransport(client=shared_session)
+
+        # Transport should not own the session
+        assert transport._owns_session is False
+
+        # aclose() should NOT close the shared session
+        await transport.aclose()
+        assert not shared_session.closed, "Transport should not close a shared ClientSession it does not own"
+    finally:
+        await shared_session.close()
+
+
+@pytest.mark.asyncio
+async def test_factory_created_session_closed_by_transport():
+    """Test that aclose() DOES close a session created from a factory."""
+    import aiohttp
+
+    def factory():
+        return aiohttp.ClientSession()
+
+    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
+
+    # Transport should own sessions it creates
+    assert transport._owns_session is True
+
+    # Force session creation
+    session = transport._get_valid_client_session()
+
+    # aclose() should close the session we created
+    await transport.aclose()
+    assert session.closed, "Transport should close a session it created from a factory"
