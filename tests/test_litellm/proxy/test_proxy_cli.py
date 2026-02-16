@@ -615,3 +615,67 @@ class TestHealthAppFactory:
 
             assert result.exit_code == 0
             mock_setup_database.assert_called_with(use_migrate=False)
+
+    @patch("subprocess.run")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    @patch("sys.exit")
+    @patch.dict(
+        os.environ, {"DATABASE_URL": "postgresql://test:test@localhost:5432/test"}
+    )
+    def test_proxy_exits_when_migrations_fail(
+        self,
+        mock_exit,
+        mock_should_update_schema,
+        mock_setup_database,
+        mock_subprocess_run,
+    ):
+        """Test that proxy exits with code 1 when database migrations fail"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        # Mock subprocess.run to simulate prisma being available
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        # Mock should_update_prisma_schema to return True (so setup_database gets called)
+        mock_should_update_schema.return_value = True
+
+        # Mock setup_database to return False (migration failure)
+        mock_setup_database.return_value = False
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            # Invoke run_server with skip_server_startup to avoid starting uvicorn
+            result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
+
+            # Assert that setup_database was called
+            mock_setup_database.assert_called_once()
+
+            # Assert that sys.exit(1) was called due to migration failure
+            # Note: Click may also call sys.exit(0), so we check that exit(1) was called
+            mock_exit.assert_any_call(1)
