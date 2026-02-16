@@ -1539,6 +1539,9 @@ def move_guardrails_to_metadata(
                     if isinstance(_dep_guardrails, list):
                         _all_deployment_guardrails.update(_dep_guardrails)
                 if _all_deployment_guardrails:
+                    from litellm.proxy.utils import _premium_user_check
+
+                    _premium_user_check()
                     if _metadata_variable_name not in data:
                         data[_metadata_variable_name] = {}
                     _existing = data[_metadata_variable_name].get("guardrails", [])

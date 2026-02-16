@@ -1634,8 +1634,8 @@ class TestMoveGuardrailsFromModelDeployment:
         ]
 
         with patch(
-            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
-        ):
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch("litellm.proxy.utils._premium_user_check"):
             move_guardrails_to_metadata(
                 data=data,
                 _metadata_variable_name="metadata",
@@ -1674,8 +1674,8 @@ class TestMoveGuardrailsFromModelDeployment:
         ]
 
         with patch(
-            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
-        ):
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch("litellm.proxy.utils._premium_user_check"):
             move_guardrails_to_metadata(
                 data=data,
                 _metadata_variable_name="metadata",
@@ -1712,7 +1712,7 @@ class TestMoveGuardrailsFromModelDeployment:
         ]
 
         with patch(
-            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
+            "litellm.proxy.proxy_server.llm_router", mock_router
         ):
             move_guardrails_to_metadata(
                 data=data,
@@ -1739,7 +1739,7 @@ class TestMoveGuardrailsFromModelDeployment:
         user_api_key_dict = UserAPIKeyAuth(api_key="test-key", metadata={})
 
         with patch(
-            "litellm.proxy.litellm_pre_call_utils.llm_router", None
+            "litellm.proxy.proxy_server.llm_router", None
         ):
             move_guardrails_to_metadata(
                 data=data,
@@ -1793,8 +1793,8 @@ class TestMoveGuardrailsFromModelDeployment:
         ]
 
         with patch(
-            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
-        ):
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch("litellm.proxy.utils._premium_user_check"):
             move_guardrails_to_metadata(
                 data=data,
                 _metadata_variable_name="metadata",
