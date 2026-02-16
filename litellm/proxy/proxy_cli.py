@@ -803,7 +803,10 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
+                    success = PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
+                    if not success:
+                        print("CRITICAL: Database migrations failed. Proxy cannot start.")  # noqa: T201
+                        sys.exit(1)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
