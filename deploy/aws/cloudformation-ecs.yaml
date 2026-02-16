@@ -80,6 +80,18 @@ Parameters:
     Default: 8192
     AllowedValues: [512, 1024, 2048, 4096, 8192, 16384]
 
+  DBInstanceClass:
+    Description: RDS instance class (benchmark recommends db.r6g.xlarge for 1-2K RPS)
+    Type: String
+    Default: db.r6g.xlarge
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.r6g.large
+      - db.r6g.xlarge
+      - db.r6g.2xlarge
+
 Resources:
   # VPC Configuration
   VPC:
@@ -283,9 +295,11 @@ Resources:
       DBInstanceIdentifier: !Sub ${AWS::StackName}-litellm-db
       Engine: postgres
       EngineVersion: '16.3'
-      DBInstanceClass: db.t3.medium
-      AllocatedStorage: 100
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: 200
       StorageType: gp3
+      Iops: 3000
+      StorageThroughput: 125
       DBName: litellm
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
@@ -392,14 +406,15 @@ Resources:
         model_list:
           - model_name: fake-openai-endpoint
             litellm_params:
-              model: openai/fake
-              api_key: fake-key
+              model: openai/any
+              api_key: test
               api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
         general_settings:
           master_key: os.environ/PROXY_MASTER_KEY
           database_url: os.environ/DATABASE_URL
           store_model_in_db: true
+          proxy_batch_write_at: 60
 
   # ECS Task Definition
   TaskDefinition:

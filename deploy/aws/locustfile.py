@@ -31,8 +31,8 @@ class LiteLLMUser(HttpUser):
     Simulates a user making requests to LiteLLM proxy server.
     """
 
-    # Wait time between tasks (benchmark uses continuous load)
-    wait_time = between(0.1, 0.5)
+    # Wait time between tasks (benchmark guide specifies 0.5-1 second)
+    wait_time = between(0.5, 1)
 
     def on_start(self):
         """
