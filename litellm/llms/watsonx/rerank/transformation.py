@@ -118,9 +118,13 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                 elif k == "max_tokens_per_doc" and v is not None:
                     optional_rerank_params.setdefault("parameters", {})["truncate_input_tokens"] = v
 
-        return dict(
-            OptionalRerankParams(**optional_rerank_params)
-        )
+                # IBM watsonx.ai require one of below parameters
+                elif k == "project_id" and v is not None:
+                    optional_rerank_params["project_id"] = v
+                elif k == "space_id" and v is not None:
+                    optional_rerank_params["space_id"] = v
+
+        return dict(OptionalRerankParams(**optional_rerank_params))
 
     def transform_rerank_request(
         self,
