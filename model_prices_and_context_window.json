@@ -25884,6 +25884,9 @@
         "mode": "chat",
         "output_cost_per_token": 7e-06,
         "source": "https://cloud.sambanova.ai/plans/pricing",
+        "supports_response_schema": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
         "supports_reasoning": true
     },
     "sambanova/DeepSeek-R1-Distill-Llama-70B": {
