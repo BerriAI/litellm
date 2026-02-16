@@ -2619,6 +2619,8 @@ def test_empty_assistant_message_handling():
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
+    # Import the litellm module that factory.py uses to ensure we patch the correct reference
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -2627,11 +2629,9 @@ def test_empty_assistant_message_handling():
         {"role": "user", "content": "How are you?"}
     ]
 
-    # Enable modify_params to prevent consecutive user message merging
-    original_modify_params = litellm.modify_params
-    litellm.modify_params = True
-
-    try:
+    # Use patch to ensure we modify the litellm reference that factory.py actually uses
+    # This avoids issues with module reloading during parallel test execution
+    with patch.object(factory_module.litellm, "modify_params", True):
         result = _bedrock_converse_messages_pt(
             messages=messages,
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2645,6 +2645,7 @@ def test_empty_assistant_message_handling():
         assert result[2]["role"] == "user"
 
         # Assistant message should have placeholder text instead of empty content
+        # When modify_params=True, empty assistant messages get replaced with DEFAULT_ASSISTANT_CONTINUE_MESSAGE
         assert len(result[1]["content"]) == 1
         assert result[1]["content"][0]["text"] == "Please continue."
 
@@ -2698,10 +2699,6 @@ def test_empty_assistant_message_handling():
         # Assistant message should keep original content
         assert len(result[1]["content"]) == 1
         assert result[1]["content"][0]["text"] == "I'm doing well, thank you!"
-
-    finally:
-        # Restore original modify_params setting
-        litellm.modify_params = original_modify_params
 
 
 def test_is_nova_lite_2_model():

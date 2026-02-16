@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -381,6 +381,17 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"][field_name] = _value
         else:
             updated_kv["metadata"] = {field_name: _value}
+
+
+def _has_non_empty_value(value: Any) -> bool:
+    """Check if a value has real content (not None, not empty list, not blank string)."""
+    if value is None:
+        return False
+    if isinstance(value, list) and len(value) == 0:
+        return False
+    if isinstance(value, str) and value.strip() == "":
+        return False
+    return True
 
 
 def _update_metadata_fields(updated_kv: dict) -> None:

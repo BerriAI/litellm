@@ -1406,7 +1406,7 @@ def client(original_function):  # noqa: PLR0915
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
                 # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = kwargs.get("metadata", {}).get(
+                previous_models = (kwargs.get("metadata") or {}).get(
                     "previous_models", None
                 )
                 if previous_models is not None:
@@ -1483,7 +1483,7 @@ def client(original_function):  # noqa: PLR0915
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
                 # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = kwargs.get("metadata", {}).get(
+                previous_models = (kwargs.get("metadata") or {}).get(
                     "previous_models", None
                 )
                 if previous_models is not None:
@@ -1678,8 +1678,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1724,8 +1724,8 @@ def client(original_function):  # noqa: PLR0915
                     None  # set retries to None to prevent infinite loops
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1974,8 +1974,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -2008,8 +2008,8 @@ def client(original_function):  # noqa: PLR0915
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
             elif call_type == CallTypes.aresponses.value:
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -7337,7 +7337,7 @@ def _get_base_model_from_metadata(model_call_details=None):
         _base_model = litellm_params.get("base_model", None)
         if _base_model is not None:
             return _base_model
-        metadata = litellm_params.get("metadata", {})
+        metadata = litellm_params.get("metadata") or {}
 
         _get_base_model_from_litellm_call_metadata = getattr(
             sys.modules[__name__], "_get_base_model_from_litellm_call_metadata"

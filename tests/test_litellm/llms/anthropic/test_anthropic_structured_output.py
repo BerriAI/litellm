@@ -130,40 +130,47 @@ class TestAnthropicStructuredOutput:
 
     def test_other_constraints_preserved(self):
         """
-        Test that other valid constraints are preserved.
+        Test that constraints are properly handled (removed from schema, added to description).
+
+        Per Anthropic API requirements, constraints like minLength/maxLength and
+        minimum/maximum must be removed from the schema but documented in descriptions.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-        
+
         class ResponseModel(BaseModel):
             name: str = Field(max_length=100, min_length=1, description="Name")
             age: int = Field(ge=0, le=150, description="Age")
             items: List[str] = Field(description="Items list")
-        
+
         config = AnthropicConfig()
         json_schema = config.get_json_schema_from_pydantic_object(ResponseModel)
-        
+
         response_format = {
             "type": "json_schema",
             "json_schema": json_schema["json_schema"]
         }
-        
+
         output_format = config.map_response_format_to_anthropic_output_format(
             response_format
         )
-        
+
         assert output_format is not None
         transformed_schema = output_format["schema"]
-        
-        # String constraints should be preserved
+
+        # String constraints should be REMOVED from schema (Anthropic doesn't support them)
         name_schema = transformed_schema["properties"]["name"]
-        assert "maxLength" in name_schema
-        assert "minLength" in name_schema
-        assert name_schema["maxLength"] == 100
-        assert name_schema["minLength"] == 1
-        
-        # Number constraints should be preserved
+        assert "maxLength" not in name_schema
+        assert "minLength" not in name_schema
+        # But constraint info should be added to description
+        assert "description" in name_schema
+        assert "minimum length: 1" in name_schema["description"]
+        assert "maximum length: 100" in name_schema["description"]
+
+        # Number constraints should be REMOVED from schema (Anthropic doesn't support them)
         age_schema = transformed_schema["properties"]["age"]
-        assert "minimum" in age_schema
-        assert "maximum" in age_schema
-        assert age_schema["minimum"] == 0
-        assert age_schema["maximum"] == 150
+        assert "minimum" not in age_schema
+        assert "maximum" not in age_schema
+        # But constraint info should be added to description
+        assert "description" in age_schema
+        assert "minimum value: 0" in age_schema["description"]
+        assert "maximum value: 150" in age_schema["description"]

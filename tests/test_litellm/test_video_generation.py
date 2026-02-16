@@ -797,25 +797,24 @@ def test_openai_transform_video_content_request_empty_params():
 
 def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.router import GenericLiteLLMParams
 
     handler = BaseLLMHTTPHandler()
     config = OpenAIVideoConfig()
 
-    mock_client = MagicMock()
+    # Use spec=HTTPHandler so isinstance(mock_client, HTTPHandler) returns True,
+    # ensuring the handler uses our mock directly instead of creating a new client.
+    mock_client = MagicMock(spec=HTTPHandler)
     mock_response = MagicMock()
     mock_response.content = b"mp4-bytes"
     mock_client.get.return_value = mock_response
 
-    # Patch both where _get_httpx_client is used and where it is defined so the mock
-    # is used regardless of import order / CI environment
-    with patch(
-        "litellm.llms.custom_httpx.http_handler._get_httpx_client",
-        return_value=mock_client,
-    ), patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
-        return_value=mock_client,
-    ):
+    # Patch _get_httpx_client to ensure no real HTTP client is created
+    # This prevents test isolation issues where isinstance check might fail
+    with patch('litellm.llms.custom_httpx.llm_http_handler._get_httpx_client') as mock_get_client:
+        mock_get_client.return_value = mock_client
+
         result = handler.video_content_handler(
             video_id="video_abc",
             video_content_provider_config=config,
@@ -824,6 +823,7 @@ def test_video_content_handler_uses_get_for_openai():
             logging_obj=MagicMock(),
             timeout=5.0,
             api_key="sk-test",
+            client=mock_client,
             _is_async=False,
         )
 

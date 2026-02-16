@@ -89,6 +89,17 @@ vi.mock("@/components/team/member_permissions", () => ({
   default: vi.fn(() => <div>Member Permissions</div>),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Group 1" },
+      { access_group_id: "ag-2", access_group_name: "Group 2" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -667,6 +678,52 @@ describe("TeamInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText(/Soft Budget Alerting Emails:/)).toBeInTheDocument();
       expect(screen.getByText(/alert1@test\.com, alert2@test\.com/)).toBeInTheDocument();
+    });
+  });
+
+  it("should pass access_group_ids to teamUpdateCall when saving team settings", async () => {
+    const user = userEvent.setup();
+    const accessGroupIds = ["ag-1", "ag-2"];
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        access_group_ids: accessGroupIds,
+        models: ["gpt-4"],
+      })
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const settingsTab = screen.getByRole("tab", { name: "Settings" });
+    await user.click(settingsTab);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
+    await user.click(editButton);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+    });
+
+    const saveButton = screen.getByRole("button", { name: /save changes/i });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          access_group_ids: accessGroupIds,
+          team_id: "123",
+        })
+      );
     });
   });
 });

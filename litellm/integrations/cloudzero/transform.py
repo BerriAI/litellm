@@ -141,7 +141,7 @@ class CBFTransformer:
             # Required CBF fields
             'time/usage_start': usage_date.isoformat() if usage_date else None,  # Required: ISO-formatted UTC datetime
             'cost/cost': float(row.get('spend', 0.0)),  # Required: billed cost
-            'resource/id': model,  # Send model name
+            'resource/id': resource_id,  # CZRN (CloudZero Resource Name)
 
             # Usage metrics for token consumption
             'usage/amount': total_tokens,  # Numeric value of tokens consumed

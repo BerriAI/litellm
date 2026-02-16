@@ -21,6 +21,9 @@ from litellm.types.integrations.langfuse import *
 
 class TestLangfuseUsageDetails(unittest.TestCase):
     def setUp(self):
+        # Save global Langfuse client counter to restore after test
+        self._original_langfuse_clients_count = litellm.initialized_langfuse_clients
+
         # Set up environment variables for testing
         self.env_patcher = patch.dict(
             "os.environ",
@@ -39,7 +42,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
         self.mock_langfuse_generation.trace_id = "test-trace-id"
-        
+
         # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
         self.mock_langfuse_span = MagicMock()
         self.mock_langfuse_span.end = MagicMock()
@@ -76,9 +79,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         sys.modules["langfuse"] = self.mock_langfuse
         sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
 
-        # Create the logger
+        # Create a fresh logger instance for each test
         self.logger = LangFuseLogger()
-        
+
         # Explicitly set the Langfuse client to our mock
         self.logger.Langfuse = self.mock_langfuse_client
         # Ensure langfuse_sdk_version is set correctly for _supports_* methods
@@ -109,7 +112,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 response_obj=response_obj,
                 level=level,
                 litellm_call_id=kwargs.get("litellm_call_id", None),
-                print_verbose=True,  # Add the missing parameter
             )
 
         # Bind the method to the instance
@@ -124,8 +126,18 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.logger._is_langfuse_v2 = types.MethodType(mock_is_langfuse_v2, self.logger)
 
     def tearDown(self):
+        # Clean up logger instance to prevent state leakage
+        if hasattr(self, 'logger'):
+            # Reset logger's Langfuse client to break any references
+            self.logger.Langfuse = None
+            # Delete logger instance to ensure complete cleanup
+            del self.logger
+
+        # Restore global Langfuse client counter to prevent cross-test pollution
+        litellm.initialized_langfuse_clients = self._original_langfuse_clients_count
+
         self.env_patcher.stop()
-        self.langfuse_module_patcher.stop()
+        self.langfuse_module_patcher.stop()  # patch.dict automatically restores sys.modules
 
     def test_langfuse_usage_details_type(self):
         """Test that LangfuseUsageDetails TypedDict is properly defined with the correct fields"""

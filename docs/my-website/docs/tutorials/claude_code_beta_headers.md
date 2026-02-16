@@ -92,9 +92,34 @@ Open `anthropic_beta_headers_config.json` and add the new header to each provide
 - **Header transformations**: Some providers use different header names (e.g., Bedrock maps `advanced-tool-use-2025-11-20` to `tool-search-tool-2025-10-19`)
 - **Alphabetical order**: Keep headers sorted alphabetically for maintainability
 
-### Step 3: Restart Your Application
+### Step 3: Reload Configuration (No Restart Required!)
 
-After updating the config file, restart your LiteLLM proxy or application:
+**Option 1: Dynamic Reload Without Restart** 
+
+Instead of restarting your application, you can dynamically reload the beta headers configuration using environment variables and API endpoints:
+
+```bash
+# Set environment variable to fetch from remote URL (Do this if you want to point it to some other URL)
+export LITELLM_ANTHROPIC_BETA_HEADERS_URL="https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json"
+
+# Manually trigger reload via API (no restart needed!)
+curl -X POST "https://your-proxy-url/reload/anthropic_beta_headers" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+```
+
+**Option 2: Schedule Automatic Reloads** 
+
+Set up automatic reloading to always stay up-to-date with the latest beta headers:
+
+```bash
+# Reload configuration every 24 hours
+curl -X POST "https://your-proxy-url/schedule/anthropic_beta_headers_reload?hours=24" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+```
+
+**Option 3: Traditional Restart**
+
+If you prefer the traditional approach, restart your LiteLLM proxy or application:
 
 ```bash
 # If using LiteLLM proxy
@@ -104,7 +129,11 @@ litellm --config config.yaml
 # Just restart your Python application
 ```
 
-The updated configuration will be loaded automatically.
+:::tip Zero-Downtime Updates
+With dynamic reloading, you can fix invalid beta header errors **without restarting your service**! This is especially useful in production environments where downtime is costly.
+
+See [Auto Sync Anthropic Beta Headers](../proxy/sync_anthropic_beta_headers.md) for complete documentation.
+:::
 
 ## Fixing Invalid Beta Header Errors
 
@@ -215,6 +244,26 @@ Result sent to Bedrock:
 anthropic-beta: computer-use-2025-01-24
 ```
 
+## Dynamic Configuration Management (No Restart Required!)
+
+### Environment Variables
+
+Control how LiteLLM loads the beta headers configuration:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LITELLM_ANTHROPIC_BETA_HEADERS_URL` | URL to fetch config from | GitHub main branch |
+| `LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS` | Set to `True` to use local config only | `False` |
+
+**Example: Use Custom Config URL**
+```bash
+export LITELLM_ANTHROPIC_BETA_HEADERS_URL="https://your-company.com/custom-beta-headers.json"
+```
+
+**Example: Use Local Config Only (No Remote Fetching)**
+```bash
+export LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True
+```
 ## Provider-Specific Notes
 
 ### Bedrock
