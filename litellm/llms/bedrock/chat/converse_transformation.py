@@ -1044,6 +1044,19 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params
         )
 
+        # Filter out known OpenAI/LiteLLM params that aren't supported by Bedrock
+        # These should never be in additionalModelRequestFields
+        from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+        known_openai_litellm_params = set(
+            DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()
+        )
+        additional_request_params = {
+            k: v
+            for k, v in additional_request_params.items()
+            if k not in known_openai_litellm_params
+        }
+
         return inference_params, additional_request_params, request_metadata
 
     def _process_tools_and_beta(

@@ -2934,3 +2934,42 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
     finally:
         # Restore original modify_params setting
         litellm.modify_params = original_modify_params
+
+
+def test_additional_request_params_filters_openai_only_params():
+    """Test that known OpenAI/LiteLLM params (store, logit_bias, n, etc.)
+    do NOT leak into additionalModelRequestFields, while legitimate
+    model-specific params still pass through."""
+    config = AmazonConverseConfig()
+    system_content_blocks = []
+    optional_params = {
+        # OpenAI-only params that should be filtered out
+        "store": True,
+        "logit_bias": {123: 1},
+        "n": 2,
+        # Legitimate model-specific param that should pass through
+        "some_model_specific_param": "value123",
+    }
+    data = config._transform_request_helper(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        system_content_blocks=system_content_blocks,
+        optional_params=optional_params,
+        messages=None,
+    )
+    additional_fields = data.get("additionalModelRequestFields", {})
+
+    # OpenAI-only params must NOT be present
+    assert "store" not in additional_fields, (
+        "store should not leak into additionalModelRequestFields"
+    )
+    assert "logit_bias" not in additional_fields, (
+        "logit_bias should not leak into additionalModelRequestFields"
+    )
+    assert "n" not in additional_fields, (
+        "n should not leak into additionalModelRequestFields"
+    )
+
+    # Legitimate model-specific param should still pass through
+    assert additional_fields.get("some_model_specific_param") == "value123", (
+        "Model-specific params should still be in additionalModelRequestFields"
+    )
