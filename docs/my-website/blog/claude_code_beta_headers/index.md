@@ -1,7 +1,7 @@
 ---
 slug: claude_code_beta_headers
 title: "Claude Code - Managing Anthropic Beta Headers"
-date: 2026-02-05T10:00:00
+date: 2026-02-16T10:00:00
 authors:
   - name: Sameer Kankute
     title: SWE @ LiteLLM (LLM Translation)
