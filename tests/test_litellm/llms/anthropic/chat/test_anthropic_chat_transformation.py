@@ -2752,3 +2752,67 @@ def test_fast_mode_parameter_mapping():
     
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_response_format_uses_supports_response_schema():
+    """
+    Test that response_format mapping uses supports_response_schema from model_cost
+    instead of hardcoded model name patterns.
+    
+    This test verifies that:
+    1. Models with supports_response_schema=True use native output_format
+    2. Models without it fall back to tool-based approach
+    """
+    from unittest.mock import patch
+
+    import litellm
+    
+    config = AnthropicConfig()
+    
+    # Test with a model that supports response_schema (claude-sonnet-4-5)
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+                "required": ["result"]
+            }
+        }
+    }
+    
+    non_default_params = {"response_format": response_format}
+    optional_params = {}
+    
+    # Test with claude-sonnet-4-5 (supports response_schema)
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False
+    )
+    
+    # Should use native output_format
+    assert "output_format" in result
+    assert result["output_format"]["type"] == "json_schema"
+    assert result["json_mode"] is True
+    
+    # Test with a hypothetical model that doesn't support response_schema
+    # Mock supports_response_schema to return False for this test
+    with patch('litellm.llms.anthropic.chat.transformation.supports_response_schema') as mock_supports:
+        mock_supports.return_value = False
+        
+        optional_params_no_support = {}
+        result_no_support = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params_no_support,
+            model="claude-hypothetical-model",
+            drop_params=False
+        )
+        
+        # Should use tool-based approach instead
+        assert "tools" in result_no_support
+        assert result_no_support["json_mode"] is True
+        # Should NOT have output_format for models that don't support it
+        assert "output_format" not in result_no_support
