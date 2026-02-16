@@ -1896,9 +1896,16 @@ def batch_cost_calculator(
     usage: Usage,
     model: str,
     custom_llm_provider: Optional[str] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> Tuple[float, float]:
     """
-    Calculate the cost of a batch job
+    Calculate the cost of a batch job.
+
+    Args:
+        model_info: Optional deployment-level model info containing custom
+            batch pricing (e.g. input_cost_per_token_batches). When provided,
+            skips the global litellm.get_model_info() lookup so that
+            deployment-specific pricing is used.
     """
 
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1911,12 +1918,13 @@ def batch_cost_calculator(
         custom_llm_provider,
     )
 
-    try:
-        model_info: Optional[ModelInfo] = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-    except Exception:
-        model_info = None
+    if model_info is None:
+        try:
+            model_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception:
+            model_info = None
 
     if not model_info:
         return 0.0, 0.0
