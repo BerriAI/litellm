@@ -2,19 +2,18 @@
 
 This directory contains 1-click deployment templates for deploying LiteLLM on AWS, configured to match the [benchmark specifications](https://docs.litellm.ai/docs/benchmarks) for optimal performance.
 
-## ⚠️ Known Limitation
+## ✅ Full Benchmark Support
 
-**The current deployment cannot run the full benchmark test.** The CloudFormation template does not configure the `fake-openai-endpoint` model required for benchmark testing. This means:
+The deployment now includes complete model configuration for running the official [LiteLLM benchmarks](https://docs.litellm.ai/docs/benchmarks). The `fake-openai-endpoint` model is pre-configured and ready to use.
 
-- ❌ Cannot run Locust benchmark tests as documented
-- ❌ Cannot measure actual API latency and throughput
-- ❌ Cannot measure LiteLLM overhead
-- ✅ Can deploy infrastructure matching benchmark specs
-- ✅ Can verify resource allocation and health
+**What's included:**
+- ✅ Pre-configured fake-openai-endpoint model for testing
+- ✅ SSM Parameter Store integration for config management
+- ✅ Automatic config fetching at container startup
+- ✅ Ready for Locust benchmark tests (1,000 users, 5 minutes)
+- ✅ LiteLLM overhead measurement via response headers
 
-**See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for details and potential fixes.**
-
-To run the actual benchmark, you'll need to manually configure models or update the template to mount a config file with the model list. The infrastructure deployment is production-ready, but model configuration is required for API functionality.
+**Previous limitation:** Earlier versions required manual model configuration. This has been resolved. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for historical context.
 
 ## Benchmark Performance Targets
 

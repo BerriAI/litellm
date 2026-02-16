@@ -354,6 +354,17 @@ Resources:
             Principal:
               Service: ecs-tasks.amazonaws.com
             Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: SSMConfigAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                  - 'ssm:GetParameters'
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/litellm-config'
 
   # Secrets Manager for sensitive data
   DBPasswordSecret:
@@ -369,6 +380,26 @@ Resources:
       Name: !Sub ${AWS::StackName}-master-key
       Description: LiteLLM Proxy Master Key
       SecretString: !Ref MasterKey
+
+  # LiteLLM Configuration Parameter
+  LiteLLMConfigParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/litellm-config
+      Description: LiteLLM proxy configuration YAML
+      Type: String
+      Value: !Sub |
+        model_list:
+          - model_name: fake-openai-endpoint
+            litellm_params:
+              model: openai/fake
+              api_key: fake-key
+              api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+        general_settings:
+          master_key: os.environ/PROXY_MASTER_KEY
+          database_url: os.environ/DATABASE_URL
+          store_model_in_db: true
 
   # ECS Task Definition
   TaskDefinition:
@@ -401,12 +432,28 @@ Resources:
                   Endpoint: !GetAtt RDSInstance.Endpoint.Address
             - Name: STORE_MODEL_IN_DB
               Value: 'True'
+            - Name: PROXY_MASTER_KEY
+              Value: !Ref MasterKey
+            - Name: CONFIG_SSM_PARAMETER
+              Value: !Sub '/${AWS::StackName}/litellm-config'
+          EntryPoint:
+            - '/bin/bash'
+            - '-c'
           Command:
-            - '--port'
-            - '4000'
-            - '--num_workers'
-            - !Ref NumWorkersPerTask
-            - '--detailed_debug'
+            - !Sub |
+              set -e
+              echo "Fetching LiteLLM configuration from SSM Parameter Store..."
+              python3 -c "
+              import boto3
+              import os
+              ssm = boto3.client('ssm', region_name='${AWS::Region}')
+              param = ssm.get_parameter(Name=os.environ['CONFIG_SSM_PARAMETER'])
+              with open('/tmp/config.yaml', 'w') as f:
+                  f.write(param['Parameter']['Value'])
+              print('Configuration fetched successfully')
+              "
+              echo "Starting LiteLLM..."
+              exec litellm --config /tmp/config.yaml --port 4000 --num_workers ${NumWorkersPerTask} --detailed_debug
           LogConfiguration:
             LogDriver: awslogs
             Options:

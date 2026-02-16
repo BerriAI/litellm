@@ -1,12 +1,22 @@
 # Known Issues & Limitations
 
-## ⚠️ Benchmark Testing Limitation
+## ✅ FIXED: Benchmark Testing Limitation
 
-### Issue
-The current CloudFormation deployment **cannot run the full benchmark test** as documented in the [LiteLLM Benchmark Guide](https://docs.litellm.ai/docs/benchmarks).
+### Issue (RESOLVED in commit 1cf0097)
+The CloudFormation deployment initially **could not run the full benchmark test** as documented in the [LiteLLM Benchmark Guide](https://docs.litellm.ai/docs/benchmarks).
 
-### Root Cause
-The deployment does not configure the required `fake-openai-endpoint` model needed for benchmark testing.
+### Root Cause (FIXED)
+The deployment did not configure the required `fake-openai-endpoint` model needed for benchmark testing.
+
+### Fix Applied
+The template now includes:
+- ✅ SSM Parameter Store with LiteLLM configuration YAML
+- ✅ IAM permissions for tasks to read SSM parameters
+- ✅ Startup script that fetches config and writes to /tmp/config.yaml
+- ✅ LiteLLM starts with --config flag pointing to the config file
+- ✅ fake-openai-endpoint model pre-configured
+
+**Status:** RESOLVED - Full benchmark testing now supported
 
 ### What's Missing
 
