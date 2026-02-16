@@ -3137,15 +3137,11 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             combined = list(dynamic_success_callbacks) + list(global_callbacks)
 
-        verbose_logger.debug(
-            f"[LANGFUSE DEBUG] Combined callbacks BEFORE filtering: {[self._get_callback_name(cb) for cb in combined]}"
-        )
-        verbose_logger.debug(
-            f"[LANGFUSE DEBUG] Dynamic callbacks: {[self._get_callback_name(cb) for cb in (dynamic_success_callbacks or [])]}"
-        )
-        verbose_logger.debug(
-            f"[LANGFUSE DEBUG] Global callbacks: {[self._get_callback_name(cb) for cb in global_callbacks]}"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                "Combined callbacks BEFORE filtering: %s",
+                [self._get_callback_name(cb) for cb in combined],
+            )
 
         # Filter duplicate Langfuse loggers to prevent trace leakage
         # Only keep ONE Langfuse logger per request (prefer dynamic over global)
