@@ -16,7 +16,6 @@ from litellm.types.llms.watsonx import (
     WatsonXAIEndpoint,
 )
 from litellm.types.rerank import (
-    OptionalRerankParams,
     RerankResponse,
     RerankResponseMeta,
     RerankTokens,
@@ -128,7 +127,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                 elif k == "space_id" and v is not None:
                     optional_rerank_params["space_id"] = v
 
-        return dict(OptionalRerankParams(**optional_rerank_params))
+        return dict(optional_rerank_params)
 
     def transform_rerank_request(
         self,
@@ -200,6 +199,6 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
         return RerankResponse(
             id=response_id,
-            results=transformed_results,
+            results=transformed_results,  # type: ignore
             meta=rerank_meta,
         )
