@@ -293,6 +293,51 @@ class TestS3V2UnitTests:
         assert result == {"downloaded": "data"}
 
 @pytest.mark.asyncio
+async def test_async_log_event_skips_when_standard_logging_object_missing():
+    """
+    Reproduces the bug where _async_log_event_base raises ValueError when
+    kwargs has no standard_logging_object (e.g. call_type=afile_delete).
+
+    The S3 logger should skip gracefully, not raise.
+    """
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_region_name="us-east-1",
+        s3_aws_access_key_id="fake",
+        s3_aws_secret_access_key="fake",
+    )
+
+    kwargs_without_slo = {
+        "call_type": "afile_delete",
+        "model": None,
+        "litellm_call_id": "test-call-id",
+    }
+
+    start_time = datetime.utcnow()
+    end_time = datetime.utcnow()
+
+    # Spy on handle_callback_failure — should NOT be called if we skip gracefully.
+    # Without the fix, the ValueError is caught by the except block which calls
+    # handle_callback_failure. With the fix, we return early and never hit except.
+    with patch.object(logger, "handle_callback_failure") as mock_failure:
+        await logger._async_log_event_base(
+            kwargs=kwargs_without_slo,
+            response_obj=None,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        assert not mock_failure.called, (
+            "handle_callback_failure should not be called — "
+            "missing standard_logging_object should be a graceful skip, not an error"
+        )
+
+    # Nothing should have been queued (catches the case where code falls
+    # through without returning and appends None to the queue)
+    assert len(logger.log_queue) == 0, "log_queue should be empty when standard_logging_object is missing"
+
+
+@pytest.mark.asyncio
 async def test_strip_base64_removes_file_and_nontext_entries():
     logger = S3Logger(s3_strip_base64_files=True)
 
