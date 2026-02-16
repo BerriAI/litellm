@@ -7026,15 +7026,17 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
  */
 export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
   const pageSize = 100; // backend maximum
+  const maxPages = 50;  // safety limit — caps at 5,000 logs
   let currentPage = 1;
   let allData: any[] = [];
   let total = 0;
 
+  const baseUrl = proxyBaseUrl
+    ? `${proxyBaseUrl}/spend/logs/session/ui`
+    : `/spend/logs/session/ui`;
+
   try {
-    while (true) {
-      const baseUrl = proxyBaseUrl
-        ? `${proxyBaseUrl}/spend/logs/session/ui`
-        : `/spend/logs/session/ui`;
+    while (currentPage <= maxPages) {
       const url = `${baseUrl}?session_id=${encodeURIComponent(session_id)}&page=${currentPage}&page_size=${pageSize}`;
 
       const response = await fetch(url, {
