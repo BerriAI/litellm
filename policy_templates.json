@@ -3,6 +3,7 @@
     "id": "advanced-au-pii-protection",
     "title": "Advanced PII Protection (Australia)",
     "description": "Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
+    "region": "AU",
     "icon": "ShieldCheckIcon",
     "iconColor": "text-purple-500",
     "iconBg": "bg-purple-50",
@@ -206,6 +207,7 @@
     "id": "baseline-pii-protection",
     "title": "Baseline PII Protection",
     "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only. Suitable for non-sensitive internal use.",
+    "region": "Global",
     "icon": "ShieldCheckIcon",
     "iconColor": "text-blue-500",
     "iconBg": "bg-blue-50",
@@ -279,6 +281,7 @@
     "id": "nsfw-content-filter-australia",
     "title": "NSFW Content Filter (Australia)",
     "description": "Blocks profanity, sexual content, NSFW requests, self-harm content, and child safety violations using English and Australian-specific slang. Protects against inappropriate content including sexual solicitation, explicit content, Australian profanity, self-harm, and content involving minors.",
+    "region": "AU",
     "icon": "ShieldExclamationIcon",
     "iconColor": "text-red-500",
     "iconBg": "bg-red-50",
@@ -399,6 +402,7 @@
     "id": "nsfw-content-filter-basic",
     "title": "NSFW Content Filter (Basic)",
     "description": "Basic NSFW content filtering for English only. Blocks profanity, sexual content, slurs, solicitation, explicit requests, self-harm content, and child safety violations. Suitable for most applications requiring content moderation.",
+    "region": "Global",
     "icon": "ShieldExclamationIcon",
     "iconColor": "text-orange-500",
     "iconBg": "bg-orange-50",
@@ -499,6 +503,7 @@
     "id": "nsfw-content-filter-all-regions",
     "title": "NSFW Content Filter (All Regions)",
     "description": "Comprehensive multi-language NSFW content filtering. Blocks profanity, sexual content, inappropriate requests, self-harm content, and child safety violations in English, Spanish, French, German, and Australian. Best for global applications.",
+    "region": "Global",
     "icon": "ShieldExclamationIcon",
     "iconColor": "text-purple-500",
     "iconBg": "bg-purple-50",
@@ -671,6 +676,95 @@
         "nsfw-self-harm-filter-global",
         "nsfw-child-safety-filter-global",
         "nsfw-racial-bias-filter-global"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "gdpr-eu-pii-protection",
+    "title": "GDPR Art. 32 — EU PII Protection",
+    "description": "GDPR Article 32 compliance for EU personal data protection. Masks French national IDs (NIR/INSEE), EU IBANs, French phone numbers, EU VAT numbers, EU passport numbers, and email addresses. Suitable for applications processing EU citizen data requiring GDPR compliance.",
+    "region": "EU",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-indigo-500",
+    "iconBg": "bg-indigo-50",
+    "guardrails": [
+      "gdpr-eu-national-identifiers",
+      "gdpr-eu-financial-data",
+      "gdpr-eu-contact-information",
+      "gdpr-eu-business-identifiers"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "gdpr-eu-national-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "fr_nir", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "eu_passport_generic", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU national identification numbers including French NIR/INSEE and EU passport numbers for GDPR compliance"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-financial-data",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "eu_iban_enhanced", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[IBAN_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU bank account numbers (IBANs) to protect financial data under GDPR Article 32"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-contact-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "fr_phone", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "fr_postal_code", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks contact information including emails, French phone numbers, and postal codes for EU data subjects"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-business-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "eu_vat", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[VAT_NUMBER_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU VAT identification numbers to protect business entity information under GDPR"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "gdpr-eu-pii-protection",
+      "description": "GDPR Article 32 compliance policy for EU personal data protection. Masks French national IDs, EU IBANs, phone numbers, VAT numbers, passports, and contact information.",
+      "guardrails_add": [
+        "gdpr-eu-national-identifiers",
+        "gdpr-eu-financial-data",
+        "gdpr-eu-contact-information",
+        "gdpr-eu-business-identifiers"
       ],
       "guardrails_remove": []
     }

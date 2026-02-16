@@ -23,6 +23,9 @@ from litellm.types.guardrails import (
     ContentFilterPattern,
     GuardrailEventHooks,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    ContentFilterCategoryConfig,
+)
 
 
 class TestContentFilterGuardrail:
@@ -1842,3 +1845,212 @@ class TestContentFilterGuardrail:
         )
         # Should pass - 'Indian' in sentence 1, 'lazy' in sentence 2
         assert len(result["texts"]) == 1
+
+
+class TestTracingFieldsE2E:
+    """E2E tests for new tracing fields (guardrail_id, policy_template, detection_method, match_details, patterns_checked)."""
+
+    @pytest.mark.asyncio
+    async def test_tracing_fields_populated_on_mask_detection(self):
+        """New tracing fields are populated in SpendLog metadata when content is masked."""
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        blocked_words = [
+            BlockedWord(
+                keyword="secret",
+                action=ContentFilterAction.MASK,
+                description="Secret keyword",
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="tracing-test",
+            guardrail_id="gd-tracing-001",
+            policy_template="Test Policy Template",
+            patterns=patterns,
+            blocked_words=blocked_words,
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["Email me at user@test.com, it's a secret"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        slg = slg_list[0]
+
+        # New tracing fields
+        assert slg["guardrail_id"] == "gd-tracing-001"
+        assert slg["policy_template"] == "Test Policy Template"
+        assert slg["detection_method"] == "keyword,regex"
+        assert slg["patterns_checked"] >= 2  # at least 1 pattern + 1 keyword
+
+        # match_details
+        assert isinstance(slg["match_details"], list)
+        assert len(slg["match_details"]) >= 2
+        methods = {d["detection_method"] for d in slg["match_details"]}
+        assert "regex" in methods
+        assert "keyword" in methods
+
+    @pytest.mark.asyncio
+    async def test_tracing_fields_fallback_when_no_config_id(self):
+        """guardrail_id falls back to guardrail_name when config id not provided."""
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="fallback-test",
+            patterns=patterns,
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["SSN: 123-45-6789"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_id"] == "fallback-test"
+        assert slg.get("policy_template") is None  # no categories loaded
+        assert slg["detection_method"] == "regex"
+        assert slg["patterns_checked"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_tracing_fields_with_category_keywords(self):
+        """Tracing fields populated correctly when category keywords trigger detections."""
+        categories = [
+            ContentFilterCategoryConfig(
+                category="harm_toxic_abuse",
+                enabled=True,
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="category-tracing",
+            guardrail_id="gd-cat-001",
+            categories=categories,
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        # Use a word from the harm_toxic_abuse category
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["You are an idiot and stupid"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_id"] == "gd-cat-001"
+        assert slg["patterns_checked"] >= 1  # category keywords counted
+
+        if slg.get("match_details"):
+            # If detections happened, verify category info
+            cat_matches = [d for d in slg["match_details"] if d.get("category")]
+            for m in cat_matches:
+                assert m["detection_method"] == "keyword"
+
+    @pytest.mark.asyncio
+    async def test_tracing_fields_on_blocked_request(self):
+        """Tracing fields populated even when request is blocked."""
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="block-tracing",
+            guardrail_id="gd-block-001",
+            policy_template="SSN Protection",
+            patterns=patterns,
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["SSN: 123-45-6789"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_id"] == "gd-block-001"
+        assert slg["policy_template"] == "SSN Protection"
+        assert slg["guardrail_status"] == "guardrail_intervened"
+        assert slg["patterns_checked"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_tracing_fields_no_detections(self):
+        """When no detections occur, tracing fields still populated with metadata."""
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="clean-tracing",
+            guardrail_id="gd-clean-001",
+            policy_template="Email Protection",
+            patterns=patterns,
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["Hello world, no sensitive content here"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_id"] == "gd-clean-001"
+        assert slg["policy_template"] == "Email Protection"
+        assert slg["guardrail_status"] == "success"
+        assert slg["patterns_checked"] >= 1
+        # No detections, so these should be None
+        assert slg.get("detection_method") is None
+        assert slg.get("match_details") is None
