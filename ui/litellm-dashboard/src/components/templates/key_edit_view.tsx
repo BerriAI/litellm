@@ -5,6 +5,7 @@ import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import AgentSelector from "../agent_management/AgentSelector";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
@@ -169,6 +170,7 @@ export function KeyEditView({
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
+    access_group_ids: keyData.access_group_ids || [],
     auto_rotate: keyData.auto_rotate || false,
     ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
     allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
@@ -196,6 +198,7 @@ export function KeyEditView({
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
         : [],
+      access_group_ids: keyData.access_group_ids || [],
       auto_rotate: keyData.auto_rotate || false,
       ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
       allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
@@ -498,6 +501,20 @@ export function KeyEditView({
             options={promptsList.map((name) => ({ value: name, label: name }))}
           />
         </Tooltip>
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Access Groups{" "}
+            <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="access_group_ids"
+      >
+        <AccessGroupSelector placeholder="Select access groups (optional)" />
       </Form.Item>
 
       <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">

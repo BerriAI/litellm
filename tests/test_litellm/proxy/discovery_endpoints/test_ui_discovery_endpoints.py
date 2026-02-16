@@ -31,6 +31,7 @@ def test_ui_discovery_endpoints_with_defaults():
         assert data["proxy_base_url"] is None
         assert data["auto_redirect_to_sso"] is False
         assert data["admin_ui_disabled"] is False
+        assert data["sso_configured"] is False
 
 
 def test_ui_discovery_endpoints_with_custom_server_root_path():
@@ -50,6 +51,7 @@ def test_ui_discovery_endpoints_with_custom_server_root_path():
         assert data["server_root_path"] == "/litellm"
         assert data["proxy_base_url"] is None
         assert data["auto_redirect_to_sso"] is False
+        assert data["sso_configured"] is False
 
 
 def test_ui_discovery_endpoints_with_proxy_base_url_when_set():
@@ -69,6 +71,7 @@ def test_ui_discovery_endpoints_with_proxy_base_url_when_set():
         assert data["server_root_path"] == "/"
         assert data["proxy_base_url"] == "https://proxy.example.com"
         assert data["auto_redirect_to_sso"] is False
+        assert data["sso_configured"] is False
 
 
 def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_enabled():
@@ -88,6 +91,30 @@ def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_enabled():
         assert data["server_root_path"] == "/litellm"
         assert data["proxy_base_url"] == "https://proxy.example.com"
         assert data["auto_redirect_to_sso"] is True
+        assert data["sso_configured"] is True
+
+
+def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_not_set_defaults_to_false():
+    """When SSO is configured but AUTO_REDIRECT_UI_LOGIN_TO_SSO is not set, defaults to False."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value="https://proxy.example.com"), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
+        # Ensure AUTO_REDIRECT_UI_LOGIN_TO_SSO is not set (simulate default)
+        os.environ.pop("AUTO_REDIRECT_UI_LOGIN_TO_SSO", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["server_root_path"] == "/litellm"
+        assert data["proxy_base_url"] == "https://proxy.example.com"
+        assert data["auto_redirect_to_sso"] is False
+        assert data["sso_configured"] is True
 
 
 def test_ui_discovery_endpoints_with_sso_configured_but_auto_redirect_disabled():
@@ -107,6 +134,7 @@ def test_ui_discovery_endpoints_with_sso_configured_but_auto_redirect_disabled()
         assert data["server_root_path"] == "/litellm"
         assert data["proxy_base_url"] == "https://proxy.example.com"
         assert data["auto_redirect_to_sso"] is False
+        assert data["sso_configured"] is True
 
 
 def test_ui_discovery_endpoints_with_sso_not_configured_but_auto_redirect_enabled():
@@ -126,6 +154,7 @@ def test_ui_discovery_endpoints_with_sso_not_configured_but_auto_redirect_enable
         assert data["server_root_path"] == "/"
         assert data["proxy_base_url"] is None
         assert data["auto_redirect_to_sso"] is False
+        assert data["sso_configured"] is False
 
 
 def test_ui_discovery_endpoints_both_routes_return_same_data():
@@ -164,6 +193,7 @@ def test_ui_discovery_endpoints_with_admin_ui_disabled():
         assert data["proxy_base_url"] is None
         assert data["auto_redirect_to_sso"] is False
         assert data["admin_ui_disabled"] is True
+        assert data["sso_configured"] is False
 
 
 def test_ui_discovery_endpoints_with_admin_ui_enabled():
@@ -184,4 +214,5 @@ def test_ui_discovery_endpoints_with_admin_ui_enabled():
         assert data["proxy_base_url"] is None
         assert data["auto_redirect_to_sso"] is False
         assert data["admin_ui_disabled"] is False
+        assert data["sso_configured"] is False
 

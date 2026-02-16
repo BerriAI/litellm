@@ -63,7 +63,7 @@ export default function OnboardingModal({
   return (
     <Modal
       title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
-      visible={isInvitationLinkModalVisible}
+      open={isInvitationLinkModalVisible}
       width={800}
       footer={null}
       onOk={handleInvitationOk}

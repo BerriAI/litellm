@@ -27,6 +27,9 @@ import { Copy } from "lucide-react";
 import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { checkTokenValidity } from "@/utils/jwtUtils";
+import { getCookie } from "@/utils/cookieUtils";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -76,6 +79,30 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
   const [isMakeMcpPublicModalVisible, setIsMakeMcpPublicModalVisible] = useState(false);
   const router = useRouter();
+  const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
+
+  // Check authentication requirement for public AI Hub
+  useEffect(() => {
+    // Only check when UI settings are loaded and this is a public page
+    if (isUISettingsLoading || !publicPage) {
+      return;
+    }
+
+    const requireAuth = uiSettings?.values?.require_auth_for_public_ai_hub;
+
+    // If require_auth_for_public_ai_hub is true, verify token
+    if (requireAuth === true) {
+      const token = getCookie("token");
+      const isTokenValid = checkTokenValidity(token);
+
+      // If token is invalid, redirect to login
+      if (!isTokenValid) {
+        router.replace(`${getProxyBaseUrl()}/ui/login`);
+        return;
+      }
+    }
+    // If require_auth_for_public_ai_hub is false, allow public access (no change)
+  }, [isUISettingsLoading, publicPage, uiSettings, router]);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {
@@ -483,7 +510,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       <Modal
         title="Public Model Hub"
         width={600}
-        visible={isPublicPageModalVisible}
+        open={isPublicPageModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -505,7 +532,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       <Modal
         title={selectedModel?.model_group || "Model Details"}
         width={1000}
-        visible={isModalVisible}
+        open={isModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -656,7 +683,7 @@ print(response.choices[0].message.content)`}
       <Modal
         title={selectedAgent?.name || "Agent Details"}
         width={1000}
-        visible={isAgentModalVisible}
+        open={isAgentModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -795,7 +822,7 @@ print(response.choices[0].message.content)`}
       <Modal
         title={selectedMcpServer?.server_name || "MCP Server Details"}
         width={1000}
-        visible={isMcpModalVisible}
+        open={isMcpModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}

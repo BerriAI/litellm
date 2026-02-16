@@ -10,8 +10,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
+    GuardrailPipeline,
+    PipelineTestRequest,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
     PolicyAttachmentListResponse,
@@ -22,10 +25,6 @@ from litellm.types.proxy.policy_engine import (
 )
 
 router = APIRouter()
-
-# Get singleton instances
-POLICY_REGISTRY = get_policy_registry()
-ATTACHMENT_REGISTRY = get_attachment_registry()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +74,7 @@ async def list_policies():
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        policies = await POLICY_REGISTRY.get_all_policies_from_db(prisma_client)
+        policies = await get_policy_registry().get_all_policies_from_db(prisma_client)
         return PolicyListDBResponse(policies=policies, total_count=len(policies))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policies: {e}")
@@ -130,7 +129,7 @@ async def create_policy(
 
     try:
         created_by = user_api_key_dict.user_id
-        result = await POLICY_REGISTRY.add_policy_to_db(
+        result = await get_policy_registry().add_policy_to_db(
             policy_request=request,
             prisma_client=prisma_client,
             created_by=created_by,
@@ -168,7 +167,7 @@ async def get_policy(policy_id: str):
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        result = await POLICY_REGISTRY.get_policy_by_id_from_db(
+        result = await get_policy_registry().get_policy_by_id_from_db(
             policy_id=policy_id,
             prisma_client=prisma_client,
         )
@@ -216,7 +215,7 @@ async def update_policy(
 
     try:
         # Check if policy exists
-        existing = await POLICY_REGISTRY.get_policy_by_id_from_db(
+        existing = await get_policy_registry().get_policy_by_id_from_db(
             policy_id=policy_id,
             prisma_client=prisma_client,
         )
@@ -226,7 +225,7 @@ async def update_policy(
             )
 
         updated_by = user_api_key_dict.user_id
-        result = await POLICY_REGISTRY.update_policy_in_db(
+        result = await get_policy_registry().update_policy_in_db(
             policy_id=policy_id,
             policy_request=request,
             prisma_client=prisma_client,
@@ -269,7 +268,7 @@ async def delete_policy(policy_id: str):
 
     try:
         # Check if policy exists
-        existing = await POLICY_REGISTRY.get_policy_by_id_from_db(
+        existing = await get_policy_registry().get_policy_by_id_from_db(
             policy_id=policy_id,
             prisma_client=prisma_client,
         )
@@ -278,7 +277,7 @@ async def delete_policy(policy_id: str):
                 status_code=404, detail=f"Policy with ID {policy_id} not found"
             )
 
-        result = await POLICY_REGISTRY.delete_policy_from_db(
+        result = await get_policy_registry().delete_policy_from_db(
             policy_id=policy_id,
             prisma_client=prisma_client,
         )
@@ -324,7 +323,7 @@ async def get_resolved_guardrails(policy_id: str):
 
     try:
         # Get the policy
-        policy = await POLICY_REGISTRY.get_policy_by_id_from_db(
+        policy = await get_policy_registry().get_policy_by_id_from_db(
             policy_id=policy_id,
             prisma_client=prisma_client,
         )
@@ -334,7 +333,7 @@ async def get_resolved_guardrails(policy_id: str):
             )
 
         # Resolve guardrails
-        resolved = await POLICY_REGISTRY.resolve_guardrails_from_db(
+        resolved = await get_policy_registry().resolve_guardrails_from_db(
             policy_name=policy.policy_name,
             prisma_client=prisma_client,
         )
@@ -350,6 +349,69 @@ async def get_resolved_guardrails(policy_id: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error resolving guardrails: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline Test Endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/policies/test-pipeline",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_pipeline(
+    request: PipelineTestRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Test a guardrail pipeline with sample messages.
+
+    Executes the pipeline steps against the provided test messages and returns
+    step-by-step results showing which guardrails passed/failed, actions taken,
+    and timing information.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/policies/test-pipeline" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "pipeline": {
+                "mode": "pre_call",
+                "steps": [
+                    {"guardrail": "pii-guard", "on_pass": "next", "on_fail": "block"}
+                ]
+            },
+            "test_messages": [{"role": "user", "content": "My SSN is 123-45-6789"}]
+        }'
+    ```
+    """
+    try:
+        validated_pipeline = GuardrailPipeline(**request.pipeline)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid pipeline: {e}")
+
+    data = {
+        "messages": request.test_messages,
+        "model": "test",
+        "metadata": {},
+    }
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=validated_pipeline.steps,
+            mode=validated_pipeline.mode,
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+            policy_name="test-pipeline",
+        )
+        return result.model_dump()
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error testing pipeline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -399,7 +461,7 @@ async def list_policy_attachments():
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        attachments = await ATTACHMENT_REGISTRY.get_all_attachments_from_db(
+        attachments = await get_attachment_registry().get_all_attachments_from_db(
             prisma_client
         )
         return PolicyAttachmentListResponse(
@@ -466,7 +528,7 @@ async def create_policy_attachment(
 
     try:
         # Verify the policy exists
-        policy = await POLICY_REGISTRY.get_all_policies_from_db(prisma_client)
+        policy = await get_policy_registry().get_all_policies_from_db(prisma_client)
         policy_names = [p.policy_name for p in policy]
         if request.policy_name not in policy_names:
             raise HTTPException(
@@ -475,7 +537,7 @@ async def create_policy_attachment(
             )
 
         created_by = user_api_key_dict.user_id
-        result = await ATTACHMENT_REGISTRY.add_attachment_to_db(
+        result = await get_attachment_registry().add_attachment_to_db(
             attachment_request=request,
             prisma_client=prisma_client,
             created_by=created_by,
@@ -510,7 +572,7 @@ async def get_policy_attachment(attachment_id: str):
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        result = await ATTACHMENT_REGISTRY.get_attachment_by_id_from_db(
+        result = await get_attachment_registry().get_attachment_by_id_from_db(
             attachment_id=attachment_id,
             prisma_client=prisma_client,
         )
@@ -556,7 +618,7 @@ async def delete_policy_attachment(attachment_id: str):
 
     try:
         # Check if attachment exists
-        existing = await ATTACHMENT_REGISTRY.get_attachment_by_id_from_db(
+        existing = await get_attachment_registry().get_attachment_by_id_from_db(
             attachment_id=attachment_id,
             prisma_client=prisma_client,
         )
@@ -566,7 +628,7 @@ async def delete_policy_attachment(attachment_id: str):
                 detail=f"Attachment with ID {attachment_id} not found",
             )
 
-        result = await ATTACHMENT_REGISTRY.delete_attachment_from_db(
+        result = await get_attachment_registry().delete_attachment_from_db(
             attachment_id=attachment_id,
             prisma_client=prisma_client,
         )

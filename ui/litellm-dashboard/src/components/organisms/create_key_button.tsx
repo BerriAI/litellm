@@ -20,8 +20,9 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import TeamDropdown from "../common_components/team_dropdown";
-import Createuser from "../create_user_button";
+import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -1001,6 +1002,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   <Form.Item
                     label={
                       <span>
+                        Access Groups{" "}
+                        <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="access_group_ids"
+                    className="mt-4"
+                    help="Select access groups to assign to this key"
+                  >
+                    <AccessGroupSelector
+                      placeholder="Select access groups (optional)"
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
                         Allowed Pass Through Routes{" "}
                         <Tooltip title="Allow this key to use specific pass through routes">
                           <a
@@ -1342,12 +1360,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       {isCreateUserModalVisible && (
         <Modal
           title="Create New User"
-          visible={isCreateUserModalVisible}
+          open={isCreateUserModalVisible}
           onCancel={() => setIsCreateUserModalVisible(false)}
           footer={null}
           width={800}
         >
-          <Createuser
+          <CreateUserButton
             userID={userID}
             accessToken={accessToken}
             teams={teams}
@@ -1359,7 +1377,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       )}
 
       {apiKey && (
-        <Modal visible={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
+        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>

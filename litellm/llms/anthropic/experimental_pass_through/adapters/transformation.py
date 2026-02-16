@@ -939,22 +939,8 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         choices: List[Choices],
         tool_name_mapping: Optional[Dict[str, str]] = None,
-    ) -> List[
-        Union[
-            AnthropicResponseContentBlockText,
-            AnthropicResponseContentBlockToolUse,
-            AnthropicResponseContentBlockThinking,
-            AnthropicResponseContentBlockRedactedThinking,
-        ]
-    ]:
-        new_content: List[
-            Union[
-                AnthropicResponseContentBlockText,
-                AnthropicResponseContentBlockToolUse,
-                AnthropicResponseContentBlockThinking,
-                AnthropicResponseContentBlockRedactedThinking,
-            ]
-        ] = []
+    ) -> List[Dict[str, Any]]:
+        new_content: List[Dict[str, Any]] = []
         for choice in choices:
             # Handle thinking blocks first
             if (
@@ -978,7 +964,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                     if signature_value is not None
                                     else None
                                 ),
-                            )
+                            ).model_dump()
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
                         data_value = thinking_block.get("data", "")
@@ -986,7 +972,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             AnthropicResponseContentBlockRedactedThinking(
                                 type="redacted_thinking",
                                 data=str(data_value) if data_value is not None else "",
-                            )
+                            ).model_dump()
                         )
             # Handle reasoning_content when thinking_blocks is not present
             elif (
@@ -998,7 +984,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         type="thinking",
                         thinking=str(choice.message.reasoning_content),
                         signature=None,
-                    )
+                    ).model_dump()
                 )
 
             # Handle text content
@@ -1006,7 +992,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_content.append(
                     AnthropicResponseContentBlockText(
                         type="text", text=choice.message.content
-                    )
+                    ).model_dump()
                 )
             # Handle tool calls (in parallel to text content)
             if (
@@ -1044,7 +1030,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_use_block.provider_specific_fields = (
                             provider_specific_fields
                         )
-                    new_content.append(tool_use_block)
+                    new_content.append(tool_use_block.model_dump())
 
         return new_content
 
@@ -1084,8 +1070,13 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         # extract usage
         usage: Usage = getattr(response, "usage")
+        uncached_input_tokens = usage.prompt_tokens or 0
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+            cached_tokens = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+            uncached_input_tokens -= cached_tokens
+        
         anthropic_usage = AnthropicUsage(
-            input_tokens=usage.prompt_tokens or 0,
+            input_tokens=uncached_input_tokens,
             output_tokens=usage.completion_tokens or 0,
         )
         # Add cache tokens if available (for prompt caching support)
@@ -1244,8 +1235,13 @@ class LiteLLMAnthropicMessagesAdapter:
             else:
                 litellm_usage_chunk = None
             if litellm_usage_chunk is not None:
+                uncached_input_tokens = litellm_usage_chunk.prompt_tokens or 0
+                if hasattr(litellm_usage_chunk, "prompt_tokens_details") and litellm_usage_chunk.prompt_tokens_details:
+                    cached_tokens = getattr(litellm_usage_chunk.prompt_tokens_details, "cached_tokens", 0) or 0
+                    uncached_input_tokens -= cached_tokens
+                
                 usage_delta = UsageDelta(
-                    input_tokens=litellm_usage_chunk.prompt_tokens or 0,
+                    input_tokens=uncached_input_tokens,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
                 )
                 # Add cache tokens if available (for prompt caching support)

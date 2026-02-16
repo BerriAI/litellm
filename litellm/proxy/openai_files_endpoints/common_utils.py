@@ -637,3 +637,127 @@ def _extract_model_param(request: "Request", request_body: dict) -> Optional[str
         or request.query_params.get("model")
         or request.headers.get("x-litellm-model")
     )
+
+
+# ============================================================================
+#                    BATCH DATABASE OPERATIONS
+# ============================================================================
+
+
+async def get_batch_from_database(
+    batch_id: str,
+    unified_batch_id: Union[str, Literal[False]],
+    managed_files_obj,
+    prisma_client,
+    verbose_proxy_logger,
+):
+    """
+    Try to retrieve batch object from ManagedObjectTable for consistent state.
+    
+    Args:
+        batch_id: The batch ID (may be unified/encoded)
+        unified_batch_id: Result from _is_base64_encoded_unified_file_id()
+        managed_files_obj: The managed_files proxy hook object
+        prisma_client: Prisma database client
+        verbose_proxy_logger: Logger instance
+        
+    Returns:
+        Tuple of (db_batch_object, response_batch)
+        - db_batch_object: Raw database object (or None)
+        - response_batch: Parsed LiteLLMBatch object (or None)
+    """
+    import json
+    from litellm.types.utils import LiteLLMBatch
+    
+    if managed_files_obj is None or not unified_batch_id:
+        return None, None
+    
+    try:
+        if not prisma_client:
+            return None, None
+            
+        db_batch_object = await prisma_client.db.litellm_managedobjecttable.find_first(
+            where={"unified_object_id": batch_id}
+        )
+        
+        if not db_batch_object or not db_batch_object.file_object:
+            return None, None
+        
+        # Parse the batch object from database
+        batch_data = json.loads(db_batch_object.file_object) if isinstance(db_batch_object.file_object, str) else db_batch_object.file_object
+        response = LiteLLMBatch(**batch_data)
+        response.id = batch_id
+        
+        verbose_proxy_logger.debug(
+            f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"
+        )
+        
+        return db_batch_object, response
+        
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to retrieve batch from ManagedObjectTable: {e}, falling back to provider"
+        )
+        return None, None
+
+
+async def update_batch_in_database(
+    batch_id: str,
+    unified_batch_id: Union[str, Literal[False]],
+    response,
+    managed_files_obj,
+    prisma_client,
+    verbose_proxy_logger,
+    db_batch_object=None,
+    operation: str = "update",
+):
+    """
+    Update batch status and object in ManagedObjectTable.
+    
+    Args:
+        batch_id: The batch ID (unified/encoded)
+        unified_batch_id: Result from _is_base64_encoded_unified_file_id()
+        response: The batch response object with updated state
+        managed_files_obj: The managed_files proxy hook object
+        prisma_client: Prisma database client
+        verbose_proxy_logger: Logger instance
+        db_batch_object: Optional existing database object (for comparison)
+        operation: Description of operation ("update", "cancel", etc.)
+    """
+    import litellm.utils
+    
+    if managed_files_obj is None or not unified_batch_id:
+        return
+    
+    try:
+        if not prisma_client:
+            return
+        
+        # Only update if status has changed (when db_batch_object is provided)
+        if db_batch_object and response.status == db_batch_object.status:
+            return
+        
+        if db_batch_object:
+            verbose_proxy_logger.info(
+                f"Updating batch {batch_id} status from {db_batch_object.status} to {response.status}"
+            )
+        else:
+            verbose_proxy_logger.info(
+                f"Updating batch {batch_id} status to {response.status} after {operation}"
+            )
+        
+        # Normalize status for database storage
+        db_status = response.status if response.status != "completed" else "complete"
+        
+        await prisma_client.db.litellm_managedobjecttable.update(
+            where={"unified_object_id": batch_id},
+            data={
+                "status": db_status,
+                "file_object": response.model_dump_json(),
+                "updated_at": litellm.utils.get_utc_datetime(),
+            },
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Failed to update batch status in ManagedObjectTable: {e}"
+        )

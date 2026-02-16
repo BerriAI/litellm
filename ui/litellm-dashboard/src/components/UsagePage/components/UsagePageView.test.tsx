@@ -1,20 +1,21 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
 import type { Organization } from "../../networking";
 import * as networking from "../../networking";
-import NewUsagePage from "./UsagePageView";
+import UsagePage from "./UsagePageView";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
     window.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      observe() { }
+      unobserve() { }
+      disconnect() { }
     } as any;
   }
 });
@@ -45,6 +46,47 @@ vi.mock("./EntityUsage/EntityUsage", () => ({
   EntityList: [],
 }));
 
+vi.mock("./EntityUsage/SpendByProvider", () => ({
+  default: () => <div>Spend By Provider</div>,
+}));
+
+vi.mock("./EndpointUsage/EndpointUsage", () => ({
+  default: () => <div>Endpoint Usage</div>,
+}));
+
+vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
+  const React = await import("react");
+  const UsageViewSelect = ({ value, onChange }: any) => {
+    return React.createElement(
+      "select",
+      {
+        value,
+        onChange: (e: any) => onChange?.(e.target.value),
+        role: "combobox",
+        "data-testid": "usage-view-select",
+      },
+      React.createElement("option", { value: "global" }, "Global Usage"),
+      React.createElement("option", { value: "team" }, "Team Usage"),
+      React.createElement("option", { value: "organization" }, "Organization Usage"),
+      React.createElement("option", { value: "customer" }, "Customer Usage"),
+      React.createElement("option", { value: "tag" }, "Tag Usage"),
+      React.createElement("option", { value: "agent" }, "Agent Usage"),
+      React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
+    );
+  };
+  UsageViewSelect.displayName = "UsageViewSelect";
+  return { UsageViewSelect };
+});
+
+vi.mock("../../shared/advanced_date_picker", async () => {
+  const React = await import("react");
+  const AdvancedDatePicker = () => {
+    return React.createElement("div", { "data-testid": "advanced-date-picker" }, "Date Picker");
+  };
+  AdvancedDatePicker.displayName = "AdvancedDatePicker";
+  return { default: AdvancedDatePicker };
+});
+
 vi.mock("../../user_agent_activity", () => ({
   default: () => <div>User Agent Activity</div>,
 }));
@@ -68,6 +110,10 @@ vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   __esModule: true,
   default: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
+  useCurrentUser: vi.fn(),
 }));
 
 vi.mock("antd", async (importOriginal) => {
@@ -133,12 +179,40 @@ vi.mock("antd", async (importOriginal) => {
   }
   (Table as any).displayName = "Table";
 
+  function Segmented(props: any) {
+    const { value, onChange, options, ...rest } = props;
+    return React.createElement(
+      "div",
+      { ...rest, "data-testid": "antd-segmented" },
+      options?.map((opt: any) =>
+        React.createElement(
+          "button",
+          {
+            key: opt.value,
+            onClick: () => onChange?.(opt.value),
+            "data-selected": value === opt.value,
+          },
+          opt.label,
+        ),
+      ),
+    );
+  }
+  (Segmented as any).displayName = "AntdSegmented";
+
+  function Tooltip(props: any) {
+    const { title, children, ...rest } = props;
+    return React.createElement("div", { ...rest, "data-testid": "antd-tooltip", title }, children);
+  }
+  (Tooltip as any).displayName = "AntdTooltip";
+
   return {
     ...actual,
     Select,
     Alert,
     Badge,
     Table,
+    Segmented,
+    Tooltip,
   };
 });
 
@@ -160,15 +234,97 @@ vi.mock("@ant-design/icons", async () => {
     BarChartOutlined: Icon,
     ClockCircleOutlined: Icon,
     CalendarOutlined: Icon,
+    InfoCircleOutlined: Icon,
   };
 });
 
-describe("NewUsage", () => {
+// Mock Tremor components
+vi.mock("@tremor/react", async () => {
+  const React = await import("react");
+  const actual = await import("@tremor/react");
+
+  function TabGroup({ children }: any) {
+    return React.createElement("div", { "data-testid": "tremor-tab-group" }, children);
+  }
+
+  function TabList({ children }: any) {
+    return React.createElement("div", { "data-testid": "tremor-tab-list" }, children);
+  }
+
+  function Tab({ children, ...props }: any) {
+    return React.createElement("button", { ...props, "data-testid": "tremor-tab" }, children);
+  }
+
+  function TabPanels({ children }: any) {
+    return React.createElement("div", { "data-testid": "tremor-tab-panels" }, children);
+  }
+
+  function TabPanel({ children }: any) {
+    return React.createElement("div", { "data-testid": "tremor-tab-panel" }, children);
+  }
+
+  function Card({ children, ...props }: any) {
+    return React.createElement("div", { ...props, "data-testid": "tremor-card" }, children);
+  }
+
+  function Grid({ children, numItems, ...props }: any) {
+    return React.createElement("div", { ...props, "data-testid": "tremor-grid" }, children);
+  }
+
+  function Col({ children, numColSpan, ...props }: any) {
+    return React.createElement("div", { ...props, "data-testid": "tremor-col" }, children);
+  }
+
+  function Title({ children, ...props }: any) {
+    return React.createElement("h2", { ...props, "data-testid": "tremor-title" }, children);
+  }
+
+  function Text({ children, ...props }: any) {
+    return React.createElement("p", { ...props, "data-testid": "tremor-text" }, children);
+  }
+
+  function BarChart({ data, valueFormatter, yAxisWidth, showLegend, customTooltip, ...props }: any) {
+    return React.createElement("div", { ...props, "data-testid": "tremor-bar-chart" }, "Bar Chart");
+  }
+
+  function DonutChart({ data, ...props }: any) {
+    return React.createElement("div", { ...props, "data-testid": "tremor-donut-chart" }, "Donut Chart");
+  }
+
+  function Button({ children, icon, onClick, ...props }: any) {
+    return React.createElement(
+      "button",
+      { ...props, onClick, "data-testid": "tremor-button" },
+      icon && React.createElement("span", { "data-testid": "tremor-button-icon" }),
+      children,
+    );
+  }
+
+  return {
+    ...actual,
+    TabGroup,
+    TabList,
+    Tab,
+    TabPanels,
+    TabPanel,
+    Card,
+    Grid,
+    Col,
+    Title,
+    Text,
+    BarChart,
+    DonutChart,
+    Button,
+  };
+});
+
+describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
+  const mockUseCurrentUser = vi.mocked(useCurrentUser);
 
   const mockSpendData = {
     results: [
@@ -308,9 +464,6 @@ describe("NewUsage", () => {
   ];
 
   const defaultProps = {
-    accessToken: "test-token",
-    userRole: "Admin",
-    userID: "user-123",
     teams: [
       {
         team_id: "team-1",
@@ -330,20 +483,27 @@ describe("NewUsage", () => {
       },
     ],
     organizations: [],
-    premiumUser: true,
   };
 
   beforeEach(() => {
     mockUseAuthorized.mockReturnValue({
       token: "mock-token",
-      accessToken: defaultProps.accessToken,
-      userId: defaultProps.userID,
+      accessToken: "test-token",
+      userId: "user-123",
       userEmail: "test@example.com",
-      userRole: defaultProps.userRole,
-      premiumUser: defaultProps.premiumUser,
+      userRole: "Admin",
+      premiumUser: true,
       disabledPersonalKeyCreation: false,
       showSSOBanner: false,
     });
+    mockUseCurrentUser.mockReturnValue({
+      data: {
+        user_id: "user-123",
+        max_budget: null,
+      },
+      isLoading: false,
+      error: null,
+    } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
     mockTagListCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
@@ -361,7 +521,7 @@ describe("NewUsage", () => {
   });
 
   it("should render and fetch usage data on mount", async () => {
-    renderWithProviders(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<UsagePage {...defaultProps} />);
 
     // Wait for data to be fetched
     await waitFor(() => {
@@ -380,7 +540,7 @@ describe("NewUsage", () => {
   });
 
   it("should display usage metrics and charts", async () => {
-    renderWithProviders(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -396,13 +556,13 @@ describe("NewUsage", () => {
     const totalTokensElements = screen.getAllByText("Total Tokens");
     expect(totalTokensElements.length).toBeGreaterThan(0);
 
-    // Check for chart titles
+    // Check for chart titles (these are in the Cost tab)
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
   it("should switch between usage views correctly", async () => {
-    renderWithProviders(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -412,7 +572,7 @@ describe("NewUsage", () => {
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
 
     // Switch to Team Usage view
-    const usageSelect = screen.getByRole("combobox");
+    const usageSelect = screen.getByTestId("usage-view-select");
     act(() => {
       fireEvent.change(usageSelect, { target: { value: "team" } });
     });
@@ -436,13 +596,13 @@ describe("NewUsage", () => {
   });
 
   it("should show organization usage banner and view for admins", async () => {
-    renderWithProviders(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
+    renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const usageSelect = screen.getByRole("combobox");
+    const usageSelect = screen.getByTestId("usage-view-select");
     act(() => {
       fireEvent.change(usageSelect, { target: { value: "organization" } });
     });
@@ -461,13 +621,13 @@ describe("NewUsage", () => {
       error: null,
     } as any);
 
-    renderWithProviders(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const usageSelect = screen.getByRole("combobox");
+    const usageSelect = screen.getByTestId("usage-view-select");
     act(() => {
       fireEvent.change(usageSelect, { target: { value: "customer" } });
     });
@@ -485,13 +645,13 @@ describe("NewUsage", () => {
       error: null,
     } as any);
 
-    renderWithProviders(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const usageSelect = screen.getByRole("combobox");
+    const usageSelect = screen.getByTestId("usage-view-select");
     act(() => {
       fireEvent.change(usageSelect, { target: { value: "agent" } });
     });
