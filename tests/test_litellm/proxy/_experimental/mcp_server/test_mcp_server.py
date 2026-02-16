@@ -30,9 +30,11 @@ def cleanup_mcp_global_state():
         )
         # Clear before test
         global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
         yield
         # Clear after test
         global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
     except ImportError:
         # MCP not available, skip cleanup
         yield
