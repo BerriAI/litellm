@@ -87,6 +87,7 @@ async def test_metadata_passed_to_custom_callback_codex_models():
 
     test_metadata = {"foo": "bar", "trace_id": "test-123"}
     callback = MetadataCaptureCallback()
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
     litellm.callbacks = [callback]
 
     with patch(
