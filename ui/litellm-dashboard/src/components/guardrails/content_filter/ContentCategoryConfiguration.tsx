@@ -28,6 +28,8 @@ interface ContentCategoryConfigurationProps {
   onCategoryRemove: (id: string) => void;
   onCategoryUpdate: (id: string, field: string, value: any) => void;
   accessToken?: string | null;
+  pendingSelection?: string;
+  onPendingSelectionChange?: (value: string) => void;
 }
 
 const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> = ({
@@ -37,8 +39,13 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   onCategoryRemove,
   onCategoryUpdate,
   accessToken,
+  pendingSelection,
+  onPendingSelectionChange,
 }) => {
-  const [selectedCategoryName, setSelectedCategoryName] = React.useState<string>("");
+  // Use controlled state if parent provides it, otherwise use local state
+  const [localSelectedCategoryName, setLocalSelectedCategoryName] = React.useState<string>("");
+  const selectedCategoryName = pendingSelection !== undefined ? pendingSelection : localSelectedCategoryName;
+  const setSelectedCategoryName = onPendingSelectionChange || setLocalSelectedCategoryName;
   const [categoryYaml, setCategoryYaml] = React.useState<{ [key: string]: string }>({});
   const [categoryFileTypes, setCategoryFileTypes] = React.useState<{ [key: string]: string }>({});
   const [loadingYaml, setLoadingYaml] = React.useState<{ [key: string]: boolean }>({});
