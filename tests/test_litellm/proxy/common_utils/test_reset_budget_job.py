@@ -382,6 +382,49 @@ def test_reset_budget_for_keys_linked_to_budgets(reset_budget_job, mock_prisma_c
     assert call["data"]["spend"] == 0
 
 
+def test_reset_budget_for_keys_linked_to_budgets_excludes_keys_with_own_budget_duration(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that keys with BOTH budget_id AND budget_duration are excluded from
+    reset_budget_for_keys_linked_to_budgets. Such keys have their own reset
+    schedule and are handled only by reset_budget_for_litellm_keys(). The
+    budget_duration=None filter ensures they are NOT double-reset when the
+    linked budget tier expires.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 10.0,
+            "budget_duration": "7d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "7d-budget-tier",
+            "created_at": now - timedelta(days=7),
+        },
+    )
+
+    budgets_to_reset = [test_budget]
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
+            budgets_to_reset=budgets_to_reset
+        )
+    )
+
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 1
+    call = calls[0]
+
+    # Critical: budget_duration must be None so keys with their own budget_duration
+    # (e.g. key has budget_id="X" AND budget_duration=60) are excluded.
+    # Those keys are reset only by reset_budget_for_litellm_keys() - no double-reset.
+    assert call["where"]["budget_duration"] is None
+    assert call["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
+
+
 def test_reset_budget_for_keys_linked_to_budgets_empty(
     reset_budget_job, mock_prisma_client
 ):

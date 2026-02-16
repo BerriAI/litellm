@@ -229,6 +229,10 @@ async def test_reset_budget_endusers_partial_failure():
     prisma_client.get_data.side_effect = get_data_mock
 
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -389,6 +393,10 @@ async def test_reset_budget_continues_other_categories_on_failure():
 
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -863,6 +871,10 @@ async def test_service_logger_endusers_success():
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -938,6 +950,10 @@ async def test_service_logger_endusers_failure():
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
