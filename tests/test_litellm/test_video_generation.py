@@ -735,8 +735,6 @@ class TestVideoLogging:
 
         Note: Uses AsyncMock with side_effect pattern for reliable parallel execution.
         """
-        import litellm.videos.main as videos_main
-
         custom_logger = self.TestVideoLogger()
         litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [custom_logger]
