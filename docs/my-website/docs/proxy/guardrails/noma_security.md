@@ -357,9 +357,11 @@ guardrails:
 
 - **`guardrail`**: Use `noma_v2` (recommended), or `noma` with `use_v2: true` for migration
 - **`mode`**: `pre_call`, `post_call`, `during_call`, `pre_mcp_call`, `during_mcp_call`
-- **`api_key`**: Noma API key (required)
+- **`api_key`**: Noma API key (required for Noma SaaS, optional for self-managed deployments)
 - **`api_base`**: Noma API base URL (defaults to `https://api.noma.security/`)
-- **`application_id`**: Application identifier
+- **`application_id`**: Application identifier. If omitted, v2 falls back to `x-noma-application-id` request header and then LiteLLM key alias (`litellm_metadata.user_api_key_alias`) when available.
+- **`monitor_mode`**: If `true`, runs in monitor-only mode without blocking (defaults to `false`)
+- **`block_failures`**: If `true`, fail-closed on guardrail technical failures (defaults to `true`)
 - **`use_v2`**: Migration toggle when `guardrail: noma` is used
 
 ### Environment Variables
@@ -368,6 +370,8 @@ guardrails:
 export NOMA_API_KEY="your-api-key-here"
 export NOMA_API_BASE="https://api.noma.security/"       # Optional
 export NOMA_APPLICATION_ID="my-app"                     # Optional
+export NOMA_MONITOR_MODE="false"                        # Optional
+export NOMA_BLOCK_FAILURES="true"                       # Optional
 ```
 
 ### Multiple Guardrails
