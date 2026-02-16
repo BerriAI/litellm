@@ -20,6 +20,12 @@ const sidebars = {
     {
       type: "category",
       label: "Observability",
+      link: {
+        type: "generated-index",
+        title: "Observability Integrations",
+        description: "Explore all observability, logging, and telemetry integrations available in LiteLLM.",
+        slug: "/integrations/observability",
+      },
       items: [
         {
           type: "category",
@@ -40,6 +46,12 @@ const sidebars = {
     {
       type: "category",
       label: "Guardrails",
+      link: {
+        type: "generated-index",
+        title: "Guardrails",
+        description: "Explore policy, safety, and moderation integrations and providers in LiteLLM.",
+        slug: "/integrations/guardrails",
+      },
       items: [
         "proxy/guardrails/quick_start",
         "proxy/guardrails/guardrail_load_balancing",
@@ -104,6 +116,12 @@ const sidebars = {
     {
       type: "category",
       label: "Alerting & Monitoring",
+      link: {
+        type: "generated-index",
+        title: "Alerting & Monitoring",
+        description: "Track and alert on proxy health, logging quality, and runtime incidents.",
+        slug: "/integrations/alerting-monitoring",
+      },
       items: [
         "proxy/alerting",
         "proxy/pagerduty",
@@ -119,6 +137,12 @@ const sidebars = {
     {
       type: "category",
       label: "[Beta] Prompt Management",
+      link: {
+        type: "generated-index",
+        title: "Prompt Management Integrations",
+        description: "Explore LiteLLM prompt-management integrations across API and dashboard workflows.",
+        slug: "/integrations/prompt-management",
+      },
       items: [
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",

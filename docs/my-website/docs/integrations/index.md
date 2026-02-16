@@ -42,11 +42,14 @@ Use this page to quickly identify integrations by intent, then open the integrat
 
 ## Observability and Logging (SDK + Proxy)
 
-- `logs_analytics` — [Langfuse](../observability/langfuse_integration.md), [LangSmith](../observability/langsmith_integration.md), [Arize](../observability/arize_integration.md), [Braintrust](../observability/braintrust.md), [Opik](../observability/opik_integration.md), [PostHog](../observability/posthog_integration.md), [MLflow](../observability/mlflow.md), [Argilla](../observability/argilla.md)
-- `telemetry` — [OpenTelemetry](../observability/opentelemetry_integration.md), [Datadog](../observability/datadog.md), [Sentry](../observability/sentry.md), [SigNoz](../observability/signoz.md), [Logfire](../observability/logfire_integration.md), [Azure Sentinel](../observability/azure_sentinel.md), [Helicone](../observability/helicone_integration.md)
+- `logs_analytics` — [Langfuse](../observability/langfuse_integration.md), [Langfuse OpenTelemetry](../observability/langfuse_otel_integration.md), [LangSmith](../observability/langsmith_integration.md), [Arize](../observability/arize_integration.md), [Braintrust](../observability/braintrust.md), [Opik](../observability/opik_integration.md), [PostHog](../observability/posthog_integration.md), [MLflow](../observability/mlflow.md), [Argilla](../observability/argilla.md), [Langtrace](../observability/langtrace_integration.md), [PromptLayer](../observability/promptlayer_integration.md)
+- `telemetry` — [OpenTelemetry](../observability/opentelemetry_integration.md), [Datadog](../observability/datadog.md), [Sentry](../observability/sentry.md), [SigNoz](../observability/signoz.md), [Logfire](../observability/logfire_integration.md), [Azure Sentinel](../observability/azure_sentinel.md), [Helicone](../observability/helicone_integration.md), [CloudZero](../observability/cloudzero.md), [Slack](../observability/slack_integration.md)
 - `callback_integrations` — [Callbacks](../observability/callbacks.md), [Custom API Callback](../observability/custom_callback.md), [Generic API Callback](../observability/generic_api.md), [AgentOps](../observability/agentops_integration.md), [Humanloop](../observability/humanloop.md), [Literal AI](../observability/literalai_integration.md), [Levo AI](../observability/levo_integration.md)
 - `evals_observability` — [OpenAI Function and output logging docs](../observability/raw_request_response.md), [Deepeval](../observability/deepeval_integration.md), [Phoenix](../observability/phoenix_integration.md), [W&B](../observability/wandb_integration.md), [OpenMeter](../observability/openmeter.md), [Lago](../observability/lago.md), [CloudZero](../observability/cloudzero.md), [Focus Export](../observability/focus.md)
 - `platform_observability` — [Qualifire](../observability/qualifire_integration.md), [Lunary](../observability/lunary_integration.md), [Greenscale](../observability/greenscale_integration.md), [Athina](../observability/athina_integration.md), [Sumo Logic](../observability/sumologic_integration.md), [Supabase Logging](../observability/supabase_integration.md), [PagerDuty + Logging](../proxy/pagerduty.md), [Scrub Logged Data](../observability/scrub_data.md)
+
+For the complete Observability & Logging inventory, use:
+- [Integrations sidebar category: Observability](/docs/integrations/observability)
 
 ## Guardrails and Safety (Proxy)
 
@@ -83,6 +86,9 @@ Use this page to quickly identify integrations by intent, then open the integrat
 
 - [Google Cloud Storage Logging](../observability/gcs_bucket_integration.md)
 - [FOCUS Export to S3](../observability/focus.md)
+- [S3 Logging and Caching Callbacks](../proxy/logging.md#s3-buckets)
+- [Azure Blob Storage Logging](../proxy/logging.md#azure-blob-storage)
+- [DynamoDB Logging](../proxy/logging.md#dynamodb)
 - [Supabase Output](../observability/supabase_integration.md)
 
 ## Next steps
