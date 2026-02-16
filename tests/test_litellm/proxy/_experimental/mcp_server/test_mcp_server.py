@@ -936,15 +936,6 @@ async def test_oauth2_headers_passed_to_mcp_client():
     # This will capture the arguments passed to _create_mcp_client
     captured_client_args = {}
 
-    # FIX: Explicitly mock the internal _create_mcp_client call
-    async def mock_get_tools_from_server(server, mcp_auth_header=None, extra_headers=None, add_prefix=False, raw_headers=None):
-        # Manually trigger the creation so the test registers the call
-        await global_mcp_server_manager._create_mcp_client(
-            server=server,
-            mcp_auth_header=mcp_auth_header,
-            extra_headers=extra_headers,
-        )
-        return []
 
     async def mock_create_mcp_client(
         server,
@@ -965,8 +956,8 @@ async def test_oauth2_headers_passed_to_mcp_client():
         mock_client = MagicMock()
         return mock_client
 
-    # Apply the patch
-    with patch.object(global_mcp_server_manager, "_get_tools_from_server", side_effect=mock_get_tools_from_server), patch.object(
+    # Patch _create_mcp_client and _prepare_mcp_server_headers, let the real _get_tools_from_server run
+    with patch.object(
         global_mcp_server_manager,
         "_create_mcp_client",
         side_effect=mock_create_mcp_client,
@@ -974,6 +965,9 @@ async def test_oauth2_headers_passed_to_mcp_client():
         global_mcp_server_manager,
         "get_allowed_mcp_servers",
         AsyncMock(return_value=[oauth2_server.server_id]),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+        return_value=(None, oauth2_headers),
     ):
         # Call _get_tools_from_mcp_servers which should eventually call _create_mcp_client
         await _get_tools_from_mcp_servers(

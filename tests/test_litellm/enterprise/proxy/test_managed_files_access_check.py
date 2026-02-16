@@ -164,7 +164,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
             "api_base": "https://test.azure.com/",
             "custom_llm_provider": "azure",
         }
-    )
+                await managed_files.check_managed_file_id_access(data, system_user)
 
     mock_deployment = MagicMock()
     mock_deployment.litellm_params.custom_llm_provider = "azure"

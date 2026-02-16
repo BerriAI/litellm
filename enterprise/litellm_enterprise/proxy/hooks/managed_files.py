@@ -357,17 +357,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 where={"unified_file_id": retrieve_file_id}
             )
             
-            # FIX 1: If record is None, it means file is deleted/missing -> Raise 404
-            if db_record is None:
+            # If record is None, it means file is deleted/missing -> Raise 404
+            if db_record is None or getattr(db_record, "deleted", False):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Managed file '{retrieve_file_id}' not found or has been deleted"
                 )
-            
             # Check access control
             if db_record.created_by != user_api_key_dict.user_id:
                 raise HTTPException(status_code=403, detail="User does not have access to this file")
-            
             return True
         return False
 
@@ -1028,7 +1026,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
         if stored_file_object and stored_file_object.file_object:
             file_obj = stored_file_object.file_object
-            # FIX 2: Ensure we return the Unified ID, not the raw provider ID
+            # Ensure we return the Unified ID, not the raw provider ID
             file_obj.id = file_id
             return file_obj
 

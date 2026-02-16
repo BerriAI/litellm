@@ -31,6 +31,7 @@ class TestVertexAIRerankTransform:
                 self._saved_env[var] = os.environ[var]
                 del os.environ[var]
 
+        self.config = VertexAIRerankConfig()
         self.model = "semantic-ranker-default@latest"
 
     def teardown_method(self):
