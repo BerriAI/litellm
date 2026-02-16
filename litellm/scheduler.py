@@ -61,6 +61,7 @@ class Scheduler:
         return [(item[0], item[1]) for item in queue]
 
     async def _get_model_lock(self, model_name: str) -> Lock:
+        # Process-local lock: protects concurrent coroutines within one router instance.
         model_lock = self._model_locks.get(model_name)
         if model_lock is not None:
             return model_lock
