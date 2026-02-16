@@ -415,7 +415,7 @@
     {
       "name": "fr_phone",
       "display_name": "Phone Number (France)",
-      "pattern": "(?:\\+33|0033|0)[1-9][0-9]{8}\\b",
+      "pattern": "(?<!\\d)(?:\\+33|0033|0)[1-9][0-9]{8}\\b",
       "category": "EU PII Patterns",
       "description": "Detects French phone numbers in various formats (+33, 0033, or 0 prefix followed by 9 digits starting with 1-9)"
     },
@@ -424,14 +424,16 @@
       "display_name": "VAT Number (EU)",
       "pattern": "\\b(AT|BE|BG|CY|CZ|DE|DK|EE|EL|ES|FI|FR|HR|HU|IE|IT|LT|LU|LV|MT|NL|PL|PT|RO|SE|SI|SK)[0-9A-Z]{8,12}\\b",
       "category": "EU PII Patterns",
-      "description": "Detects EU VAT identification numbers (2-letter country code + 8-12 alphanumeric characters covering all EU member states)"
+      "description": "Detects EU VAT identification numbers (2-letter country code + 8-12 alphanumeric characters covering all EU member states)",
+      "keyword_pattern": "\\b(?:VAT|V\\.A\\.T\\.|TVA|IVA|BTW|MWST|value\\s*added\\s*tax|tax\\s*number|tax\\s*id|fiscal\\s*number|fiscal\\s*code)\\b"
     },
     {
       "name": "eu_passport_generic",
       "display_name": "Passport Number (EU Generic)",
       "pattern": "\\b[0-9]{2}[A-Z]{2}[0-9]{5}\\b",
       "category": "EU PII Patterns",
-      "description": "Detects generic EU passport format (2 digits + 2 letters + 5 digits) - covers France and similar EU formats"
+      "description": "Detects generic EU passport format (2 digits + 2 letters + 5 digits) - covers France and similar EU formats",
+      "keyword_pattern": "\\b(?:passport|passeport|travel\\s*document|document\\s*number|reisepass|paspoort|paszport)\\b"
     },
     {
       "name": "fr_postal_code",
