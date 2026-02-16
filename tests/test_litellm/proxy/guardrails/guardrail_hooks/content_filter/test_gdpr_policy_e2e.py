@@ -249,6 +249,7 @@ class TestGDPRPolicyE2E:
         assert "jean@example.com" not in result
         assert "+33612345678" not in result
         assert "192057512345678" not in result
+
     @pytest.mark.asyncio
     async def test_vat_number_without_keyword_context_passes(self):
         """
