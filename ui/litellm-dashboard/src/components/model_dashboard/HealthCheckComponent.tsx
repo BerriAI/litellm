@@ -85,31 +85,16 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
           latestHealthChecks.latest_health_checks &&
           typeof latestHealthChecks.latest_health_checks === "object"
         ) {
-          Object.entries(latestHealthChecks.latest_health_checks).forEach(([key, checkData]: [string, any]) => {
+          Object.entries(latestHealthChecks.latest_health_checks).forEach(([modelId, checkData]: [string, any]) => {
             if (!checkData) return;
 
-            let targetModelId: string | null = null;
+            // Key is model_id from the backend (guaranteed by DB schema)
+            const modelExists = modelData.data.some((m: any) => m.model_info?.id === modelId);
+            if (!modelExists) return;
 
-            // The key is model_id from the backend; fallback to matching by model_name for legacy data
-            const modelByIdMatch = modelData.data.find((m: any) => m.model_info && m.model_info.id === key);
-            if (modelByIdMatch) {
-              targetModelId = modelByIdMatch.model_info.id;
-            } else {
-              const directModelMatch = modelData.data.find((m: any) => m.model_name === key);
-              if (directModelMatch?.model_info?.id) {
-                targetModelId = directModelMatch.model_info.id;
-              } else if (checkData.model_name) {
-                const modelByNameInData = modelData.data.find((m: any) => m.model_name === checkData.model_name);
-                if (modelByNameInData?.model_info?.id) {
-                  targetModelId = modelByNameInData.model_info.id;
-                }
-              }
-            }
+            const fullError = checkData.error_message || undefined;
 
-            if (targetModelId) {
-              const fullError = checkData.error_message || undefined;
-
-              healthStatusMap[targetModelId] = {
+            healthStatusMap[modelId] = {
                 status: checkData.status || "unknown",
                 lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : "None",
                 lastSuccess:
@@ -123,7 +108,6 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
                 fullError: fullError,
                 successResponse: checkData.status === "healthy" ? checkData : undefined,
               };
-            }
           });
         }
       } catch (healthError) {

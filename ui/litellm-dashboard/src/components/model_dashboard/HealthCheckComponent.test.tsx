@@ -92,56 +92,140 @@ describe("HealthCheckComponent", () => {
     expect(mockIndividualModelHealthCheckCall).not.toHaveBeenCalledWith("token-123", "gpt-4");
   });
 
-  it("should key health status by model id and show status from latest_health_checks by model_id", async () => {
-    const modelData = {
-      data: [
-        {
-          model_name: "gpt-4",
-          model_info: { id: "id-alpha" },
-          litellm_model_name: "gpt-4",
-        },
-        {
-          model_name: "gpt-4",
-          model_info: { id: "id-beta" },
-          litellm_model_name: "gpt-4",
-        },
-      ],
-    };
+  describe("latest_health_checks keyed by model id", () => {
+    it("should show status from latest_health_checks when keys match model ids", async () => {
+      const modelData = {
+        data: [
+          { 
+            model_name: "gpt-4", 
+            model_info: { id: "id-alpha" }, 
+            litellm_model_name: "gpt-4",  
+          },
+          { 
+            model_name: "gpt-4", 
+            model_info: { id: "id-beta" }, 
+            litellm_model_name: "gpt-4",
+          },
+        ],
+      };
 
-    mockLatestHealthChecksCall.mockResolvedValue({
-      latest_health_checks: {
-        "id-alpha": {
-          status: "healthy",
-          checked_at: "2024-01-15T10:00:00Z",
-          error_message: null,
+      mockLatestHealthChecksCall.mockResolvedValue({
+        latest_health_checks: {
+          "id-alpha": {
+            status: "healthy",
+            checked_at: "2024-01-15T10:00:00Z",
+            error_message: null,
+          },
+          "id-beta": {
+            status: "unhealthy",
+            checked_at: "2024-01-15T10:05:00Z",
+            error_message: "Connection failed",
+          },
         },
-        "id-beta": {
-          status: "unhealthy",
-          checked_at: "2024-01-15T10:05:00Z",
-          error_message: "Connection failed",
-        },
-      },
+      });
+
+      await act(async () => {
+        render(
+          <HealthCheckComponent
+            accessToken="token"
+            modelData={modelData}
+            all_models_on_proxy={["id-alpha", "id-beta"]}
+            getDisplayModelName={getDisplayModelName}
+          />,
+        );
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      expect(mockLatestHealthChecksCall).toHaveBeenCalledWith("token");
+      const healthyBadges = screen.getAllByText("healthy");
+      const unhealthyBadges = screen.getAllByText("unhealthy");
+      expect(healthyBadges.length).toBeGreaterThanOrEqual(1);
+      expect(unhealthyBadges.length).toBeGreaterThanOrEqual(1);
     });
 
-    await act(async () => {
-      render(
-        <HealthCheckComponent
-          accessToken="token"
-          modelData={modelData}
-          all_models_on_proxy={["id-alpha", "id-beta"]}
-          getDisplayModelName={getDisplayModelName}
-        />,
-      );
+    it("should skip latest_health_checks entries whose key is not a known model id", async () => {
+      const modelData = {
+        data: [
+          {
+            model_name: "gpt-4",
+            model_info: { id: "current-model-id" },
+            litellm_model_name: "gpt-4",
+          },
+        ],
+      };
+
+      mockLatestHealthChecksCall.mockResolvedValue({
+        latest_health_checks: {
+          "current-model-id": {
+            status: "healthy",
+            checked_at: "2024-01-15T10:00:00Z",
+            error_message: null,
+          },
+          "deleted-or-unknown-id": {
+            status: "unhealthy",
+            checked_at: "2024-01-15T10:05:00Z",
+            error_message: "Stale entry",
+          },
+        },
+      });
+
+      await act(async () => {
+        render(
+          <HealthCheckComponent
+            accessToken="token"
+            modelData={modelData}
+            all_models_on_proxy={["current-model-id"]}
+            getDisplayModelName={getDisplayModelName}
+          />,
+        );
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      expect(screen.getByText("healthy")).toBeInTheDocument();
+      expect(screen.queryByText("unhealthy")).not.toBeInTheDocument();
     });
 
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
-    });
+    it("should not apply status when latest_health_checks key is model name not model id", async () => {
+      const modelData = {
+        data: [
+          {
+            model_name: "gpt-4",
+            model_info: { id: "model-id-123" },
+            litellm_model_name: "gpt-4",
+          },
+        ],
+      };
 
-    expect(mockLatestHealthChecksCall).toHaveBeenCalledWith("token");
-    const healthyBadges = screen.getAllByText("healthy");
-    const unhealthyBadges = screen.getAllByText("unhealthy");
-    expect(healthyBadges.length).toBeGreaterThanOrEqual(1);
-    expect(unhealthyBadges.length).toBeGreaterThanOrEqual(1);
+      mockLatestHealthChecksCall.mockResolvedValue({
+        latest_health_checks: {
+          "gpt-4": {
+            status: "healthy",
+            checked_at: "2024-01-15T10:00:00Z",
+            error_message: null,
+          },
+        },
+      });
+
+      await act(async () => {
+        render(
+          <HealthCheckComponent
+            accessToken="token"
+            modelData={modelData}
+            all_models_on_proxy={["model-id-123"]}
+            getDisplayModelName={getDisplayModelName}
+          />,
+        );
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      expect(screen.queryByText("healthy")).not.toBeInTheDocument();
+      expect(screen.getByText("none")).toBeInTheDocument();
+    });
   });
 });
