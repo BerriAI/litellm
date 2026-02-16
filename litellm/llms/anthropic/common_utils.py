@@ -227,7 +227,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
-        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
+        # Note: Opus 4.6 effort is GA and does not require the beta header
+        if model and (
+            "opus-4-5" in model.lower()
+            or "opus_4_5" in model.lower()
+        ):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True

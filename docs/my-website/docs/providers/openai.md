@@ -194,6 +194,7 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5.2-pro | `response = completion(model="gpt-5.2-pro", messages=messages)` |
 | gpt-5.2-pro-2025-12-11 | `response = completion(model="gpt-5.2-pro-2025-12-11", messages=messages)` |
 | gpt-5.1 | `response = completion(model="gpt-5.1", messages=messages)` |
+| gpt-5-codex | `response = completion(model="gpt-5-codex", messages=messages)` |
 | gpt-5.1-codex | `response = completion(model="gpt-5.1-codex", messages=messages)` |
 | gpt-5.1-codex-mini | `response = completion(model="gpt-5.1-codex-mini", messages=messages)` |
 | gpt-5.1-codex-max | `response = completion(model="gpt-5.1-codex-max", messages=messages)` |
@@ -201,13 +202,18 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
 | o4-mini | `response = completion(model="o4-mini", messages=messages)` |
+| o4-mini-deep-research | `response = completion(model="o4-mini-deep-research", messages=messages)` |
+| o3-pro | `response = completion(model="o3-pro", messages=messages)` |
 | o3-mini | `response = completion(model="o3-mini", messages=messages)` |
 | o3 | `response = completion(model="o3", messages=messages)` |
+| o3-deep-research | `response = completion(model="o3-deep-research", messages=messages)` or `completion(model="o3-deep-research-2025-06-26", messages=messages)` |
+| o1-pro | `response = completion(model="o1-pro", messages=messages)` |
 | o1-mini | `response = completion(model="o1-mini", messages=messages)` |
 | o1-preview | `response = completion(model="o1-preview", messages=messages)` |
 | gpt-4o-mini  | `response = completion(model="gpt-4o-mini", messages=messages)` |
 | gpt-4o-mini-2024-07-18   | `response = completion(model="gpt-4o-mini-2024-07-18", messages=messages)` |
 | gpt-4o   | `response = completion(model="gpt-4o", messages=messages)` |
+| gpt-4o-2024-11-20   | `response = completion(model="gpt-4o-2024-11-20", messages=messages)` |
 | gpt-4o-2024-08-06   | `response = completion(model="gpt-4o-2024-08-06", messages=messages)` |
 | gpt-4o-2024-05-13   | `response = completion(model="gpt-4o-2024-05-13", messages=messages)` |
 | gpt-4-turbo   | `response = completion(model="gpt-4-turbo", messages=messages)` |
