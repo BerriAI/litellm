@@ -415,7 +415,7 @@
     {
       "name": "fr_phone",
       "display_name": "Phone Number (France)",
-      "pattern": "(?:(?:\\+33|0033)\\b|\\b0)[1-9][0-9]{8}\\b",
+      "pattern": "(?<!\\d)(?:\\+33|0033|0)[1-9][0-9]{8}\\b",
       "category": "EU PII Patterns",
       "description": "Detects French phone numbers in various formats (+33, 0033, or 0 prefix followed by 9 digits starting with 1-9)"
     },
