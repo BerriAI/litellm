@@ -193,17 +193,18 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
             # If session is from a different or closed loop, recreate it
             if session_loop is None or session_loop != current_loop or session_loop.is_closed():
-                # Close old session to prevent leaks
+                # Close old session to prevent leaks (only if we own it)
                 old_session = self.client
-                try:
-                    if not old_session.closed:
-                        try:
-                            asyncio.create_task(old_session.close())
-                        except RuntimeError:
-                            # Different event loop - can't schedule task, rely on GC
-                            verbose_logger.debug("Old session from different loop, relying on GC")
-                except Exception as e:
-                    verbose_logger.debug(f"Error closing old session: {e}")
+                if self._owns_session:
+                    try:
+                        if not old_session.closed:
+                            try:
+                                asyncio.create_task(old_session.close())
+                            except RuntimeError:
+                                # Different event loop - can't schedule task, rely on GC
+                                verbose_logger.debug("Old session from different loop, relying on GC")
+                    except Exception as e:
+                        verbose_logger.debug(f"Error closing old session: {e}")
 
                 # Create a new session in the current event loop
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
