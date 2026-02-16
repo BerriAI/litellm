@@ -193,8 +193,15 @@ async def test_scheduler_concurrent_poll_allows_single_request_per_interval():
 
 
 @pytest.mark.asyncio
-async def test_scheduler_poll_allows_next_request_after_polling_interval():
-    scheduler = Scheduler(polling_interval=0.01)
+async def test_scheduler_poll_allows_next_request_after_polling_interval(monkeypatch):
+    fake_time = {"now": 100.0}
+
+    def _fake_monotonic():
+        return fake_time["now"]
+
+    monkeypatch.setattr("litellm.scheduler.time.monotonic", _fake_monotonic)
+
+    scheduler = Scheduler(polling_interval=1)
     model_name = "gpt-3.5-turbo"
 
     await scheduler.add_request(
@@ -218,7 +225,7 @@ async def test_scheduler_poll_allows_next_request_after_polling_interval():
     )
     assert second_poll_immediate is False
 
-    await asyncio.sleep(0.02)
+    fake_time["now"] = fake_time["now"] + 2
 
     second_poll_after_wait = await scheduler.poll(
         id="req-1",
@@ -246,3 +253,31 @@ async def test_scheduler_get_queue_returns_copy():
     queue_a.append((999, "mutated"))
     queue_after_mutation = await scheduler.get_queue(model_name=model_name)
     assert (999, "mutated") not in queue_after_mutation
+
+
+@pytest.mark.asyncio
+async def test_scheduler_normalizes_cached_queue_items_to_tuples():
+    class StubRedisCache:
+        def __init__(self):
+            self.store = {}
+
+        async def async_get_cache(self, key, **kwargs):
+            return self.store.get(key)
+
+        async def async_set_cache(self, key, value, **kwargs):
+            self.store[key] = value
+
+    redis_cache = StubRedisCache()
+    scheduler = Scheduler(redis_cache=redis_cache)
+    model_name = "gpt-3.5-turbo"
+    queue_key = f"{SchedulerCacheKeys.queue.value}:{model_name}"
+
+    # Simulate Redis JSON round-trip shape: list-of-lists.
+    redis_cache.store[queue_key] = [[0, "req-0"]]
+
+    await scheduler.add_request(
+        FlowItem(priority=1, request_id="req-1", model_name=model_name)
+    )
+
+    queue = await scheduler.get_queue(model_name=model_name)
+    assert queue == [(0, "req-0"), (1, "req-1")]

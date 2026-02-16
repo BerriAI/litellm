@@ -3,6 +3,7 @@ import heapq
 import time
 from asyncio import Lock
 from typing import Dict, Optional
+from weakref import WeakValueDictionary
 
 from pydantic import BaseModel
 
@@ -46,9 +47,18 @@ class Scheduler:
         self.polling_interval = (
             polling_interval or DEFAULT_POLLING_INTERVAL
         )  # default to 3ms
-        self._model_locks: Dict[str, Lock] = {}
+        # Use weak refs to avoid unbounded lock growth for highly variable model names.
+        self._model_locks: Dict[str, Lock] = WeakValueDictionary()
         self._model_locks_guard = Lock()
         self._last_unhealthy_pop_at: Dict[str, float] = {}
+
+    @staticmethod
+    def _normalize_queue_items(queue: list) -> list:
+        """
+        Ensure queue entries always use tuples for deterministic heap behavior.
+        Redis JSON round-trips convert tuples to lists.
+        """
+        return [(item[0], item[1]) for item in queue]
 
     async def _get_model_lock(self, model_name: str) -> Lock:
         model_lock = self._model_locks.get(model_name)
@@ -173,16 +183,20 @@ class Scheduler:
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
-                return list(response)
+                return self._normalize_queue_items(response)
         return list(self.queue)
 
     async def save_queue(self, queue: list, model_name: str) -> None:
         """
         Save the updated queue of the model group
         """
-        queue_snapshot = list(queue)
+        queue_snapshot = self._normalize_queue_items(queue)
         if self.cache is not None:
             _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
             await self.cache.async_set_cache(key=_cache_key, value=queue_snapshot)
-        self.queue = queue_snapshot
+        else:
+            self.queue = list(queue_snapshot)
+
+        if len(queue_snapshot) == 0:
+            self._last_unhealthy_pop_at.pop(model_name, None)
         return None
