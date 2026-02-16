@@ -59,9 +59,11 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         self,
         headers: dict,
         model: str,
-        optional_params: dict,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> Dict:
+        optional_params = optional_params or {}
+
         default_headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
