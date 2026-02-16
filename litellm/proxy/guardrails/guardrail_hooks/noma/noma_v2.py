@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 _DEFAULT_API_BASE = "https://api.noma.security/"
 _AIDR_SCAN_ENDPOINT = "/ai-dr/v2/litellm/guardrails/scan"
-_INTERVENED_INPUT_FIELDS = ("texts", "images", "tools")
+_INTERVENED_INPUT_FIELDS = ("texts", "images", "tools", "tool_calls")
 _DEFAULT_API_BASE_HOSTNAME = urlparse(_DEFAULT_API_BASE).hostname
 
 

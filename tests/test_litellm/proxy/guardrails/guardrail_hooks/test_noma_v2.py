@@ -251,6 +251,13 @@ class TestNomaV2ActionBehavior:
             "texts": ["Name: Jane"],
             "images": ["https://old.example/image.png"],
             "tools": [{"type": "function", "function": {"name": "old_tool"}}],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "old_tool", "arguments": '{"key":"value"}'},
+                }
+            ],
         }
         with patch.object(
             noma_v2_guardrail,
@@ -261,6 +268,13 @@ class TestNomaV2ActionBehavior:
                     "texts": ["Name: *******"],
                     "images": ["https://new.example/image.png"],
                     "tools": [{"type": "function", "function": {"name": "new_tool"}}],
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "new_tool", "arguments": '{"safe":"true"}'},
+                        }
+                    ],
                 }
             ),
         ):
@@ -273,6 +287,13 @@ class TestNomaV2ActionBehavior:
         assert result["texts"] == ["Name: *******"]
         assert result["images"] == ["https://new.example/image.png"]
         assert result["tools"] == [{"type": "function", "function": {"name": "new_tool"}}]
+        assert result["tool_calls"] == [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "new_tool", "arguments": '{"safe":"true"}'},
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_native_action_blocked(self, noma_v2_guardrail):
