@@ -204,27 +204,27 @@ export function AccessGroupsPage() {
           const agentIds = record.agentIds ?? [];
           return (
             <Flex gap={12} align="center">
-              <Tooltip title={`${modelIds.length} Models`}>
+              <Tooltip title={`${modelIds?.length} Models`}>
                 <Tag color="blue" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
                   <Flex align="center" gap={6}>
                     <LayersIcon size={14} />
-                    {modelIds.length}
+                    {modelIds?.length}
                   </Flex>
                 </Tag>
               </Tooltip>
-              <Tooltip title={`${mcpServerIds.length} MCP Servers`}>
+              <Tooltip title={`${mcpServerIds?.length} MCP Servers`}>
                 <Tag color="cyan" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
                   <Flex align="center" gap={6}>
                     <ServerIcon size={14} />
-                    {mcpServerIds.length}
+                    {mcpServerIds?.length}
                   </Flex>
                 </Tag>
               </Tooltip>
-              <Tooltip title={`${agentIds.length} Agents`}>
+              <Tooltip title={`${agentIds?.length} Agents`}>
                 <Tag color="purple" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
                   <Flex align="center" gap={6}>
                     <BotIcon size={14} />
-                    {agentIds.length}
+                    {agentIds?.length}
                   </Flex>
                 </Tag>
               </Tooltip>
@@ -356,7 +356,7 @@ export function AccessGroupsPage() {
           />
           <Pagination
             current={currentPage}
-            total={sortedRows.length}
+            total={sortedRows?.length}
             pageSize={pageSize}
             onChange={(page) => setCurrentPage(page)}
             size="small"
