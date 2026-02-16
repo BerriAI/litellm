@@ -1706,3 +1706,108 @@ def test_translate_openai_response_restores_tool_names():
     assert len(tool_use_blocks) == 1
     # Name should be restored to original
     assert tool_use_blocks[0]["name"] == original_name
+
+
+def test_translate_openai_response_to_anthropic_input_tokens_excludes_cached_tokens():
+    """
+    Regression test: input_tokens in Anthropic format should NOT include cached tokens.
+    
+    Issue: v1/messages API was returning incorrect input_token count when using prompt caching.
+    The OpenAI format includes cached tokens in prompt_tokens, but Anthropic format should not.
+    
+    According to Anthropic's spec:
+    - input_tokens = uncached input tokens only
+    - cache_read_input_tokens = tokens read from cache
+    
+    In OpenAI format:
+    - prompt_tokens = all input tokens (including cached)
+    - prompt_tokens_details.cached_tokens = cached tokens
+    
+    Expected: anthropic.input_tokens = openai.prompt_tokens - openai.prompt_tokens_details.cached_tokens
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Create OpenAI format response with cached tokens
+    # Scenario: 100 total prompt tokens, 30 of which are cached
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30
+        ),
+        cache_read_input_tokens=30,  # Anthropic format cache info
+    )
+    
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    
+    # Convert to Anthropic format
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+    
+    # Validate: input_tokens should be 70 (100 - 30 cached), not 100
+    assert anthropic_response["usage"]["input_tokens"] == 70, (
+        f"Expected input_tokens=70 (100 total - 30 cached), "
+        f"but got {anthropic_response['usage']['input_tokens']}. "
+        f"input_tokens should NOT include cached tokens per Anthropic spec."
+    )
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+
+
+def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
+    """
+    Regression test: input_tokens should equal prompt_tokens when there are no cached tokens.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Create OpenAI format response without cached tokens
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    
+    # Convert to Anthropic format
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+    
+    # Validate: input_tokens should equal prompt_tokens when no caching
+    assert anthropic_response["usage"]["input_tokens"] == 100
+    assert anthropic_response["usage"]["output_tokens"] == 50
