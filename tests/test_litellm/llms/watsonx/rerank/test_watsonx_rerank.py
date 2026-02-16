@@ -64,10 +64,10 @@ class TestIBMWatsonXRerankTransform:
         }
 
         request_body = self.config.transform_rerank_request(
-            model=self.model, optional_rerank_params=optional_params, headers={}
+            model="cross-encoder/ms-marco-minilm-l-12-v2", optional_rerank_params=optional_params, headers={}
         )
 
-        assert request_body["model_id"] == "watsonx/cross-encoder/ms-marco-minilm-l-12-v2"
+        assert request_body["model_id"] == "cross-encoder/ms-marco-minilm-l-12-v2"
         assert request_body["project_id"] is not None
         assert request_body["query"] == "What is the capital of France?"
         assert request_body["documents"] == optional_params["documents"]

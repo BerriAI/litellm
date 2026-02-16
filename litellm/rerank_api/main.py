@@ -85,6 +85,7 @@ def rerank(  # noqa: PLR0915
             "deepinfra",
             "fireworks_ai",
             "voyage",
+            "watsonx",
         ]
     ] = None,
     top_n: Optional[int] = None,
