@@ -72,7 +72,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
             return {**default_headers, **headers}
         token = cast(
             Optional[str],
-            optional_params.get("token") or get_secret_str("WATSONX_TOKEN"),
+            optional_params.pop("token", None) or get_secret_str("WATSONX_TOKEN"),
         )
         zen_api_key = cast(
             Optional[str],

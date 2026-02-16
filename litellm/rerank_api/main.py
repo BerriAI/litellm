@@ -10,7 +10,6 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
-from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import RerankResponse
@@ -494,6 +493,8 @@ def rerank(  # noqa: PLR0915
                 model_response=model_response,
             )
         elif _custom_llm_provider == litellm.LlmProviders.WATSONX:
+            from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
+
             credentials = IBMWatsonXMixin.get_watsonx_credentials(
                 optional_params=dict(optional_params), api_key=dynamic_api_key, api_base=dynamic_api_base
             )
