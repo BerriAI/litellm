@@ -1360,7 +1360,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 methods.add("regex")
             else:
                 methods.add("keyword")
-        return ",".join(sorted(methods)) if methods else "keyword"
+        return ",".join(sorted(methods)) if methods else ""
 
     def _get_patterns_checked_count(self) -> int:
         """Get total number of patterns and keywords that were evaluated."""
