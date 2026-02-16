@@ -4,6 +4,15 @@
 
 A complete, production-ready 1-click deployment solution for LiteLLM on AWS, configured exactly as specified in the [benchmark guide](https://docs.litellm.ai/docs/benchmarks).
 
+## ⚠️ Important Note
+
+**This deployment currently has a known limitation:** It does not include model configuration, which is required to run the actual benchmark tests. The infrastructure matches the benchmark specifications perfectly, but you'll need to manually configure models (or update the template) to run API calls and measure performance.
+
+**What works:** Infrastructure deployment, resource allocation, health checks
+**What doesn't:** API requests, benchmark testing (requires model configuration)
+
+👉 **See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for full details and workarounds.**
+
 ## 🎯 Benchmark Configuration
 
 This deployment creates:
