@@ -1187,18 +1187,27 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
-                _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
-                    team_id=valid_token.team_id,
-                    max_budget=valid_token.team_max_budget,
-                    soft_budget=valid_token.team_soft_budget,
-                    spend=valid_token.team_spend,
-                    tpm_limit=valid_token.team_tpm_limit,
-                    rpm_limit=valid_token.team_rpm_limit,
-                    blocked=valid_token.team_blocked,
-                    models=valid_token.team_models,
-                    metadata=valid_token.team_metadata,
-                    object_permission_id=valid_token.team_object_permission_id,
-                )
+                try:
+                    _team_obj = await get_team_object(
+                        team_id=valid_token.team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except HTTPException:
+                    _team_obj = LiteLLM_TeamTableCachedObj(
+                        team_id=valid_token.team_id,
+                        max_budget=valid_token.team_max_budget,
+                        soft_budget=valid_token.team_soft_budget,
+                        spend=valid_token.team_spend,
+                        tpm_limit=valid_token.team_tpm_limit,
+                        rpm_limit=valid_token.team_rpm_limit,
+                        blocked=valid_token.team_blocked,
+                        models=valid_token.team_models,
+                        metadata=valid_token.team_metadata,
+                        object_permission_id=valid_token.team_object_permission_id,
+                    )
             else:
                 _team_obj = None
 

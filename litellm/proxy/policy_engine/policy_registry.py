@@ -7,10 +7,9 @@ Policies define WHAT guardrails to apply. WHERE they apply is defined
 by policy_attachments (see AttachmentRegistry).
 """
 
+import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
-
-from prisma import Json as PrismaJson
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
@@ -250,10 +249,10 @@ class PolicyRegistry:
                 data["created_by"] = created_by
                 data["updated_by"] = created_by
             if policy_request.condition is not None:
-                data["condition"] = PrismaJson(policy_request.condition.model_dump())
+                data["condition"] = json.dumps(policy_request.condition.model_dump())
             if policy_request.pipeline is not None:
                 validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
-                data["pipeline"] = PrismaJson(validated_pipeline.model_dump())
+                data["pipeline"] = json.dumps(validated_pipeline.model_dump())
 
             created_policy = await prisma_client.db.litellm_policytable.create(
                 data=data
@@ -332,10 +331,10 @@ class PolicyRegistry:
             if policy_request.guardrails_remove is not None:
                 update_data["guardrails_remove"] = policy_request.guardrails_remove
             if policy_request.condition is not None:
-                update_data["condition"] = PrismaJson(policy_request.condition.model_dump())
+                update_data["condition"] = json.dumps(policy_request.condition.model_dump())
             if policy_request.pipeline is not None:
                 validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
-                update_data["pipeline"] = PrismaJson(validated_pipeline.model_dump())
+                update_data["pipeline"] = json.dumps(validated_pipeline.model_dump())
 
             updated_policy = await prisma_client.db.litellm_policytable.update(
                 where={"policy_id": policy_id},

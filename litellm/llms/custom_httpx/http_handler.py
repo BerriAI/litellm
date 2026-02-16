@@ -866,6 +866,7 @@ class AsyncHTTPHandler:
             return LiteLLMAiohttpTransport(
                 client=shared_session,
                 ssl_verify=ssl_for_transport,
+                owns_session=False,
             )
 
         # Create new session only if none provided or existing one is invalid

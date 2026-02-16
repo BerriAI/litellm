@@ -16,6 +16,32 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation impo
 )
 
 
+@pytest.fixture(autouse=True)
+def clean_vertex_env():
+    """Clear Google/Vertex AI environment variables before each test to prevent test isolation issues."""
+    saved_env = {}
+    env_vars_to_clear = [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_CREDENTIALS",
+        "VERTEX_PROJECT",
+        "VERTEX_LOCATION",
+        "VERTEX_AI_PROJECT",
+    ]
+    for var in env_vars_to_clear:
+        if var in os.environ:
+            saved_env[var] = os.environ[var]
+            del os.environ[var]
+
+    yield
+
+    # Restore saved environment variables
+    for var, value in saved_env.items():
+        os.environ[var] = value
+
+
 class TestVertexAIGPTOSSTransformation:
     """Test class for VertexAI GPT-OSS transformation functionality."""
 
@@ -47,7 +73,7 @@ class TestVertexAIGPTOSSTransformation:
 @pytest.mark.asyncio
 async def test_vertex_ai_gpt_oss_simple_request():
     """
-    Test that a simple request to vertex_ai/openai/gpt-oss-20b-maas lands at the correct URL 
+    Test that a simple request to vertex_ai/openai/gpt-oss-20b-maas lands at the correct URL
     with the correct request body.
     """
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -80,14 +106,20 @@ async def test_vertex_ai_gpt_oss_simple_request():
             "total_tokens": 70
         }
     }
-    
+
     client = AsyncHTTPHandler()
-    
+
     async def mock_post_func(*args, **kwargs):
         return mock_response
-    
+
+    # Mock vertexai module to prevent import from triggering authentication
+    mock_vertexai = MagicMock()
+    mock_vertexai.preview = MagicMock()
+    mock_vertexai.preview.language_models = MagicMock()
+
     with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
-         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")):
+         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")), \
+         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}):
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
@@ -96,7 +128,7 @@ async def test_vertex_ai_gpt_oss_simple_request():
                     "content": "Your name is Litellm Bot, you are a helpful assistant"
                 },
                 {
-                    "role": "user", 
+                    "role": "user",
                     "content": "Hello, what is your name and can you tell me the weather?"
                 }
             ],
@@ -144,7 +176,7 @@ async def test_vertex_ai_gpt_oss_simple_request():
 @pytest.mark.asyncio
 async def test_vertex_ai_gpt_oss_reasoning_effort():
     """
-    Test that reasoning_effort parameter is correctly passed in the request body 
+    Test that reasoning_effort parameter is correctly passed in the request body
     for GPT-OSS models.
     """
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -158,7 +190,7 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
     mock_response.headers = {}
     mock_response.json.return_value = {
         "id": "chatcmpl-test456",
-        "object": "chat.completion", 
+        "object": "chat.completion",
         "created": 1234567890,
         "model": "openai/gpt-oss-20b-maas",
         "choices": [
@@ -177,14 +209,20 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
             "total_tokens": 67
         }
     }
-    
+
     client = AsyncHTTPHandler()
-    
+
     async def mock_post_func(*args, **kwargs):
         return mock_response
-    
+
+    # Mock vertexai module to prevent import from triggering authentication
+    mock_vertexai = MagicMock()
+    mock_vertexai.preview = MagicMock()
+    mock_vertexai.preview.language_models = MagicMock()
+
     with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
-         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")):
+         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")), \
+         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}):
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
