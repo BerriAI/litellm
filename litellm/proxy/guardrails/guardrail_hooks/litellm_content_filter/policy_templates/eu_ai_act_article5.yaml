@@ -1,5 +1,6 @@
 # EU AI Act Article 5 - Prohibited Practices Detection
 # Uses conditional logic: BLOCK if identifier word + block word appear together
+# Reference: https://artificialintelligenceact.eu/article/5/
 category_name: "eu_ai_act_article5_prohibited_practices"
 description: "Detects EU AI Act Article 5 prohibited practices using conditional keyword matching"
 default_action: "BLOCK"
