@@ -176,7 +176,7 @@ const sidebars = {
         "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
         "tutorials/livekit_xai_realtime",
-        "litellm/docs/my-website/docs/projects/openai-agents.md"
+        "projects/openai-agents"
       ]
     },
 
