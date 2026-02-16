@@ -53,13 +53,13 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="The Noma Application ID. Reads from NOMA_APPLICATION_ID env var if None.",
     )
-    client_id: Optional[str] = Field(
+    monitor_mode: Optional[bool] = Field(
         default=None,
-        description="Noma OAuth client ID. Used when api_key is not provided.",
+        description="When true, run guardrail checks in monitor mode.",
     )
-    client_secret: Optional[str] = Field(
+    block_failures: Optional[bool] = Field(
         default=None,
-        description="Noma OAuth client secret. Used when api_key is not provided.",
+        description="When true, fail closed on Noma API errors.",
     )
 
     @staticmethod

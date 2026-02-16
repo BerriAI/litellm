@@ -13,6 +13,8 @@ def noma_v2_guardrail():
         api_key="test-api-key",
         api_base="https://api.test.noma.security/",
         application_id="test-app",
+        monitor_mode=False,
+        block_failures=False,
         guardrail_name="test-noma-v2-guardrail",
         event_hook="pre_call",
         default_on=True,
@@ -34,17 +36,26 @@ class TestNomaV2Configuration:
         assert "api_key" in noma_v2_params
         assert "api_base" in noma_v2_params
         assert "application_id" in noma_v2_params
-        assert "client_id" in noma_v2_params
-        assert "client_secret" in noma_v2_params
+        assert "monitor_mode" in noma_v2_params
+        assert "block_failures" in noma_v2_params
+        assert "client_id" not in noma_v2_params
+        assert "client_secret" not in noma_v2_params
         assert "use_v2" not in noma_v2_params
 
     def test_init_requires_auth(self):
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(
                 ValueError,
-                match="Noma v2 guardrail requires either api_key or client_id\\+client_secret",
+                match="Noma v2 guardrail requires api_key",
             ):
                 NomaV2Guardrail()
+
+    def test_init_defaults_monitor_and_block_failures(self):
+        with patch.dict(os.environ, {"NOMA_API_KEY": "test-api-key"}, clear=True):
+            guardrail = NomaV2Guardrail()
+
+        assert guardrail.monitor_mode is False
+        assert guardrail.block_failures is False
 
     @pytest.mark.asyncio
     async def test_api_key_auth_path(self, noma_v2_guardrail):
@@ -64,13 +75,10 @@ class TestNomaV2Configuration:
         with patch.object(noma_v2_guardrail.async_handler, "post", mock_post):
             await noma_v2_guardrail._call_noma_scan(
                 payload={"inputs": {"texts": []}},
-                request_data={"litellm_call_id": "test-call-id"},
-                logging_obj=None,
             )
 
         call_kwargs = mock_post.call_args.kwargs
         assert call_kwargs["headers"]["Authorization"] == "Bearer test-api-key"
-        assert call_kwargs["headers"]["X-Noma-Request-ID"] == "test-call-id"
 
     def test_build_scan_payload_sends_raw_available_data(self, noma_v2_guardrail):
         inputs = {
@@ -86,21 +94,21 @@ class TestNomaV2Configuration:
             "litellm_metadata": {"user_api_key_alias": "litellm-alias"},
             "litellm_call_id": "call-id-1",
         }
-        dynamic_params = {"application_id": "dynamic-app", "future_field": {"a": 1}}
-
         payload = noma_v2_guardrail._build_scan_payload(
             inputs=inputs,
             request_data=request_data,
             input_type="request",
             logging_obj=None,
-            dynamic_params=dynamic_params,
+            application_id="dynamic-app",
         )
 
         assert payload["inputs"] == inputs
         assert payload["request_data"] == request_data
         assert payload["input_type"] == "request"
-        assert payload["dynamic_params"] == dynamic_params
-        assert payload["x-noma-context"]["applicationId"] == "dynamic-app"
+        assert payload["monitor_mode"] is False
+        assert payload["application_id"] == "dynamic-app"
+        assert "dynamic_params" not in payload
+        assert "x-noma-context" not in payload
         assert "input" not in payload
 
     def test_build_scan_payload_passes_model_call_details_as_is(
@@ -125,7 +133,7 @@ class TestNomaV2Configuration:
             request_data=request_data,
             input_type="request",
             logging_obj=_LoggingObj(),
-            dynamic_params={},
+            application_id="test-app",
         )
 
         assert payload["request_data"]["litellm_logging_obj"] == {
@@ -140,34 +148,6 @@ class TestNomaV2Configuration:
         }
         assert "logging_obj" not in payload
         assert request_data["litellm_logging_obj"] == "<Logging object>"
-
-    @pytest.mark.asyncio
-    async def test_oauth_path_and_token_reuse(self):
-        guardrail = NomaV2Guardrail(
-            api_base="https://api.test.noma.security/",
-            client_id="test-client-id",
-            client_secret="test-client-secret",
-            guardrail_name="test-noma-v2-guardrail",
-            event_hook="pre_call",
-            default_on=True,
-        )
-
-        token_response = MagicMock()
-        token_response.status_code = 200
-        token_response.json.return_value = {
-            "accessToken": "oauth-token",
-            "expiresIn": 3600,
-        }
-        token_response.raise_for_status = MagicMock()
-        token_post = AsyncMock(return_value=token_response)
-
-        with patch.object(guardrail.async_handler, "post", token_post):
-            auth_1 = await guardrail._get_authorization_header()
-            auth_2 = await guardrail._get_authorization_header()
-
-        assert auth_1 == "Bearer oauth-token"
-        assert auth_2 == "Bearer oauth-token"
-        assert token_post.call_count == 1
 
     @pytest.mark.asyncio
     async def test_call_noma_scan_sanitizes_response_model_dump_object(
@@ -190,15 +170,11 @@ class TestNomaV2Configuration:
             "inputs": {"texts": ["hello"]},
             "request_data": {"response": _FakeModelResponse()},
             "input_type": "response",
-            "dynamic_params": {},
+            "application_id": "test-app",
         }
 
         with patch.object(noma_v2_guardrail.async_handler, "post", mock_post):
-            await noma_v2_guardrail._call_noma_scan(
-                payload=payload,
-                request_data={"litellm_call_id": "test-call-id"},
-                logging_obj=None,
-            )
+            await noma_v2_guardrail._call_noma_scan(payload=payload)
 
         sent_payload = mock_post.call_args.kwargs["json"]
         json.dumps(sent_payload)
@@ -317,49 +293,90 @@ class TestNomaV2ActionBehavior:
 
         assert result == inputs
 
+    @pytest.mark.asyncio
+    async def test_fail_closed_on_technical_scan_failure_when_block_failures_true(self):
+        guardrail = NomaV2Guardrail(
+            api_key="test-api-key",
+            block_failures=True,
+            guardrail_name="test-noma-v2-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+        )
+        with patch.object(
+            guardrail,
+            "_call_noma_scan",
+            AsyncMock(side_effect=Exception("network error")),
+        ):
+            with pytest.raises(Exception, match="network error"):
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data={"metadata": {}},
+                    input_type="request",
+                )
+
+    @pytest.mark.asyncio
+    async def test_monitor_mode_ignores_block_action(self):
+        guardrail = NomaV2Guardrail(
+            api_key="test-api-key",
+            monitor_mode=True,
+            guardrail_name="test-noma-v2-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+        )
+        call_mock = AsyncMock(return_value={"action": "BLOCKED"})
+        with patch.object(guardrail, "_call_noma_scan", call_mock):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]},
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+
+        payload = call_mock.call_args.kwargs["payload"]
+        assert payload["monitor_mode"] is True
+        assert result == {"texts": ["hello"]}
+
 
 class TestNomaV2ApplicationIdResolution:
-    def test_application_id_precedence(self, noma_v2_guardrail, monkeypatch):
-        monkeypatch.delenv("NOMA_APPLICATION_ID", raising=False)
-        request_data = {
-            "metadata": {
-                "headers": {"x-noma-application-id": "header-app"},
-                "user_api_key_alias": "metadata-alias",
-            },
-            "litellm_metadata": {"user_api_key_alias": "litellm-alias"},
-        }
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_uses_dynamic_application_id(self, noma_v2_guardrail):
+        call_mock = AsyncMock(return_value={"action": "NONE"})
+        with patch.object(
+            noma_v2_guardrail,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={"application_id": "dynamic-app"},
+        ):
+            with patch.object(noma_v2_guardrail, "_call_noma_scan", call_mock):
+                await noma_v2_guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data={"metadata": {}},
+                    input_type="request",
+                )
 
-        assert (
-            noma_v2_guardrail._build_noma_context(
-                request_data=request_data,
-                logging_obj=None,
-                dynamic_params={"application_id": "dynamic-app"},
-            )["applicationId"]
-            == "dynamic-app"
-        )
+        payload = call_mock.call_args.kwargs["payload"]
+        assert payload["application_id"] == "dynamic-app"
 
-        assert (
-            noma_v2_guardrail._build_noma_context(
-                request_data=request_data,
-                logging_obj=None,
-                dynamic_params={},
-            )["applicationId"]
-            == "header-app"
-        )
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_uses_configured_application_id(
+        self, noma_v2_guardrail
+    ):
+        call_mock = AsyncMock(return_value={"action": "NONE"})
+        with patch.object(
+            noma_v2_guardrail,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={},
+        ):
+            with patch.object(noma_v2_guardrail, "_call_noma_scan", call_mock):
+                await noma_v2_guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data={"metadata": {}},
+                    input_type="request",
+                )
 
-        request_data_no_header = {
-            "metadata": {},
-            "litellm_metadata": {"user_api_key_alias": "litellm-alias"},
-        }
-        assert (
-            noma_v2_guardrail._build_noma_context(
-                request_data=request_data_no_header,
-                logging_obj=None,
-                dynamic_params={},
-            )["applicationId"]
-            == "test-app"
-        )
+        payload = call_mock.call_args.kwargs["payload"]
+        assert payload["application_id"] == "test-app"
 
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_omits_application_id_when_not_explicit(self):
         guardrail_no_config = NomaV2Guardrail(
             api_key="test-api-key",
             application_id=None,
@@ -367,24 +384,19 @@ class TestNomaV2ApplicationIdResolution:
             event_hook="pre_call",
             default_on=True,
         )
-        request_data_alias_only = {
-            "metadata": {},
-            "litellm_metadata": {"user_api_key_alias": "litellm-alias"},
-        }
-        assert (
-            guardrail_no_config._build_noma_context(
-                request_data=request_data_alias_only,
-                logging_obj=None,
-                dynamic_params={},
-            )["applicationId"]
-            == "litellm-alias"
-        )
 
-        assert (
-            guardrail_no_config._build_noma_context(
-                request_data={"metadata": {}, "litellm_metadata": {}},
-                logging_obj=None,
-                dynamic_params={},
-            )["applicationId"]
-            == "litellm"
-        )
+        call_mock = AsyncMock(return_value={"action": "NONE"})
+        with patch.object(
+            guardrail_no_config,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={},
+        ):
+            with patch.object(guardrail_no_config, "_call_noma_scan", call_mock):
+                await guardrail_no_config.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data={"metadata": {}},
+                    input_type="request",
+                )
+
+        payload = call_mock.call_args.kwargs["payload"]
+        assert "application_id" not in payload

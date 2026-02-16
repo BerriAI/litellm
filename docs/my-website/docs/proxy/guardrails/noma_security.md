@@ -358,9 +358,7 @@ guardrails:
 
 - **`guardrail`**: Use `noma_v2` (recommended), or `noma` with `use_v2: true` for migration
 - **`mode`**: `pre_call`, `post_call`, `during_call`, `pre_mcp_call`, `during_mcp_call`
-- **`api_key`**: Noma API key (optional if using OAuth client credentials)
-- **`client_id`**: OAuth client ID (used when `api_key` is not set)
-- **`client_secret`**: OAuth client secret (used when `api_key` is not set)
+- **`api_key`**: Noma API key (required)
 - **`api_base`**: Noma API base URL (defaults to `https://api.noma.security/`)
 - **`application_id`**: Application identifier
 - **`use_v2`**: Migration toggle when `guardrail: noma` is used
@@ -368,10 +366,7 @@ guardrails:
 ### Environment Variables
 
 ```shell
-export NOMA_API_KEY="your-api-key-here"          # Optional if using OAuth client credentials
-export NOMA_CLIENT_ID="your-client-id"           # Optional if using API key
-export NOMA_CLIENT_SECRET="your-client-secret"   # Optional if using API key
-export NOMA_TOKEN_URL="https://api.noma.security/auth"  # Optional
+export NOMA_API_KEY="your-api-key-here"
 export NOMA_API_BASE="https://api.noma.security/"       # Optional
 export NOMA_APPLICATION_ID="my-app"                     # Optional
 ```
