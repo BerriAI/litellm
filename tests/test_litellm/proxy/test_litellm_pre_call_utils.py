@@ -1751,3 +1751,58 @@ class TestMoveGuardrailsFromModelDeployment:
         assert data["metadata"].get("guardrails") is None or data["metadata"].get(
             "guardrails"
         ) == []
+
+    def test_multi_deployment_guardrails_merged_from_all(self):
+        """
+        When a model group has multiple deployments with different guardrails,
+        guardrails from ALL deployments should be merged (union) since deployment
+        selection happens later in the request lifecycle.
+        """
+        from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {},
+        }
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", metadata={})
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4-deployment-1",
+                    "guardrails": ["presidio", "content-filter"],
+                },
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4-deployment-2",
+                    "guardrails": ["content-filter", "pii-scanner"],
+                },
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    # No guardrails on this deployment
+                },
+            },
+        ]
+
+        with patch(
+            "litellm.proxy.litellm_pre_call_utils.llm_router", mock_router
+        ):
+            move_guardrails_to_metadata(
+                data=data,
+                _metadata_variable_name="metadata",
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert set(data["metadata"]["guardrails"]) == {
+            "presidio",
+            "content-filter",
+            "pii-scanner",
+        }

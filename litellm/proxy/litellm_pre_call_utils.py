@@ -1518,7 +1518,9 @@ def move_guardrails_to_metadata(
 
     #########################################################################################
     # Add guardrails from model deployment's litellm_params.guardrails
-    # This enables per-model guardrail scoping via the "Guardrails" field in model settings
+    # This enables per-model guardrail scoping via the "Guardrails" field in model settings.
+    # Merges guardrails from ALL deployments in the model group, since deployment selection
+    # happens later in the request lifecycle (router._completion → get_available_deployment).
     #########################################################################################
     try:
         from litellm.proxy.proxy_server import llm_router
@@ -1527,22 +1529,28 @@ def move_guardrails_to_metadata(
             _model_name = data.get("model", "")
             _deployments = llm_router.get_model_list(model_name=_model_name)
             if _deployments:
-                _model_guardrails = (
-                    _deployments[0]
-                    .get("litellm_params", {})
-                    .get("guardrails", [])
-                )
-                if _model_guardrails and isinstance(_model_guardrails, list):
+                _all_deployment_guardrails: set = set()
+                for _deployment in _deployments:
+                    _dep_guardrails = (
+                        _deployment
+                        .get("litellm_params", {})
+                        .get("guardrails", [])
+                    )
+                    if isinstance(_dep_guardrails, list):
+                        _all_deployment_guardrails.update(_dep_guardrails)
+                if _all_deployment_guardrails:
                     if _metadata_variable_name not in data:
                         data[_metadata_variable_name] = {}
                     _existing = data[_metadata_variable_name].get("guardrails", [])
                     if isinstance(_existing, list):
-                        _merged = list(set(_existing) | set(_model_guardrails))
+                        _merged = list(set(_existing) | _all_deployment_guardrails)
                     else:
-                        _merged = list(_model_guardrails)
+                        _merged = list(_all_deployment_guardrails)
                     data[_metadata_variable_name]["guardrails"] = _merged
-    except Exception:
-        pass  # Never break request processing for guardrail lookup failures
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to read guardrails from model deployment: %s", str(e)
+        )
 
 
 def _match_and_track_policies(
