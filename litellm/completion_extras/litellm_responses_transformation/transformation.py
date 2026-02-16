@@ -960,9 +960,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         provider_specific_fields
                     )
 
+                tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
-                    index=0,
+                    index=tool_call_index,
                     type="function",
                     function=function_chunk,
                 )
@@ -983,6 +984,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         elif event_type == "response.function_call_arguments.delta":
             content_part: Optional[str] = parsed_chunk.get("delta", None)
             if content_part:
+                tool_call_index = parsed_chunk.get("output_index", 0)
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
@@ -991,7 +993,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                 tool_calls=[
                                     ChatCompletionToolCallChunk(
                                         id=None,
-                                        index=0,
+                                        index=tool_call_index,
                                         type="function",
                                         function=ChatCompletionToolCallFunctionChunk(
                                             name=None, arguments=content_part
@@ -1033,9 +1035,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         provider_specific_fields
                     )
 
+                tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
-                    index=0,
+                    index=tool_call_index,
                     type="function",
                     function=function_chunk,
                 )
