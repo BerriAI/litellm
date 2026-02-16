@@ -8239,11 +8239,6 @@ class ProviderConfigManager:
                 or (supports_reasoning(model) and not is_gpt_model)
             )
 
-            is_o_series = model and (
-                "o_series" in model.lower()
-                or (supports_reasoning(model) and not is_gpt_model)
-            )
-
             if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
@@ -8251,7 +8246,11 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
-            return litellm.GithubCopilotResponsesAPIConfig()
+            # Only GPT-5 models support native responses API; others use chat completion translation
+            # When model=None (follow-up operations like GET/DELETE), return config to allow the operation
+            if model is None or "gpt-5" in model.lower():
+                return litellm.GithubCopilotResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.CHATGPT == provider:
             return litellm.ChatGPTResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:

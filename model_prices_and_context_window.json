@@ -17093,7 +17093,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17106,7 +17107,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17119,7 +17121,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_vision": true
     },
@@ -17130,7 +17133,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17143,7 +17147,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17160,6 +17165,16 @@
         "supports_vision": true
     },
     "github_copilot/gemini-3-pro-preview": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
+    "github_copilot/gemini-3-flash-preview": {
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 64000,
@@ -17314,6 +17329,10 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -17348,6 +17367,20 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "github_copilot/gpt-5.1-codex-mini": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
     "github_copilot/gpt-5.2": {
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
@@ -17356,6 +17389,20 @@
         "mode": "chat",
         "supported_endpoints": [
             "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.2-codex": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
             "/v1/responses"
         ],
         "supports_function_calling": true,
