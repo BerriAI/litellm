@@ -1,6 +1,8 @@
 import copy
+import json
 from unittest.mock import AsyncMock, MagicMock
 
+import orjson
 import pytest
 from fastapi import Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -14,6 +16,7 @@ from litellm.proxy.common_request_processing import (
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _parse_event_data_for_error,
+    _response_to_json_serializable,
     create_response,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -1024,3 +1027,91 @@ class TestExtractErrorFromSSEChunk:
         # Other fields should be obtained from the original error object (if exists)
 
 
+def _parsed_via_legacy_path(obj) -> dict:
+    """Simulate legacy path: jsonable_encoder + json.dumps -> parse. Returns parsed dict."""
+    from fastapi.encoders import jsonable_encoder
+
+    encoded = jsonable_encoder(obj)
+    return json.loads(json.dumps(encoded))
+
+
+def _parsed_via_new_path(obj) -> dict:
+    """New path: _response_to_json_serializable + orjson.dumps -> parse. Returns parsed dict."""
+    content = _response_to_json_serializable(obj)
+    if content is None:
+        raise ValueError("_response_to_json_serializable returned None")
+    return json.loads(orjson.dumps(content).decode())
+
+
+class TestResponseToJsonSerializable:
+    """Tests for _response_to_json_serializable (ORJSONResponse bypass for serialize_response)."""
+
+    def test_dict_passthrough(self):
+        """Plain dict should be returned as-is."""
+        d = {"data": [{"embedding": [0.1] * 100}], "model": "text-embedding-3"}
+        assert _response_to_json_serializable(d) is d
+
+    def test_pydantic_model_dump(self):
+        """Pydantic model should use model_dump(mode='json')."""
+        from litellm.types.utils import EmbeddingResponse, Usage
+
+        resp = EmbeddingResponse(
+            data=[{"embedding": [0.1] * 100, "index": 0}],
+            model="text-embedding-3",
+            usage=Usage(prompt_tokens=10, total_tokens=10),
+        )
+        result = _response_to_json_serializable(resp)
+        assert result is not None
+        assert result["model"] == "text-embedding-3"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["embedding"] == [0.1] * 100
+
+    def test_none_for_unsupported_type(self):
+        """Non-dict, non-Pydantic should return None."""
+        assert _response_to_json_serializable("string") is None
+        assert _response_to_json_serializable(42) is None
+        assert _response_to_json_serializable(None) is None
+
+    # --- Backward compatibility: new ORJSON path should produce equivalent JSON to legacy jsonable_encoder ---
+
+    def test_backward_compat_embedding_response_same_as_legacy(self):
+        """EmbeddingResponse via new path should produce JSON structurally equivalent to jsonable_encoder."""
+        from litellm.types.utils import EmbeddingResponse, Usage
+
+        resp = EmbeddingResponse(
+            data=[{"embedding": [0.1, 0.2, 0.3] * 50, "index": 0}],
+            model="text-embedding-3",
+            usage=Usage(prompt_tokens=10, total_tokens=10),
+        )
+        legacy = _parsed_via_legacy_path(resp)
+        new_path = _parsed_via_new_path(resp)
+        assert legacy == new_path
+
+    def test_backward_compat_plain_dict_same_as_legacy(self):
+        """Plain dict via new path should produce identical parsed JSON to legacy."""
+        d = {"data": [{"embedding": [0.1] * 100}], "model": "text-embedding-3"}
+        legacy = _parsed_via_legacy_path(d)
+        new_path = _parsed_via_new_path(d)
+        assert legacy == new_path
+
+    def test_backward_compat_unicode_preserved(self):
+        """Unicode in response should be preserved identically by both paths."""
+        d = {"model": "text-embedding-3", "text": "café résumé 日本語 🔥"}
+        legacy = _parsed_via_legacy_path(d)
+        new_path = _parsed_via_new_path(d)
+        assert legacy == new_path
+
+    def test_backward_compat_nested_structure_same_as_legacy(self):
+        """Nested dicts/lists should produce equivalent JSON."""
+        d = {
+            "object": "list",
+            "data": [
+                {"embedding": [0.1, 0.2], "index": 0},
+                {"embedding": [0.3, 0.4], "index": 1},
+            ],
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+            "model": "embedding-model",
+        }
+        legacy = _parsed_via_legacy_path(d)
+        new_path = _parsed_via_new_path(d)
+        assert legacy == new_path

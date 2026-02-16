@@ -17,7 +17,7 @@ from typing import (
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, ORJSONResponse, Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -51,6 +51,27 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+
+
+def _response_to_json_serializable(response: Any) -> Optional[dict]:
+    """
+    Convert LLM response to a JSON-serializable dict for ORJSONResponse.
+    Bypasses FastAPI jsonable_encoder to eliminate serialize_response overhead.
+    Returns None if conversion is not applicable (caller should return response as-is).
+    """
+    if isinstance(response, dict):
+        return response
+    if hasattr(response, "model_dump"):
+        try:
+            return response.model_dump(mode="json")
+        except Exception:
+            pass
+    if hasattr(response, "dict"):
+        try:
+            return response.dict()
+        except Exception:
+            pass
+    return None
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
@@ -808,6 +829,16 @@ class ProxyBaseLLMRequestProcessing:
             )
         )
         await check_response_size_is_safe(response=response)
+
+        # Bypass FastAPI jsonable_encoder: return ORJSONResponse with pre-serialized content
+        # to eliminate serialize_response overhead (~5.5s for large embeddings/completions).
+        content = _response_to_json_serializable(response)
+        if content is not None:
+            return ORJSONResponse(
+                content=content,
+                status_code=status.HTTP_200_OK,
+                headers=dict(fastapi_response.headers),
+            )
 
         return response
 
