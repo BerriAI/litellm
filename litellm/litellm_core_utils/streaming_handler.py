@@ -158,15 +158,17 @@ class CustomStreamWrapper:
 
     async def aclose(self):
         if self.completion_stream is not None:
+            stream_to_close = self.completion_stream
+            self.completion_stream = None
             # Shield from anyio cancellation so cleanup awaits can complete.
             # Without this, CancelledError is thrown into every await during
             # task group cancellation, preventing HTTP connection release.
             with anyio.CancelScope(shield=True):
                 try:
-                    if hasattr(self.completion_stream, "aclose"):
-                        await self.completion_stream.aclose()
-                    elif hasattr(self.completion_stream, "close"):
-                        result = self.completion_stream.close()
+                    if hasattr(stream_to_close, "aclose"):
+                        await stream_to_close.aclose()
+                    elif hasattr(stream_to_close, "close"):
+                        result = stream_to_close.close()
                         if result is not None:
                             await result
                 except BaseException as e:

@@ -13,8 +13,6 @@ import enum
 import hashlib
 import inspect
 import json
-
-import anyio
 import logging
 import threading
 import time
@@ -35,6 +33,7 @@ from typing import (
     cast,
 )
 
+import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
