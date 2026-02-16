@@ -7020,31 +7020,56 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
 };
 
 /**
- * Get all spend logs for a particular session
+ * Get all spend logs for a particular session.
+ * Fetches every page (page_size=100, the backend max) and merges
+ * them into a single response so the session drawer shows all logs.
  */
 export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
+  const pageSize = 100; // backend maximum
+  let currentPage = 1;
+  let allData: any[] = [];
+  let total = 0;
+
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
-      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+    while (true) {
+      const baseUrl = proxyBaseUrl
+        ? `${proxyBaseUrl}/spend/logs/session/ui`
+        : `/spend/logs/session/ui`;
+      const url = `${baseUrl}?session_id=${encodeURIComponent(session_id)}&page=${currentPage}&page_size=${pageSize}`;
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
+      if (!response.ok) {
+        const errorData = await response.json();
+        const errorMessage = deriveErrorMessage(errorData);
+        handleError(errorMessage);
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      const pageData = data.data || [];
+      allData = allData.concat(pageData);
+      total = data.total || allData.length;
+
+      if (currentPage >= (data.total_pages || 1)) {
+        break;
+      }
+      currentPage++;
     }
 
-    const data = await response.json();
-    return data;
+    return {
+      data: allData,
+      total: total,
+      page: 1,
+      page_size: total,
+      total_pages: 1,
+    };
   } catch (error) {
     console.error("Failed to fetch session logs:", error);
     throw error;
