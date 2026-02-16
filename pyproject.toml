@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.81.11"
+version = "1.81.12"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -61,9 +61,9 @@ boto3 = { version = "1.40.76", optional = true }
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = ">=1.25.0,<2.0.0", optional = true, python = ">=3.10"}
 a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.37", optional = true}
+litellm-proxy-extras = {version = "0.4.39", optional = true}
 rich = {version = "13.7.1", optional = true}
-litellm-enterprise = {version = "0.1.31", optional = true}
+litellm-enterprise = {version = "0.1.32", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = ">=0.1.12", optional = true, python = ">=3.9,<3.14"}
@@ -164,6 +164,7 @@ opentelemetry-sdk = "^1.28.0"
 opentelemetry-exporter-otlp = "^1.28.0"
 langfuse = "^2.45.0"
 fastapi-offline = "^1.7.3"
+fakeredis = "^2.27.1"
 
 [tool.poetry.group.proxy-dev.dependencies]
 prisma = "0.11.0"
@@ -173,13 +174,14 @@ opentelemetry-api = "^1.28.0"
 opentelemetry-sdk = "^1.28.0"
 opentelemetry-exporter-otlp = "^1.28.0"
 azure-identity = {version = "^1.15.0", python = ">=3.9"}
+a2a-sdk = {version = "^0.3.22", python = ">=3.10"}
 
 [build-system]
 requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.81.11"
+version = "1.81.12"
 version_files = [
     "pyproject.toml:^version"
 ]

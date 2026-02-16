@@ -166,7 +166,7 @@ model LiteLLM_DeletedTeamTable {
     policies                String[] @default([])
     model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false)
-    
+
     // Original timestamps from team creation/updates
     created_at              DateTime? @map("created_at")
     updated_at              DateTime? @map("updated_at")
@@ -367,6 +367,7 @@ model LiteLLM_DeletedVerificationToken {
     rotation_interval       String?
     last_rotation_at        DateTime?
     key_rotation_at         DateTime?
+    
     // Deletion metadata
     deleted_at              DateTime  @default(now()) @map("deleted_at")
     deleted_by              String?   @map("deleted_by") // User who deleted the key
@@ -769,6 +770,22 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([model_object_id])
 }
 
+model LiteLLM_ManagedVectorStoreTable {
+  id String @id @default(uuid())
+  unified_resource_id String @unique // The base64 encoded unified vector store ID
+  resource_object Json? // Stores the VectorStoreCreateResponse
+  model_mappings Json // Maps model_id -> provider_vector_store_id
+  flat_model_resource_ids String[] @default([]) // Flat list of provider vector store IDs for faster querying
+  storage_backend String? // Storage backend name (if applicable)
+  storage_url String? // Storage URL (if applicable)
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+
+  @@index([unified_resource_id])
+}
+
 model LiteLLM_ManagedVectorStoresTable {
   vector_store_id String @id
   custom_llm_provider String
@@ -792,6 +809,7 @@ model LiteLLM_GuardrailsTable {
   guardrail_name String @unique
   litellm_params Json
   guardrail_info Json?
+  team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
@@ -902,6 +920,7 @@ model LiteLLM_PolicyTable {
   guardrails_add   String[]  @default([])
   guardrails_remove String[] @default([])
   condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
