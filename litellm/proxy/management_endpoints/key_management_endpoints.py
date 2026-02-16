@@ -3277,6 +3277,14 @@ async def _execute_virtual_key_regeneration(
     update_data.update(non_default_values)
     update_data = prisma_client.jsonify_object(data=update_data)
 
+    # If grace period set, insert deprecated key so old key remains valid
+    await _insert_deprecated_key(
+        prisma_client=prisma_client,
+        old_token_hash=hashed_api_key,
+        new_token_hash=new_token_hash,
+        grace_period=data.grace_period if data else None,
+    )
+
     updated_token = await prisma_client.db.litellm_verificationtoken.update(
         where={"token": hashed_api_key},
         data=update_data,  # type: ignore
@@ -3474,58 +3482,6 @@ async def regenerate_key_fn(  # noqa: PLR0915
         )
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
-        new_token = get_new_token(data=data)
-
-        new_token_hash = hash_token(new_token)
-        new_token_key_name = f"sk-...{new_token[-4:]}"
-
-        # Prepare the update data
-        update_data = {
-            "token": new_token_hash,
-            "key_name": new_token_key_name,
-        }
-
-        non_default_values = {}
-        if data is not None:
-            # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = await prepare_key_update_data(
-                data=data, existing_key_row=_key_in_db
-            )
-            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
-
-        update_data.update(non_default_values)
-        update_data = prisma_client.jsonify_object(data=update_data)
-
-        # If grace period set, insert deprecated key so old key remains valid
-        await _insert_deprecated_key(
-            prisma_client=prisma_client,
-            old_token_hash=hashed_api_key,
-            new_token_hash=new_token_hash,
-            grace_period=data.grace_period if data else None,
-        )
-
-        # Update the token in the database
-        updated_token = await prisma_client.db.litellm_verificationtoken.update(
-            where={"token": hashed_api_key},
-            data=update_data,  # type: ignore
-        )
-
-        updated_token_dict = {}
-        if updated_token is not None:
-            updated_token_dict = dict(updated_token)
-
-        updated_token_dict["key"] = new_token
-        updated_token_dict["token_id"] = updated_token_dict.pop("token")
-
-        ### 3. remove existing key entry from cache
-        ######################################################################
-
-        if hashed_api_key or key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
         # Normalize litellm_changed_by: if it's a Header object or not a string, convert to None
         if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
             litellm_changed_by = None
