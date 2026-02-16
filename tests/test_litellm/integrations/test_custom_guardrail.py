@@ -723,3 +723,93 @@ class TestEventTypeLogging:
         logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
+
+
+class TestTracingFieldsPopulation:
+    """Verify add_standard_logging_guardrail_information_to_request_data passes new tracing fields via **extra_fields."""
+
+    def test_new_fields_set_on_slg(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        request_data = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            guardrail_id="rail-123",
+            policy_template="EU AI Act Article 5",
+            detection_method="regex",
+            confidence_score=0.95,
+            match_details=[{"type": "pattern", "action_taken": "BLOCK"}],
+            patterns_checked=12,
+            alert_recipients=["admin@example.com"],
+        )
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        slg = slg_list[0]
+        assert slg["guardrail_id"] == "rail-123"
+        assert slg["policy_template"] == "EU AI Act Article 5"
+        assert slg["detection_method"] == "regex"
+        assert slg["confidence_score"] == 0.95
+        assert slg["patterns_checked"] == 12
+        assert slg["alert_recipients"] == ["admin@example.com"]
+        assert len(slg["match_details"]) == 1
+
+    def test_new_fields_default_to_absent(self):
+        """When extra_fields are not passed, new fields are absent from the SLG dict."""
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        request_data = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="ok",
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg.get("guardrail_id") is None
+        assert slg.get("policy_template") is None
+        assert slg.get("confidence_score") is None
+
+    def test_multiple_guardrails_with_different_policies(self):
+        """One request, multiple guardrails each with own policy_template."""
+        cg1 = CustomGuardrail(guardrail_name="rail-1")
+        cg2 = CustomGuardrail(guardrail_name="rail-2")
+        request_data = {"metadata": {}}
+
+        cg1.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="ok",
+            request_data=request_data,
+            guardrail_status="success",
+            policy_template="GDPR",
+        )
+        cg2.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="blocked",
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+            policy_template="EU AI Act Article 5",
+        )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 2
+        assert slg_list[0]["policy_template"] == "GDPR"
+        assert slg_list[1]["policy_template"] == "EU AI Act Article 5"
+
+    def test_classification_field_passed_through(self):
+        """Classification dict for LLM-judge guardrails is passed through."""
+        cg = CustomGuardrail(guardrail_name="judge-rail")
+        request_data = {"metadata": {}}
+        classification = {
+            "flagged": True,
+            "category": "workplace_emotion_recognition",
+            "article_reference": "Article 5(1)(f)",
+            "confidence": 0.94,
+            "reason": "Request asks to analyze employee sentiment",
+        }
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="blocked",
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+            classification=classification,
+            detection_method="llm-judge",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["classification"] == classification
+        assert slg["detection_method"] == "llm-judge"

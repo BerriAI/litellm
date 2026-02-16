@@ -155,8 +155,8 @@ class TestGDPRPolicyE2E:
         """
         guardrail = self.setup_gdpr_guardrail()
 
-        # Include VAT keyword for contextual matching
-        text = "Company VAT number is FR12345678901"
+        # Include VAT keyword for contextual matching (max 1 word gap)
+        text = "Company VAT number: FR12345678901"
         guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": [text]},
             request_data={},

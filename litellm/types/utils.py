@@ -2645,6 +2645,24 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     """Email addresses that were notified"""
 
 
+class GuardrailTracingDetail(TypedDict, total=False):
+    """
+    Typed fields for guardrail tracing metadata.
+
+    Passed to add_standard_logging_guardrail_information_to_request_data()
+    to enrich the StandardLoggingGuardrailInformation with provider-specific details.
+    """
+
+    guardrail_id: Optional[str]
+    policy_template: Optional[str]
+    detection_method: Optional[str]
+    confidence_score: Optional[float]
+    classification: Optional[dict]
+    match_details: Optional[List[dict]]
+    patterns_checked: Optional[int]
+    alert_recipients: Optional[List[str]]
+
+
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
