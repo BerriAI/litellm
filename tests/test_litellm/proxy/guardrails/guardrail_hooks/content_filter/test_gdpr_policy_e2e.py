@@ -10,8 +10,6 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../"))
 
-from fastapi import HTTPException
-
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
@@ -138,11 +136,12 @@ class TestGDPRPolicyE2E:
     @pytest.mark.asyncio
     async def test_eu_vat_masked(self):
         """
-        Test 4 - SHOULD MASK: EU VAT number is detected and masked
+        Test 4 - SHOULD MASK: EU VAT number with keyword context is detected and masked
         """
         guardrail = self.setup_gdpr_guardrail()
 
-        text = "Company VAT number is FR12345678901"
+        # Include VAT keyword for contextual matching (max 1 word gap)
+        text = "Company VAT number: FR12345678901"
         guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": [text]},
             request_data={},
@@ -250,3 +249,45 @@ class TestGDPRPolicyE2E:
         assert "jean@example.com" not in result
         assert "+33612345678" not in result
         assert "192057512345678" not in result
+
+    @pytest.mark.asyncio
+    async def test_vat_number_without_keyword_context_passes(self):
+        """
+        Test 10 - SHOULD NOT MASK: VAT-like pattern without keyword context
+        Contextual keyword guard prevents false positives
+        """
+        guardrail = self.setup_gdpr_guardrail()
+
+        # Text with VAT-like format but no VAT keyword context
+        text = "Product code FR12345678 for the shipment"
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])[0]
+
+        # Should not mask without VAT keyword context
+        assert "FR12345678" in result
+        assert "REDACTED" not in result
+
+    @pytest.mark.asyncio
+    async def test_passport_number_without_keyword_context_passes(self):
+        """
+        Test 11 - SHOULD NOT MASK: Passport-like pattern without keyword context
+        Contextual keyword guard prevents false positives
+        """
+        guardrail = self.setup_gdpr_guardrail()
+
+        # Text with passport-like format but no passport keyword context
+        text = "Reference number 12AB34567 for your order"
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])[0]
+
+        # Should not mask without passport keyword context
+        assert "12AB34567" in result
+        assert "REDACTED" not in result

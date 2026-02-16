@@ -31,7 +31,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import GuardrailTracingDetail, ModelResponseStream
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -133,6 +133,8 @@ class ContentFilterGuardrail(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
+        guardrail_id: Optional[str] = None,
+        policy_template: Optional[str] = None,
         patterns: Optional[List[ContentFilterPattern]] = None,
         blocked_words: Optional[List[BlockedWord]] = None,
         blocked_words_file: Optional[str] = None,
@@ -177,6 +179,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
         self.guardrail_provider = "litellm_content_filter"
+        self.config_guardrail_id = guardrail_id
+        self.config_policy_template = policy_template
         self.pattern_redaction_format = (
             pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
         )
@@ -1352,6 +1356,48 @@ class ContentFilterGuardrail(CustomGuardrail):
                         masked_entity_count.get(category, 0) + 1
                     )
 
+    def _build_match_details(
+        self, detections: List[ContentFilterDetection]
+    ) -> List[dict]:
+        """Build match_details list from content filter detections."""
+        match_details: List[dict] = []
+        for detection in detections:
+            detail: dict = {"type": detection["type"], "action_taken": detection["action"]}
+            if detection["type"] == "pattern":
+                detail["detection_method"] = "regex"
+                detail["snippet"] = cast(PatternDetection, detection).get("pattern_name", "")
+            elif detection["type"] == "blocked_word":
+                detail["detection_method"] = "keyword"
+                detail["snippet"] = cast(BlockedWordDetection, detection).get("keyword", "")
+            elif detection["type"] == "category_keyword":
+                detail["detection_method"] = "keyword"
+                cat_det = cast(CategoryKeywordDetection, detection)
+                detail["snippet"] = cat_det.get("keyword", "")
+                detail["category"] = cat_det.get("category", "")
+            match_details.append(detail)
+        return match_details
+
+    def _get_detection_methods(self, detections: List[ContentFilterDetection]) -> str:
+        """Get comma-separated detection methods used."""
+        methods: set = set()
+        for detection in detections:
+            if detection["type"] == "pattern":
+                methods.add("regex")
+            else:
+                methods.add("keyword")
+        return ",".join(sorted(methods)) if methods else ""
+
+    def _get_patterns_checked_count(self) -> int:
+        """Get total number of patterns and keywords that were evaluated."""
+        return len(self.compiled_patterns) + len(self.blocked_words) + len(self.category_keywords)
+
+    def _get_policy_templates(self) -> Optional[str]:
+        """Get comma-separated policy template names from loaded categories."""
+        if not self.loaded_categories:
+            return None
+        names = [cat.description or cat.category_name for cat in self.loaded_categories.values()]
+        return ", ".join(names) if names else None
+
     def _log_guardrail_information(
         self,
         request_data: dict,
@@ -1392,6 +1438,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
             masked_entity_count=masked_entity_count,
+            tracing_detail=GuardrailTracingDetail(
+                guardrail_id=self.config_guardrail_id or self.guardrail_name,
+                policy_template=self.config_policy_template or self._get_policy_templates(),
+                detection_method=self._get_detection_methods(detections) if detections else None,
+                match_details=self._build_match_details(detections) if detections else None,
+                patterns_checked=self._get_patterns_checked_count(),
+            ),
         )
 
     async def apply_guardrail(

@@ -57,6 +57,20 @@ class TestEUVAT:
         assert pattern.search("DE123456789") is not None
         assert pattern.search("IT12345678901") is not None
 
+    def test_pattern_requires_keyword_context(self):
+        """
+        NOTE: The eu_vat raw pattern CAN match common words like DEPARTMENT (DE+PARTMENT).
+        This is why the pattern REQUIRES keyword_pattern in production use.
+        The ContentFilterGuardrail enforces keyword context, preventing false positives.
+        This test documents the raw pattern's broad matching behavior.
+        """
+        pattern = get_compiled_pattern("eu_vat")
+        # These WILL match the raw pattern (by design - pattern is broad)
+        assert pattern.search("DEPARTMENT") is not None  # DE + PARTMENT
+        assert pattern.search("ITALY12345678") is not None  # IT + digits
+
+        # But in production, keyword_pattern guard prevents these false positives
+
 
 class TestEUPassportGeneric:
     """Test generic EU passport detection"""
