@@ -12,12 +12,14 @@ All /key management endpoints
 import asyncio
 import copy
 import json
+import os
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
+import prisma
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
@@ -629,7 +631,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
-        _masked = "{}****{}".format(data.key[:4], data.key[-4:]) if len(data.key) > 8 else "****"
+        _masked = (
+            "{}****{}".format(data.key[:4], data.key[-4:])
+            if len(data.key) > 8
+            else "****"
+        )
         raise HTTPException(
             status_code=400,
             detail={
@@ -1343,6 +1349,7 @@ async def prepare_key_update_data(
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
+    data_json.pop("grace_period", None)  # Request-only param, not a DB column
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None
@@ -3087,13 +3094,17 @@ async def _rotate_master_key(
                 should_create_model_in_db=False,
             )
             if new_model:
-                new_models.append(jsonify_object(new_model.model_dump()))
+                _dumped = new_model.model_dump(exclude_none=True)
+                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])
+                _dumped["model_info"] = prisma.Json(_dumped["model_info"])
+                new_models.append(_dumped)
         verbose_proxy_logger.debug("Resetting proxy model table")
-        await prisma_client.db.litellm_proxymodeltable.delete_many()
-        verbose_proxy_logger.debug("Creating %s models", len(new_models))
-        await prisma_client.db.litellm_proxymodeltable.create_many(
-            data=new_models,
-        )
+        async with prisma_client.db.tx() as tx:
+            await tx.litellm_proxymodeltable.delete_many()
+            verbose_proxy_logger.debug("Creating %s models", len(new_models))
+            await tx.litellm_proxymodeltable.create_many(
+                data=new_models,
+            )
     # 3. process config table
     try:
         config = await prisma_client.db.litellm_config.find_many()
@@ -3119,15 +3130,20 @@ async def _rotate_master_key(
             if encrypted_env_vars:
                 await prisma_client.db.litellm_config.update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": jsonify_object(encrypted_env_vars)},
+                    data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
 
     # 4. process MCP server table
-    await rotate_mcp_server_credentials_master_key(
-        prisma_client=prisma_client,
-        touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-        new_master_key=new_master_key,
-    )
+    try:
+        await rotate_mcp_server_credentials_master_key(
+            prisma_client=prisma_client,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to rotate MCP server credentials: %s", str(e)
+        )
 
     # 5. process credentials table
     try:
@@ -3145,13 +3161,19 @@ async def _rotate_master_key(
                     updated_patch=decrypted_cred,
                     new_encryption_key=new_master_key,
                 )
-                credential_object_jsonified = jsonify_object(
-                    encrypted_cred.model_dump()
-                )
+                _cred_data = encrypted_cred.model_dump(exclude_none=True)
+                if "credential_values" in _cred_data:
+                    _cred_data["credential_values"] = prisma.Json(
+                        _cred_data["credential_values"]
+                    )
+                if "credential_info" in _cred_data:
+                    _cred_data["credential_info"] = prisma.Json(
+                        _cred_data["credential_info"]
+                    )
                 await prisma_client.db.litellm_credentialstable.update(
                     where={"credential_name": cred.credential_name},
                     data={
-                        **credential_object_jsonified,
+                        **_cred_data,
                         "updated_by": user_api_key_dict.user_id,
                     },
                 )
@@ -3181,6 +3203,67 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     return new_token
 
 
+async def _insert_deprecated_key(
+    prisma_client: "PrismaClient",
+    old_token_hash: str,
+    new_token_hash: str,
+    grace_period: Optional[str],
+) -> None:
+    """
+    Insert old key into deprecated table so it remains valid during grace period.
+
+    Uses upsert to handle concurrent rotations gracefully.
+
+    Parameters:
+        prisma_client: DB client
+        old_token_hash: Hash of the old key being rotated out
+        new_token_hash: Hash of the new replacement key
+        grace_period: Duration string (e.g. "24h", "2d") or None/empty for immediate revoke
+    """
+    grace_period_value = grace_period or os.getenv(
+        "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
+    )
+    if not grace_period_value:
+        return
+
+    try:
+        grace_seconds = duration_in_seconds(grace_period_value)
+    except ValueError:
+        verbose_proxy_logger.warning(
+            "Invalid grace_period format: %s. Expected format like '24h', '2d'.",
+            grace_period_value,
+        )
+        return
+
+    if grace_seconds <= 0:
+        return
+
+    try:
+        revoke_at = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
+        await prisma_client.db.litellm_deprecatedverificationtoken.upsert(
+            where={"token": old_token_hash},
+            data={
+                "create": {
+                    "token": old_token_hash,
+                    "active_token_id": new_token_hash,
+                    "revoke_at": revoke_at,
+                },
+                "update": {
+                    "active_token_id": new_token_hash,
+                    "revoke_at": revoke_at,
+                },
+            },
+        )
+        verbose_proxy_logger.debug(
+            "Deprecated key retained for %s (revoke_at: %s)",
+            grace_period_value,
+            revoke_at,
+        )
+    except Exception as deprecated_err:
+        verbose_proxy_logger.warning(
+            "Failed to insert deprecated key for grace period: %s",
+            deprecated_err,
+        )
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -3288,6 +3371,7 @@ async def regenerate_key_fn(  # noqa: PLR0915
         - permissions: Optional[dict] - Key-specific permissions
         - guardrails: Optional[List[str]] - List of active guardrails for the key
         - blocked: Optional[bool] - Whether the key is blocked
+        - grace_period: Optional[str] - Duration to keep old key valid after rotation (e.g. "24h", "2d"). Omitted = immediate revoke. Env: LITELLM_KEY_ROTATION_GRACE_PERIOD
 
 
     Returns:
@@ -3406,6 +3490,58 @@ async def regenerate_key_fn(  # noqa: PLR0915
         )
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
+        new_token = get_new_token(data=data)
+
+        new_token_hash = hash_token(new_token)
+        new_token_key_name = f"sk-...{new_token[-4:]}"
+
+        # Prepare the update data
+        update_data = {
+            "token": new_token_hash,
+            "key_name": new_token_key_name,
+        }
+
+        non_default_values = {}
+        if data is not None:
+            # Update with any provided parameters from GenerateKeyRequest
+            non_default_values = await prepare_key_update_data(
+                data=data, existing_key_row=_key_in_db
+            )
+            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
+
+        update_data.update(non_default_values)
+        update_data = prisma_client.jsonify_object(data=update_data)
+
+        # If grace period set, insert deprecated key so old key remains valid
+        await _insert_deprecated_key(
+            prisma_client=prisma_client,
+            old_token_hash=hashed_api_key,
+            new_token_hash=new_token_hash,
+            grace_period=data.grace_period if data else None,
+        )
+
+        # Update the token in the database
+        updated_token = await prisma_client.db.litellm_verificationtoken.update(
+            where={"token": hashed_api_key},
+            data=update_data,  # type: ignore
+        )
+
+        updated_token_dict = {}
+        if updated_token is not None:
+            updated_token_dict = dict(updated_token)
+
+        updated_token_dict["key"] = new_token
+        updated_token_dict["token_id"] = updated_token_dict.pop("token")
+
+        ### 3. remove existing key entry from cache
+        ######################################################################
+
+        if hashed_api_key or key:
+            await _delete_cache_key_object(
+                hashed_token=hash_token(key),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
         # Normalize litellm_changed_by: if it's a Header object or not a string, convert to None
         if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
             litellm_changed_by = None
