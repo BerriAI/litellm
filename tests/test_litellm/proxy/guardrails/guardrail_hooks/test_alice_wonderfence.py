@@ -55,7 +55,7 @@ def wonderfence_guardrail(monkeypatch, mock_wonderfence_client):
 
 def test_initialization_without_api_key(monkeypatch):
     """Test that initialization fails without API key."""
-    monkeypatch.delenv("WONDERFENCE_API_KEY", raising=False)
+    monkeypatch.delenv("ALICE_API_KEY", raising=False)
 
     with pytest.raises(WonderFenceMissingSecrets) as exc:
         WonderFenceGuardrail(
@@ -63,7 +63,7 @@ def test_initialization_without_api_key(monkeypatch):
             event_hook=GuardrailEventHooks.pre_call,
         )
 
-    assert "WonderFence API key not found" in str(exc.value)
+    assert "Alice API key not found" in str(exc.value)
 
 
 def test_initialization_with_env_var(monkeypatch):
@@ -79,8 +79,8 @@ def test_initialization_with_env_var(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.client", mock_sdk)
     monkeypatch.setitem(__import__("sys").modules, "wonderfence_sdk.models", mock_sdk.models)
 
-    monkeypatch.setenv("WONDERFENCE_API_KEY", "env-api-key")
-    monkeypatch.setenv("WONDERFENCE_APP_NAME", "env-app-name")
+    monkeypatch.setenv("ALICE_API_KEY", "env-api-key")
+    monkeypatch.setenv("ALICE_APP_NAME", "env-app-name")
 
     guardrail = WonderFenceGuardrail(
         guardrail_name="test",
