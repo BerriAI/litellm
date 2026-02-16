@@ -1,0 +1,317 @@
+---
+slug: streaming-connection-pool-leak
+title: "How We Fixed a Streaming Connection Pool Leak"
+date: 2026-02-14T10:00:00
+authors:
+  - name: Ryan Crabbe
+    title: "Performance Engineer, LiteLLM"
+    url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
+    image_url: https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M
+description: "How we tracked down and fixed a connection pool leak that caused OpenAI streaming requests to hang after 30 minutes"
+tags: [performance, streaming, debugging]
+hide_table_of_contents: false
+---
+
+import { HappyPathScene, LeakScene, FixScene } from '@site/src/components/ParkingGarageAnimation';
+
+> Sometimes after roughly 30 minutes of running the LiteLLM proxy, OpenAI calls would just hang. Direct requests to OpenAI worked fine, and other providers through the proxy were unaffected. Since the requests were hanging rather than failing, and the provider itself was healthy, this pointed to a streaming connection issue.
+
+{/* truncate */}
+
+---
+
+## Reproducing It
+
+We wrote a self-contained Python script that starts a fake OpenAI server, starts the LiteLLM proxy pointed at it, and makes streaming requests where the client disconnects mid-stream. With the connection pool limit set to 2, the first two requests leak their connections, and the third request hangs forever waiting for a pool slot — confirming the bug.
+
+<details>
+<summary>Repro script</summary>
+
+```python
+"""
+Tests streaming connection pool leak THROUGH the proxy (the real-world scenario).
+
+Run: poetry run python tests/repro_connection_leak_proxy.py
+
+How it works:
+1. Starts a fake OpenAI server on :8099 (slow-streaming, never finishes quickly)
+2. Starts the LiteLLM proxy on :4111 configured to route to the fake server
+3. Client makes streaming requests to the proxy, reads a few chunks, then disconnects
+4. After exhausting the pool, tries one more request to see if it hangs
+
+BEFORE fix: Request 3 hangs (pool exhausted, connections leaked)
+AFTER fix:  Request 3 succeeds (async_data_generator finally block releases connections)
+"""
+
+import os
+
+# Set low pool limits BEFORE importing litellm
+os.environ["AIOHTTP_CONNECTOR_LIMIT_PER_HOST"] = "2"
+os.environ["AIOHTTP_CONNECTOR_LIMIT"] = "2"
+# Disable auth so we don't need a real key for the proxy
+os.environ["LITELLM_MASTER_KEY"] = "sk-test-master-key"
+
+import asyncio
+import json
+import uuid
+import subprocess
+import sys
+import time
+import signal
+
+import httpx
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+import uvicorn
+
+# ── Fake slow-streaming OpenAI server ──────────────────────────
+
+fake_app = FastAPI()
+
+
+async def slow_stream():
+    for i in range(200):
+        chunk = {
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "object": "chat.completion.chunk",
+            "created": 1677652288,
+            "model": "gpt-3.5-turbo",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": f"word{i} "},
+                    "finish_reason": None,
+                }
+            ],
+        }
+        yield f"data: {json.dumps(chunk)}\n\n"
+        await asyncio.sleep(0.5)  # slow enough that client will disconnect before done
+    yield "data: [DONE]\n\n"
+
+
+@fake_app.post("/v1/chat/completions")
+async def completions():
+    return StreamingResponse(slow_stream(), media_type="text/event-stream")
+
+
+def start_fake_server():
+    uvicorn.run(fake_app, host="127.0.0.1", port=8099, log_level="warning")
+
+
+# ── Proxy config ──────────────────────────────────────────────
+
+PROXY_CONFIG = {
+    "model_list": [
+        {
+            "model_name": "fake-model",
+            "litellm_params": {
+                "model": "openai/gpt-3.5-turbo",
+                "api_key": "fake-key",
+                "api_base": "http://127.0.0.1:8099/v1",
+            },
+        }
+    ],
+    "general_settings": {
+        "master_key": "sk-test-master-key",
+    },
+}
+
+PROXY_PORT = 4111
+PROXY_URL = f"http://127.0.0.1:{PROXY_PORT}"
+
+
+# ── Client that disconnects mid-stream ────────────────────────
+
+
+async def stream_and_disconnect(request_num: int):
+    """Connect to the proxy, read a few chunks, then disconnect abruptly."""
+    async with httpx.AsyncClient() as client:
+        async with client.stream(
+            "POST",
+            f"{PROXY_URL}/v1/chat/completions",
+            json={
+                "model": "fake-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+            headers={"Authorization": "Bearer sk-test-master-key"},
+            timeout=30.0,
+        ) as resp:
+            chunks_read = 0
+            async for line in resp.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    chunks_read += 1
+                    if chunks_read >= 3:
+                        print(
+                            f"[Request {request_num}] Read {chunks_read} chunks, disconnecting..."
+                        )
+                        return  # abrupt disconnect — context manager closes connection
+
+
+async def main():
+    import threading
+    import tempfile
+    import yaml
+
+    pool_limit = int(os.environ["AIOHTTP_CONNECTOR_LIMIT_PER_HOST"])
+
+    print("=" * 60)
+    print("CONNECTION POOL LEAK TEST (through proxy)")
+    print(f"Pool limit per host: {pool_limit}")
+    print("=" * 60)
+
+    # 1. Start fake OpenAI server
+    print("\n[Setup] Starting fake OpenAI server on :8099...")
+    server_thread = threading.Thread(target=start_fake_server, daemon=True)
+    server_thread.start()
+    await asyncio.sleep(1)
+
+    # 2. Write temp config and start proxy as subprocess
+    config_path = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, prefix="litellm_test_"
+    )
+    yaml.dump(PROXY_CONFIG, config_path)
+    config_path.close()
+
+    print(f"[Setup] Starting LiteLLM proxy on :{PROXY_PORT}...")
+    proxy_proc = subprocess.Popen(
+        [
+            "litellm",
+            "--config", config_path.name,
+            "--port", str(PROXY_PORT),
+            "--num_workers", "1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env={**os.environ},
+    )
+
+    # Wait for proxy to be ready
+    for i in range(30):
+        ret = proxy_proc.poll()
+        if ret is not None:
+            stdout = proxy_proc.stdout.read().decode() if proxy_proc.stdout else ""
+            print(f"[Setup] ERROR: Proxy exited with code {ret}")
+            return
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.get(f"{PROXY_URL}/health/liveliness")
+                if r.status_code == 200:
+                    print("[Setup] Proxy is ready!")
+                    break
+        except (httpx.ConnectError, httpx.RemoteProtocolError):
+            pass
+        await asyncio.sleep(1)
+    else:
+        print("[Setup] ERROR: Proxy failed to start (timeout)")
+        proxy_proc.kill()
+        return
+
+    # 3. Exhaust the connection pool
+    try:
+        for i in range(pool_limit):
+            print(f"\n[Request {i+1}] Streaming from proxy then disconnecting...")
+            await stream_and_disconnect(i + 1)
+            await asyncio.sleep(0.5)
+
+        # 4. Try one more — will it hang?
+        next_req = pool_limit + 1
+        print(f"\n{'=' * 60}")
+        print(f"[Request {next_req}] If pool is leaked, this will HANG...")
+        print(f"{'=' * 60}\n")
+
+        try:
+            await asyncio.wait_for(stream_and_disconnect(next_req), timeout=15)
+            print(f"\n** SUCCESS: Request {next_req} completed! No pool exhaustion. **")
+        except asyncio.TimeoutError:
+            print(f"\n!! FAILURE: Request {next_req} TIMED OUT — connection pool exhausted !!")
+
+    finally:
+        proxy_proc.send_signal(signal.SIGTERM)
+        try:
+            stdout, _ = proxy_proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proxy_proc.kill()
+            stdout, _ = proxy_proc.communicate()
+        os.unlink(config_path.name)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+</details>
+
+---
+
+## How the Connection Pool Works
+
+When a client makes a streaming request through the proxy, there are two separate connections:
+
+```
+Client ↔ Connection A ↔ Proxy ↔ Connection B ↔ Provider
+```
+
+The proxy holds Connection B in a pool — by default 50 slots per provider host. On the happy path, a connection is acquired from the pool, used for streaming, and released when the stream completes:
+
+<HappyPathScene />
+
+---
+
+## The Leak
+
+When the client disconnects mid-stream, Starlette cancels the async generator that yields chunks. But the generator isn't the same thing as the `CustomStreamWrapper` that owns the upstream HTTP connection. The generator gets torn down — the connection stays in its pool slot. Under normal traffic, disconnects accumulate faster than GC can reclaim them, and eventually every slot is leaked:
+
+<LeakScene />
+
+---
+
+## The First Fix — And Why It Wasn't Enough
+
+Two changes to fix the leak:
+
+1. **Added `aclose()` to `CustomStreamWrapper`** — giving the cleanup path a way to release the connection. The proxy interacts with `CustomStreamWrapper`, not the raw provider connection, so it needed a method that delegates down to the underlying stream's close and releases the HTTP connection.
+
+2. **Added a `finally` block in `async_data_generator`** — ensuring the connection is always released, whether the stream completes normally, the client disconnects, or something throws.
+
+We ran the repro script. The leak was still there.
+
+---
+
+## Three More Problems
+
+We added logging throughout the cleanup chain and reran the repro. The `finally` block wasn't even being hit. Here's what we found, in order of discovery:
+
+### Starlette stopped detecting disconnects
+
+Starlette 0.45.3 changed how `StreamingResponse` detects client disconnects. The old behavior used a dedicated `listen_for_disconnect` task that actively watched for `http.disconnect` messages. The new behavior relies on `send()` raising `OSError` when the client is gone. But uvicorn's `send()` silently returns instead of raising — so the generator never gets cancelled and the `finally` block never runs.
+
+**Fix:** Monkey-patch `StreamingResponse.__call__` to restore the task-group disconnect listener.
+
+### The `aclose()` call chain was broken
+
+After fixing disconnect detection, the `finally` block ran and `aclose()` was called — but `AiohttpResponseStream.aclose()` was never reached. In `aiohttp_transport.py`, the response was constructed with `content=` instead of `stream=`. This caused httpx to wrap the stream in an `AsyncIteratorByteStream` whose `aclose()` is a no-op. The call chain hit a dead end one layer too early.
+
+**Fix:** Change `content=` to `stream=` in `aiohttp_transport.py`. One word.
+
+### Cleanup was cancelled before it could finish
+
+After the above two fixes, `aclose()` reached the right function — but it wasn't completing. When the task group cancels the streaming task, anyio throws `CancelledError` into every subsequent `await`. The `finally` block runs, but every async cleanup call inside it is immediately interrupted.
+
+**Fix:** Wrap cleanup awaits in `anyio.CancelScope(shield=True)` — a brief immunity window that lets the cleanup complete before cancellation resumes.
+
+---
+
+## The Complete Fix
+
+We ran the repro script again. Request 3 completes instead of hanging. The `finally` block now properly releases the connection on disconnect:
+
+<FixScene />
+
+---
+
+## What This Means
+
+For LiteLLM users, streaming connections through the proxy are now properly released on client disconnect instead of leaking until pool exhaustion. The Starlette/Uvicorn disconnect detection gap also affects any FastAPI application doing streaming — not just LiteLLM.
+
+We prevent regression with unit tests for each fix — verifying that `aclose()` propagates through the `stream=` path, that cleanup completes under anyio cancellation, that the disconnect monkey-patch is applied, and that the router's generator calls `aclose()` on close. We're also adding the integration repro script to CI/CD to catch this class of streaming bug end-to-end.

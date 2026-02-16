@@ -1,0 +1,217 @@
+/* ── Parking Garage custom properties ── */
+:root {
+  --pg-bg: #f0f2f5;
+  --pg-bg-gradient: linear-gradient(180deg, #e8ecf1 0%, #f0f2f5 100%);
+  --pg-border: #c9cfd8;
+  --pg-text-primary: #1a1a2e;
+  --pg-text-secondary: #6b7280;
+  --pg-text-dim: #9ca3af;
+  --pg-spot-bg: #f8f9fb;
+  --pg-spot-border: #d1d5db;
+  --pg-spot-empty-bg: #fafbfc;
+  --pg-garage-roof: #64748b;
+  --pg-garage-wall: #94a3b8;
+  --pg-garage-floor: #cbd5e1;
+  --pg-car-body-green: #22c55e;
+  --pg-car-body-blue: #3b82f6;
+  --pg-car-body-red: #ef4444;
+  --pg-car-window: #dbeafe;
+  --pg-car-wheel: #374151;
+  --pg-valet-body: #6366f1;
+  --pg-valet-skin: #fbbf24;
+  --pg-dot-color: #3b82f6;
+  --pg-leaked-bg: #fef2f2;
+  --pg-leaked-border: #fca5a5;
+  --pg-timeout-bg: rgba(15, 23, 42, 0.88);
+  --pg-caption-bg: #ffffff;
+  --pg-caption-border: #e5e7eb;
+  --pg-road: #94a3b8;
+  --pg-road-mark: #fbbf24;
+  --pg-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+[data-theme='dark'] {
+  --pg-bg: #0f172a;
+  --pg-bg-gradient: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+  --pg-border: #334155;
+  --pg-text-primary: #e2e8f0;
+  --pg-text-secondary: #94a3b8;
+  --pg-text-dim: #64748b;
+  --pg-spot-bg: #1e293b;
+  --pg-spot-border: #475569;
+  --pg-spot-empty-bg: #0f172a;
+  --pg-garage-roof: #475569;
+  --pg-garage-wall: #334155;
+  --pg-garage-floor: #1e293b;
+  --pg-car-body-green: #4ade80;
+  --pg-car-body-blue: #60a5fa;
+  --pg-car-body-red: #f87171;
+  --pg-car-window: #1e3a5f;
+  --pg-car-wheel: #e2e8f0;
+  --pg-valet-body: #818cf8;
+  --pg-valet-skin: #fcd34d;
+  --pg-dot-color: #60a5fa;
+  --pg-leaked-bg: #451a1a;
+  --pg-leaked-border: #b91c1c;
+  --pg-timeout-bg: rgba(0, 0, 0, 0.92);
+  --pg-caption-bg: #1e293b;
+  --pg-caption-border: #334155;
+  --pg-road: #334155;
+  --pg-road-mark: #fbbf24;
+}
+
+/* ── Wrapper ── */
+.wrapper {
+  margin: 1.5rem 0;
+  user-select: none;
+  cursor: pointer;
+}
+
+/* ── Dual label ── */
+.garageLabel {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.garageLabelAnalogy {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--pg-text-primary);
+}
+
+.garageLabelTechnical {
+  font-size: 0.75rem;
+  color: var(--pg-text-secondary);
+  font-family: var(--pg-mono);
+}
+
+/* ── SVG scene ── */
+.scene {
+  width: 100%;
+  border: 2px solid var(--pg-border);
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.sceneSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* ── Timeout overlay ── */
+.timeoutOverlay {
+  position: absolute;
+  inset: 0;
+  background: var(--pg-timeout-bg);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.timeoutText {
+  color: var(--pg-car-body-red);
+  font-size: 1.6rem;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+}
+
+.timeoutSubtext {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  margin-top: 0.3rem;
+  font-family: var(--pg-mono);
+}
+
+/* ── Caption ── */
+.caption {
+  margin-top: 0.75rem;
+  padding: 0.65rem 1rem;
+  background: var(--pg-caption-bg);
+  border: 1px solid var(--pg-caption-border);
+  border-radius: 8px;
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--pg-text-primary);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.4;
+}
+
+.pauseHint {
+  font-size: 0.7rem;
+  color: var(--pg-text-dim);
+  text-align: center;
+  margin-top: 0.35rem;
+}
+
+/* ── Scene (PoolScene) ── */
+.sceneWrapper {
+  margin: 1.5rem 0;
+  position: relative;
+}
+
+.sceneSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.sceneCaption {
+  text-align: center;
+  font-size: 0.84rem;
+  color: var(--pg-text-secondary);
+  min-height: 28px;
+  line-height: 1.4;
+}
+
+/* ── CSS animations (PoolScene) ── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(-3px); }
+  50% { transform: translateX(3px); }
+}
+
+.shake {
+  animation: shake 0.15s ease-in-out infinite;
+}
+
+@keyframes streamDot {
+  0% { cx: var(--dot-from-x); cy: var(--dot-from-y); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { cx: var(--dot-to-x); cy: var(--dot-to-y); opacity: 0; }
+}
+
+.streamDot {
+  animation: streamDot 1.2s linear infinite;
+}
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .caption {
+    font-size: 0.8rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .timeoutText {
+    font-size: 1.2rem;
+  }
+}
