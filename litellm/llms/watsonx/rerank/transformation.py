@@ -43,7 +43,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
         params = optional_params or {}
 
-        complete_url = self._add_api_version_to_url(url=url, api_version=params.pop("api_version", None))
+        complete_url = self._add_api_version_to_url(url=url, api_version=(params.get("api_version", None)))
         return complete_url
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
