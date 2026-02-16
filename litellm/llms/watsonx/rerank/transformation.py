@@ -110,7 +110,9 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                 if k == "query" and v is not None:
                     optional_rerank_params["query"] = v
                 elif k == "documents" and v is not None:
-                    optional_rerank_params["inputs"] = [{"text": el} for el in v]
+                    optional_rerank_params["inputs"] = [
+                        {"text": el} if isinstance(el, str) else el for el in v
+                    ]
                 elif k == "top_n" and v is not None:
                     optional_rerank_params.setdefault("parameters", {}).setdefault("return_options", {})["top_n"] = v
                 elif k == "return_documents" and v is not None and isinstance(v, bool):
