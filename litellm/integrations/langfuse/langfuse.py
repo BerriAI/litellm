@@ -677,7 +677,7 @@ class LangFuseLogger:
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
-                    "user_id": end_user_id,
+                    "user_id": end_user_id or clean_metadata.get("user_api_key_user_id") or clean_metadata.get("user_api_key_alias"),
                 }
                 for key in list(
                     filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
@@ -842,6 +842,7 @@ class LangFuseLogger:
                 "model_parameters": optional_params,
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
+                "user_id": clean_metadata.get("user_api_key_user_id") or clean_metadata.get("user_api_key_alias"),
                 "usage": usage,
                 "usage_details": usage_details,
                 "metadata": log_requester_metadata(clean_metadata),
