@@ -8,7 +8,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import CallTypes, ModelResponse, Usage
+from litellm.types.utils import CallTypes, ModelInfo, ModelResponse, Usage
 from litellm.utils import token_counter
 
 
@@ -16,7 +16,7 @@ async def calculate_batch_cost_and_usage(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
-    model_info: Optional[dict] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> Tuple[float, Usage, List[str]]:
     """
     Calculate the cost and usage of a batch.
@@ -102,7 +102,7 @@ def _batch_cost_calculator(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_name: Optional[str] = None,
-    model_info: Optional[dict] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
     Calculate the cost of a batch based on the output file id
@@ -300,7 +300,7 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
-    model_info: Optional[dict] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
     Get the cost of a batch job from the file content
