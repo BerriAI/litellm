@@ -1896,7 +1896,7 @@ def batch_cost_calculator(
     usage: Usage,
     model: str,
     custom_llm_provider: Optional[str] = None,
-    model_info: Optional[dict] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> Tuple[float, float]:
     """
     Calculate the cost of a batch job.
