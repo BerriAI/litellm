@@ -57,6 +57,14 @@ class TestEUVAT:
         assert pattern.search("DE123456789") is not None
         assert pattern.search("IT12345678901") is not None
 
+    def test_common_words_not_matched(self):
+        """Test that common English words starting with country codes are not matched"""
+        pattern = get_compiled_pattern("eu_vat")
+        # Common words that could false-positive without proper context
+        assert pattern.search("DEPARTMENT") is None
+        assert pattern.search("ITALY") is None
+        assert pattern.search("DECEMBER") is None
+
 
 class TestEUPassportGeneric:
     """Test generic EU passport detection"""

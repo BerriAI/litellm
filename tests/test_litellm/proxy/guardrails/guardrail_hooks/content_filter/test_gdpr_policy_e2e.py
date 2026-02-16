@@ -10,8 +10,6 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../"))
 
-from fastapi import HTTPException
-
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
