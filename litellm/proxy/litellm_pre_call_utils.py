@@ -3,7 +3,7 @@ import copy
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from starlette.datastructures import Headers
 
 import litellm
@@ -1550,6 +1550,8 @@ def move_guardrails_to_metadata(
                     else:
                         _merged = list(_all_deployment_guardrails)
                     data[_metadata_variable_name]["guardrails"] = _merged
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.debug(
             "Failed to read guardrails from model deployment: %s", str(e)
