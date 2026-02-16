@@ -3184,9 +3184,19 @@ class Logging(LiteLLMLoggingBaseClass):
                 f"[LANGFUSE DEBUG] Langfuse logger kept: {self._get_callback_name(langfuse_logger_found)}"
             )
 
-        # Don't use set() - it breaks deduplication for callback instances
-        # The filtering logic above already handles deduplication
-        return filtered
+        # After Langfuse filtering, deduplicate remaining callbacks
+        seen = set()
+        final = []
+        for cb in filtered:
+            cb_id = id(cb) if not isinstance(cb, str) else cb
+            if cb_id not in seen:
+                seen.add(cb_id)
+                final.append(cb)
+            else:
+                verbose_logger.debug(
+                    f"LiteLLM Logging: Skipping duplicate callback: {self._get_callback_name(cb)}"
+                )
+        return final
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """
