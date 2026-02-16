@@ -48,7 +48,7 @@ class Scheduler:
             polling_interval or DEFAULT_POLLING_INTERVAL
         )  # default to 3ms
         # Use weak refs to avoid unbounded lock growth for highly variable model names.
-        self._model_locks: Dict[str, Lock] = WeakValueDictionary()
+        self._model_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
         self._model_locks_guard = Lock()
         self._last_unhealthy_pop_at: Dict[str, float] = {}
 
