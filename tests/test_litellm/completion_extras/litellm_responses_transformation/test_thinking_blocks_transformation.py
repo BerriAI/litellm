@@ -64,9 +64,11 @@ def test_regular_thinking_block_conversion():
     ), "Reasoning item should come before message"
 
 
-def test_thinking_block_truncation():
+def test_thinking_block_full_text_preserved():
     """
-    Test that thinking text longer than 100 chars is truncated with '...' in summary.
+    Test that thinking text is passed through in full without any truncation.
+
+    Per OpenAI docs, reasoning items should be passed back "untouched" between turns.
     """
     handler = LiteLLMResponsesTransformationHandler()
 
@@ -86,9 +88,8 @@ def test_thinking_block_truncation():
     assert len(reasoning_items) == 1
 
     summary_text = reasoning_items[0]["summary"][0]["text"]
-    assert len(summary_text) == 103, "Should be 100 chars + '...'"
-    assert summary_text.endswith("..."), "Should end with '...'"
-    assert summary_text.startswith("A" * 100), "Should start with first 100 chars"
+    assert len(summary_text) == 150, "Full text should be preserved without truncation"
+    assert summary_text == long_thinking, "Text should be passed through exactly as-is"
 
 
 def test_redacted_thinking_block_conversion():
@@ -370,6 +371,30 @@ def test_empty_thinking_text():
     assert reasoning_items[0]["type"] == "reasoning"
     # OpenAI requires summary field (even if empty) - use empty array for empty thinking
     assert reasoning_items[0]["summary"] == [], "Empty thinking should have empty summary array"
+
+
+def test_thinking_blocks_with_explicit_none_content():
+    """
+    Test edge case: assistant message with thinking_blocks, content=None, no tool_calls.
+
+    This should NOT silently drop thinking_blocks - they should still be converted.
+    """
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,  # Explicitly None
+            "thinking_blocks": [{"type": "thinking", "thinking": "Processing..."}],
+        }
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Should have reasoning item even with content=None
+    reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
+    assert len(reasoning_items) == 1, "Should have reasoning item despite content=None"
+    assert "Processing..." in reasoning_items[0]["summary"][0]["text"]
 
 
 def test_thinking_blocks_only_no_content():
