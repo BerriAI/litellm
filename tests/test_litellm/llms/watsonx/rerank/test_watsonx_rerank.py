@@ -226,7 +226,7 @@ class TestIBMWatsonXRerankTransform:
             )
 
     def test_get_supported_cohere_rerank_params(self):
-        """Test getting supported parameters for Fireworks AI rerank."""
+        """Test getting supported parameters for IBM watsonx.ai rerank."""
         supported_params = self.config.get_supported_cohere_rerank_params(self.model)
         assert "query" in supported_params
         assert "documents" in supported_params
