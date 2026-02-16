@@ -318,7 +318,8 @@ class AmazonConverseConfig(BaseConfig):
                 break
 
         # Check if the model is a Nova 2 model (matches nova-2-lite, nova-2-pro, etc.)
-        return model_without_region.startswith("amazon.nova-2-")
+        # Also check for nova-2/ spec prefix for imported models
+        return model_without_region.startswith("amazon.nova-2-") or model_without_region.startswith("nova-2/")
 
     def _map_web_search_options(
         self, web_search_options: dict, model: str
@@ -490,6 +491,9 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("tool_choice")
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+            # For nova imported models, also add web_search_options
+            if "nova" in model.lower():
+                supported_params.append("web_search_options")
             return supported_params
 
         ## Filter out 'cross-region' from model name
