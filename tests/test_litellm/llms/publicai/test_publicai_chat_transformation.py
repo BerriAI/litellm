@@ -7,6 +7,7 @@ PublicAI is an OpenAI-compatible provider with minor customizations.
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -55,38 +56,42 @@ class TestPublicAIConfig:
         """
         Test that get_supported_openai_params returns correct params
         """
-        supported_params = config.get_supported_openai_params(model="swiss-ai-apertus")
-        
-        assert "tools" in supported_params
-        assert "tool_choice" in supported_params
-        assert "temperature" in supported_params
-        assert "max_tokens" in supported_params
-        assert "stream" in supported_params
-        
-        # Note: JSON-based configs inherit from OpenAIGPTConfig which includes functions
-        # This is expected behavior for JSON-based providers
+        # Mock supports_function_calling to return True for all models
+        with patch('litellm.utils.supports_function_calling', return_value=True):
+            supported_params = config.get_supported_openai_params(model="swiss-ai-apertus")
+            
+            assert "tools" in supported_params
+            assert "tool_choice" in supported_params
+            assert "temperature" in supported_params
+            assert "max_tokens" in supported_params
+            assert "stream" in supported_params
+            
+            # Note: JSON-based configs inherit from OpenAIGPTConfig which includes functions
+            # This is expected behavior for JSON-based providers
 
     def test_map_openai_params_includes_functions(self, config):
         """
         Test that functions parameter is mapped (JSON-based configs don't exclude functions)
         """
-        non_default_params = {
-            "functions": [{"name": "test_function", "description": "Test function"}],
-            "temperature": 0.7,
-            "max_tokens": 1000
-        }
-        
-        result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params={},
-            model="swiss-ai-apertus",
-            drop_params=False
-        )
-        
-        # JSON-based configs inherit from OpenAIGPTConfig which includes functions
-        assert "functions" in result
-        assert result.get("temperature") == 0.7
-        assert result.get("max_tokens") == 1000
+        # Mock supports_function_calling to return True for this model
+        with patch('litellm.utils.supports_function_calling', return_value=True):
+            non_default_params = {
+                "functions": [{"name": "test_function", "description": "Test function"}],
+                "temperature": 0.7,
+                "max_tokens": 1000
+            }
+            
+            result = config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params={},
+                model="swiss-ai-apertus",
+                drop_params=False
+            )
+            
+            # JSON-based configs inherit from OpenAIGPTConfig which includes functions
+            assert "functions" in result
+            assert result.get("temperature") == 0.7
+            assert result.get("max_tokens") == 1000
 
     def test_map_openai_params_max_completion_tokens_mapping(self, config):
         """

@@ -1,12 +1,15 @@
+"""
+Tests for WatsonX chat completion functionality.
+"""
 import json
 import os
 import sys
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from typing import Optional
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -297,11 +300,10 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     def mock_get_chat_template_file(hf_model_name: str):
         return {"status": "failure"}
 
-    # Async mock function for client.post to properly handle async method mocking
-    async def mock_post_func(*args, **kwargs):
-        return mock_completion_response
-
-    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, patch.object(
+    # Create AsyncMock for client.post that returns the mock completion response
+    mock_post = AsyncMock(return_value=mock_completion_response)
+    
+    with patch.object(client, "post", mock_post), patch.object(
         litellm.module_level_client, "post", return_value=mock_token_response
     ), patch(
         "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_tokenizer_config",
