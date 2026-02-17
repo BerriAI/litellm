@@ -573,6 +573,7 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
+        "evals_api",
         "generateContent",
         "apply_guardrail",
         "bedrock_invoke",
