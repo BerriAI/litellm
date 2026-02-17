@@ -36,10 +36,18 @@ def isolate_litellm_state():
     # Get worker ID if running with pytest-xdist
     worker_id = os.environ.get('PYTEST_XDIST_WORKER', 'master')
 
-    # Store original state
-    original_callbacks = None
+    # Store original callback state (all callback lists)
+    original_state = {}
     if hasattr(litellm, 'callbacks'):
-        original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+        original_state['callbacks'] = litellm.callbacks.copy() if litellm.callbacks else []
+    if hasattr(litellm, 'success_callback'):
+        original_state['success_callback'] = litellm.success_callback.copy() if litellm.success_callback else []
+    if hasattr(litellm, 'failure_callback'):
+        original_state['failure_callback'] = litellm.failure_callback.copy() if litellm.failure_callback else []
+    if hasattr(litellm, '_async_success_callback'):
+        original_state['_async_success_callback'] = litellm._async_success_callback.copy() if litellm._async_success_callback else []
+    if hasattr(litellm, '_async_failure_callback'):
+        original_state['_async_failure_callback'] = litellm._async_failure_callback.copy() if litellm._async_failure_callback else []
 
     # Flush cache before test (critical for respx mocks)
     if hasattr(litellm, "in_memory_llm_clients_cache"):
@@ -61,9 +69,10 @@ def isolate_litellm_state():
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
-    # Reset to original state
-    if original_callbacks is not None and hasattr(litellm, 'callbacks'):
-        litellm.callbacks = original_callbacks
+    # Restore all callback lists to original state
+    for attr_name, original_value in original_state.items():
+        if hasattr(litellm, attr_name):
+            setattr(litellm, attr_name, original_value)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -74,13 +83,11 @@ def setup_and_teardown():
     Use this sparingly - most state should be handled by isolate_litellm_state.
     Only reload modules here if absolutely necessary.
     """
-    curr_dir = os.getcwd()
     sys.path.insert(
         0, os.path.abspath("../..")
     )
 
     import litellm
-    from litellm import Router
 
     # Only reload if NOT running in parallel (module reload + parallel = bad)
     worker_id = os.environ.get('PYTEST_XDIST_WORKER', None)
@@ -94,6 +101,10 @@ def setup_and_teardown():
                 importlib.reload(litellm.proxy.proxy_server)
         except Exception as e:
             print(f"Error reloading litellm.proxy.proxy_server: {e}")
+
+        # Flush cache after reload (prevents stale client instances)
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
 
     print(f"[conftest] Module setup complete (worker: {worker_id or 'master'})")
 
