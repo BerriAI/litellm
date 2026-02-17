@@ -7,8 +7,8 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import asyncio
 import copy
+import inspect
 from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
@@ -101,8 +101,8 @@ def perform_redaction(model_call_details: dict, result):
     # Redact result
     if result is not None:
         # Check if result is a coroutine, async generator, or other async object - these cannot be deepcopied
-        if (asyncio.iscoroutine(result) or 
-            asyncio.iscoroutinefunction(result) or
+        if (inspect.iscoroutine(result) or
+            inspect.iscoroutinefunction(result) or
             hasattr(result, '__aiter__') or  # async generator
             hasattr(result, '__anext__')):   # async iterator
             # For async objects, return a simple redacted response without deepcopy
