@@ -19,7 +19,6 @@ from litellm.integrations.prompt_management_base import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 GITLAB_PREFIX = "gitlab::"
