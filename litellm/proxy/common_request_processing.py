@@ -8,6 +8,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Callable,
+    Dict,
     Literal,
     Optional,
     Tuple,
@@ -351,9 +352,23 @@ def _get_cost_breakdown_from_logging_obj(
 
 
 class ProxyBaseLLMRequestProcessing:
+    # Headers excluded from request_headers passed to callbacks to avoid leaking credentials
+    _SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+
     def __init__(self, data: dict):
         self.data = data
         self._request_headers: Optional[Dict[str, str]] = None
+
+    @staticmethod
+    def _filter_sensitive_headers(
+        headers: "starlette.datastructures.Headers",
+    ) -> dict:
+        """Return a copy of request headers with sensitive values removed."""
+        return {
+            k: v
+            for k, v in headers.items()
+            if k.lower() not in ProxyBaseLLMRequestProcessing._SENSITIVE_HEADERS
+        }
 
     @staticmethod
     def get_custom_headers(
@@ -750,7 +765,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        self._request_headers = dict(request.headers)
+        self._request_headers = self._filter_sensitive_headers(request.headers)
 
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None

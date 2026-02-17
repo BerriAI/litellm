@@ -78,6 +78,16 @@ async def anthropic_response(  # noqa: PLR0915
             request_data=_data,
         )
 
+        # Call response headers hook for guardrail failure path
+        _callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=_data,
+            user_api_key_dict=user_api_key_dict,
+            response=None,
+            request_headers=ProxyBaseLLMRequestProcessing._filter_sensitive_headers(request.headers),
+        )
+        if _callback_headers:
+            fastapi_response.headers.update(_callback_headers)
+
         # Create Anthropic-formatted response with violation message
         import uuid
 
