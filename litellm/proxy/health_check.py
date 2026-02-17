@@ -67,16 +67,8 @@ async def run_with_timeout(task, timeout):
     try:
         return await asyncio.wait_for(task, timeout)
     except asyncio.TimeoutError:
-        task.cancel()
-        # Only cancel child tasks of the current task
-        current_task = asyncio.current_task()
-        for t in asyncio.all_tasks():
-            if t != current_task:
-                t.cancel()
-        try:
-            await asyncio.wait_for(task, 0.1)  # Give 100ms for cleanup
-        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-            pass
+        # `asyncio.wait_for()` already cancels only the awaited task on timeout.
+        # Do not cancel unrelated sibling health check tasks.
         return {"error": "Timeout exceeded"}
 
 
@@ -107,7 +99,7 @@ async def _perform_health_check(
         async def _run():
             return await run_with_timeout(
                 litellm.ahealth_check(
-                    model["litellm_params"],
+                    litellm_params,
                     mode=mode,
                     prompt=DEFAULT_HEALTH_CHECK_PROMPT,
                     input=["test from litellm"],

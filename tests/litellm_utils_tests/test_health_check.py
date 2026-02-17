@@ -591,6 +591,40 @@ async def test_health_check_respects_concurrency_limit():
 
 
 @pytest.mark.asyncio
+async def test_timeout_does_not_cancel_other_health_checks():
+    from litellm.proxy.health_check import _perform_health_check
+
+    model_list = [
+        {
+            "litellm_params": {"model": "openai/slow-model", "api_key": "fake-key"},
+            "model_info": {"health_check_timeout": 0.05},
+        },
+        {
+            "litellm_params": {"model": "openai/fast-model", "api_key": "fake-key"},
+            "model_info": {"health_check_timeout": 1},
+        },
+    ]
+
+    async def mock_health_check(litellm_params, **kwargs):
+        if litellm_params["model"] == "openai/slow-model":
+            await asyncio.sleep(0.2)
+            return {"status": "healthy"}
+        await asyncio.sleep(0.01)
+        return {"status": "healthy"}
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+            model_list, max_concurrency=1
+        )
+
+    healthy_models = {endpoint["model"] for endpoint in healthy_endpoints}
+    unhealthy_models = {endpoint["model"] for endpoint in unhealthy_endpoints}
+
+    assert "openai/fast-model" in healthy_models
+    assert "openai/slow-model" in unhealthy_models
+
+
+@pytest.mark.asyncio
 async def test_ahealth_check_ocr():
     litellm._turn_on_debug()
     response = await litellm.ahealth_check(
