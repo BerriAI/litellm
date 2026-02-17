@@ -1,6 +1,5 @@
 import asyncio
 import functools
-import inspect
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
@@ -271,7 +270,7 @@ def track_llm_api_timing():
                     verbose_logger.debug(f"Error in service logging: {str(e)}")
 
         # Check if the function is async or sync
-        if inspect.iscoroutinefunction(func):
+        if asyncio.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 
