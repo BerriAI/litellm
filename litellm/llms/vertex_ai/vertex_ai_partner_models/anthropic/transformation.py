@@ -108,6 +108,19 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         # VertexAI doesn't support output_format parameter, remove it if present
         data.pop("output_format", None)
 
+        # VertexAI doesn't support output_config parameter, remove it if present
+        if "output_config" in data:
+            output_config = data.pop("output_config")
+            if isinstance(output_config, dict):
+                # Extract the schema from Anthropic format: 
+                # {"format": {"type": "json_schema", "schema": {...}}}
+                format_obj = output_config.get("format", {})
+                if format_obj.get("type") == "json_schema":
+                    schema = format_obj.get("schema")
+                    if schema:
+                        # Map to Vertex AI's GA parameter: response_schema
+                        data["response_schema"] = schema
+
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
         auto_betas = self.get_anthropic_beta_list(
