@@ -3376,6 +3376,7 @@ def test_output_config_applies_additional_properties():
     assert parsed["properties"]["nested"]["additionalProperties"] is False
 
 
+
 class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
