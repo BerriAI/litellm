@@ -1,7 +1,17 @@
 import React from "react";
-import { notification } from "antd";
+import { notification as staticNotification } from "antd";
+import type { NotificationInstance } from "antd/es/notification/interface";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { ArgsProps } from "antd/es/notification";
+
+let notificationInstance: NotificationInstance | null = null;
+
+export const setNotificationInstance = (instance: NotificationInstance) => {
+  notificationInstance = instance;
+};
+
+// Helper to get the best available notification instance
+const getNotification = () => notificationInstance || staticNotification;
 
 type Placement = "top" | "topLeft" | "topRight" | "bottom" | "bottomLeft" | "bottomRight";
 
@@ -251,7 +261,7 @@ function looksErrorPayload(input: any, status?: number): boolean {
 const NotificationManager = {
   error(input: string | NotificationConfig) {
     const cfg = normalize(input, "Error");
-    notification.error({
+    getNotification().error({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
@@ -261,7 +271,7 @@ const NotificationManager = {
 
   warning(input: string | NotificationConfig) {
     const cfg = normalize(input, "Warning");
-    notification.warning({
+    getNotification().warning({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
@@ -271,7 +281,7 @@ const NotificationManager = {
 
   info(input: string | NotificationConfig) {
     const cfg = normalize(input, "Info");
-    notification.info({
+    getNotification().info({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
@@ -281,7 +291,7 @@ const NotificationManager = {
 
   success(input: string | React.ReactNode | NotificationConfig) {
     if (React.isValidElement(input)) {
-      notification.success({
+      getNotification().success({
         ...COMMON_NOTIFICATION_PROPS,
         message: "Success",
         description: input,
@@ -291,7 +301,7 @@ const NotificationManager = {
       return;
     }
     const cfg = normalize(input as string | NotificationConfig, "Success");
-    notification.success({
+    getNotification().success({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
@@ -316,11 +326,11 @@ const NotificationManager = {
         title === "Content Blocked" ||
         title === "Integration Error"
       ) {
-        notification.warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 7 });
+        getNotification().warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 7 });
         return;
       }
       if (title === "Server Error") {
-        notification.error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 8 });
+        getNotification().error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 8 });
         return;
       }
       if (
@@ -331,10 +341,10 @@ const NotificationManager = {
         title === "Error" ||
         title === "Already Exists"
       ) {
-        notification.error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
+        getNotification().error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
         return;
       }
-      notification.info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
+      getNotification().info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
       return;
     }
 
@@ -343,18 +353,18 @@ const NotificationManager = {
     const payload = { ...base, message: cls?.title ?? "Info" };
 
     if (cls?.kind === "success") {
-      notification.success({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 3.5 });
+      getNotification().success({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 3.5 });
       return;
     }
     if (cls?.kind === "warning") {
-      notification.warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
+      getNotification().warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
       return;
     }
-    notification.info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
+    getNotification().info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
   },
 
   clear() {
-    notification.destroy();
+    getNotification().destroy();
   },
 };
 

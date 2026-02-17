@@ -43,4 +43,5 @@ export const ENDPOINT_OPTIONS = [
   { value: EndpointType.SPEECH, label: "/v1/audio/speech" },
   { value: EndpointType.TRANSCRIPTION, label: "/v1/audio/transcriptions" },
   { value: EndpointType.A2A_AGENTS, label: "/v1/a2a/message/send" },
+  { value: EndpointType.MCP, label: "/mcp-rest/tools/call" },
 ];

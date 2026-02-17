@@ -14,6 +14,7 @@ import { mcpServerColumns } from "./mcp_server_columns";
 import { MCPServerView } from "./mcp_server_view";
 import { MCPServer, MCPServerProps, Team } from "./types";
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
+import MCPNetworkSettings from "./MCPNetworkSettings";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -304,6 +305,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>All Servers</Tab>
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
+            <Tab>Network Settings</Tab>
           </div>
         </TabList>
         <TabPanels>
@@ -394,6 +396,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </TabPanel>
           <TabPanel>
             <MCPSemanticFilterSettings accessToken={accessToken} />
+          </TabPanel>
+          <TabPanel>
+            <MCPNetworkSettings accessToken={accessToken} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

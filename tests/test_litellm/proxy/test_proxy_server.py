@@ -3203,3 +3203,123 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     assert result["general_settings"]["nested"]["key1"] == "updated_value1"
     assert result["general_settings"]["nested"]["key2"] == "value2"
     assert result["general_settings"]["nested"]["key3"] == "value3"
+
+
+class TestInvitationEndpoints:
+    """Tests for /invitation/new and /invitation/delete endpoints."""
+
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with admin authentication."""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "admin-user-id"
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        mock_auth.api_key = "sk-test"
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        return TestClient(app)
+
+    @pytest.mark.parametrize(
+        "endpoint,payload,mock_return",
+        [
+            (
+                "/invitation/new",
+                {"user_id": "target-user-123"},
+                {
+                    "id": "inv-123",
+                    "user_id": "target-user-123",
+                    "is_accepted": False,
+                    "accepted_at": None,
+                    "expires_at": "2025-02-18T00:00:00",
+                    "created_at": "2025-02-11T00:00:00",
+                    "created_by": "admin-user-id",
+                    "updated_at": "2025-02-11T00:00:00",
+                    "updated_by": "admin-user-id",
+                },
+            ),
+            (
+                "/invitation/delete",
+                {"invitation_id": "inv-456"},
+                {
+                    "id": "inv-456",
+                    "user_id": "target-user-123",
+                    "is_accepted": False,
+                    "accepted_at": None,
+                    "expires_at": "2025-02-18T00:00:00",
+                    "created_at": "2025-02-11T00:00:00",
+                    "created_by": "admin-user-id",
+                    "updated_at": "2025-02-11T00:00:00",
+                    "updated_by": "admin-user-id",
+                },
+            ),
+        ],
+    )
+    def test_invitation_endpoints_proxy_admin_success(
+        self, client_with_auth, endpoint, payload, mock_return
+    ):
+        """Proxy admin can successfully create and delete invitations."""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_invitationlink = MagicMock()
+            if endpoint == "/invitation/new":
+                mock_create = AsyncMock(return_value=mock_return)
+                with patch(
+                    "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
+                    mock_create,
+                ):
+                    response = client_with_auth.post(endpoint, json=payload)
+            else:
+                mock_prisma.db.litellm_invitationlink.find_unique = AsyncMock(
+                    return_value={**mock_return, "created_by": "admin-user-id"}
+                )
+                mock_prisma.db.litellm_invitationlink.delete = AsyncMock(
+                    return_value=mock_return
+                )
+                response = client_with_auth.post(endpoint, json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == mock_return["id"]
+        assert data["user_id"] == mock_return["user_id"]
+
+    @pytest.mark.parametrize(
+        "endpoint,payload",
+        [
+            ("/invitation/new", {"user_id": "target-user-123"}),
+            ("/invitation/delete", {"invitation_id": "inv-456"}),
+        ],
+    )
+    def test_invitation_endpoints_non_admin_denied(
+        self, client_with_auth, endpoint, payload
+    ):
+        """Non-admin users cannot access invitation endpoints."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "regular-user"
+        mock_auth.user_role = LitellmUserRoles.INTERNAL_USER
+        mock_auth.api_key = "sk-regular"
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_invitationlink = MagicMock()
+            # Avoid triggering async DB calls in _user_has_admin_privileges
+            with patch(
+                "litellm.proxy.proxy_server._user_has_admin_privileges",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
+                response = client_with_auth.post(endpoint, json=payload)
+
+        assert response.status_code == 400
+        body = response.json()
+        # ProxyException handler returns {"error": {...}}, HTTPException returns {"detail": {...}}
+        error_content = body.get("error", body.get("detail", body))
+        assert "not allowed" in str(error_content).lower()
