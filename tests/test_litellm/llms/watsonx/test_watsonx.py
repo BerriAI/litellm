@@ -301,8 +301,16 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     async def mock_post_func(*args, **kwargs):
         return mock_completion_response
 
+    # Mock the token generation response to avoid actual API call
+    mock_token_get_response = Mock()
+    mock_token_get_response.json.return_value = {
+        "access_token": "mock_access_token",
+        "expires_in": 3600,
+    }
+    mock_token_get_response.raise_for_status = Mock()
+
     with patch.object(client, "post", side_effect=mock_post_func) as mock_post, patch.object(
-        litellm.module_level_client, "post", return_value=mock_token_response
+        litellm.module_level_client, "post", return_value=mock_token_get_response
     ), patch(
         "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_tokenizer_config",
         side_effect=mock_aget_tokenizer_config,

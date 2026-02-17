@@ -119,7 +119,9 @@ async def test_vertex_ai_gpt_oss_simple_request():
 
     with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
          patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")), \
-         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}):
+         patch('litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexAIError', Exception), \
+         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}), \
+         patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}):
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
@@ -222,7 +224,9 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
 
     with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
          patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")), \
-         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}):
+         patch('litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexAIError', Exception), \
+         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}), \
+         patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}):
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
