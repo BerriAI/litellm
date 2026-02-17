@@ -1113,7 +1113,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "anthropic.claude-sonnet-4-6-v1": {
+    "anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -1143,7 +1143,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "global.anthropic.claude-sonnet-4-6-v1": {
+    "global.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -1173,7 +1173,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "us.anthropic.claude-sonnet-4-6-v1": {
+    "us.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 8.25e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -1203,7 +1203,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "eu.anthropic.claude-sonnet-4-6-v1": {
+    "eu.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 8.25e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -1233,7 +1233,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
-    "apac.anthropic.claude-sonnet-4-6-v1": {
+    "apac.anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 8.25e-06,
         "cache_read_input_token_cost": 3.3e-07,
