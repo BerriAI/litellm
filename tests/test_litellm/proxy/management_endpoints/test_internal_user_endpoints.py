@@ -1213,6 +1213,7 @@ async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeyp
             user_api_key_dict=non_admin_key_dict,
         )
 
+    assert exc_info.value.status_code == 403
     assert "Non-admin users can only view their own spend data" in str(
         exc_info.value.detail
     )
@@ -1231,6 +1232,7 @@ async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeyp
             user_api_key_dict=non_admin_key_dict,
         )
 
+    assert exc_info.value.status_code == 403
     assert "Non-admin users must provide a user_id" in str(exc_info.value.detail)
 
 
