@@ -198,3 +198,220 @@ class CancelEvalResponse(BaseModel):
 
     status: Literal["cancelled"]
     """Status after cancellation, always 'cancelled'"""
+
+
+# Run API Request Types
+class DataSourceDatasetConfig(TypedDict, total=False):
+    """Data source configuration for dataset-based runs"""
+
+    type: Required[Literal["dataset"]]
+    """Data source type - dataset"""
+
+    dataset_id: Required[str]
+    """ID of the dataset to use for the run"""
+
+
+class DataSourceSampleSetConfig(TypedDict, total=False):
+    """Data source configuration for sample set-based runs"""
+
+    type: Required[Literal["sample_set"]]
+    """Data source type - sample_set"""
+
+    sample_set_id: Required[str]
+    """ID of the sample set to use for the run"""
+
+
+class DataSourceInlineConfig(TypedDict, total=False):
+    """Data source configuration for inline samples"""
+
+    type: Required[Literal["inline"]]
+    """Data source type - inline"""
+
+    samples: Required[List[Dict[str, Any]]]
+    """List of inline samples to use for the run"""
+
+
+RunDataSourceConfig = Union[
+    DataSourceDatasetConfig, DataSourceSampleSetConfig, DataSourceInlineConfig
+]
+
+
+class CompletionConfig(TypedDict, total=False):
+    """Configuration for model completions in a run"""
+
+    model: Required[str]
+    """Model to use for completions"""
+
+    temperature: Optional[float]
+    """Sampling temperature (0-2)"""
+
+    max_tokens: Optional[int]
+    """Maximum tokens to generate"""
+
+    top_p: Optional[float]
+    """Nucleus sampling parameter"""
+
+    frequency_penalty: Optional[float]
+    """Frequency penalty (-2.0 to 2.0)"""
+
+    presence_penalty: Optional[float]
+    """Presence penalty (-2.0 to 2.0)"""
+
+
+class CreateRunRequest(TypedDict, total=False):
+    """Request parameters for creating a run"""
+
+    data_source: Required[Dict[str, Any]]
+    """Data source configuration for the run (can be jsonl, completions, or responses type)"""
+
+    name: Optional[str]
+    """Optional name for the run"""
+
+    metadata: Optional[Dict[str, Any]]
+    """Optional metadata for the run"""
+
+
+class ListRunsParams(TypedDict, total=False):
+    """Query parameters for listing runs"""
+
+    limit: Optional[int]
+    """Number of results to return per page. Maximum value is 100. Defaults to 20."""
+
+    after: Optional[str]
+    """Cursor for pagination - returns runs after this ID"""
+
+    before: Optional[str]
+    """Cursor for pagination - returns runs before this ID"""
+
+    order: Optional[Literal["asc", "desc"]]
+    """Sort order for results. Defaults to 'desc'."""
+
+
+# Run API Response Types
+class ResultCounts(BaseModel):
+    """Result counts for a run"""
+
+    total: int
+    """Total number of results"""
+
+    passed: int = 0
+    """Number of passed results"""
+
+    failed: int = 0
+    """Number of failed results"""
+
+    error: int = 0
+    """Number of error results"""
+
+
+class PerTestingCriteriaResult(BaseModel):
+    """Results for a specific testing criteria"""
+
+    testing_criteria_index: int
+    """Index of the testing criteria"""
+
+    result_counts: ResultCounts
+    """Result counts for this criteria"""
+
+    average_score: Optional[float] = None
+    """Average score for this criteria"""
+
+
+class Run(BaseModel):
+    """Represents a run from the OpenAI Evals API"""
+
+    id: str
+    """Unique identifier for the run"""
+
+    object: str = "eval.run"
+    """Object type, always 'eval.run'"""
+
+    created_at: int
+    """Unix timestamp of when the run was created"""
+
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    """Current status of the run"""
+
+    data_source: Dict[str, Any]
+    """Data source configuration used for the run"""
+
+    eval_id: str
+    """ID of the evaluation this run belongs to"""
+
+    name: Optional[str] = None
+    """Name of the run"""
+
+    started_at: Optional[int] = None
+    """Unix timestamp of when the run started"""
+
+    completed_at: Optional[int] = None
+    """Unix timestamp of when the run completed"""
+
+    model: Optional[str] = None
+    """Model used for the run, if any"""
+
+    per_model_usage: Optional[Any] = None
+    """Model usage details per model, if available"""
+
+    per_testing_criteria_results: Optional[List[PerTestingCriteriaResult]] = None
+    """Per-criteria results"""
+
+    report_url: Optional[str] = None
+    """URL for the evaluation report"""
+
+    result_counts: Optional[Dict[str, int]] = None
+    """Aggregate result counts (e.g., {"passed": 0, "failed": 0, "errored": 0, "total": 0})"""
+
+    shared_with_openai: Optional[bool] = None
+    """Whether run is shared with OpenAI"""
+
+    metadata: Optional[Dict[str, Any]] = None
+    """Additional metadata"""
+
+    error: Optional[Dict[str, Any]] = None
+    """Error details if the run failed"""
+
+
+class ListRunsResponse(BaseModel):
+    """Response from listing runs"""
+
+    object: str = "list"
+    """Object type, always 'list'"""
+
+    data: List[Run]
+    """List of runs"""
+
+    first_id: Optional[str] = None
+    """ID of the first run in the list"""
+
+    last_id: Optional[str] = None
+    """ID of the last run in the list"""
+
+    has_more: bool = False
+    """Whether there are more runs available"""
+
+
+class CancelRunResponse(BaseModel):
+    """Response from cancelling a run"""
+
+    id: str
+    """The ID of the cancelled run"""
+
+    object: str = "eval.run"
+    """Object type, always 'eval.run'"""
+
+    status: Literal["cancelled"]
+    """Status after cancellation, always 'cancelled'"""
+
+
+class RunDeleteResponse(BaseModel):
+    """Response from deleting a run"""
+
+    run_id: str
+    """The ID of the deleted run"""
+
+    object: Optional[str] = "eval.run.deleted"
+    """Object type, always 'eval.run.deleted'"""
+
+    deleted: Optional[bool] = True
+    """Whether the run was successfully deleted"""
