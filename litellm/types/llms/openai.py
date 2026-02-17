@@ -1176,6 +1176,14 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     cost: Optional[float] = None
     """The cost of the request."""
 
+    @field_validator("cost", mode="before")
+    @classmethod
+    def parse_cost(cls, v: Any) -> Optional[float]:
+        """Accept cost as a dict (e.g. Perplexity's {total_cost: 0.01}) and extract the float."""
+        if isinstance(v, dict):
+            return v.get("total_cost")
+        return v
+
     model_config = {"extra": "allow"}
 
 

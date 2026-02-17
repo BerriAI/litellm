@@ -21,6 +21,7 @@ class SimpleProviderConfig:
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
+        self.supported_endpoints = data.get("supported_endpoints", [])
 
 
 class JSONProviderRegistry:
@@ -63,6 +64,14 @@ class JSONProviderRegistry:
     def exists(cls, slug: str) -> bool:
         """Check if a provider is defined via JSON"""
         return slug in cls._providers
+
+    @classmethod
+    def supports_responses_api(cls, slug: str) -> bool:
+        """Check if a JSON provider supports the Responses API"""
+        provider = cls._providers.get(slug)
+        if provider is None:
+            return False
+        return "/v1/responses" in provider.supported_endpoints
 
     @classmethod
     def list_providers(cls) -> list:

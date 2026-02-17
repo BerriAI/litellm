@@ -80,6 +80,36 @@ That's it! The provider is now available.
 }
 ```
 
+## Responses API Support
+
+If your provider also supports the OpenAI Responses API (`/v1/responses`), add `supported_endpoints`:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  }
+}
+```
+
+This enables `litellm.responses()` with zero additional code:
+
+```python
+import litellm
+
+response = litellm.responses(
+    model="your_provider/model-name",
+    input="Hello, what can you do?",
+)
+print(response.output)
+```
+
+If `supported_endpoints` is omitted, it defaults to `[]`. Chat completions is always enabled for JSON providers regardless of this field.
+
+The provider inherits all request/response handling from OpenAI's Responses API — streaming, tools, and all standard parameters work out of the box.
+
 ## Usage
 
 ```python
@@ -89,10 +119,16 @@ import os
 # Set your API key
 os.environ["YOUR_PROVIDER_API_KEY"] = "your-key-here"
 
-# Use the provider
+# Chat completions
 response = litellm.completion(
     model="your_provider/model-name",
     messages=[{"role": "user", "content": "Hello"}],
+)
+
+# Responses API (if supported_endpoints includes "/v1/responses")
+response = litellm.responses(
+    model="your_provider/model-name",
+    input="Hello",
 )
 ```
 
@@ -105,7 +141,9 @@ Use a Python config class if you need:
 - Provider-specific streaming logic
 - Advanced tool calling modifications
 
-For these cases, create a config class in `litellm/llms/your_provider/chat/transformation.py` that inherits from `OpenAIGPTConfig` or `OpenAILikeChatConfig`.
+For chat completions, create a config class in `litellm/llms/your_provider/chat/transformation.py` that inherits from `OpenAIGPTConfig` or `OpenAILikeChatConfig`.
+
+For responses API with small overrides, inherit from `OpenAIResponsesAPIConfig` and override only what's needed. See `litellm/llms/perplexity/responses/transformation.py` for a minimal example (~40 lines vs 400+).
 
 ## Testing
 
