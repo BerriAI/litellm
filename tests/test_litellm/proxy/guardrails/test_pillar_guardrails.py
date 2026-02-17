@@ -37,7 +37,6 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
-
 # ============================================================================
 # FIXTURES
 # ============================================================================
@@ -49,8 +48,8 @@ def setup_and_teardown():
     Standard LiteLLM fixture that reloads litellm before every function
     to speed up testing by removing callbacks being chained.
     """
-    import importlib
     import asyncio
+    import importlib
     import sys
 
     # Reload litellm to ensure clean state
@@ -1272,20 +1271,20 @@ async def test_exception_without_scanners(
     pillar_flagged_response,
 ):
     """Test exception excludes scanners when include_scanners is False."""
-    guardrail = PillarGuardrail(
-        guardrail_name="pillar-no-scanners",
-        api_key="test-pillar-key",
-        api_base="https://api.pillar.security",
-        on_flagged_action="block",
-        include_scanners=False,
-        include_evidence=True,
-    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-no-scanners",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=False,
+            include_evidence=True,
+        )
 
-    with pytest.raises(HTTPException) as excinfo:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=pillar_flagged_response,
-        ):
+        with pytest.raises(HTTPException) as excinfo:
             await guardrail.async_pre_call_hook(
                 data=sample_request_data,
                 cache=dual_cache,
@@ -1307,20 +1306,20 @@ async def test_exception_without_evidence(
     pillar_flagged_response,
 ):
     """Test exception excludes evidence when include_evidence is False."""
-    guardrail = PillarGuardrail(
-        guardrail_name="pillar-no-evidence",
-        api_key="test-pillar-key",
-        api_base="https://api.pillar.security",
-        on_flagged_action="block",
-        include_scanners=True,
-        include_evidence=False,
-    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-no-evidence",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=True,
+            include_evidence=False,
+        )
 
-    with pytest.raises(HTTPException) as excinfo:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=pillar_flagged_response,
-        ):
+        with pytest.raises(HTTPException) as excinfo:
             await guardrail.async_pre_call_hook(
                 data=sample_request_data,
                 cache=dual_cache,
@@ -1342,20 +1341,20 @@ async def test_exception_without_scanners_or_evidence(
     pillar_flagged_response,
 ):
     """Test exception excludes both scanners and evidence when both are False."""
-    guardrail = PillarGuardrail(
-        guardrail_name="pillar-minimal",
-        api_key="test-pillar-key",
-        api_base="https://api.pillar.security",
-        on_flagged_action="block",
-        include_scanners=False,
-        include_evidence=False,
-    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-minimal",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=False,
+            include_evidence=False,
+        )
 
-    with pytest.raises(HTTPException) as excinfo:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=pillar_flagged_response,
-        ):
+        with pytest.raises(HTTPException) as excinfo:
             await guardrail.async_pre_call_hook(
                 data=sample_request_data,
                 cache=dual_cache,

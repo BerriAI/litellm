@@ -41,12 +41,18 @@ class TestVertexAIRerankTransform:
         for var, value in self._saved_env.items():
             os.environ[var] = value
 
+    @patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str')
     @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_get_complete_url(self, mock_ensure_access_token):
+    def test_get_complete_url(self, mock_ensure_access_token, mock_get_secret_str):
         """Test URL generation for Vertex AI Discovery Engine rerank API."""
         # Mock _ensure_access_token to return (token, project_id)
         mock_ensure_access_token.return_value = ("mock-token", None)
-        
+
+        # Mock get_secret_str to return the environment variable value
+        def mock_get_secret(key):
+            return os.environ.get(key)
+        mock_get_secret_str.side_effect = mock_get_secret
+
         # Test with project ID from environment
         with patch.dict(os.environ, {"VERTEXAI_PROJECT": "test-project-123"}):
             url = self.config.get_complete_url(api_base=None, model=self.model)
@@ -62,6 +68,9 @@ class TestVertexAIRerankTransform:
                 litellm.vertex_project = None
             original_project = litellm.vertex_project
             litellm.vertex_project = "litellm-project-456"
+            # Reset mock call count
+            mock_ensure_access_token.reset_mock()
+            mock_ensure_access_token.return_value = ("mock-token", "litellm-project-456")
             try:
                 url = self.config.get_complete_url(api_base=None, model=self.model)
                 expected_url = "https://discoveryengine.googleapis.com/v1/projects/litellm-project-456/locations/global/rankingConfigs/default_ranking_config:rank"
@@ -78,28 +87,37 @@ class TestVertexAIRerankTransform:
                 litellm.vertex_project = None
             original_project = litellm.vertex_project
             litellm.vertex_project = None
+            # Reset mock and set it to raise an error
+            mock_ensure_access_token.reset_mock()
+            mock_ensure_access_token.side_effect = ValueError("Vertex AI project ID is required")
             try:
                 with pytest.raises(ValueError, match="Vertex AI project ID is required"):
                     self.config.get_complete_url(api_base=None, model=self.model)
             finally:
                 litellm.vertex_project = original_project
 
+    @patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str')
     @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_validate_environment(self, mock_ensure_access_token):
+    def test_validate_environment(self, mock_ensure_access_token, mock_get_secret_str):
         """Test environment validation and header setup."""
         # Mock the authentication
         mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
-        
+
+        # Mock get_secret_str to return the environment variable value
+        def mock_get_secret(key):
+            return os.environ.get(key)
+        mock_get_secret_str.side_effect = mock_get_secret
+
         # Mock the credential and project methods
         with patch.object(self.config, 'get_vertex_ai_credentials', return_value=None), \
              patch.object(self.config, 'get_vertex_ai_project', return_value="test-project-123"):
-            
+
             headers = self.config.validate_environment(
                 headers={},
                 model=self.model,
                 api_key=None
             )
-            
+
             expected_headers = {
                 "Authorization": "Bearer test-access-token",
                 "Content-Type": "application/json",
