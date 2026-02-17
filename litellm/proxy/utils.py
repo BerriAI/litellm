@@ -1047,6 +1047,7 @@ class ProxyLogging:
                     break
 
         return data
+
     async def _process_prompt_template(
         self,
         data: dict,

@@ -222,7 +222,7 @@ prompts:
         project_name: litellm
         slug: hello-world-prompt-2bac
       api_base: http://localhost:8080
-      api_key: os.environ/BRAINTRUST_API_KEY
+      api_key: os.environ/GENERIC_PROMPT_API_KEY
       ignore_prompt_manager_model: true  # optional
       ignore_prompt_manager_optional_params: true  # optional
 ```

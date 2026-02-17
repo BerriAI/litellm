@@ -1196,8 +1196,7 @@ When responding to Computer Use tool calls, include the URL and screenshot:
 
 
 
-</TabItem>
-</Tabs>
+
 
 ## Thought Signatures
 
