@@ -5606,3 +5606,61 @@ async def test_validate_key_list_check_key_hash_not_found():
 
     assert exc_info.value.code == "403" or exc_info.value.code == 403
     assert "Key Hash not found" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_duration(monkeypatch):
+    """
+    Test that default_key_generate_params with 'duration' is applied
+    when no duration is provided in the key generation request.
+
+    Regression test for bug where 'duration' was missing from the list
+    of fields populated from default_key_generate_params.
+    """
+    import litellm
+
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Set default_key_generate_params with duration
+    original_value = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {"duration": "180d"}
+
+    try:
+        request = GenerateKeyRequest()  # No duration specified
+        response = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+        # Verify duration was applied from defaults
+        assert request.duration == "180d"
+    finally:
+        litellm.default_key_generate_params = original_value
