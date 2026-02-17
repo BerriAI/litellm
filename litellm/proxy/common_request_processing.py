@@ -353,6 +353,7 @@ def _get_cost_breakdown_from_logging_obj(
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+        self._request_headers: Optional[Dict[str, str]] = None
 
     @staticmethod
     def get_custom_headers(
@@ -749,6 +750,8 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
+        self._request_headers = dict(request.headers)
+
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
@@ -859,6 +862,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=response,
+                request_headers=self._request_headers,
             )
             if callback_headers:
                 custom_headers.update(callback_headers)
@@ -967,6 +971,7 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=response,
+            request_headers=self._request_headers,
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -1135,6 +1140,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
+                request_headers=self._request_headers,
             )
             if callback_headers:
                 headers.update(callback_headers)

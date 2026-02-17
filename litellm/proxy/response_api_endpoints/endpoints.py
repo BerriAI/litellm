@@ -226,6 +226,16 @@ async def responses_api(
             request_data=_data,
         )
 
+        # Call response headers hook for guardrail failure path
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=_data,
+            user_api_key_dict=user_api_key_dict,
+            response=None,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
+
         violation_text = e.message
         response_obj = ResponsesAPIResponse(
             id=f"resp_{uuid4()}",

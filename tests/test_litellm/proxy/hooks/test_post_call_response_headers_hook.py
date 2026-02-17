@@ -195,3 +195,66 @@ async def test_default_hook_returns_none():
         response=None,
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_response_headers_hook_receives_request_headers():
+    """Test that the hook receives request_headers when provided."""
+    injector = HeaderInjectorLogger(headers={"x-echoed": "yes"})
+    mock_request_headers = {"x-apigee-request-id": "req-abc-123", "authorization": "Bearer sk-xxx"}
+
+    with patch("litellm.callbacks", [injector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        result = await proxy_logging.post_call_response_headers_hook(
+            data={"model": "test-model"},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response={"id": "resp-1"},
+            request_headers=mock_request_headers,
+        )
+
+        assert injector.called is True
+        assert result == {"x-echoed": "yes"}
+
+
+@pytest.mark.asyncio
+async def test_response_headers_hook_request_headers_passed_to_callback():
+    """Test that request_headers are forwarded to the callback and can be used to echo incoming headers."""
+
+    class RequestHeaderAwareLogger(CustomLogger):
+        def __init__(self):
+            self.received_request_headers = None
+
+        async def async_post_call_response_headers_hook(
+            self,
+            data: dict,
+            user_api_key_dict: UserAPIKeyAuth,
+            response: Any,
+            request_headers: Optional[Dict[str, str]] = None,
+        ) -> Optional[Dict[str, str]]:
+            self.received_request_headers = request_headers
+            if request_headers and "x-apigee-request-id" in request_headers:
+                return {"x-apigee-request-id": request_headers["x-apigee-request-id"]}
+            return None
+
+    logger = RequestHeaderAwareLogger()
+    mock_request_headers = {"x-apigee-request-id": "apigee-123"}
+
+    with patch("litellm.callbacks", [logger]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        result = await proxy_logging.post_call_response_headers_hook(
+            data={"model": "test-model"},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=None,
+            request_headers=mock_request_headers,
+        )
+
+        assert logger.received_request_headers == mock_request_headers
+        assert result == {"x-apigee-request-id": "apigee-123"}
