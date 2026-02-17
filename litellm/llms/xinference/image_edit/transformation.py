@@ -200,7 +200,7 @@ class XInferenceImageEditConfig(BaseImageEditConfig):
         )
         
         # Only add Authorization header if API key is provided
-        if final_api_key and final_api_key != "anything":
+        if final_api_key and final_api_key != "stub-xinference-key":
             headers["Authorization"] = f"Bearer {final_api_key}"
         
         return headers
