@@ -334,11 +334,16 @@ class MCPRequestHandler:
         """
         Get list of allowed MCP servers for the given user/key based on permissions.
 
-        Permission hierarchy (all rules are intersections):
-        1. Get allowed servers from key permissions
-        2. Get allowed servers from team permissions
-        3. Get allowed servers from end_user permissions
-        4. Final result = intersection of key/team AND end_user (if end_user has permissions set)
+        Permission hierarchy:
+        1. Calculate key/team allowed servers:
+           - If team has permissions: key inherits from team (or intersects if key has own permissions)
+           - If team has no permissions: use key permissions
+        2. Apply end_user permissions if end_user_id is set:
+           - If require_end_user_mcp_access_defined=True and end_user has no permissions: block all access
+           - If end_user has permissions:
+             * If key/team has no restrictions (empty): use end_user permissions
+             * If key/team has restrictions: intersect key/team AND end_user
+           - If end_user has no permissions and flag is False: use key/team permissions
 
         Returns:
             List[str]: List of allowed MCP servers by server id
@@ -386,40 +391,41 @@ class MCPRequestHandler:
                     )
                 )
 
+                # Check if require_end_user_mcp_access flag is enabled
+                require_end_user_mcp_access = general_settings.get(
+                    "require_end_user_mcp_access_defined", False
+                )
 
-                # If end_user has explicit MCP server permissions, apply intersection
+                # If the flag is enabled and end_user has no permissions, block all access
+                if require_end_user_mcp_access and len(allowed_mcp_servers_for_end_user) == 0:
+                    verbose_logger.debug(
+                        f"require_end_user_mcp_access_defined=True and end_user {user_api_key_auth.end_user_id} has no MCP permissions - blocking MCP access"
+                    )
+                    return []
+
+                # If end_user has explicit MCP server permissions, apply intersection logic
                 if len(allowed_mcp_servers_for_end_user) > 0:
                     verbose_logger.debug(
                         f"End user {user_api_key_auth.end_user_id} has explicit MCP permissions: {allowed_mcp_servers_for_end_user}"
                     )
 
-                    # Check if require_end_user_mcp_access flag is enabled
-                    require_end_user_mcp_access = general_settings.get(
-                        "require_end_user_mcp_access_defined", False
-                    )
-
-                    # If the flag is enabled and end_user has permissions, use ONLY end_user permissions
-                    if require_end_user_mcp_access:
+                    # If key/team has no restrictions (empty list), use end_user permissions
+                    if len(allowed_mcp_servers) == 0:
                         verbose_logger.debug(
-                            "require_end_user_mcp_access_defined=True - using only end_user permissions"
+                            "No key/team MCP restrictions - using end_user permissions"
                         )
                         allowed_mcp_servers = allowed_mcp_servers_for_end_user
                     else:
-                        # Otherwise, apply intersection: key/team AND end_user
+                        # Apply intersection: key/team AND end_user
+                        # This ensures key/team restrictions are ALWAYS respected
                         filtered_servers = []
                         for _mcp_server in allowed_mcp_servers:
                             if _mcp_server in allowed_mcp_servers_for_end_user:
                                 filtered_servers.append(_mcp_server)
                         allowed_mcp_servers = filtered_servers
                         verbose_logger.debug(
-                            f"Applied end_user intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                            f"Applied end_user intersection with key/team. Final allowed servers: {allowed_mcp_servers}"
                         )
-                # If flag is enabled but end_user has no permissions, block all access
-                elif general_settings.get("require_end_user_mcp_access_defined", False):
-                    verbose_logger.debug(
-                        f"require_end_user_mcp_access_defined=True and end_user {user_api_key_auth.end_user_id} has no MCP permissions - blocking MCP access"
-                    )
-                    return []
 
             return list(set(allowed_mcp_servers))
         except Exception as e:

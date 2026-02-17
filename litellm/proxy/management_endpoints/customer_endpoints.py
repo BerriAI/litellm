@@ -174,7 +174,8 @@ async def _handle_customer_object_permission_update(
     """
     Handle object permission updates for customer endpoints.
 
-    Updates the update_end_user_table_data dict in place with the new object_permission_id.
+    Updates the update_end_user_table_data dict in place with the new object_permission_id
+    and removes the object_permission field to prevent it from being sent to the database.
 
     Args:
         non_default_values: Dictionary containing the update values including object_permission
@@ -195,6 +196,10 @@ async def _handle_customer_object_permission_update(
         )
         if object_permission_id is not None:
             update_end_user_table_data["object_permission_id"] = object_permission_id
+
+        # Remove object_permission from update_end_user_table_data to prevent DB write attempts
+        # object_permission is a read-only relationship field, not a writable column
+        update_end_user_table_data.pop("object_permission", None)
 
 
 @router.post(
@@ -611,14 +616,6 @@ async def update_end_user(
 
         ## Update user table, with update params + new budget id (if set) ##
         verbose_proxy_logger.debug("/customer/update: Received data = %s", data)
-
-        # Ensure object_permission is not in the update data
-        # It should have been converted to object_permission_id by handle_update_object_permission_common
-        if "object_permission" in update_end_user_table_data:
-            verbose_proxy_logger.warning(
-                f"object_permission still in update_end_user_table_data: {update_end_user_table_data.get('object_permission')}"
-            )
-            update_end_user_table_data.pop("object_permission", None)
 
         if data.user_id is not None and len(data.user_id) > 0:
             update_end_user_table_data["user_id"] = data.user_id  # type: ignore
