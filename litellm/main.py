@@ -1104,6 +1104,7 @@ def completion(  # type: ignore # noqa: PLR0915
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
 
+    args = locals()
     ######### unpacking kwargs #####################
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
@@ -1283,12 +1284,12 @@ def completion(  # type: ignore # noqa: PLR0915
         logging: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
-            return completion_with_fallbacks(**locals())
+            return completion_with_fallbacks(**args)
         if model_list is not None:
             deployments = [
                 m["litellm_params"] for m in model_list if m["model_name"] == model
             ]
-            return litellm.batch_completion_models(deployments=deployments, **locals())
+            return litellm.batch_completion_models(deployments=deployments, **args)
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
