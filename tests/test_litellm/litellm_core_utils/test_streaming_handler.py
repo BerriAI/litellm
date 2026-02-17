@@ -1202,7 +1202,6 @@ async def test_streaming_usage_after_finish_reason(sync_mode: bool):
     Without the fix, chunk #3 is discarded and litellm falls back to its own
     token estimation. With the fix, the provider-reported usage is used.
     """
-    import time
 
     # Chunk 1: content
     content_chunk = ModelResponseStream(
