@@ -1487,6 +1487,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
     # Budget fields
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     budget_duration: Optional[str] = None
 
     models: list = []
@@ -1558,6 +1559,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
