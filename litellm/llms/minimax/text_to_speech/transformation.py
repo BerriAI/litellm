@@ -419,3 +419,12 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return url
 
+    @property
+    def supports_streaming(self) -> bool:
+        """
+        MiniMax TTS does not support true streaming.
+
+        The API returns JSON containing hex/base64-encoded audio data,
+        which must be fully received and decoded before audio bytes are available.
+        """
+        return False

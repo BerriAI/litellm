@@ -589,3 +589,12 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         # Return the audio data wrapped in HttpxBinaryResponseContent
         return HttpxBinaryResponseContent(audio_response)
 
+    @property
+    def supports_streaming(self) -> bool:
+        """
+        RunwayML TTS does not support true streaming.
+
+        The API uses an asynchronous polling pattern: the initial POST returns a
+        task ID, which must be polled until completion before downloading audio.
+        """
+        return False
