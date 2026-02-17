@@ -62,6 +62,59 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def __init__(self):
         pass
 
+    @staticmethod
+    def _extract_openai_reasoning_item_from_chat_message(
+        msg: Dict[str, Any],
+        custom_llm_provider: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Support round-tripping OpenAI Responses reasoning blobs through chat messages.
+
+        We store it on the assistant message as:
+          message.provider_specific_fields["reasoning"] = { ... encrypted_content ... }
+        and reconstruct a Responses API input item:
+          {"type": "reasoning", ...}
+        """
+        if custom_llm_provider != "openai":
+            return None
+
+        provider_fields = msg.get("provider_specific_fields")
+        if isinstance(provider_fields, dict):
+            reasoning = provider_fields.get("reasoning")
+            if isinstance(reasoning, dict):
+                encrypted_content = reasoning.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    item = dict(reasoning)
+                    item.setdefault("type", "reasoning")
+                    if "summary" not in item:
+                        item["summary"] = [{"type": "summary_text", "text": ""}]
+                    return item
+
+            encrypted_content = provider_fields.get("reasoning_encrypted_content") or provider_fields.get(
+                "encrypted_content"
+            )
+            if isinstance(encrypted_content, str) and encrypted_content:
+                return {
+                    "type": "reasoning",
+                    "encrypted_content": encrypted_content,
+                    "summary": [{"type": "summary_text", "text": ""}],
+                }
+
+        thinking_blocks = msg.get("thinking_blocks")
+        if isinstance(thinking_blocks, list):
+            for block in thinking_blocks:
+                if not isinstance(block, dict):
+                    continue
+                encrypted_content = block.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    return {
+                        "type": "reasoning",
+                        "encrypted_content": encrypted_content,
+                        "summary": [{"type": "summary_text", "text": ""}],
+                    }
+
+        return None
+
     def _handle_raw_dict_response_item(
         self, item: Dict[str, Any], index: int
     ) -> Tuple[Optional[Any], int]:
@@ -144,7 +197,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return None, index
 
     def convert_chat_completion_messages_to_responses_api(
-        self, messages: List["AllMessageValues"]
+        self,
+        messages: List["AllMessageValues"],
+        custom_llm_provider: Optional[str] = None,
     ) -> Tuple[List[Any], Optional[str]]:
         input_items: List[Any] = []
         instructions: Optional[str] = None
@@ -154,6 +209,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             content = msg.get("content", "")
             tool_calls = msg.get("tool_calls")
             tool_call_id = msg.get("tool_call_id")
+
+            if role == "assistant":
+                reasoning_item = (
+                    LiteLLMResponsesTransformationHandler._extract_openai_reasoning_item_from_chat_message(
+                        msg=cast(Dict[str, Any], msg),
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                )
+                if reasoning_item is not None:
+                    input_items.append(reasoning_item)
 
             if role == "system":
                 # Extract system message as instructions
@@ -315,10 +380,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: Optional[Any] = None,
     ) -> dict:
+        custom_llm_provider = cast(Optional[str], litellm_params.get("custom_llm_provider"))
         (
             input_items,
             instructions,
-        ) = self.convert_chat_completion_messages_to_responses_api(messages)
+        ) = self.convert_chat_completion_messages_to_responses_api(
+            messages, custom_llm_provider=custom_llm_provider
+        )
 
         optional_params = self._extract_extra_body_params(optional_params)
 
@@ -335,6 +403,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug(f"Chat provider: Stream parameter: {stream}")
+
+        if custom_llm_provider == "openai":
+            has_prior_reasoning = any(
+                isinstance(item, dict)
+                and item.get("type") == "reasoning"
+                and isinstance(item.get("encrypted_content"), str)
+                and item.get("encrypted_content")
+                for item in input_items
+            )
+            if responses_api_request.get("reasoning") is not None or has_prior_reasoning:
+                include = list(responses_api_request.get("include") or [])
+                if "reasoning.encrypted_content" not in include:
+                    include.append("reasoning.encrypted_content")
+                responses_api_request["include"] = include
 
         # Ensure stream is properly set in the request
         if stream:
@@ -407,6 +489,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: List[Choices] = []
         index = 0
         reasoning_content: Optional[str] = None
+        pending_reasoning_item: Optional[Dict[str, Any]] = None
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -419,6 +502,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     response_text = getattr(summary_item, "text", "")
                     reasoning_content = response_text if response_text else ""
 
+                encrypted_content = getattr(item, "encrypted_content", None)
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    try:
+                        if hasattr(item, "model_dump"):
+                            pending_reasoning_item = item.model_dump(exclude_none=True)
+                        else:
+                            pending_reasoning_item = item.dict(exclude_none=True)  # type: ignore[attr-defined]
+                    except Exception:
+                        pending_reasoning_item = {
+                            "type": "reasoning",
+                            "encrypted_content": encrypted_content,
+                        }
+
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
@@ -427,11 +523,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                         raw_annotations
                     )
+                    provider_specific_fields = (
+                        {"reasoning": pending_reasoning_item}
+                        if pending_reasoning_item is not None
+                        else None
+                    )
+                    thinking_blocks = None
+                    if pending_reasoning_item is not None:
+                        encrypted_content = pending_reasoning_item.get("encrypted_content")
+                        if isinstance(encrypted_content, str) and encrypted_content:
+                            thinking_blocks = [
+                                {
+                                    "type": "thinking",
+                                    "encrypted_content": encrypted_content,
+                                }
+                            ]
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
                         annotations=annotations,
+                        thinking_blocks=thinking_blocks,
+                        provider_specific_fields=provider_specific_fields,
                     )
 
                     choices.append(
@@ -443,6 +556,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
 
                     reasoning_content = None  # flush reasoning content
+                    pending_reasoning_item = None
                     index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -465,17 +579,64 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
+        # If reasoning appears after an output message, attach it to the last choice.
+        if pending_reasoning_item is not None and not accumulated_tool_calls and choices:
+            try:
+                last_message = choices[-1].message
+                existing_fields = getattr(last_message, "provider_specific_fields", None)
+                if isinstance(existing_fields, dict):
+                    merged_fields = dict(existing_fields)
+                else:
+                    merged_fields = {}
+                merged_fields["reasoning"] = pending_reasoning_item
+                setattr(last_message, "provider_specific_fields", merged_fields)
+                encrypted_content = pending_reasoning_item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    existing_thinking_blocks = getattr(last_message, "thinking_blocks", None)
+                    if isinstance(existing_thinking_blocks, list):
+                        merged_thinking_blocks = list(existing_thinking_blocks)
+                    else:
+                        merged_thinking_blocks = []
+                    merged_thinking_blocks.append(
+                        {
+                            "type": "thinking",
+                            "encrypted_content": encrypted_content,
+                        }
+                    )
+                    setattr(last_message, "thinking_blocks", merged_thinking_blocks)
+                pending_reasoning_item = None
+            except Exception:
+                pass
+
         # If we accumulated tool calls, create a single choice with all of them
         if accumulated_tool_calls:
+            provider_specific_fields = (
+                {"reasoning": pending_reasoning_item}
+                if pending_reasoning_item is not None
+                else None
+            )
+            thinking_blocks = None
+            if pending_reasoning_item is not None:
+                encrypted_content = pending_reasoning_item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    thinking_blocks = [
+                        {
+                            "type": "thinking",
+                            "encrypted_content": encrypted_content,
+                        }
+                    ]
             msg = Message(
                 content=None,
                 tool_calls=accumulated_tool_calls,
                 reasoning_content=reasoning_content,
+                thinking_blocks=thinking_blocks,
+                provider_specific_fields=provider_specific_fields,
             )
             choices.append(
                 Choices(message=msg, finish_reason="tool_calls", index=index)
             )
             reasoning_content = None
+            pending_reasoning_item = None
 
         return choices
 
@@ -1142,11 +1303,54 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         elif event_type == "response.completed":
             # Response is fully complete - now we can signal is_finished=True
             # This ensures we don't prematurely end the stream before tool_calls arrive
+            provider_specific_fields = None
+            thinking_blocks = None
+            try:
+                response_obj = parsed_chunk.get("response")
+                if isinstance(response_obj, dict):
+                    output = response_obj.get("output")
+                    if isinstance(output, list):
+                        for out_item in output:
+                            if (
+                                isinstance(out_item, dict)
+                                and out_item.get("type") == "reasoning"
+                                and isinstance(out_item.get("encrypted_content"), str)
+                                and out_item.get("encrypted_content")
+                            ):
+                                encrypted_content = out_item.get("encrypted_content")
+                                provider_specific_fields = {
+                                    "reasoning": {
+                                        k: v
+                                        for k, v in out_item.items()
+                                        if v is not None
+                                    }
+                                }
+                                thinking_blocks = (
+                                    [
+                                        {
+                                            "type": "thinking",
+                                            "encrypted_content": encrypted_content,
+                                        }
+                                    ]
+                                    if isinstance(encrypted_content, str)
+                                    and encrypted_content
+                                    else None
+                                )
+                                break
+            except Exception:
+                provider_specific_fields = None
+                thinking_blocks = None
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         index=0,
-                        delta=Delta(content=""),
+                        delta=Delta(
+                            content="",
+                            provider_specific_fields=provider_specific_fields,
+                            thinking_blocks=thinking_blocks,
+                        )
+                        if provider_specific_fields is not None or thinking_blocks is not None
+                        else Delta(content=""),
                         finish_reason="stop",
                     )
                 ]
