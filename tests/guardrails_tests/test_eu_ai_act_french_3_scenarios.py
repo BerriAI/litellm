@@ -162,17 +162,39 @@ class TestEUAIActFrench3Scenarios:
 
 
     @pytest.mark.asyncio
-    async def test_all_scenarios_summary(self):
-        """Run all scenarios and print summary."""
+    async def test_pure_conditional_matching(self, content_filter_guardrail):
+        """
+        Test pure conditional matching (identifier + block word, not in always_block_keywords).
+        This ensures conditional matching works independently of always_block_keywords.
+        """
+        # This sentence contains "analyser" (identifier) + "sentiment des salariés" (block word)
+        # but doesn't match any always_block_keywords
+        sentence = "Développer un outil pour analyser le sentiment des salariés en continu"
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+
         print(f"\n{'='*70}")
-        print("EU AI ACT FRENCH LANGUAGE SUPPORT - 3 SCENARIOS SUMMARY")
+        print("PURE CONDITIONAL MATCHING TEST")
         print(f"{'='*70}")
-        print(f"✓ Scenario 1: Direct prohibited query → BLOCKED ✓")
-        print(f"✓ Scenario 2: Circumvention attempt → BLOCKED ✓")
-        print(f"✓ Scenario 3: Safe legitimate query → ALLOWED ✓")
-        print(f"{'='*70}")
-        print(f"\nAll 3 critical scenarios passed successfully!")
-        print(f"French language support is working correctly for EU AI Act Article 5.\n")
+        print(f"Query: {sentence}")
+        print(f"Translation: Develop a tool to analyze employee sentiment continuously")
+        print(f"Expected: BLOCK (conditional match: analyser + sentiment des salariés)")
+        print(f"{'='*70}\n")
+
+        # Should raise an exception (blocked by conditional matching)
+        with pytest.raises(Exception) as exc_info:
+            await content_filter_guardrail.apply_guardrail(
+                inputs={"texts": [sentence]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        # Verify it's a conditional match, not an always_block match
+        error_msg = str(exc_info.value)
+        assert "conditional match" in error_msg.lower(), \
+            f"Expected conditional match but got: {error_msg}"
+
+        print(f"✓ PURE CONDITIONAL MATCHING PASSED")
+        print(f"  Reason: {exc_info.value}\n")
 
 
 # Additional edge cases for French language support
