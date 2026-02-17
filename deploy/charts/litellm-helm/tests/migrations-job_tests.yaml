@@ -172,3 +172,19 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: my-custom-sa
+
+  - it: should use pre-existing service account when helm hooks are enabled but serviceAccount.create is false
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        hooks:
+          helm:
+            enabled: true
+      serviceAccount:
+        create: false
+        name: pre-existing-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: pre-existing-sa
