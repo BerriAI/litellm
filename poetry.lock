@@ -5525,6 +5525,22 @@ pytest = ">=6.2"
 setuptools = "*"
 
 [[package]]
+name = "pytest-rerunfailures"
+version = "14.0"
+description = "pytest plugin to re-run tests to eliminate flaky failures"
+optional = false
+python-versions = ">=3.8"
+groups = ["dev"]
+files = [
+    {file = "pytest-rerunfailures-14.0.tar.gz", hash = "sha256:4a400bcbcd3c7a4ad151ab8afac123d90eca3abe27f98725dc4d9702887d2e92"},
+    {file = "pytest_rerunfailures-14.0-py3-none-any.whl", hash = "sha256:4197bdd2eaeffdbf50b5ea6e7236f47ff0e44d1def8dae08e409f536d84e7b32"},
+]
+
+[package.dependencies]
+packaging = ">=17.1"
+pytest = ">=7.2"
+
+[[package]]
 name = "pytest-retry"
 version = "1.7.0"
 description = "Adds the ability to retry flaky tests in CI environments"
@@ -7934,4 +7950,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "dfaf1eabfd17db5e30a8dda813872507aa38664fe7681ece2f8fa06ba035d3cf"
+content-hash = "d99036fc86de60170dde4a1a9b3f9fdac6eb3610edb6177e70ca86133b71703e"
