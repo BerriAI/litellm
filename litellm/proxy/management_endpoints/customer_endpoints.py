@@ -233,7 +233,16 @@ async def new_end_user(
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     - spend: Optional[float] - Specify initial spend for a given customer.
     - budget_reset_at: Optional[str] - Specify the date and time when the budget should be reset.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permission. Example - {"mcp_servers": ["server_1", "server_2"], "vector_stores": ["vector_store_1"], "agents": ["agent_1"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
+        Supported fields:
+        * mcp_servers: List[str] - List of allowed MCP server IDs
+        * mcp_access_groups: List[str] - List of MCP access group names
+        * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names (e.g., {"server_1": ["tool_a", "tool_b"]})
+        * vector_stores: List[str] - List of allowed vector store IDs
+        * agents: List[str] - List of allowed agent IDs
+        * agent_access_groups: List[str] - List of agent access group names
+        Example: {"mcp_servers": ["server_1", "server_2"], "vector_stores": ["vector_store_1"], "agents": ["agent_1"]}
+        IF null or {} then no object-level restrictions apply.
     
     
     - Allow specifying allowed regions 
@@ -248,8 +257,21 @@ async def new_end_user(
             "user_id" : "ishaan-jaff-3",
             "allowed_region": "eu",
             "budget_id": "free_tier",
-            "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model? 
+            "default_model": "azure/gpt-3.5-turbo-eu"
         }'
+
+    # With object permissions
+    curl -L -X POST 'http://localhost:4000/customer/new' \
+        -H 'Authorization: Bearer sk-1234' \
+        -H 'Content-Type: application/json' \
+        -d '{
+            "user_id": "user_1",
+            "object_permission": {
+              "mcp_servers": ["server_1"],
+              "mcp_access_groups": ["public_group"],
+              "vector_stores": ["vector_store_1"]
+            }
+          }'
 
         # return end-user object
     ```
@@ -461,7 +483,16 @@ async def update_end_user(
     - default_model: Optional[str] = (
         None  # if no equivalent model in allowed region - default all requests to this model
     )
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] = Customer-specific object permission. Example - {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
+        Supported fields:
+        * mcp_servers: List[str] - List of allowed MCP server IDs
+        * mcp_access_groups: List[str] - List of MCP access group names
+        * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
+        * vector_stores: List[str] - List of allowed vector store IDs
+        * agents: List[str] - List of allowed agent IDs
+        * agent_access_groups: List[str] - List of agent access group names
+        Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
+        IF null or {} then no object-level restrictions apply.
 
     Example curl:
     ```
@@ -473,7 +504,19 @@ async def update_end_user(
         "budget_id": "paid_tier"
     }'
 
-    See below for all params 
+    # Updating object permissions
+    curl -L -X POST 'http://localhost:4000/customer/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "user_1",
+        "object_permission": {
+          "mcp_servers": ["server_3"],
+          "vector_stores": ["vector_store_2", "vector_store_3"]
+        }
+      }'
+
+    See below for all params
     ```
     """
 
