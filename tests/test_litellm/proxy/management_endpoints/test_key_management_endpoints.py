@@ -521,6 +521,51 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
+    """Ensure generate_key_helper_fn passes access_group_ids into the key insert payload."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id=None)
+    )
+
+    captured_key_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            captured_key_data.update(kwargs.get("data", {}))
+            return MagicMock(
+                token="hashed_token_789",
+                litellm_budget_table=None,
+                object_permission=None,
+                created_at=None,
+                updated_at=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_id="test-user",
+        access_group_ids=["ag-1", "ag-2"],
+    )
+
+    assert captured_key_data.get("access_group_ids") == ["ag-1", "ag-2"]
+
+
+@pytest.mark.asyncio
 async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     """
     Test that /key/generate correctly handles mcp_tool_permissions in object_permission.
@@ -1356,14 +1401,15 @@ async def test_unblock_key_invalid_key_format(monkeypatch):
     assert "Invalid key format" in str(exc_info.value.message)
 
 
-def test_validate_key_team_change_with_member_permissions():
+@pytest.mark.asyncio
+async def test_validate_key_team_change_with_member_permissions():
     """
     Test validate_key_team_change function with team member permissions.
 
     This test covers the new logic that allows team members with specific
     permissions to update keys, not just team admins.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy._types import KeyManagementRoutes
 
@@ -1389,7 +1435,8 @@ def test_validate_key_team_change_with_member_permissions():
     mock_member_object = MagicMock()
 
     with patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model"
+        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model",
+        new_callable=AsyncMock,
     ):
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
@@ -1406,7 +1453,7 @@ def test_validate_key_team_change_with_member_permissions():
                     mock_has_perms.return_value = True
 
                     # This should not raise an exception due to member permissions
-                    validate_key_team_change(
+                    await validate_key_team_change(
                         key=mock_key,
                         team=mock_team,
                         change_initiated_by=mock_change_initiator,
@@ -5559,3 +5606,61 @@ async def test_validate_key_list_check_key_hash_not_found():
 
     assert exc_info.value.code == "403" or exc_info.value.code == 403
     assert "Key Hash not found" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_duration(monkeypatch):
+    """
+    Test that default_key_generate_params with 'duration' is applied
+    when no duration is provided in the key generation request.
+
+    Regression test for bug where 'duration' was missing from the list
+    of fields populated from default_key_generate_params.
+    """
+    import litellm
+
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Set default_key_generate_params with duration
+    original_value = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {"duration": "180d"}
+
+    try:
+        request = GenerateKeyRequest()  # No duration specified
+        response = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+        # Verify duration was applied from defaults
+        assert request.duration == "180d"
+    finally:
+        litellm.default_key_generate_params = original_value

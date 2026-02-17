@@ -97,6 +97,7 @@ const sidebars = {
       label: "Policies",
       items: [
         "proxy/guardrails/guardrail_policies",
+        "proxy/guardrails/policy_templates",
         "proxy/guardrails/policy_tags",
       ],
     },
@@ -106,7 +107,8 @@ const sidebars = {
       items: [
         "proxy/alerting",
         "proxy/pagerduty",
-        "proxy/prometheus"
+        "proxy/prometheus",
+        "proxy/pyroscope_profiling"
       ]
     },
     {
@@ -181,6 +183,7 @@ const sidebars = {
         "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
         "tutorials/livekit_xai_realtime",
+        "projects/openai-agents"
       ]
     },
 
@@ -472,6 +475,7 @@ const sidebars = {
             "proxy/model_access_guide",
             "proxy/model_access",
             "proxy/model_access_groups",
+            "proxy/access_groups",
             "proxy/team_model_add"
           ]
         },
@@ -576,6 +580,7 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
+        "evals_api",
         "generateContent",
         "apply_guardrail",
         "bedrock_invoke",
@@ -880,6 +885,7 @@ const sidebars = {
         },
         "providers/sambanova",
         "providers/sap",
+        "providers/scaleway",
         "providers/stability",
         "providers/synthetic",
         "providers/snowflake",
@@ -1009,6 +1015,7 @@ const sidebars = {
         "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
+        "tutorials/claude_code_beta_headers",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
@@ -1103,16 +1110,24 @@ const sidebars = {
         "proxy_server",
       ],
     },
-    "troubleshoot",
     {
       type: "category",
-      label: "Issue Reporting",
+      label: "Troubleshooting",
       items: [
-        "troubleshoot/prisma_migrations",
-        "troubleshoot/cpu_issues",
-        "troubleshoot/memory_issues",
-        "troubleshoot/spend_queue_warnings",
-        "troubleshoot/max_callbacks",
+        "troubleshoot/ui_issues",
+        "mcp_troubleshoot",
+        {
+          type: "category",
+          label: "Performance / Latency",
+          items: [
+            "troubleshoot/cpu_issues",
+            "troubleshoot/memory_issues",
+            "troubleshoot/spend_queue_warnings",
+            "troubleshoot/max_callbacks",
+            "troubleshoot/prisma_migrations",
+          ],
+        },
+        "troubleshoot",
       ],
     },
     {

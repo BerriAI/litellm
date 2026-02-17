@@ -76,6 +76,8 @@ def get_functions_from_router(file_path):
 ignored_function_names = [
     "_acancel_batch",
     "__init__",
+    "avector_store_create",  # Tested via proxy vector_store_endpoints (files lack "router" in name)
+    "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init
 ]
 
 

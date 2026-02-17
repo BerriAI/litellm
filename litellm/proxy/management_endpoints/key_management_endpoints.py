@@ -12,6 +12,7 @@ All /key management endpoints
 import asyncio
 import copy
 import json
+import os
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,7 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
     PrismaClient,
+    ProxyLogging,
     _hash_token_if_needed,
     handle_exception_on_proxy,
     is_valid_api_key,
@@ -478,6 +480,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 "tpm_limit",
                 "rpm_limit",
                 "budget_duration",
+                "duration",
             ]:
                 setattr(data, key, litellm.default_key_generate_params.get(key, None))
             elif key == "models" and value == []:
@@ -628,10 +631,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
+        _masked = (
+            "{}****{}".format(data.key[:4], data.key[-4:])
+            if len(data.key) > 8
+            else "****"
+        )
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {_masked}"
             },
         )
 
@@ -1044,6 +1052,7 @@ async def generate_key_fn(
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+    - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
 
     Examples:
 
@@ -1340,6 +1349,7 @@ async def prepare_key_update_data(
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
+    data_json.pop("grace_period", None)  # Request-only param, not a DB column
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None
@@ -1597,7 +1607,7 @@ async def _process_single_key_update(
                 status_code=500,
                 detail={"error": "Team object not found for team change validation"},
             )
-        validate_key_team_change(
+        await validate_key_team_change(
             key=existing_key_row,
             team=team_obj,
             change_initiated_by=user_api_key_dict,
@@ -1712,7 +1722,8 @@ async def update_key_fn(
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
-    
+    - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
+
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -1825,7 +1836,7 @@ async def update_key_fn(
                         "error": "Team object not found for team change validation"
                     },
                 )
-            validate_key_team_change(
+            await validate_key_team_change(
                 key=existing_key_row,
                 team=team_obj,
                 change_initiated_by=user_api_key_dict,
@@ -2059,7 +2070,7 @@ async def bulk_update_keys(
     )
 
 
-def validate_key_team_change(
+async def validate_key_team_change(
     key: LiteLLM_VerificationToken,
     team: LiteLLM_TeamTable,
     change_initiated_by: UserAPIKeyAuth,
@@ -2076,7 +2087,7 @@ def validate_key_team_change(
     # Check if the team has access to the key's models
     if len(key.models) > 0:
         for model in key.models:
-            can_team_access_model(
+            await can_team_access_model(
                 model=model,
                 team_object=team,
                 llm_router=llm_router,
@@ -2476,6 +2487,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     auto_rotate: Optional[bool] = None,
     rotation_interval: Optional[str] = None,
     router_settings: Optional[dict] = None,
+    access_group_ids: Optional[list] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -2592,6 +2604,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
+            "access_group_ids": access_group_ids or [],
         }
 
         # Add rotation fields if auto_rotate is enabled
@@ -3175,6 +3188,132 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     return new_token
 
 
+async def _insert_deprecated_key(
+    prisma_client: "PrismaClient",
+    old_token_hash: str,
+    new_token_hash: str,
+    grace_period: Optional[str],
+) -> None:
+    """
+    Insert old key into deprecated table so it remains valid during grace period.
+
+    Uses upsert to handle concurrent rotations gracefully.
+
+    Parameters:
+        prisma_client: DB client
+        old_token_hash: Hash of the old key being rotated out
+        new_token_hash: Hash of the new replacement key
+        grace_period: Duration string (e.g. "24h", "2d") or None/empty for immediate revoke
+    """
+    grace_period_value = grace_period or os.getenv(
+        "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
+    )
+    if not grace_period_value:
+        return
+
+    try:
+        grace_seconds = duration_in_seconds(grace_period_value)
+    except ValueError:
+        verbose_proxy_logger.warning(
+            "Invalid grace_period format: %s. Expected format like '24h', '2d'.",
+            grace_period_value,
+        )
+        return
+
+    if grace_seconds <= 0:
+        return
+
+    try:
+        revoke_at = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
+        await prisma_client.db.litellm_deprecatedverificationtoken.upsert(
+            where={"token": old_token_hash},
+            data={
+                "create": {
+                    "token": old_token_hash,
+                    "active_token_id": new_token_hash,
+                    "revoke_at": revoke_at,
+                },
+                "update": {
+                    "active_token_id": new_token_hash,
+                    "revoke_at": revoke_at,
+                },
+            },
+        )
+        verbose_proxy_logger.debug(
+            "Deprecated key retained for %s (revoke_at: %s)",
+            grace_period_value,
+            revoke_at,
+        )
+    except Exception as deprecated_err:
+        verbose_proxy_logger.warning(
+            "Failed to insert deprecated key for grace period: %s",
+            deprecated_err,
+        )
+async def _execute_virtual_key_regeneration(
+    *,
+    prisma_client: PrismaClient,
+    key_in_db: LiteLLM_VerificationToken,
+    hashed_api_key: str,
+    key: str,
+    data: Optional[RegenerateKeyRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> GenerateKeyResponse:
+    """Generate new token, update DB, invalidate cache, and return response."""
+    from litellm.proxy.proxy_server import hash_token
+
+    new_token = get_new_token(data=data)
+    new_token_hash = hash_token(new_token)
+    new_token_key_name = f"sk-...{new_token[-4:]}"
+    update_data = {"token": new_token_hash, "key_name": new_token_key_name}
+
+    non_default_values = {}
+    if data is not None:
+        non_default_values = await prepare_key_update_data(
+            data=data, existing_key_row=key_in_db
+        )
+        verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
+    update_data.update(non_default_values)
+    update_data = prisma_client.jsonify_object(data=update_data)
+
+    # If grace period set, insert deprecated key so old key remains valid
+    await _insert_deprecated_key(
+        prisma_client=prisma_client,
+        old_token_hash=hashed_api_key,
+        new_token_hash=new_token_hash,
+        grace_period=data.grace_period if data else None,
+    )
+
+    updated_token = await prisma_client.db.litellm_verificationtoken.update(
+        where={"token": hashed_api_key},
+        data=update_data,  # type: ignore
+    )
+    updated_token_dict = dict(updated_token) if updated_token is not None else {}
+    updated_token_dict["key"] = new_token
+    updated_token_dict["token_id"] = updated_token_dict.pop("token")
+
+    if hashed_api_key or key:
+        await _delete_cache_key_object(
+            hashed_token=hash_token(key),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    response = GenerateKeyResponse(**updated_token_dict)
+    asyncio.create_task(
+        KeyManagementEventHooks.async_key_rotated_hook(
+            data=data,
+            existing_key_row=key_in_db,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+    )
+    return response
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -3225,6 +3364,7 @@ async def regenerate_key_fn(  # noqa: PLR0915
         - permissions: Optional[dict] - Key-specific permissions
         - guardrails: Optional[List[str]] - List of active guardrails for the key
         - blocked: Optional[bool] - Whether the key is blocked
+        - grace_period: Optional[str] - Duration to keep old key valid after rotation (e.g. "24h", "2d"). Omitted = immediate revoke. Env: LITELLM_KEY_ROTATION_GRACE_PERIOD
 
 
     Returns:
@@ -3343,69 +3483,32 @@ async def regenerate_key_fn(  # noqa: PLR0915
         )
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
-        new_token = get_new_token(data=data)
+        # Normalize litellm_changed_by: if it's a Header object or not a string, convert to None
+        if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
+            litellm_changed_by = None
 
-        new_token_hash = hash_token(new_token)
-        new_token_key_name = f"sk-...{new_token[-4:]}"
-
-        # Prepare the update data
-        update_data = {
-            "token": new_token_hash,
-            "key_name": new_token_key_name,
-        }
-
-        non_default_values = {}
-        if data is not None:
-            # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = await prepare_key_update_data(
-                data=data, existing_key_row=_key_in_db
-            )
-            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
-
-        update_data.update(non_default_values)
-        update_data = prisma_client.jsonify_object(data=update_data)
-        # Update the token in the database
-        updated_token = await prisma_client.db.litellm_verificationtoken.update(
-            where={"token": hashed_api_key},
-            data=update_data,  # type: ignore
+        # Save the old key record to deleted table before regeneration.
+        # This preserves key_alias and team_id metadata for historical spend records.
+        # If this fails, abort the regeneration to avoid permanently losing the
+        # old hash→metadata mapping.
+        await _persist_deleted_verification_tokens(
+            keys=[_key_in_db],
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
         )
 
-        updated_token_dict = {}
-        if updated_token is not None:
-            updated_token_dict = dict(updated_token)
-
-        updated_token_dict["key"] = new_token
-        updated_token_dict["token_id"] = updated_token_dict.pop("token")
-
-        ### 3. remove existing key entry from cache
-        ######################################################################
-
-        if hashed_api_key or key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-        response = GenerateKeyResponse(
-            **updated_token_dict,
+        return await _execute_virtual_key_regeneration(
+            prisma_client=prisma_client,
+            key_in_db=_key_in_db,
+            hashed_api_key=hashed_api_key,
+            key=key,
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
-
-        verbose_proxy_logger.info(
-            "Key regeneration completed: key_alias=%s",
-            getattr(_key_in_db, "key_alias", None),
-        )
-        asyncio.create_task(
-            KeyManagementEventHooks.async_key_rotated_hook(
-                data=data,
-                existing_key_row=_key_in_db,
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-            )
-        )
-
-        return response
     except Exception as e:
         verbose_proxy_logger.exception("Error regenerating key: %s", e)
         raise handle_exception_on_proxy(e)

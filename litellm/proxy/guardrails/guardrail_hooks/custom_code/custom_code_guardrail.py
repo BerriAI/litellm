@@ -216,7 +216,6 @@ class CustomCodeGuardrail(CustomGuardrail):
             HTTPException: If content is blocked
             CustomCodeExecutionError: If execution fails
         """
-
         if self._compiled_function is None:
             if self._compile_error:
                 raise CustomCodeExecutionError(

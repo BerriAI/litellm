@@ -19,6 +19,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.utils import ModelResponse
+from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
     pass
@@ -63,6 +64,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return
 
         model = completion_kwargs.get("model")
+        try:
+            model_info = get_model_info(model=cast(str, model), custom_llm_provider=custom_llm_provider)
+            if model_info and model_info.get("supports_reasoning") is False:
+                # Model doesn't support reasoning/responses API, don't route
+                return
+        except Exception:
+            pass
+
         if isinstance(model, str) and model and not model.startswith("responses/"):
             # Prefix model with "responses/" to route to OpenAI Responses API
             completion_kwargs["model"] = f"responses/{model}"
