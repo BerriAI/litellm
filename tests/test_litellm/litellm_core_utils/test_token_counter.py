@@ -213,10 +213,11 @@ def test_tokenizers():
         # llama2 may fall back to the tiktoken tokenizer when the HuggingFace
         # model hub is unreachable (e.g. in CI).  In that case the count will
         # equal the openai count and the differentiation assertion is skipped.
-        if openai_tokens != llama2_tokens:
-            assert (
-                llama2_tokens != llama3_tokens_1
-            ), "Token values are not different."
+        if openai_tokens == llama2_tokens:
+            pytest.skip("llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion")
+        assert (
+            llama2_tokens != llama3_tokens_1
+        ), "Token values are not different."
 
         assert (
             llama3_tokens_1 == llama3_tokens_2
