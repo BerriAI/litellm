@@ -277,8 +277,6 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)
-            if chunk.get("usage") is not None:
-                print(f"Usage: {chunk.get('usage')}")
             return ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
