@@ -1185,3 +1185,109 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
         )
         is True
     )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_usage_after_finish_reason(sync_mode: bool):
+    """
+    Test that provider-reported usage is preserved when usage arrives in a
+    separate chunk AFTER the finish_reason chunk (OpenRouter's pattern).
+
+    OpenRouter sends:
+      1. Content chunks
+      2. A chunk with finish_reason="stop" (no usage)
+      3. A final chunk with empty choices but usage data
+
+    Without the fix, chunk #3 is discarded and litellm falls back to its own
+    token estimation. With the fix, the provider-reported usage is used.
+    """
+    import time
+
+    # Chunk 1: content
+    content_chunk = ModelResponseStream(
+        id="gen-test-openrouter-usage",
+        created=1234567890,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello world", role="assistant"),
+            )
+        ],
+        usage=None,
+    )
+
+    # Chunk 2: finish_reason, no usage
+    finish_chunk = ModelResponseStream(
+        id="gen-test-openrouter-usage",
+        created=1234567890,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role="assistant"),
+            )
+        ],
+        usage=None,
+    )
+
+    # Chunk 3: usage data, empty choices (OpenRouter's pattern)
+    usage_chunk = ModelResponseStream(
+        id="gen-test-openrouter-usage",
+        created=1234567890,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[],
+        usage=Usage(
+            prompt_tokens=20,
+            completion_tokens=135,
+            total_tokens=155,
+        ),
+    )
+
+    test_chunks = [content_chunk, finish_chunk, usage_chunk]
+    completion_stream = ModelResponseListIterator(model_responses=test_chunks)
+
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="openrouter/openai/gpt-4o-mini",
+        custom_llm_provider="openrouter",
+        logging_obj=Logging(
+            model="openrouter/openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    collected_chunks = []
+    if sync_mode:
+        for chunk in response:
+            collected_chunks.append(chunk)
+    else:
+        async for chunk in response:
+            collected_chunks.append(chunk)
+
+    # Should have received chunks
+    assert len(collected_chunks) > 0
+
+    # The usage-only chunk should have been captured in response.chunks
+    # even though it was not yielded to the user.
+    # stream_chunk_builder (used by the proxy to build the final response)
+    # reads from response.chunks, so the usage must be there.
+    complete_response = litellm.stream_chunk_builder(
+        chunks=response.chunks,
+        messages=[{"role": "user", "content": "Hey"}],
+    )
+    assert complete_response is not None
+    assert complete_response.usage.prompt_tokens == 20
+    assert complete_response.usage.completion_tokens == 135
+    assert complete_response.usage.total_tokens == 155
