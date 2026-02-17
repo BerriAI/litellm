@@ -7743,13 +7743,23 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             )
             is True
         ):
-            result = await provider_counter.count_tokens(
-                model_to_use=model_to_use or "",
-                messages=messages,  # type: ignore
-                contents=contents,
-                deployment=deployment,
-                request_model=request.model,
-            )
+            try:
+                result = await provider_counter.count_tokens(
+                    model_to_use=model_to_use or "",
+                    messages=messages,  # type: ignore
+                    contents=contents,
+                    deployment=deployment,
+                    request_model=request.model,
+                )
+            except httpx.HTTPStatusError as e:
+                error_message = getattr(e, "message", None) or str(e)
+                status_code = getattr(e, "status_code", None) or 500
+                raise ProxyException(
+                    message=error_message,
+                    type="token_counting_error",
+                    param="model",
+                    code=status_code
+                )
             #########################################################
             # Transfrom the Response to the well known format
             #########################################################
