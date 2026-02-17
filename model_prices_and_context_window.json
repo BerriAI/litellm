@@ -8146,7 +8146,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_structured_outputs": true
     },
     "claude-opus-4-1-20250805": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -8174,7 +8175,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_structured_outputs": true
     },
     "claude-opus-4-20250514": {
         "cache_creation_input_token_cost": 1.875e-05,
