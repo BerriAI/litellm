@@ -824,6 +824,7 @@ def log_guardrail_information(func):
     """
     import asyncio
     import functools
+    import inspect
 
     def _infer_event_type_from_function_name(
         func_name: str,
@@ -904,7 +905,7 @@ def log_guardrail_information(func):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 
