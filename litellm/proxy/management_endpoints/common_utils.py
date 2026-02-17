@@ -372,7 +372,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         # proceed with the update so that users can intentionally clear a
         # previously-set field by sending an empty list/dict.
         if value is not None and value != [] and value != {}:
-            _premium_user_check()
+            _premium_user_check(feature: f"update {field_name}")
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
