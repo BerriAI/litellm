@@ -20,19 +20,6 @@ import asyncio
 import litellm
 
 
-# Session-scoped event loop for pytest-asyncio
-@pytest.fixture(scope="session")
-def event_loop():
-    """
-    Session-scoped event loop.
-    pytest-asyncio will use this instead of creating new loops per test.
-    """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.close()
-
-
 @pytest.fixture(scope="function", autouse=True)
 def isolate_litellm_state():
     """
@@ -79,7 +66,6 @@ def isolate_litellm_state():
         litellm.callbacks = original_callbacks
 
 
-@pytest.fixture(scope="module")
 @pytest.fixture(scope="module", autouse=True)
 def setup_and_teardown():
     """
