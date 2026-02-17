@@ -165,6 +165,56 @@ os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 # os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true" # [OPTIONAL] Disable automatic URL suffix appending
 ```
 
+### OAuth Token (Claude Pro/Max Subscription)
+
+If you have a Claude Pro or Max subscription, you can use your OAuth token instead of an API key. LiteLLM automatically detects OAuth tokens (prefixed with `sk-ant-oat`) and sends them via `Authorization: Bearer` instead of `x-api-key`.
+
+**1. Generate your OAuth token**
+
+```bash
+claude setup-token
+```
+
+This generates a token in the format `sk-ant-oat01-...`. The token expires every 8 hours but can be refreshed automatically.
+
+**2. Use it in LiteLLM**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    api_key="sk-ant-oat01-...",  # OAuth token works here
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+Or via environment variable:
+
+```python
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-oat01-..."  # OAuth token
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+For routing Claude Pro/Max subscription traffic through LiteLLM Proxy with cost tracking and budgets, see the [Claude Code Max Subscription tutorial](/docs/tutorials/claude_code_max_subscription).
+
+</TabItem>
+</Tabs>
+
+:::info How it works
+LiteLLM detects the `sk-ant-oat` prefix and automatically:
+- Sends the token via `Authorization: Bearer` header (instead of `x-api-key`)
+- Adds the required `anthropic-beta: oauth-2025-04-20` header
+- Adds the `anthropic-dangerous-direct-browser-access: true` header
+:::
+
 :::tip Azure Foundry Support
 
 Claude models are also available via Microsoft Azure Foundry. Use the `azure/` prefix instead of `anthropic/` and configure Azure authentication. See the [Azure Anthropic documentation](../providers/azure/azure_anthropic) for details.
