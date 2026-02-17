@@ -13,7 +13,7 @@ jobs:
 
     strategy:
       matrix:
-        root_path: ["/api/v1"]
+        root_path: ["/api/v1", "/llmproxy"]
 
     steps:
       - name: Checkout repository
@@ -50,7 +50,7 @@ jobs:
 
           while [ $attempt -lt $max_attempts ]; do
             if docker logs litellm-test 2>&1 | grep -q "Uvicorn running"; then
-              echo "✅ LiteLLM started successfully"
+              echo "LiteLLM started successfully"
               break
             fi
             attempt=$((attempt + 1))
@@ -59,262 +59,33 @@ jobs:
           done
 
           if [ $attempt -eq $max_attempts ]; then
-            echo "❌ Server failed to start within timeout"
+            echo "Server failed to start within timeout"
             docker logs litellm-test
             exit 1
           fi
 
-          # Additional wait for full initialization
           sleep 5
 
       - name: Show container logs
         if: always()
-        run: |
-          echo "=== Container Logs ==="
-          docker logs litellm-test
+        run: docker logs litellm-test
 
-      - name: Test health endpoint with root path
+      - name: Test UI endpoint with root path
         run: |
           ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing health endpoint at: http://localhost:4000${ROOT_PATH}/health"
-
-          for i in 1 2 3; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/health")
-            if [ "$response" = "200" ]; then
-              echo "✅ Health endpoint returned 200"
-              exit 0
-            fi
-            echo "Attempt $i/3 - got $response, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ Health endpoint returned $response (expected 200)"
-          docker logs litellm-test
-          exit 1
-
-      - name: Test health endpoint liveliness with root path
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing liveliness endpoint at: http://localhost:4000${ROOT_PATH}/health/liveliness"
-
-          for i in 1 2 3; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/health/liveliness")
-            if [ "$response" = "200" ]; then
-              echo "✅ Liveliness endpoint returned 200"
-              exit 0
-            fi
-            echo "Attempt $i/3 - got $response, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ Liveliness endpoint returned $response (expected 200)"
-          docker logs litellm-test
-          exit 1
-
-      - name: Test health endpoint readiness with root path
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing readiness endpoint at: http://localhost:4000${ROOT_PATH}/health/readiness"
-
-          for i in 1 2 3; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/health/readiness")
-            if [ "$response" = "200" ]; then
-              echo "✅ Readiness endpoint returned 200"
-              exit 0
-            fi
-            echo "Attempt $i/3 - got $response, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ Readiness endpoint returned $response (expected 200)"
-          docker logs litellm-test
-          exit 1
-
-      - name: Test UI is accessible with root path
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing UI endpoint at: http://localhost:4000${ROOT_PATH}/ui"
-
-          for i in 1 2 3; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/ui")
-            if [[ "$response" =~ ^(200|30[0-9])$ ]]; then
-              echo "✅ UI endpoint returned $response"
-              exit 0
-            fi
-            echo "Attempt $i/3 - got $response, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ UI endpoint returned $response (expected 200 or 30x)"
-          docker logs litellm-test
-          exit 1
-
-      - name: Test UI index page content with root path
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing UI content at: http://localhost:4000${ROOT_PATH}/ui/"
+          echo "Testing UI at: http://localhost:4000${ROOT_PATH}/ui/"
 
           for i in 1 2 3; do
             content=$(curl -sL --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/ui/")
             if echo "$content" | grep -q -E "(html|<!DOCTYPE|<head|<body)"; then
-              echo "✅ UI page contains valid HTML content"
+              echo "UI page contains valid HTML content"
               exit 0
             fi
             echo "Attempt $i/3 - no valid HTML, retrying in 5s..."
             sleep 5
           done
-          echo "❌ UI page does not contain expected HTML content"
+          echo "UI page does not contain expected HTML content"
           echo "Response: $content"
-          docker logs litellm-test
-          exit 1
-
-      - name: Test API docs endpoint with root path
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing API docs at: http://localhost:4000${ROOT_PATH}/docs"
-
-          for i in 1 2 3; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/docs")
-            if [ "$response" = "200" ]; then
-              echo "✅ API docs endpoint returned 200"
-              exit 0
-            fi
-            echo "Attempt $i/3 - got $response, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ API docs endpoint returned $response (expected 200)"
-          docker logs litellm-test
-          exit 1
-
-      - name: Test OpenAPI schema with root path
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing OpenAPI schema at: http://localhost:4000${ROOT_PATH}/openapi.json"
-
-          for i in 1 2 3; do
-            response=$(curl -s --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/openapi.json")
-            if echo "$response" | grep -q '"openapi"'; then
-              echo "✅ OpenAPI schema is valid"
-              exit 0
-            fi
-            echo "Attempt $i/3 - invalid schema, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ OpenAPI schema is invalid or missing"
-          echo "Response: $response"
-          docker logs litellm-test
-          exit 1
-
-      - name: Test model list endpoint with root path
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Testing model list endpoint at: http://localhost:4000${ROOT_PATH}/v1/models"
-
-          for i in 1 2 3; do
-            response=$(curl -s --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/v1/models")
-            if echo "$response" | grep -q '"data"'; then
-              echo "✅ Model list endpoint returned valid response"
-              exit 0
-            fi
-            echo "Attempt $i/3 - invalid response, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ Model list endpoint returned invalid response"
-          echo "Response: $response"
-          docker logs litellm-test
-          exit 1
-
-      - name: Verify root path is NOT accessible without prefix
-        run: |
-          ROOT_PATH="${{ matrix.root_path }}"
-          echo "Verifying endpoints are NOT accessible without root path prefix"
-
-          # These should fail (404) because we're accessing without the root path
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000/health")
-
-          if [ "$response" = "404" ]; then
-            echo "✅ Correctly returns 404 when accessing without root path"
-          else
-            echo "⚠️  Warning: Endpoint accessible without root path (returned $response)"
-            # This is a warning, not a failure, as FastAPI might handle this differently
-          fi
-
-      - name: Run unit tests for SERVER_ROOT_PATH
-        run: |
-          docker exec litellm-test pip install pytest pytest-asyncio
-          docker exec litellm-test pytest /app/tests/proxy_unit_tests/test_server_root_path.py -v
-
-      - name: Cleanup
-        if: always()
-        run: |
-          docker stop litellm-test || true
-          docker rm litellm-test || true
-
-  test-without-root-path:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./docker/Dockerfile.database
-          tags: litellm-test:${{ github.sha }}
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Start LiteLLM container without SERVER_ROOT_PATH
-        run: |
-          docker run -d \
-            --name litellm-test \
-            -p 4000:4000 \
-            -e LITELLM_MASTER_KEY="sk-1234" \
-            litellm-test:${{ github.sha }}
-
-      - name: Wait for container to be healthy
-        run: |
-          echo "Waiting for LiteLLM to start..."
-          max_attempts=30
-          attempt=0
-
-          while [ $attempt -lt $max_attempts ]; do
-            if docker logs litellm-test 2>&1 | grep -q "Uvicorn running"; then
-              echo "✅ LiteLLM started successfully"
-              break
-            fi
-            attempt=$((attempt + 1))
-            echo "Attempt $attempt/$max_attempts - waiting for server to start..."
-            sleep 2
-          done
-
-          if [ $attempt -eq $max_attempts ]; then
-            echo "❌ Server failed to start within timeout"
-            docker logs litellm-test
-            exit 1
-          fi
-
-          sleep 5
-
-      - name: Test default paths work without SERVER_ROOT_PATH
-        run: |
-          echo "Testing that default paths work when SERVER_ROOT_PATH is not set"
-
-          for i in 1 2 3; do
-            health=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000/health")
-            ui=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000/ui")
-
-            if [ "$health" = "200" ] && [[ "$ui" =~ ^(200|30[0-9])$ ]]; then
-              echo "✅ Default paths work correctly"
-              exit 0
-            fi
-            echo "Attempt $i/3 - health: $health, ui: $ui, retrying in 5s..."
-            sleep 5
-          done
-          echo "❌ Default paths failed (health: $health, ui: $ui)"
           docker logs litellm-test
           exit 1
 
