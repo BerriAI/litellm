@@ -1,15 +1,10 @@
-name: Test SERVER_ROOT_PATH
+name: Test Proxy SERVER_ROOT_PATH Routing
+permissions:
+  contents: read
 
 on:
-  push:
-    branches:
-      - main
-      - master
   pull_request:
-    branches:
-      - main
-      - master
-  workflow_dispatch:
+    branches: [main]
 
 jobs:
   test-server-root-path:
