@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type, Uni
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_CALLBACKS
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
@@ -23,9 +24,6 @@ class LoggingCallbackManager:
     - Prevent adding duplicate callbacks / success_callback / failure_callback
     - Keep a reasonable MAX_CALLBACKS limit (this ensures callbacks don't exponentially grow and consume CPU Resources)
     """
-
-    # healthy maximum number of callbacks - unlikely someone needs more than 20
-    MAX_CALLBACKS = 30
 
     def add_litellm_input_callback(self, callback: Union[CustomLogger, str]):
         """
@@ -114,6 +112,27 @@ class LoggingCallbackManager:
         for c in remove_list:
             callback_list.remove(c)
 
+    def remove_callbacks_by_type(self, callback_list, callback_type):
+        """
+        Remove all callbacks of a specific type from a callback list.
+        
+        Args:
+            callback_list: The list to remove callbacks from (e.g., litellm.callbacks)
+            callback_type: The class type to match (e.g., SemanticToolFilterHook)
+            
+        Example:
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                litellm.callbacks, SemanticToolFilterHook
+            )
+        """
+        if not isinstance(callback_list, list):
+            return
+
+        remove_list = [c for c in callback_list if isinstance(c, callback_type)]
+
+        for c in remove_list:
+            callback_list.remove(c)
+
     def _add_string_callback_to_list(
         self, callback: str, parent_list: List[Union[CustomLogger, Callable, str]]
     ):
@@ -134,9 +153,9 @@ class LoggingCallbackManager:
         Check if adding another callback would exceed MAX_CALLBACKS
         Returns True if safe to add, False if would exceed limit
         """
-        if len(parent_list) >= self.MAX_CALLBACKS:
+        if len(parent_list) >= MAX_CALLBACKS:
             verbose_logger.warning(
-                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {self.MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
+                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
             )
             return False
         return True
@@ -166,6 +185,7 @@ class LoggingCallbackManager:
             endpoint = callback_config.get("endpoint")
             headers = callback_config.get("headers")
             event_types = callback_config.get("event_types")
+            log_format = callback_config.get("log_format")
 
             if endpoint is None or headers is None:
                 verbose_logger.warning(
@@ -180,6 +200,7 @@ class LoggingCallbackManager:
                 and cached_logger.endpoint == endpoint
                 and cached_logger.headers == headers
                 and cached_logger.event_types == event_types
+                and cached_logger.log_format == log_format
             ):
                 return cached_logger
 
@@ -187,6 +208,7 @@ class LoggingCallbackManager:
                 endpoint=endpoint,
                 headers=headers,
                 event_types=event_types,
+                log_format=log_format,
             )
             _generic_api_logger_cache[callback] = new_logger
             return new_logger

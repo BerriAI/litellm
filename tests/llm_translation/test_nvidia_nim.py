@@ -253,7 +253,7 @@ class TestNvidiaNim(BaseLLMRerankTest):
 
     def get_base_rerank_call_args(self) -> dict:
         return {
-            "model": "nvidia_nim/nvidia/llama-3.2-nv-rerankqa-1b-v2",
+            "model": "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
         }
     
     def get_expected_cost(self) -> float:

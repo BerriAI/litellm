@@ -8,7 +8,10 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
+    create_tool_name_mapping,
+    truncate_tool_name,
 )
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
@@ -338,10 +341,10 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 1
-    assert result[0].type == "tool_use"
-    assert result[0].id == "call_empty_args"
-    assert result[0].name == "test_function"
-    assert result[0].input == {}, "Empty function arguments should result in empty dict"
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "call_empty_args"
+    assert result[0]["name"] == "test_function"
+    assert result[0]["input"] == {}, "Empty function arguments should result in empty dict"
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
@@ -369,12 +372,12 @@ def test_translate_openai_content_to_anthropic_text_and_tool_calls():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 2
-    assert result[0].type == "text"
-    assert result[0].text == "Calling get_weather now."
-    assert result[1].type == "tool_use"
-    assert result[1].id == "call_weather"
-    assert result[1].name == "get_weather"
-    assert result[1].input == {"location": "Boston"}
+    assert result[0]["type"] == "text"
+    assert result[0]["text"] == "Calling get_weather now."
+    assert result[1]["type"] == "tool_use"
+    assert result[1]["id"] == "call_weather"
+    assert result[1]["name"] == "get_weather"
+    assert result[1]["input"] == {"location": "Boston"}
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
@@ -411,11 +414,11 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     anthropic_content = anthropic_response.get("content")
     assert anthropic_content is not None
     assert len(anthropic_content) == 2
-    assert cast(Any, anthropic_content[0]).type == "text"
-    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
-    assert cast(Any, anthropic_content[1]).type == "tool_use"
-    assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
-    assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
+    assert anthropic_content[0]["type"] == "text"
+    assert anthropic_content[0]["text"] == "Let me grab the current weather."
+    assert anthropic_content[1]["type"] == "tool_use"
+    assert anthropic_content[1]["id"] == "call_tool_combo"
+    assert anthropic_content[1]["input"] == {"location": "Paris"}
     assert anthropic_response.get("stop_reason") == "tool_use"
 
 
@@ -481,11 +484,11 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
     assert len(result) == 2
-    assert result[0].type == "thinking"
-    assert result[0].thinking == "I need to summar"
-    assert result[0].signature == "sigsig"
-    assert result[1].type == "redacted_thinking"
-    assert result[1].data == "REDACTED"
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "I need to summar"
+    assert result[0]["signature"] == "sigsig"
+    assert result[1]["type"] == "redacted_thinking"
+    assert result[1]["data"] == "REDACTED"
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
@@ -1055,3 +1058,756 @@ def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward
         f"got {type(tool_message['content'])}"
     )
     assert tool_message["content"] == "72°F and sunny"
+
+
+def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
+    """
+    When a streaming choice contains both text content and tool_calls,
+    both should be processed (tool_calls should not be ignored).
+    """
+    # streaming choice with both text and tool_calls
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Here is some text for litellm",
+                role=None,
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="toolu_bdrk_013xRVejhv3ybmLEGCoZib2b",
+                        function=Function(arguments='{"cmd": "init"}', name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    # When both text and tool_calls exist, tool_calls (input_json_delta) takes priority
+    (
+        type_of_content,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+
+    assert type_of_content == "input_json_delta"
+    assert content_block_delta["partial_json"] == '{"cmd": "init"}'
+
+    # When both text and tool_calls exist, tool_use should be detected and tool name captured
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "tool_use"
+    assert content_block_start["name"] == "Bash"
+    assert content_block_start["id"] == "toolu_bdrk_013xRVejhv3ybmLEGCoZib2b"
+
+
+# ============================================================================
+# Cache Control Transformation Tests
+# ============================================================================
+
+# Model constant for cache control tests
+CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
+CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
+
+
+def test_should_add_cache_control_for_anthropic_model():
+    """Should add cache_control to target for Anthropic Claude models."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral"}
+
+    for model in [
+        CACHE_CONTROL_BEDROCK_CONVERSE_MODEL,
+        "anthropic/claude-sonnet-4-5",
+        "claude-opus-4-5-20251101",
+        "vertex_ai/claude-3-sonnet@20240229",
+    ]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" in target
+        assert target["cache_control"] == cache_control
+
+
+def test_should_not_add_cache_control_for_non_anthropic_model():
+    """Should not add cache_control for non-Anthropic models."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral"}
+
+    for model in [CACHE_CONTROL_NON_ANTHROPIC_MODEL, "openai/gpt-4-turbo", "gemini-pro"]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" not in target
+
+
+def test_should_not_add_cache_control_when_none():
+    """Should not add cache_control when source has None or empty cache_control."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    for source in [{"cache_control": None}, {"cache_control": {}}, {"cache_control": ""}, {}]:
+        target = {}
+        adapter._add_cache_control_if_applicable(source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL)
+        assert "cache_control" not in target
+
+
+def test_should_not_add_cache_control_when_model_none():
+    """Should not add cache_control when model is None or empty."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral"}
+
+    for model in [None, ""]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" not in target
+
+
+def test_cache_control_preserved_in_text_content_for_claude():
+    """Cache control should be preserved in text content for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_not_preserved_for_non_claude_model():
+    """Cache control should NOT be preserved for non-Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_NON_ANTHROPIC_MODEL
+    )
+
+    assert len(result) == 1
+    assert "cache_control" not in result[0]["content"][0]
+
+
+def test_cache_control_preserved_in_image_content_for_claude():
+    """Cache control should be preserved in image content for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_document_content_for_claude():
+    """Cache control should be preserved in document content for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQKJeLjz9MK",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_tool_result_for_claude():
+    """Cache control should be preserved in tool_result for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Tool result content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    tool_message = next(msg for msg in result if msg.get("role") == "tool")
+    assert tool_message["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_not_preserved_in_tool_result_for_non_claude():
+    """Cache control should NOT be preserved in tool_result for non-Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Tool result content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_NON_ANTHROPIC_MODEL
+    )
+
+    tool_message = next(msg for msg in result if msg.get("role") == "tool")
+    assert "cache_control" not in tool_message
+
+
+def test_cache_control_preserved_in_assistant_text_for_claude():
+    """Cache control should be preserved in assistant text blocks for Claude models."""
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "text",
+                    "text": "Assistant response",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["role"] == "assistant"
+    # When cache_control is present, content should be a list
+    assert isinstance(result[0]["content"], list)
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_tool_use_for_claude():
+    """Cache control should be preserved in tool_use blocks for Claude models."""
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert "tool_calls" in result[0]
+    assert result[0]["tool_calls"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_tools_for_claude():
+    """Cache control should be preserved in tools for Claude models."""
+    tools = [
+        {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["cache_control"] == {"type": "ephemeral"}
+    assert tool_name_mapping == {}  # No truncation needed for short names
+
+
+def test_cache_control_not_preserved_in_tools_for_non_claude():
+    """Cache control should NOT be preserved in tools for non-Claude models."""
+    tools = [
+        {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model=CACHE_CONTROL_NON_ANTHROPIC_MODEL
+    )
+
+    assert len(result) == 1
+    assert "cache_control" not in result[0]
+
+
+def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
+    """
+    Test that reasoning_content is converted to thinking block when thinking_blocks is not present.
+    This handles providers like OpenRouter that return reasoning_content instead of thinking_blocks.
+    
+    Regression test for: OpenRouter models returning reasoning_content in /v1/messages endpoint
+    should be converted to Anthropic's thinking block format.
+    """
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="There are **3** \"r\"s in the word strawberry.",
+                reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'. I've identified the target word, \"strawberry,\" and confirmed my understanding of the letter's location. The first 'r' follows 't', the second after 'e', and the third… well, I'm almost there.\n\n\n**Calculating the Count**\n\nMy analysis is complete! I've confirmed that the letter \"r\" appears three times in \"strawberry.\" The first follows \"t,\" the second \"e,\" and the third immediately follows the second. The count is definitively three.",
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 2
+    # First block should be thinking block with reasoning_content
+    assert result[0]["type"] == "thinking"
+    assert "Considering Letter Frequency" in result[0]["thinking"]
+    assert "Calculating the Count" in result[0]["thinking"]
+    assert result[0]["signature"] is None
+    # Second block should be text block with content
+    assert result[1]["type"] == "text"
+    assert result[1]["text"] == "There are **3** \"r\"s in the word strawberry."
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without_thinking_blocks():
+    """
+    Test that reasoning_content in streaming chunks is converted to thinking_delta 
+    when thinking_blocks is not present.
+    
+    This handles providers like OpenRouter that return reasoning_content in streaming 
+    responses without thinking_blocks.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="I need to analyze this carefully...",
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    assert type_of_content == "thinking_delta"
+    assert content_block_delta["type"] == "thinking_delta"
+    assert content_block_delta["thinking"] == "I need to analyze this carefully..."
+
+
+def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
+    """
+    Test the full response translation when only reasoning_content is present 
+    (no thinking_blocks).
+    
+    This simulates OpenRouter's response format being translated to Anthropic format
+    through /v1/messages endpoint.
+    """
+    openai_response = ModelResponse(
+        id="gen-1770027855-HyrqYvLcX8oTLNgfyDob",
+        model="gemini-3-flash",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="There are **3** \"r\"s in the word strawberry.",
+                    reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'.",
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=13, completion_tokens=138),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 2
+    
+    # First block should be thinking
+    assert anthropic_content[0]["type"] == "thinking"
+    assert "Considering Letter Frequency" in anthropic_content[0]["thinking"]
+    assert anthropic_content[0].get("signature") is None
+    
+    # Second block should be text
+    assert anthropic_content[1]["type"] == "text"
+    assert anthropic_content[1]["text"] == "There are **3** \"r\"s in the word strawberry."
+    
+    assert anthropic_response.get("stop_reason") == "end_turn"
+
+
+# =====================================================================
+# Tool Name Truncation Tests (Issue #17904)
+# OpenAI has a 64-character limit for function/tool names
+# =====================================================================
+
+
+def test_truncate_tool_name_short_name():
+    """Short tool names should not be truncated."""
+    short_name = "get_weather"
+    result = truncate_tool_name(short_name)
+    assert result == short_name
+    assert len(result) <= OPENAI_MAX_TOOL_NAME_LENGTH
+
+
+def test_truncate_tool_name_exactly_64_chars():
+    """Tool names exactly 64 chars should not be truncated."""
+    name_64_chars = "a" * 64
+    result = truncate_tool_name(name_64_chars)
+    assert result == name_64_chars
+    assert len(result) == 64
+
+
+def test_truncate_tool_name_long_name():
+    """Long tool names should be truncated with hash suffix."""
+    long_name = "computer_tool_with_very_long_name_that_exceeds_openai_64_character_limit_and_keeps_going"
+    result = truncate_tool_name(long_name)
+
+    assert len(result) == OPENAI_MAX_TOOL_NAME_LENGTH
+    assert result != long_name
+    # Should have format: {55-char-prefix}_{8-char-hash}
+    assert "_" in result
+    parts = result.rsplit("_", 1)
+    assert len(parts[0]) == 55
+    assert len(parts[1]) == 8
+
+
+def test_truncate_tool_name_deterministic():
+    """Truncation should be deterministic (same input = same output)."""
+    long_name = "a_very_long_tool_name_that_needs_to_be_truncated_for_openai_compatibility_reasons"
+    result1 = truncate_tool_name(long_name)
+    result2 = truncate_tool_name(long_name)
+    assert result1 == result2
+
+
+def test_truncate_tool_name_avoids_collisions():
+    """Similar long names should produce different truncated names."""
+    name1 = "process_user_data_with_validation_and_error_handling_for_production_environment"
+    name2 = "process_user_data_with_validation_and_error_handling_for_staging_environment"
+
+    result1 = truncate_tool_name(name1)
+    result2 = truncate_tool_name(name2)
+
+    assert result1 != result2  # Different hashes prevent collision
+
+
+def test_create_tool_name_mapping_no_long_names():
+    """Mapping should be empty when no names need truncation."""
+    tools = [
+        {"name": "get_weather"},
+        {"name": "search_web"},
+    ]
+    mapping = create_tool_name_mapping(tools)
+    assert mapping == {}
+
+
+def test_create_tool_name_mapping_with_long_names():
+    """Mapping should contain entries for truncated names."""
+    long_name = "a_very_long_tool_name_that_exceeds_the_64_character_limit_imposed_by_openai"
+    tools = [
+        {"name": "short_name"},
+        {"name": long_name},
+    ]
+    mapping = create_tool_name_mapping(tools)
+
+    assert len(mapping) == 1
+    truncated = truncate_tool_name(long_name)
+    assert truncated in mapping
+    assert mapping[truncated] == long_name
+
+
+def test_translate_anthropic_tools_with_long_names():
+    """Tools with long names should be truncated and mapped."""
+    long_name = "computer_tool_with_very_long_descriptive_name_that_exceeds_openai_limit_completely"
+    tools = [
+        {
+            "name": long_name,
+            "description": "A tool with a very long name",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model="gpt-4"
+    )
+
+    assert len(result) == 1
+    # The tool name should be truncated
+    truncated_name = result[0]["function"]["name"]
+    assert len(truncated_name) <= 64
+    assert truncated_name != long_name
+    # Mapping should have the reverse lookup
+    assert truncated_name in tool_name_mapping
+    assert tool_name_mapping[truncated_name] == long_name
+
+
+def test_translate_anthropic_tools_mixed_names():
+    """Mix of short and long names should work correctly."""
+    short_name = "get_weather"
+    long_name = "process_complex_data_transformation_with_validation_and_error_handling_pipeline"
+    tools = [
+        {"name": short_name, "input_schema": {"type": "object"}},
+        {"name": long_name, "input_schema": {"type": "object"}},
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model="gpt-4"
+    )
+
+    assert len(result) == 2
+    # Short name unchanged
+    assert result[0]["function"]["name"] == short_name
+    # Long name truncated
+    assert result[1]["function"]["name"] != long_name
+    assert len(result[1]["function"]["name"]) <= 64
+    # Only long name in mapping
+    assert len(tool_name_mapping) == 1
+
+
+def test_translate_openai_response_restores_tool_names():
+    """Tool names in responses should be restored to original."""
+    original_name = "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"
+    truncated_name = truncate_tool_name(original_name)
+    tool_name_mapping = {truncated_name: original_name}
+
+    # Create a mock OpenAI response with the truncated name
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionAssistantToolCall(
+                            id="call_123",
+                            type="function",
+                            function=Function(
+                                name=truncated_name,
+                                arguments='{"arg": "value"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        model="gpt-4",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, tool_name_mapping=tool_name_mapping
+    )
+
+    # Find the tool_use block in the response
+    tool_use_blocks = [c for c in result["content"] if c.get("type") == "tool_use"]
+    assert len(tool_use_blocks) == 1
+    # Name should be restored to original
+    assert tool_use_blocks[0]["name"] == original_name
+
+
+def test_translate_openai_response_to_anthropic_input_tokens_excludes_cached_tokens():
+    """
+    Regression test: input_tokens in Anthropic format should NOT include cached tokens.
+    
+    Issue: v1/messages API was returning incorrect input_token count when using prompt caching.
+    The OpenAI format includes cached tokens in prompt_tokens, but Anthropic format should not.
+    
+    According to Anthropic's spec:
+    - input_tokens = uncached input tokens only
+    - cache_read_input_tokens = tokens read from cache
+    
+    In OpenAI format:
+    - prompt_tokens = all input tokens (including cached)
+    - prompt_tokens_details.cached_tokens = cached tokens
+    
+    Expected: anthropic.input_tokens = openai.prompt_tokens - openai.prompt_tokens_details.cached_tokens
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Create OpenAI format response with cached tokens
+    # Scenario: 100 total prompt tokens, 30 of which are cached
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30
+        ),
+        cache_read_input_tokens=30,  # Anthropic format cache info
+    )
+    
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    
+    # Convert to Anthropic format
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+    
+    # Validate: input_tokens should be 70 (100 - 30 cached), not 100
+    assert anthropic_response["usage"]["input_tokens"] == 70, (
+        f"Expected input_tokens=70 (100 total - 30 cached), "
+        f"but got {anthropic_response['usage']['input_tokens']}. "
+        f"input_tokens should NOT include cached tokens per Anthropic spec."
+    )
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+
+
+def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
+    """
+    Regression test: input_tokens should equal prompt_tokens when there are no cached tokens.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # Create OpenAI format response without cached tokens
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="claude-3-sonnet-20240229",
+        usage=usage,
+    )
+    
+    # Convert to Anthropic format
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+    
+    # Validate: input_tokens should equal prompt_tokens when no caching
+    assert anthropic_response["usage"]["input_tokens"] == 100
+    assert anthropic_response["usage"]["output_tokens"] == 50

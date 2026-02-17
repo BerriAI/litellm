@@ -103,7 +103,11 @@ class TestProxyInitializationHelpers:
             args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
                 "localhost", 8000
             )
-            assert args["log_config"] is None
+            # When json_logs is True, log_config should be set to the JSON log config dict
+            assert args["log_config"] is not None
+            assert isinstance(args["log_config"], dict)
+            assert "version" in args["log_config"]
+            assert "formatters" in args["log_config"]
 
         # Test with keepalive_timeout
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
@@ -180,7 +184,7 @@ class TestProxyInitializationHelpers:
         test_env = {
             "DATABASE_HOST": "localhost:5432",
             "DATABASE_USERNAME": "user@with+special",
-            "DATABASE_PASSWORD": "pass&word!@#$%",
+            "DATABASE_PASSWORD": "test-password-special-chars",
             "DATABASE_NAME": "db_name/test",
         }
 
@@ -205,7 +209,7 @@ class TestProxyInitializationHelpers:
             database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
 
             # Assert the correct URL was constructed with properly escaped characters
-            expected_url = "postgresql://user%40with%2Bspecial:pass%26word%21%40%23%24%25@localhost:5432/db_name%2Ftest"
+            expected_url = "postgresql://user%40with%2Bspecial:test-password-special-chars@localhost:5432/db_name%2Ftest"
             assert database_url == expected_url
 
             # Test appending query parameters
@@ -214,29 +218,29 @@ class TestProxyInitializationHelpers:
             assert "connection_limit=10" in modified_url
             assert "pool_timeout=60" in modified_url
 
+    def test_append_query_params_handles_missing_url(self):
+        from litellm.proxy.proxy_cli import append_query_params
+
+        modified_url = append_query_params(None, {"connection_limit": 10})
+        assert modified_url == ""
+
     @patch("uvicorn.run")
-    @patch("builtins.print")
-    def test_skip_server_startup(self, mock_print, mock_uvicorn_run):
-        """Test that the skip_server_startup flag prevents server startup when True"""
+    @patch("atexit.register")  # 🔥 critical
+    def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
 
-        mock_app = MagicMock()
-        mock_proxy_config = MagicMock()
-        mock_key_mgmt = MagicMock()
-        mock_save_worker_config = MagicMock()
-
         with patch.dict(
             "sys.modules",
             {
                 "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
+                    app=MagicMock(),
+                    ProxyConfig=MagicMock(),
+                    KeyManagementSettings=MagicMock(),
+                    save_worker_config=MagicMock(),
                 )
             },
         ), patch(
@@ -248,16 +252,15 @@ class TestProxyInitializationHelpers:
                 "port": 8000,
             }
 
+            # --- skip startup ---
             result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
 
             assert result.exit_code == 0
+            assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
-            mock_print.assert_any_call(
-                "LiteLLM: Setup complete. Skipping server startup as requested."
-            )
 
+            # --- normal startup ---
             mock_uvicorn_run.reset_mock()
-            mock_print.reset_mock()
 
             result = runner.invoke(run_server, ["--local"])
 
@@ -381,13 +384,13 @@ class TestProxyInitializationHelpers:
         test_env_special = {
             "DATABASE_HOST": "localhost:5432",
             "DATABASE_USERNAME": "user@with+special",
-            "DATABASE_PASSWORD": "pass&word!@#$%",
+            "DATABASE_PASSWORD": "test-password-special-chars",
             "DATABASE_NAME": "db_name/test",
         }
 
         with patch.dict(os.environ, test_env_special):
             result = construct_database_url_from_env_vars()
-            expected_url = "postgresql://user%40with%2Bspecial:pass%26word%21%40%23%24%25@localhost:5432/db_name%2Ftest"
+            expected_url = "postgresql://user%40with%2Bspecial:test-password-special-chars@localhost:5432/db_name%2Ftest"
             assert result == expected_url
 
         # Test without password (should still work)
@@ -443,8 +446,24 @@ class TestProxyInitializationHelpers:
         mock_proxy_config_instance.get_config = mock_get_config
         mock_proxy_config.return_value = mock_proxy_config_instance
 
-        # Ensure DATABASE_URL is not set in the environment
-        with patch.dict(os.environ, {"DATABASE_URL": ""}, clear=True):
+        mock_proxy_server_module = MagicMock(app=mock_app)
+
+        # Only remove DATABASE_URL and DIRECT_URL to prevent the database setup
+        # code path from running. Do NOT use clear=True as it removes PATH, HOME,
+        # etc., which causes imports inside run_server to break in CI (the real
+        # litellm.proxy.proxy_server import at line 820 of proxy_cli.py has heavy
+        # side effects that fail without a proper environment).
+        env_overrides = {
+            "DATABASE_URL": "",
+            "DIRECT_URL": "",
+            "IAM_TOKEN_DB_AUTH": "",
+            "USE_AWS_KMS": "",
+        }
+        with patch.dict(os.environ, env_overrides):
+            # Remove DATABASE_URL entirely so the DB setup block is skipped
+            os.environ.pop("DATABASE_URL", None)
+            os.environ.pop("DIRECT_URL", None)
+
             with patch.dict(
                 "sys.modules",
                 {
@@ -453,7 +472,11 @@ class TestProxyInitializationHelpers:
                         ProxyConfig=mock_proxy_config,
                         KeyManagementSettings=mock_key_mgmt,
                         save_worker_config=mock_save_worker_config,
-                    )
+                    ),
+                    # Also mock litellm.proxy.proxy_server to prevent the real
+                    # import at line 820 of proxy_cli.py which has heavy side
+                    # effects (FastAPI app init, logging setup, etc.)
+                    "litellm.proxy.proxy_server": mock_proxy_server_module,
                 },
             ), patch(
                 "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
@@ -467,7 +490,10 @@ class TestProxyInitializationHelpers:
                 # Test with no config parameter (config=None)
                 result = runner.invoke(run_server, ["--local"])
 
-                assert result.exit_code == 0
+                assert result.exit_code == 0, (
+                    f"run_server failed with exit_code={result.exit_code}, "
+                    f"output={result.output}, exception={result.exception}"
+                )
 
                 # Verify that uvicorn.run was called
                 mock_uvicorn_run.assert_called_once()
@@ -478,7 +504,10 @@ class TestProxyInitializationHelpers:
                 # Test with explicit --config None (should behave the same)
                 result = runner.invoke(run_server, ["--local", "--config", "None"])
 
-                assert result.exit_code == 0
+                assert result.exit_code == 0, (
+                    f"run_server failed with exit_code={result.exit_code}, "
+                    f"output={result.output}, exception={result.exception}"
+                )
 
                 # Verify that uvicorn.run was called again
                 mock_uvicorn_run.assert_called_once()

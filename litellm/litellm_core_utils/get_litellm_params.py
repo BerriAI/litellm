@@ -1,19 +1,48 @@
 from typing import Optional
 
 
+# Pre-define optional kwargs keys as frozenset for O(1) lookups
+# These are extracted from kwargs only if present, avoiding unnecessary .get() calls
+_OPTIONAL_KWARGS_KEYS = frozenset({
+    "azure_ad_token",
+    "tenant_id",
+    "client_id",
+    "client_secret",
+    "azure_username",
+    "azure_password",
+    "azure_scope",
+    "timeout",
+    "bucket_name",
+    "vertex_credentials",
+    "vertex_project",
+    "vertex_location",
+    "vertex_ai_project",
+    "vertex_ai_location",
+    "vertex_ai_credentials",
+    "aws_region_name",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
+    "aws_bedrock_runtime_endpoint",
+    "tpm",
+    "rpm",
+})
+
+
 def _get_base_model_from_litellm_call_metadata(
     metadata: Optional[dict],
 ) -> Optional[str]:
     if metadata is None:
         return None
-
-    if metadata is not None:
-        model_info = metadata.get("model_info", {})
-
-        if model_info is not None:
-            base_model = model_info.get("base_model", None)
-            if base_model is not None:
-                return base_model
+    model_info = metadata.get("model_info")
+    if model_info:
+        return model_info.get("base_model")
     return None
 
 
@@ -66,6 +95,7 @@ def get_litellm_params(
     litellm_request_debug: Optional[bool] = None,
     **kwargs,
 ) -> dict:
+    # Build base dict with explicit parameters (always included)
     litellm_params = {
         "acompletion": acompletion,
         "api_key": api_key,
@@ -94,7 +124,11 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or _get_base_model_from_litellm_call_metadata(metadata=metadata),
+        or (
+            _get_base_model_from_litellm_call_metadata(metadata=metadata)
+            if metadata
+            else None
+        ),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,
@@ -108,35 +142,15 @@ def get_litellm_params(
         "ssl_verify": ssl_verify,
         "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
         "api_version": api_version,
-        "azure_ad_token": kwargs.get("azure_ad_token"),
-        "tenant_id": kwargs.get("tenant_id"),
-        "client_id": kwargs.get("client_id"),
-        "client_secret": kwargs.get("client_secret"),
-        "azure_username": kwargs.get("azure_username"),
-        "azure_password": kwargs.get("azure_password"),
-        "azure_scope": kwargs.get("azure_scope"),
         "max_retries": max_retries,
-        "timeout": kwargs.get("timeout"),
-        "bucket_name": kwargs.get("bucket_name"),
-        "vertex_credentials": kwargs.get("vertex_credentials"),
-        "vertex_project": kwargs.get("vertex_project"),
-        "vertex_location": kwargs.get("vertex_location"),
-        "vertex_ai_project": kwargs.get("vertex_ai_project"),
-        "vertex_ai_location": kwargs.get("vertex_ai_location"),
-        "vertex_ai_credentials": kwargs.get("vertex_ai_credentials"),
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
-        "aws_region_name": kwargs.get("aws_region_name"),
-        # AWS credentials for Bedrock/Sagemaker
-        "aws_access_key_id": kwargs.get("aws_access_key_id"),
-        "aws_secret_access_key": kwargs.get("aws_secret_access_key"),
-        "aws_session_token": kwargs.get("aws_session_token"),
-        "aws_session_name": kwargs.get("aws_session_name"),
-        "aws_profile_name": kwargs.get("aws_profile_name"),
-        "aws_role_name": kwargs.get("aws_role_name"),
-        "aws_web_identity_token": kwargs.get("aws_web_identity_token"),
-        "aws_sts_endpoint": kwargs.get("aws_sts_endpoint"),
-        "aws_external_id": kwargs.get("aws_external_id"),
-        "aws_bedrock_runtime_endpoint": kwargs.get("aws_bedrock_runtime_endpoint"),
     }
+
+    # Sparse extraction: only add kwargs keys that are actually present
+    if kwargs:
+        for key in _OPTIONAL_KWARGS_KEYS:
+            if key in kwargs:
+                litellm_params[key] = kwargs[key]
+
     return litellm_params

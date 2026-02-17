@@ -5,6 +5,7 @@ datasource client {
 
 generator client {
   provider = "prisma-client-py"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
 // Budget / Rate Limits for an org
@@ -112,6 +113,7 @@ model LiteLLM_TeamTable {
     members_with_roles Json @default("{}")
     metadata  Json  @default("{}")
     max_budget Float?
+    soft_budget Float?
     spend      Float    @default(0.0)
     models     String[]
     max_parallel_requests Int?
@@ -124,11 +126,62 @@ model LiteLLM_TeamTable {
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    router_settings  Json? @default("{}")
     team_member_permissions String[] @default([])
+    access_group_ids String[] @default([])
+    policies         String[] @default([])
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
+    allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+}
+
+// Audit table for deleted teams - preserves spend and team information for historical tracking
+model LiteLLM_DeletedTeamTable {
+    id                      String   @id @default(uuid())
+    team_id                 String   // Original team_id
+    team_alias              String?
+    organization_id         String?
+    object_permission_id    String?
+    admins                  String[]
+    members                 String[]
+    members_with_roles      Json     @default("{}")
+    metadata                Json     @default("{}")
+    max_budget              Float?
+    soft_budget             Float?
+    spend                   Float    @default(0.0)
+    models                  String[]
+    max_parallel_requests   Int?
+    tpm_limit               BigInt?
+    rpm_limit               BigInt?
+    budget_duration         String?
+    budget_reset_at         DateTime?
+    blocked                 Boolean  @default(false)
+    model_spend             Json     @default("{}")
+    model_max_budget        Json     @default("{}")
+    router_settings  Json? @default("{}")
+    team_member_permissions String[] @default([])
+    access_group_ids String[] @default([])
+    policies                String[] @default([])
+    model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
+    allow_team_guardrail_config Boolean @default(false)
+
+    // Original timestamps from team creation/updates
+    created_at              DateTime? @map("created_at")
+    updated_at              DateTime? @map("updated_at")
+    
+    // Deletion metadata
+    deleted_at              DateTime  @default(now()) @map("deleted_at")
+    deleted_by              String?   @map("deleted_by") // User who deleted the team
+    deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
+    litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
+    
+    @@index([team_id])
+    @@index([deleted_at])
+    @@index([organization_id])
+    @@index([team_alias])
+    @@index([created_at])
 }
 
 // Track spend, rate limit, budget Users
@@ -153,6 +206,7 @@ model LiteLLM_UserTable {
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
+    policies         String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     created_at      DateTime?               @default(now()) @map("created_at")
@@ -208,6 +262,11 @@ model LiteLLM_MCPServerTable {
   command      String?
   args         String[]       @default([])
   env          Json?          @default("{}")
+  authorization_url  String?
+  token_url          String?
+  registration_url   String?
+  allow_all_keys Boolean @default(false)
+  available_on_public_internet Boolean @default(false)
 }
 
 // Generate Tokens for Proxy
@@ -221,6 +280,7 @@ model LiteLLM_VerificationToken {
     models     String[]
     aliases    Json  @default("{}")
     config     Json  @default("{}")
+    router_settings Json? @default("{}")
     user_id    String?
     team_id    String?
     permissions Json @default("{}")
@@ -234,6 +294,8 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
+    policies         String[] @default([])
+    access_group_ids String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
@@ -251,6 +313,87 @@ model LiteLLM_VerificationToken {
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+
+    // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
+    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
+    @@index([user_id, team_id])
+
+    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."team_id" = $1 OFFSET $2
+    @@index([team_id])
+
+    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (("public"."LiteLLM_VerificationToken"."expires" IS NULL OR "public"."LiteLLM_VerificationToken"."expires" > $1) AND "public"."LiteLLM_VerificationToken"."budget_reset_at" < $2) OFFSET $3
+    @@index([budget_reset_at, expires])
+}
+
+// Deprecated keys during grace period - allows old key to work until revoke_at
+model LiteLLM_DeprecatedVerificationToken {
+    id               String   @id @default(uuid())
+    token            String   // Hashed old key
+    active_token_id  String   // Current token hash in LiteLLM_VerificationToken
+    revoke_at        DateTime // When the old key stops working
+    created_at       DateTime @default(now()) @map("created_at")
+
+    @@unique([token])
+    @@index([token, revoke_at])
+    @@index([revoke_at])
+}
+
+// Audit table for deleted keys - preserves spend and key information for historical tracking
+model LiteLLM_DeletedVerificationToken {
+    id                      String   @id @default(uuid())
+    token                   String   // Original token (hashed)
+    key_name                String?
+    key_alias               String?
+    soft_budget_cooldown    Boolean  @default(false)
+    spend                   Float    @default(0.0)
+    expires                 DateTime?
+    models                  String[]
+    aliases                 Json     @default("{}")
+    config                  Json     @default("{}")
+    user_id                 String?
+    team_id                 String?
+    permissions             Json     @default("{}")
+    max_parallel_requests   Int?
+    metadata                Json     @default("{}")
+    blocked                 Boolean?
+    tpm_limit               BigInt?
+    rpm_limit               BigInt?
+    max_budget              Float?
+    budget_duration         String?
+    budget_reset_at         DateTime?
+    allowed_cache_controls  String[] @default([])
+    allowed_routes          String[] @default([])
+    policies                String[] @default([])
+    access_group_ids String[] @default([])
+    model_spend             Json     @default("{}")
+    model_max_budget        Json     @default("{}")
+    router_settings  Json? @default("{}")
+    budget_id               String?
+    organization_id         String?
+    object_permission_id    String?
+    created_at              DateTime? // Original creation timestamp
+    created_by              String?   // Original creator
+    updated_at              DateTime? // Last update timestamp before deletion
+    updated_by              String?   // Last user who updated before deletion
+    rotation_count          Int?      @default(0)
+    auto_rotate             Boolean?  @default(false)
+    rotation_interval       String?
+    last_rotation_at        DateTime?
+    key_rotation_at         DateTime?
+    
+    // Deletion metadata
+    deleted_at              DateTime  @default(now()) @map("deleted_at")
+    deleted_by              String?   @map("deleted_by") // User who deleted the key
+    deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
+    litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
+    
+    @@index([token])
+    @@index([deleted_at])
+    @@index([user_id])
+    @@index([team_id])
+    @@index([organization_id])
+    @@index([key_alias])
+    @@index([created_at])
 }
 
 model LiteLLM_EndUserTable {
@@ -418,6 +561,7 @@ model LiteLLM_DailyUserSpend {
   model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
+  endpoint               String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -429,12 +573,13 @@ model LiteLLM_DailyUserSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
   @@index([user_id])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
+  @@index([endpoint])
 }
 
 // Track daily organization spend metrics per model and key
@@ -447,6 +592,7 @@ model LiteLLM_DailyOrganizationSpend {
   model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
+  endpoint               String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -458,12 +604,13 @@ model LiteLLM_DailyOrganizationSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
   @@index([organization_id])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
+  @@index([endpoint])
 }
 
 // Track daily end user (customer) spend metrics per model and key
@@ -476,6 +623,7 @@ model LiteLLM_DailyEndUserSpend {
   model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
+  endpoint               String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -486,12 +634,13 @@ model LiteLLM_DailyEndUserSpend {
   failed_requests     BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
-  @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
   @@index([end_user_id])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
+  @@index([endpoint])
 }
 
 // Track daily agent spend metrics per model and key
@@ -504,6 +653,7 @@ model LiteLLM_DailyAgentSpend {
   model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
+  endpoint               String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -514,12 +664,13 @@ model LiteLLM_DailyAgentSpend {
   failed_requests     BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
-  @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
   @@index([agent_id])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
+  @@index([endpoint])
 }
 
 // Track daily team spend metrics per model and key
@@ -532,6 +683,7 @@ model LiteLLM_DailyTeamSpend {
   model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
+  endpoint               String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -543,12 +695,13 @@ model LiteLLM_DailyTeamSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@unique([team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
   @@index([team_id])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
+  @@index([endpoint])
 }
 
 // Track daily team spend metrics per model and key
@@ -562,6 +715,7 @@ model LiteLLM_DailyTagSpend {
   model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
+  endpoint               String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -573,12 +727,13 @@ model LiteLLM_DailyTagSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
   @@index([tag])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
+  @@index([endpoint])
 }
 
 
@@ -602,6 +757,8 @@ model LiteLLM_ManagedFileTable {
   file_object Json? // Stores the OpenAIFileObject
   model_mappings Json
   flat_model_file_ids String[]  @default([]) // Flat list of model file id's - for faster querying of model id -> unified file id
+  storage_backend String? // Storage backend name (e.g., "azure_storage", "gcs", "default")
+  storage_url String? // The actual storage URL where the file is stored
   created_at DateTime @default(now())
   created_by String? 
   updated_at DateTime @updatedAt
@@ -626,6 +783,22 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([model_object_id])
 }
 
+model LiteLLM_ManagedVectorStoreTable {
+  id String @id @default(uuid())
+  unified_resource_id String @unique // The base64 encoded unified vector store ID
+  resource_object Json? // Stores the VectorStoreCreateResponse
+  model_mappings Json // Maps model_id -> provider_vector_store_id
+  flat_model_resource_ids String[] @default([]) // Flat list of provider vector store IDs for faster querying
+  storage_backend String? // Storage backend name (if applicable)
+  storage_url String? // Storage URL (if applicable)
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+
+  @@index([unified_resource_id])
+}
+
 model LiteLLM_ManagedVectorStoresTable {
   vector_store_id String @id
   custom_llm_provider String
@@ -636,6 +809,11 @@ model LiteLLM_ManagedVectorStoresTable {
   updated_at DateTime @updatedAt
   litellm_credential_name String?
   litellm_params Json?
+  team_id String?
+  user_id String?
+  
+  @@index([team_id])
+  @@index([user_id])
 }
 
 // Guardrails table for storing guardrail configurations
@@ -644,6 +822,7 @@ model LiteLLM_GuardrailsTable {
   guardrail_name String @unique
   litellm_params Json
   guardrail_info Json?
+  team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
@@ -725,4 +904,73 @@ model LiteLLM_UISettings {
   ui_settings Json
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+}
+
+// Skills table for storing LiteLLM-managed skills
+model LiteLLM_SkillsTable {
+  skill_id       String   @id @default(uuid())
+  display_title  String?
+  description    String?
+  instructions   String?  // The skill instructions/prompt (from SKILL.md)
+  source         String   @default("custom")  // "custom" or "anthropic"
+  latest_version String?
+  file_content   Bytes?   // Binary content of the skill files (zip)
+  file_name      String?  // Original filename
+  file_type      String?  // MIME type (e.g., "application/zip")
+  metadata       Json?    @default("{}")
+  created_at     DateTime @default(now())
+  created_by     String?
+  updated_at     DateTime @default(now()) @updatedAt
+  updated_by     String?
+}
+
+// Policy table for storing guardrail policies
+model LiteLLM_PolicyTable {
+  policy_id        String    @id @default(uuid())
+  policy_name      String    @unique
+  inherit          String?   // Name of parent policy to inherit from
+  description      String?
+  guardrails_add   String[]  @default([])
+  guardrails_remove String[] @default([])
+  condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
+  created_at       DateTime  @default(now())
+  created_by       String?
+  updated_at       DateTime  @default(now()) @updatedAt
+  updated_by       String?
+}
+
+// Policy attachment table for defining where policies apply
+model LiteLLM_PolicyAttachmentTable {
+  attachment_id    String    @id @default(uuid())
+  policy_name      String    // Name of the policy to attach
+  scope            String?   // Use '*' for global scope
+  teams            String[]  @default([])  // Team aliases or patterns
+  keys             String[]  @default([])  // Key aliases or patterns
+  models           String[]  @default([])  // Model names or patterns
+  tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
+  created_at       DateTime  @default(now())
+  created_by       String?
+  updated_at       DateTime  @default(now()) @updatedAt
+  updated_by       String?
+}
+
+//Unified Access Groups table for storing unified access groups
+model LiteLLM_AccessGroupTable {
+  access_group_id    String   @id @default(uuid())
+  access_group_name  String   @unique
+  description        String?
+  
+  // Resource memberships - explicit arrays per type
+  access_model_names        String[] @default([])
+  access_mcp_server_ids   String[] @default([])
+  access_agent_ids        String[] @default([])
+
+  assigned_team_ids         String[] @default([])
+  assigned_key_ids          String[] @default([])
+
+  created_at         DateTime @default(now())
+  created_by         String?
+  updated_at         DateTime @default(now()) @updatedAt
+  updated_by         String?
 }

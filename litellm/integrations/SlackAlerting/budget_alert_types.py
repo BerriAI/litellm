@@ -77,8 +77,9 @@ class ProjectedLimitExceededAlert(BaseBudgetAlertType):
 def get_budget_alert_type(
     type: Literal[
         "token_budget",
-        "soft_budget",
         "user_budget",
+        "soft_budget",
+        "max_budget_alert",
         "team_budget",
         "organization_budget",
         "proxy_budget",
@@ -91,6 +92,7 @@ def get_budget_alert_type(
         "proxy_budget": ProxyBudgetAlert(),
         "soft_budget": SoftBudgetAlert(),
         "user_budget": UserBudgetAlert(),
+        "max_budget_alert": TokenBudgetAlert(),
         "team_budget": TeamBudgetAlert(),
         "organization_budget": OrganizationBudgetAlert(),
         "token_budget": TokenBudgetAlert(),

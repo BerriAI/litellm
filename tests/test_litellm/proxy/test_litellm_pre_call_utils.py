@@ -16,6 +16,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     _get_enforced_params,
     _update_model_if_key_alias_exists,
+    add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
@@ -158,6 +159,44 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
     litellm_metadata = updated_data.get("metadata", {})
     assert isinstance(litellm_metadata, dict)
     assert updated_data["metadata"]["generation_name"] == "gen123"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_user_spend_and_budget():
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        user_spend=150.0,
+        user_max_budget=500.0,
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    metadata = updated_data.get("metadata", {})
+    assert metadata["user_api_key_user_spend"] == 150.0
+    assert metadata["user_api_key_user_max_budget"] == 500.0
 
 
 @pytest.mark.asyncio
@@ -1297,3 +1336,267 @@ def test_update_model_if_key_alias_exists():
     original_model = data["model"]
     _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
     assert data["model"] == original_model  # Should remain unchanged
+
+
+@pytest.mark.asyncio
+async def test_embedding_header_forwarding_with_model_group():
+    """
+    Test that headers are properly forwarded for embedding requests when
+    forward_client_headers_to_llm_api is configured for the model group.
+
+    This test verifies the fix for embedding endpoints not forwarding headers
+    similar to how chat completion endpoints do.
+    """
+    import importlib
+
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils_module
+
+    # Reload the module to ensure it has a fresh reference to litellm
+    # This is necessary because conftest.py reloads litellm at module scope,
+    # which can cause the module's litellm reference to become stale
+    importlib.reload(pre_call_utils_module)
+
+    # Re-import the function after reload to get the fresh version
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    # Setup mock request for embeddings
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/embeddings"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/embeddings"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID": "test-request-123",
+        "Authorization": "Bearer sk-test-key",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup embedding request data
+    data = {
+        "model": "local-openai/text-embedding-3-small",
+        "input": ["Text to embed"],
+    }
+
+    # Setup user API key
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        org_id="test-org",
+    )
+
+    # Mock model_group_settings to enable header forwarding for the model
+    # Use string-based patch to ensure we patch the current sys.modules['litellm']
+    # This avoids issues with module reloading during parallel test execution
+    mock_settings = MagicMock(forward_client_headers_to_llm_api=["local-openai/*"])
+    with patch("litellm.model_group_settings", mock_settings):
+        # Call add_litellm_data_to_request which includes header forwarding logic
+        updated_data = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        # Verify that headers were added to the request data
+        assert "headers" in updated_data, "Headers should be added to embedding request"
+
+        # Verify that only x- prefixed headers (except x-stainless) were forwarded
+        forwarded_headers = updated_data["headers"]
+        assert "X-Custom-Header" in forwarded_headers, "X-Custom-Header should be forwarded"
+        assert forwarded_headers["X-Custom-Header"] == "custom-value"
+        assert "X-Request-ID" in forwarded_headers, "X-Request-ID should be forwarded"
+        assert forwarded_headers["X-Request-ID"] == "test-request-123"
+
+        # Verify that authorization header was NOT forwarded (sensitive header)
+        assert "Authorization" not in forwarded_headers, "Authorization header should not be forwarded"
+
+        # Verify that Content-Type was NOT forwarded (doesn't start with x-)
+        assert "Content-Type" not in forwarded_headers, "Content-Type should not be forwarded"
+
+        # Verify original data fields are preserved
+        assert updated_data["model"] == "local-openai/text-embedding-3-small"
+        assert updated_data["input"] == ["Text to embed"]
+
+
+@pytest.mark.asyncio
+async def test_embedding_header_forwarding_without_model_group_config():
+    """
+    Test that headers are NOT forwarded for embedding requests when
+    the model is not in the forward_client_headers_to_llm_api list.
+    """
+    import litellm
+
+    # Setup mock request for embeddings
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/embeddings"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/embeddings"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "X-Custom-Header": "custom-value",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup embedding request data with a model NOT in the forward list
+    data = {
+        "model": "text-embedding-ada-002",
+        "input": ["Text to embed"],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+    )
+
+    # Mock model_group_settings with a different model in the forward list
+    mock_settings = MagicMock(forward_client_headers_to_llm_api=["gpt-4", "claude-*"])
+    original_model_group_settings = getattr(litellm, "model_group_settings", None)
+    litellm.model_group_settings = mock_settings
+
+    try:
+        updated_data = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        # Verify that headers were NOT added since model is not in forward list
+        assert "headers" not in updated_data or updated_data.get("headers") is None, \
+            "Headers should not be forwarded for models not in forward_client_headers_to_llm_api list"
+
+        # Verify original data fields are preserved
+        assert updated_data["model"] == "text-embedding-ada-002"
+        assert updated_data["input"] == ["Text to embed"]
+
+    finally:
+        # Restore original model_group_settings
+        litellm.model_group_settings = original_model_group_settings
+
+
+def test_add_guardrails_from_policy_engine():
+    """
+    Test that add_guardrails_from_policy_engine adds guardrails from matching policies
+    and tracks applied policies in metadata.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyGuardrails,
+    )
+
+    # Setup test data
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_alias="healthcare-team",
+        key_alias="my-key",
+    )
+
+    # Setup mock policies in the registry (policies define WHAT guardrails to apply)
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "global-baseline": Policy(
+            guardrails=PolicyGuardrails(add=["pii_blocker"]),
+        ),
+        "healthcare": Policy(
+            guardrails=PolicyGuardrails(add=["hipaa_audit"]),
+        ),
+    }
+    policy_registry._initialized = True
+
+    # Setup attachments in the attachment registry (attachments define WHERE policies apply)
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [
+        PolicyAttachment(policy="global-baseline", scope="*"),  # applies to all
+        PolicyAttachment(policy="healthcare", teams=["healthcare-team"]),  # applies to healthcare team
+    ]
+    attachment_registry._initialized = True
+
+    # Call the function
+    add_guardrails_from_policy_engine(
+        data=data,
+        metadata_variable_name="metadata",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Verify guardrails were added
+    assert "guardrails" in data["metadata"]
+    assert "pii_blocker" in data["metadata"]["guardrails"]
+    assert "hipaa_audit" in data["metadata"]["guardrails"]
+
+    # Verify applied policies were tracked
+    assert "applied_policies" in data["metadata"]
+    assert "global-baseline" in data["metadata"]["applied_policies"]
+    assert "healthcare" in data["metadata"]["applied_policies"]
+
+    # Clean up registries
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+    attachment_registry._attachments = []
+    attachment_registry._initialized = False
+
+
+def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
+    """
+    Test that add_guardrails_from_policy_engine accepts dynamic 'policies' from the request body
+    and removes them to prevent forwarding to the LLM provider.
+    
+    This is critical because 'policies' is a LiteLLM proxy-specific parameter that should
+    not be sent to the actual LLM API (e.g., OpenAI, Anthropic, etc.).
+    """
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    # Setup test data with 'policies' in the request body
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "policies": ["PII-POLICY-GLOBAL", "HIPAA-POLICY"],  # Dynamic policies - should be accepted and removed
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_alias="test-team",
+        key_alias="test-key",
+    )
+
+    # Initialize empty policy registry (we're just testing the accept and pop behavior)
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+
+    # Call the function - should accept dynamic policies and not raise an error
+    add_guardrails_from_policy_engine(
+        data=data,
+        metadata_variable_name="metadata",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Verify that 'policies' was removed from the request body
+    assert "policies" not in data, "'policies' should be removed from request body to prevent forwarding to LLM provider"
+
+    # Verify that other fields are preserved
+    assert "model" in data
+    assert data["model"] == "gpt-4"
+    assert "messages" in data
+    assert data["messages"] == [{"role": "user", "content": "Hello"}]
+    assert "metadata" in data

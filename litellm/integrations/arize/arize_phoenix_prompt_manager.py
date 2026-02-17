@@ -13,6 +13,7 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementClient,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .arize_phoenix_client import ArizePhoenixClient
@@ -362,7 +363,8 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         """
@@ -375,7 +377,8 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
     def _compile_prompt_helper(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
@@ -390,6 +393,8 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         3. Returns formatted chat messages
         4. Extracts model and optional parameters from metadata
         """
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for Arize Phoenix prompt manager")
         try:
             # Load the prompt from Arize Phoenix if not already loaded
             if prompt_id not in self.prompt_manager.prompts:
@@ -426,6 +431,30 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         except Exception as e:
             raise ValueError(f"Error compiling prompt '{prompt_id}': {e}")
 
+    async def async_compile_prompt_helper(
+        self,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> PromptManagementClient:
+        """
+        Async version of compile prompt helper. Since Arize Phoenix operations are synchronous,
+        this simply delegates to the sync version.
+        """
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for Arize Phoenix prompt manager")
+        return self._compile_prompt_helper(
+            prompt_id=prompt_id,
+            prompt_spec=prompt_spec,
+            prompt_variables=prompt_variables,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+        )
+
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -434,6 +463,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
         ignore_prompt_manager_model: Optional[bool] = False,
@@ -450,8 +480,9 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             prompt_id,
             prompt_variables,
             dynamic_callback_params,
-            prompt_label,
-            prompt_version,
-            self.ignore_prompt_manager_model,
-            self.ignore_prompt_manager_optional_params,
+            prompt_spec=prompt_spec,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )

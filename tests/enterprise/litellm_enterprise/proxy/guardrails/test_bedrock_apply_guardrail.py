@@ -4,13 +4,12 @@ Test the Bedrock guardrail apply_guardrail functionality
 
 import os
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -53,32 +52,42 @@ async def test_bedrock_apply_guardrail_success():
 
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_blocked():
-    """Test that Bedrock guardrail apply_guardrail method handles blocked content"""
-    # Create a BedrockGuardrail instance
+    """Test that apply_guardrail lets HTTPException propagate as-is for blocked content.
+
+    Regression test for issue #20045: when disable_exception_on_block=False (default),
+    make_bedrock_api_request raises HTTPException for BLOCKED content. apply_guardrail
+    must NOT wrap it in a generic Exception, otherwise the proxy loses the HTTP 400
+    status and fails to block the LLM call.
+    """
+    from fastapi import HTTPException
+
     guardrail = BedrockGuardrail(
         guardrail_name="test-bedrock-guard",
         guardrailIdentifier="test-guard-id",
         guardrailVersion="DRAFT",
     )
 
-    # Mock the make_bedrock_api_request method
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api_request:
-        # Mock a blocked response from Bedrock
-        mock_response = {"action": "BLOCKED", "reason": "Content violates policy"}
-        mock_api_request.return_value = mock_response
+        mock_api_request.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "Content blocked",
+            },
+        )
 
-        # Test the apply_guardrail method should raise an exception
-        with pytest.raises(Exception) as exc_info:
+        # Test the apply_guardrail method propagates HTTPException (AWS error) to the client
+        with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["This is blocked content"]},
                 request_data={},
                 input_type="request",
             )
 
-        assert "Content blocked by Bedrock guardrail" in str(exc_info.value)
-        assert "Content violates policy" in str(exc_info.value)
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -219,7 +228,10 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api:
-        mock_api.return_value = {"action": "ALLOWED", "output": [{"text": "latest question"}]}
+        mock_api.return_value = {
+            "action": "ALLOWED",
+            "output": [{"text": "latest question"}],
+        }
 
         guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": ["latest question"]},
@@ -253,9 +265,18 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api:
-        mock_api.return_value = {"action": "BLOCKED", "reason": "policy"}
+        # Mock the method to raise an HTTPException as it would for blocked content
+        from fastapi import HTTPException
 
-        with pytest.raises(Exception, match="policy") as exc_info:
+        mock_api.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "policy",
+            },
+        )
+
+        with pytest.raises(HTTPException, match="policy") as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["blocked"]},
                 request_data=request_data,
@@ -265,7 +286,9 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
         assert mock_api.called
         _, kwargs = mock_api.call_args
         assert kwargs["messages"] == [request_messages[-1]]
-        assert "Content blocked by Bedrock guardrail" in str(exc_info.value)
+        # HTTPException from guardrail is propagated so the client gets the AWS message
+        assert exc_info.value.status_code == 400
+        assert "policy" in str(exc_info.value.detail)
 
 
 def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
@@ -296,3 +319,37 @@ def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
         target_indices=filter_result.target_indices,
     )
     assert masked_messages[3]["content"] == "[MASKED]"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block():
+    """
+    Regression test for issue #20045: when disable_exception_on_block=True,
+    make_bedrock_api_request raises GuardrailInterventionNormalStringError.
+    apply_guardrail must let it propagate as-is so the proxy can handle it
+    properly instead of wrapping it in a generic Exception.
+    """
+    from litellm.exceptions import GuardrailInterventionNormalStringError
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.side_effect = GuardrailInterventionNormalStringError(
+            message="Sorry, your question in its current format is unable to be answered."
+        )
+
+        with pytest.raises(GuardrailInterventionNormalStringError) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["harmful prompt content"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert "unable to be answered" in str(exc_info.value.message)

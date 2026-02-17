@@ -1,55 +1,55 @@
 "use client";
-import React, { useState, useEffect, useCallback } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Text, Title, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
-import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button as Button2, Modal, Form, Input, Select, Radio, Switch } from "antd";
-import NumericalInput from "../shared/numerical_input";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import SchemaFormFields from "../common_components/check_openapi_schema";
-import {
-  keyCreateCall,
-  modelAvailableCall,
-  getGuardrailsList,
-  proxyBaseUrl,
-  getPossibleUserRoles,
-  userFilterUICall,
-  keyCreateServiceAccountCall,
-  fetchMCPAccessGroups,
-  getPromptsList,
-} from "../networking";
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { Team } from "../key_team_helpers/key_list";
-import TeamDropdown from "../common_components/team_dropdown";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Tooltip } from "antd";
-import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
-import Createuser from "../create_user_button";
-import debounce from "lodash/debounce";
-import { rolesWithWriteAccess } from "../../utils/roles";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
+import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tooltip } from "antd";
+import debounce from "lodash/debounce";
+import React, { useCallback, useEffect, useState } from "react";
+import { CopyToClipboard } from "react-copy-to-clipboard";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import SchemaFormFields from "../common_components/check_openapi_schema";
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
+import ModelAliasManager from "../common_components/ModelAliasManager";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import TeamDropdown from "../common_components/team_dropdown";
+import { CreateUserButton } from "../CreateUserButton";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import AgentSelector from "../agent_management/AgentSelector";
-import ModelAliasManager from "../common_components/ModelAliasManager";
 import NotificationsManager from "../molecules/notifications_manager";
-import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
-import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import {
+  getGuardrailsList,
+  getPoliciesList,
+  getPossibleUserRoles,
+  getPromptsList,
+  keyCreateCall,
+  keyCreateServiceAccountCall,
+  modelAvailableCall,
+  proxyBaseUrl,
+  userFilterUICall,
+} from "../networking";
+import NumericalInput from "../shared/numerical_input";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
 
 interface CreateKeyProps {
-  userID: string;
   team: Team | null;
-  userRole: string | null;
-  accessToken: string;
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
-  premiumUser?: boolean;
 }
 
 interface User {
@@ -140,16 +140,9 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({
-  userID,
-  team,
-  teams,
-  userRole,
-  accessToken,
-  data,
-  addKey,
-  premiumUser = false,
-}) => {
+const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
+  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
@@ -159,6 +152,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
@@ -168,22 +162,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
-  const [keyType, setKeyType] = useState<string>("default");
+  const [keyType, setKeyType] = useState<string>("llm_api");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
-
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleCancel = () => {
@@ -193,10 +189,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   useEffect(() => {
@@ -204,22 +202,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
   }, [accessToken, userID, userRole]);
-
-  const fetchMcpAccessGroups = async () => {
-    try {
-      if (accessToken == null) {
-        return;
-      }
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
-
-  useEffect(() => {
-    fetchMcpAccessGroups();
-  }, [accessToken]);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -229,6 +211,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         setGuardrailsList(guardrailNames);
       } catch (error) {
         console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    const fetchPolicies = async () => {
+      try {
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
       }
     };
 
@@ -242,6 +234,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     };
 
     fetchGuardrails();
+    fetchPolicies();
     fetchPrompts();
   }, [accessToken]);
 
@@ -329,9 +322,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         formValues.rotation_interval = rotationInterval;
       }
 
-      // Handle duration field for key expiry
-      if (formValues.duration) {
-        formValues.duration = formValues.duration;
+      // Handle duration field for key expiry - convert empty string to null
+      if (!formValues.duration || formValues.duration.trim() === "") {
+        formValues.duration = null;
       }
 
       // Update the formValues with the final metadata
@@ -411,6 +404,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         formValues.aliases = JSON.stringify(modelAliases);
       }
 
+      // Add router_settings if any are defined
+      if (routerSettings?.router_settings) {
+        // Only include router_settings if it has at least one non-null value
+        const hasValues = Object.values(routerSettings.router_settings).some(
+          (value) => value !== null && value !== undefined && value !== "",
+        );
+        if (hasValues) {
+          formValues.router_settings = routerSettings.router_settings;
+        }
+      }
+
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -421,8 +425,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       console.log("key create Response:", response);
 
       // Add the data to the state in the parent component
-      // Also directly update the keys list in AllKeysTable without an API call
+      // Also directly update the keys list in VirtualKeysTable without an API call
       addKey(response);
+
+      // Invalidate and refetch all keys list queries to update the table
+      // This will trigger a refetch of all key list queries regardless of pagination
+      queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
 
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
@@ -431,7 +439,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
-      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
+      const simplifiedError = simplifyKeyGenerateError(error);
+      NotificationsManager.fromBackend(simplifiedError);
     }
   };
 
@@ -510,14 +519,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           + Create New Key
         </Button>
       )}
-      <Modal
-        // title="Create Key"
-        visible={isModalVisible}
-        width={1000}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
-      >
+      <Modal open={isModalVisible} width={1000} footer={null} onOk={handleOk} onCancel={handleCancel}>
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           {/* Section 1: Key Ownership */}
           <div className="mb-8">
@@ -706,11 +708,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   </span>
                 }
                 name="key_type"
-                initialValue="default"
+                initialValue="llm_api"
                 className="mt-4"
               >
                 <Select
-                  defaultValue="default"
+                  defaultValue="llm_api"
                   placeholder="Select key type"
                   style={{ width: "100%" }}
                   optionLabelProp="label"
@@ -930,6 +932,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <Form.Item
                     label={
                       <span>
+                        Policies{" "}
+                        <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="policies"
+                    className="mt-4"
+                    help={
+                      premiumUser
+                        ? "Select existing policies or enter new ones"
+                        : "Premium feature - Upgrade to set policies by key"
+                    }
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      disabled={!premiumUser}
+                      placeholder={
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set policies by key"
+                          : "Select or enter policies"
+                      }
+                      options={policiesList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
                         Prompts{" "}
                         <Tooltip title="Allow this key to use specific prompt templates">
                           <a
@@ -959,6 +997,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
                       }
                       options={promptsList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Access Groups{" "}
+                        <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="access_group_ids"
+                    className="mt-4"
+                    help="Select access groups to assign to this key"
+                  >
+                    <AccessGroupSelector
+                      placeholder="Select access groups (optional)"
                     />
                   </Form.Item>
                   <Form.Item
@@ -1053,15 +1108,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       options={predefinedTags}
                     />
                   </Form.Item>
-                  <Accordion
-                    className="mt-4 mb-4"
-                    onClick={() => {
-                      if (!mcpAccessGroupsLoaded) {
-                        fetchMcpAccessGroups();
-                        setMcpAccessGroupsLoaded(true);
-                      }
-                    }}
-                  >
+                  <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
                       <b>MCP Settings</b>
                     </AccordionHeader>
@@ -1192,6 +1239,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     </Tooltip>
                   )}
 
+                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Router Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4 w-full">
+                        <RouterSettingsAccordion
+                          key={routerSettingsKey}
+                          accessToken={accessToken || ""}
+                          value={routerSettings || undefined}
+                          onChange={setRouterSettings}
+                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
                       <b>Model Aliases</b>
@@ -1224,6 +1288,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           onAutoRotationChange={setAutoRotationEnabled}
                           rotationInterval={rotationInterval}
                           onRotationIntervalChange={setRotationInterval}
+                          isCreateMode={true}
                         />
                       </div>
                     </AccordionBody>
@@ -1295,12 +1360,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       {isCreateUserModalVisible && (
         <Modal
           title="Create New User"
-          visible={isCreateUserModalVisible}
+          open={isCreateUserModalVisible}
           onCancel={() => setIsCreateUserModalVisible(false)}
           footer={null}
           width={800}
         >
-          <Createuser
+          <CreateUserButton
             userID={userID}
             accessToken={accessToken}
             teams={teams}
@@ -1312,7 +1377,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       )}
 
       {apiKey && (
-        <Modal visible={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
+        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>

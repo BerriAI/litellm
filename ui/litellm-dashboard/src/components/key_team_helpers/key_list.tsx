@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { keyListCall, Member, Organization } from "../networking";
 import { Setter } from "@/types";
+import { useEffect, useState } from "react";
+import { keyListCall, Member, Organization } from "../networking";
 
 export interface Team {
   team_id: string;
@@ -14,6 +14,7 @@ export interface Team {
   created_at: string;
   keys: KeyResponse[];
   members_with_roles: Member[];
+  spend: number;
 }
 
 export interface KeyResponse {
@@ -86,11 +87,16 @@ export interface KeyResponse {
     agents?: string[];
     agent_access_groups?: string[];
   };
+  access_group_ids?: string[];
   auto_rotate?: boolean;
   rotation_interval?: string;
   last_rotation_at?: string;
   key_rotation_at?: string;
   next_rotation_at?: string;
+  user?: {
+    user_id: string;
+    user_email: string;
+  };
 }
 
 interface KeyListResponse {
@@ -106,6 +112,7 @@ interface UseKeyListProps {
   selectedKeyAlias: string | null;
   accessToken: string;
   createClicked: boolean;
+  expand?: string[];
 }
 
 interface PaginationData {
@@ -129,6 +136,7 @@ const useKeyList = ({
   selectedKeyAlias,
   accessToken,
   createClicked,
+  expand = [],
 }: UseKeyListProps): UseKeyListReturn => {
   const [keyData, setKeyData] = useState<KeyListResponse>({
     keys: [],
@@ -151,7 +159,19 @@ const useKeyList = ({
       const page = typeof params.page === "number" ? params.page : 1;
       const pageSize = typeof params.pageSize === "number" ? params.pageSize : 100;
 
-      const data = await keyListCall(accessToken, null, null, null, null, null, page, pageSize);
+      const data = await keyListCall(
+        accessToken,
+        null,
+        null,
+        null,
+        null,
+        null,
+        page,
+        pageSize,
+        null,
+        null,
+        expand.join(","),
+      );
       console.log("data", data);
       setKeyData(data);
       setError(null);

@@ -98,47 +98,63 @@ class CBFTransformer:
         # Handle team information with fallbacks
         team_id = row.get('team_id')
         team_alias = row.get('team_alias')
+        user_email = row.get('user_email')
         
         # Use team_alias if available, otherwise team_id, otherwise fallback to 'unknown'
         entity_id = str(team_alias) if team_alias else (str(team_id) if team_id else 'unknown')
         
+        # Get alias fields if they exist
+        api_key_alias = row.get('api_key_alias')
+        organization_alias = row.get('organization_alias')
+        project_alias = row.get('project_alias')
+        user_alias = row.get('user_alias')
+
         dimensions = {
             'entity_type': CZEntityType.TEAM.value,
             'entity_id': entity_id,
-            'team_id': str(team_id) if team_id else 'unknown',
             'team_alias': str(team_alias) if team_alias else 'unknown',
             'model': model,
             'model_group': str(row.get('model_group', '')),
             'provider': str(row.get('custom_llm_provider', '')),
             'api_key_prefix': api_key_hash,
             'api_key_alias': str(row.get('api_key_alias', '')),
+            'user_email': str(user_email) if user_email else '',
             'api_requests': str(row.get('api_requests', 0)),
             'successful_requests': str(row.get('successful_requests', 0)),
             'failed_requests': str(row.get('failed_requests', 0)),
             'cache_creation_tokens': str(row.get('cache_creation_input_tokens', 0)),
             'cache_read_tokens': str(row.get('cache_read_input_tokens', 0)),
+            'organization_alias': str(organization_alias) if organization_alias else '',
+            'project_alias': str(project_alias) if project_alias else '',
+            'user_alias': str(user_alias) if user_alias else '',
         }
 
         # Extract CZRN components to populate corresponding CBF columns
         czrn_components = self.czrn_generator.extract_components(resource_id)
         service_type, provider, region, owner_account_id, resource_type, cloud_local_id = czrn_components
 
+        # Build resource/account as concat of api_key_alias and api_key_prefix
+        resource_account = f"{api_key_alias}|{api_key_hash}" if api_key_alias else api_key_hash
+
         # CloudZero CBF format with proper column names
         cbf_record = {
             # Required CBF fields
             'time/usage_start': usage_date.isoformat() if usage_date else None,  # Required: ISO-formatted UTC datetime
             'cost/cost': float(row.get('spend', 0.0)),  # Required: billed cost
-            'resource/id': resource_id,  # Required when resource tags are present
+            'resource/id': resource_id,  # CZRN (CloudZero Resource Name)
 
             # Usage metrics for token consumption
             'usage/amount': total_tokens,  # Numeric value of tokens consumed
             'usage/units': 'tokens',  # Description of token units
 
-            # CBF fields that correspond to CZRN components
-            'resource/service': service_type,  # Maps to CZRN service-type (litellm)
-            'resource/account': owner_account_id,  # Maps to CZRN owner-account-id (entity_id)
+            # CBF fields - updated per LIT-1907
+            'resource/service': str(row.get('model_group', '')),  # Send model_group
+            'resource/account': resource_account,  # Send api_key_alias|api_key_prefix
             'resource/region': region,  # Maps to CZRN region (cross-region)
-            'resource/usage_family': resource_type,  # Maps to CZRN resource-type (llm-usage)
+            'resource/usage_family': str(row.get('custom_llm_provider', '')),  # Send provider
+
+            # Action field
+            'action/operation': str(team_id) if team_id else '',  # Send team_id
 
             # Line item details
             'lineitem/type': 'Usage',  # Standard usage line item
@@ -153,13 +169,11 @@ class CBFTransformer:
             if value and value != 'N/A' and value != 'unknown':  # Only add meaningful tags
                 cbf_record[f'resource/tag:{key}'] = str(value)
 
-        # Add token breakdown as resource tags for analysis
+        # Add token breakdown as resource tags for analysis (excluding total_tokens per LIT-1907)
         if prompt_tokens > 0:
             cbf_record['resource/tag:prompt_tokens'] = str(prompt_tokens)
         if completion_tokens > 0:
             cbf_record['resource/tag:completion_tokens'] = str(completion_tokens)
-        if total_tokens > 0:
-            cbf_record['resource/tag:total_tokens'] = str(total_tokens)
 
         return CBFRecord(cbf_record)
 
@@ -183,5 +197,4 @@ class CBFTransformer:
                     return None
 
         return None
-
 

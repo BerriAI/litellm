@@ -21,11 +21,13 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
+    CompletionTokensDetailsWrapper,
     Delta,
     EmbeddingResponse,
     Function,
     HiddenParams,
     ImageResponse,
+    PromptTokensDetailsWrapper,
 )
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.types.utils import (
@@ -304,6 +306,22 @@ class LiteLLMResponseObjectHandler:
                     "text_tokens": 0,
                 }
 
+            # Map Responses API naming to Chat Completions API naming for cost calculator
+            if usage.get("prompt_tokens") is None:
+                usage["prompt_tokens"] = usage.get("input_tokens", 0)
+            if usage.get("completion_tokens") is None:
+                usage["completion_tokens"] = usage.get("output_tokens", 0)
+
+            # Convert dicts to wrapper objects so getattr() works in cost calculation
+            if isinstance(usage.get("input_tokens_details"), dict):
+                usage["prompt_tokens_details"] = PromptTokensDetailsWrapper(
+                    **usage["input_tokens_details"]
+                )
+            if isinstance(usage.get("output_tokens_details"), dict):
+                usage["completion_tokens_details"] = CompletionTokensDetailsWrapper(
+                    **usage["output_tokens_details"]
+                )
+
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)
             return model_response_object
@@ -430,28 +448,58 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
     if hidden_params is None:
         hidden_params = {}
+    
+    # Preserve existing additional_headers if they contain important provider headers
+    # For responses API, additional_headers may already be set with LLM provider headers
+    existing_additional_headers = hidden_params.get("additional_headers", {})
+    if existing_additional_headers and _response_headers is None:
+        # Keep existing headers when _response_headers is None (responses API case)
+        additional_headers = existing_additional_headers
+    else:
+        # Merge new headers with existing ones
+        if existing_additional_headers:
+            additional_headers.update(existing_additional_headers)
+    
     hidden_params["additional_headers"] = additional_headers
 
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
+    # Some OpenAI-compatible providers (e.g., Apertis) return empty error objects
+    # even on success. Only raise if the error contains meaningful data.
     if (
         response_object is not None
         and "error" in response_object
         and response_object["error"] is not None
     ):
-        error_args = {"status_code": 422, "message": "Error in response object"}
-        if isinstance(response_object["error"], dict):
-            if "code" in response_object["error"]:
-                error_args["status_code"] = response_object["error"]["code"]
-            if "message" in response_object["error"]:
-                if isinstance(response_object["error"]["message"], dict):
-                    message_str = json.dumps(response_object["error"]["message"])
-                else:
-                    message_str = str(response_object["error"]["message"])
-                error_args["message"] = message_str
-        raised_exception = Exception()
-        setattr(raised_exception, "status_code", error_args["status_code"])
-        setattr(raised_exception, "message", error_args["message"])
-        raise raised_exception
+        error_obj = response_object["error"]
+        has_meaningful_error = False
+
+        if isinstance(error_obj, dict):
+            # Check if error dict has non-empty message or non-null code
+            error_message = error_obj.get("message", "")
+            error_code = error_obj.get("code")
+            has_meaningful_error = bool(error_message) or error_code is not None
+        elif isinstance(error_obj, str):
+            # String error is meaningful if non-empty
+            has_meaningful_error = bool(error_obj)
+        else:
+            # Any other truthy value is considered meaningful
+            has_meaningful_error = True
+
+        if has_meaningful_error:
+            error_args = {"status_code": 422, "message": "Error in response object"}
+            if isinstance(error_obj, dict):
+                if "code" in error_obj:
+                    error_args["status_code"] = error_obj["code"]
+                if "message" in error_obj:
+                    if isinstance(error_obj["message"], dict):
+                        message_str = json.dumps(error_obj["message"])
+                    else:
+                        message_str = str(error_obj["message"])
+                    error_args["message"] = message_str
+            raised_exception = Exception()
+            setattr(raised_exception, "status_code", error_args["status_code"])
+            setattr(raised_exception, "message", error_args["message"])
+            raise raised_exception
 
     try:
         if response_type == "completion" and (

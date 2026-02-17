@@ -1,260 +1,576 @@
-import { render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import React, { ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
+import NotificationsManager from "./molecules/notifications_manager";
+import * as networking from "./networking";
 
 vi.mock("../../utils/dataUtils", () => ({
-  copyToClipboard: vi.fn(),
+  copyToClipboard: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("./molecules/notifications_manager", () => ({
+  default: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    fromBackend: vi.fn(),
+  },
 }));
 
 vi.mock("./networking", () => ({
-  modelInfoV1Call: vi.fn().mockResolvedValue({
-    data: [
-      {
-        model_name: "aws/anthropic/bedrock-claude-3-5-sonnet-v1",
-        litellm_params: {
-          aws_region_name: "us-east-1",
-          custom_llm_provider: "bedrock",
-          use_in_pass_through: false,
-          use_litellm_proxy: false,
-          merge_reasoning_content_in_choices: false,
-          model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-        },
-        model_info: {
-          id: "70b94bbd2af4a75215f7e3e465b5b199529dc15deb5d395d0668a4aabc496c84",
-          db_model: false,
-          access_via_team_ids: [
-            "4fe3cfea-c907-412a-a645-60915b618d11",
-            "9a4b2d15-4198-47e4-971b-7329b77f40e4",
-            "14d55eef-b8d4-4cb8-b080-d973269dae54",
-            "693ce1d2-9fae-4605-a5c9-1c9829415e1a",
-            "fe29d910-4968-45bc-9fe0-6716e89c6270",
-          ],
-          direct_access: true,
-          key: "anthropic.claude-3-5-sonnet-20240620-v1:0",
-          max_tokens: 4096,
-          max_input_tokens: 200000,
-          max_output_tokens: 4096,
-          input_cost_per_token: 0.000003,
-          input_cost_per_token_flex: null,
-          input_cost_per_token_priority: null,
-          cache_creation_input_token_cost: null,
-          cache_read_input_token_cost: null,
-          cache_read_input_token_cost_flex: null,
-          cache_read_input_token_cost_priority: null,
-          cache_creation_input_token_cost_above_1hr: null,
-          input_cost_per_character: null,
-          input_cost_per_token_above_128k_tokens: null,
-          input_cost_per_token_above_200k_tokens: null,
-          input_cost_per_query: null,
-          input_cost_per_second: null,
-          input_cost_per_audio_token: null,
-          input_cost_per_token_batches: null,
-          output_cost_per_token_batches: null,
-          output_cost_per_token: 0.000015,
-          output_cost_per_token_flex: null,
-          output_cost_per_token_priority: null,
-          output_cost_per_audio_token: null,
-          output_cost_per_character: null,
-          output_cost_per_reasoning_token: null,
-          output_cost_per_token_above_128k_tokens: null,
-          output_cost_per_character_above_128k_tokens: null,
-          output_cost_per_token_above_200k_tokens: null,
-          output_cost_per_second: null,
-          output_cost_per_video_per_second: null,
-          output_cost_per_image: null,
-          output_vector_size: null,
-          citation_cost_per_token: null,
-          tiered_pricing: null,
-          litellm_provider: "bedrock",
-          mode: "chat",
-          supports_system_messages: null,
-          supports_response_schema: true,
-          supports_vision: true,
-          supports_function_calling: true,
-          supports_tool_choice: true,
-          supports_assistant_prefill: null,
-          supports_prompt_caching: null,
-          supports_audio_input: null,
-          supports_audio_output: null,
-          supports_pdf_input: true,
-          supports_embedding_image_input: null,
-          supports_native_streaming: null,
-          supports_web_search: null,
-          supports_url_context: null,
-          supports_reasoning: null,
-          supports_computer_use: null,
-          search_context_cost_per_query: null,
-          tpm: null,
-          rpm: null,
-          ocr_cost_per_page: null,
-          annotation_cost_per_page: null,
-          supported_openai_params: [
-            "max_tokens",
-            "max_completion_tokens",
-            "stream",
-            "stream_options",
-            "stop",
-            "temperature",
-            "top_p",
-            "extra_headers",
-            "response_format",
-            "requestMetadata",
-            "tools",
-            "tool_choice",
-          ],
-        },
-      },
-    ],
-  }),
-  credentialGetCall: vi.fn().mockResolvedValue({}),
+  modelInfoV1Call: vi.fn(),
+  credentialGetCall: vi.fn(),
+  getGuardrailsList: vi.fn(),
+  tagListCall: vi.fn(),
+  testConnectionRequest: vi.fn(),
+  modelPatchUpdateCall: vi.fn(),
+  modelDeleteCall: vi.fn(),
+  credentialCreateCall: vi.fn(),
 }));
 
+const mockUseModelsInfo = vi.fn();
+const mockUseModelHub = vi.fn();
+
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelsInfo: (...args: any[]) => mockUseModelsInfo(...args),
+  useModelHub: (...args: any[]) => mockUseModelHub(...args),
+}));
+
+const mockUseModelCostMap = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
+}));
+
+const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockModelInfoV1Call = vi.mocked(networking.modelInfoV1Call);
+const mockCredentialGetCall = vi.mocked(networking.credentialGetCall);
+const mockGetGuardrailsList = vi.mocked(networking.getGuardrailsList);
+const mockTagListCall = vi.mocked(networking.tagListCall);
+const mockTestConnectionRequest = vi.mocked(networking.testConnectionRequest);
+const mockModelPatchUpdateCall = vi.mocked(networking.modelPatchUpdateCall);
+const mockModelDeleteCall = vi.mocked(networking.modelDeleteCall);
+const mockCredentialCreateCall = vi.mocked(networking.credentialCreateCall);
+
 describe("ModelInfoView", () => {
-  const modelData = {
-    model_info: {
-      id: "123",
-      created_by: "123",
-      db_model: true,
-    },
+  let queryClient: QueryClient;
+
+  const defaultModelData = {
+    model_name: "GPT-4",
     litellm_params: {
+      model: "gpt-4",
       api_base: "https://api.openai.com/v1",
       custom_llm_provider: "openai",
     },
-    litellm_model_name: "gpt-4",
-    model_name: "GPT-4",
-    litellm_provider: "openai",
-    mode: "chat",
-    supported_openai_params: ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"],
+    model_info: {
+      id: "123",
+      created_by: "123",
+      created_at: "2024-01-01T00:00:00Z",
+      db_model: true,
+      input_cost_per_token: 0.00003,
+      output_cost_per_token: 0.00006,
+    },
   };
 
   const DEFAULT_ADMIN_PROPS = {
     modelId: "123",
-    onClose: () => {},
-    modelData: modelData,
-    accessToken: "123",
+    onClose: vi.fn(),
+    accessToken: "test-token",
     userID: "123",
     userRole: "Admin",
-    editModel: false,
-    setEditModalVisible: () => {},
-    setSelectedModel: () => {},
-    onModelUpdate: () => {},
-    modelAccessGroups: [],
+    onModelUpdate: vi.fn(),
+    modelAccessGroups: ["group1", "group2"],
   };
 
-  describe("Edit Model", () => {
-    it("should render the model info view", async () => {
-      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
-      await waitFor(() => {
-        expect(getByText("Model Settings")).toBeInTheDocument();
-      });
-    });
-
-    it("should not render an edit model button if the model is not a DB model", async () => {
-      const nonDbModelData = {
-        ...modelData,
-        model_info: {
-          ...modelData.model_info,
-          db_model: false,
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
         },
-      };
+      },
+    });
+    vi.clearAllMocks();
 
-      const NON_DB_ADMIN_PROPS = {
-        ...DEFAULT_ADMIN_PROPS,
-        modelData: nonDbModelData,
-      };
-
-      const { queryByText } = render(<ModelInfoView {...NON_DB_ADMIN_PROPS} />);
-      await waitFor(() => {
-        expect(queryByText("Edit Model")).not.toBeInTheDocument();
-      });
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [defaultModelData],
+      },
+      isLoading: false,
+      error: null,
     });
 
-    it("should render tags in the edit model", async () => {
-      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
-      await waitFor(() => {
-        expect(getByText("Tags")).toBeInTheDocument();
-      });
+    mockUseModelHub.mockReturnValue({
+      data: {
+        data: [],
+      },
+      isLoading: false,
+      error: null,
     });
 
-    it("should render the litellm params in the edit model", async () => {
-      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
-      await waitFor(() => {
-        expect(getByText("LiteLLM Params")).toBeInTheDocument();
-      });
+    mockUseModelCostMap.mockReturnValue({
+      data: {},
+      isLoading: false,
+      error: null,
     });
+
+    mockModelInfoV1Call.mockResolvedValue({
+      data: [defaultModelData],
+    });
+
+    mockCredentialGetCall.mockResolvedValue({
+      credential_name: "test-credential",
+      credential_values: {},
+      credential_info: {},
+    });
+
+    mockGetGuardrailsList.mockResolvedValue({
+      guardrails: [{ guardrail_name: "content_filter" }, { guardrail_name: "toxicity_filter" }],
+    });
+
+    mockTagListCall.mockResolvedValue({
+      test_tag: {
+        name: "test_tag",
+        description: "A test tag",
+        models: [],
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+      production_tag: {
+        name: "production_tag",
+        description: "Production ready models",
+        models: [],
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+    });
+
+    mockTestConnectionRequest.mockResolvedValue({
+      status: "success",
+    });
+
+    mockModelPatchUpdateCall.mockResolvedValue({});
+    mockModelDeleteCall.mockResolvedValue({});
+    mockCredentialCreateCall.mockResolvedValue({});
   });
 
-  it("should render a test connection button", async () => {
-    const { getByTestId } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("should render", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
-      expect(getByTestId("test-connection-button")).toBeInTheDocument();
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
   });
 
-  it("should render a reuse credentials button", async () => {
-    const { getByTestId } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+  it("should display loading state when model data is loading", () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: null,
+      isLoading: true,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+  });
+
+  it("should display not found message when model data is not available", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
-      expect(getByTestId("reuse-credentials-button")).toBeInTheDocument();
+      expect(screen.getByText("Model not found")).toBeInTheDocument();
     });
   });
 
-  it("should render a delete model button", async () => {
-    const { getByTestId } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+  it("should display model name in the header", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
-      expect(getByTestId("delete-model-button")).toBeInTheDocument();
+      expect(screen.getByText(/Public Model Name:/)).toBeInTheDocument();
     });
   });
 
-  it("should render a disabled delete model button if the model is not a DB model", async () => {
+  it("should display back button that calls onClose when clicked", async () => {
+    const mockOnClose = vi.fn();
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onClose={mockOnClose} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    const backButton = screen.getByRole("button", { name: /back to models/i });
+    await user.click(backButton);
+
+    expect(mockOnClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("should display test connection button", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /test connection/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should test connection when test connection button is clicked", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: /test connection/i });
+    await user.click(testButton);
+
+    await waitFor(() => {
+      expect(mockTestConnectionRequest).toHaveBeenCalled();
+      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Connection test successful!");
+    });
+  });
+
+  it("should display error notification when connection test fails", async () => {
+    const user = userEvent.setup();
+    mockTestConnectionRequest.mockRejectedValue(new Error("Connection failed"));
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: /test connection/i });
+    await user.click(testButton);
+
+    await waitFor(() => {
+      expect(mockNotificationsManager.error).toHaveBeenCalled();
+    });
+  });
+
+  it("should display reuse credentials button for admin users", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /re-use credentials/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should disable reuse credentials button for non-admin users", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="User" />, { wrapper });
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: /re-use credentials/i });
+      expect(button).toBeDisabled();
+    });
+  });
+
+  it("should display delete model button", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /delete model/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should disable delete button when model is not a DB model", async () => {
     const nonDbModelData = {
-      ...modelData,
+      ...defaultModelData,
       model_info: {
-        ...modelData.model_info,
+        ...defaultModelData.model_info,
         db_model: false,
       },
     };
-    const NON_DB_ADMIN_PROPS = {
-      ...DEFAULT_ADMIN_PROPS,
-      modelData: nonDbModelData,
-    };
-    const { getByTestId } = render(<ModelInfoView {...NON_DB_ADMIN_PROPS} />);
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [nonDbModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
-      expect(getByTestId("delete-model-button")).toBeDisabled();
+      const deleteButton = screen.getByRole("button", { name: /delete model/i });
+      expect(deleteButton).toBeDisabled();
     });
   });
 
-  it("should render a disabled delete model button if the user is not an admin and model is not created by the user", async () => {
+  it("should disable delete button when user is not admin and did not create the model", async () => {
     const nonCreatedByUserModelData = {
-      ...modelData,
+      ...defaultModelData,
       model_info: {
-        ...modelData.model_info,
+        ...defaultModelData.model_info,
         created_by: "456",
       },
     };
-    const NON_CREATED_BY_USER_ADMIN_PROPS = {
-      ...DEFAULT_ADMIN_PROPS,
-      modelData: nonCreatedByUserModelData,
-      userRole: "User",
-    };
-    const { getByTestId } = render(<ModelInfoView {...NON_CREATED_BY_USER_ADMIN_PROPS} />);
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [nonCreatedByUserModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="User" />, { wrapper });
     await waitFor(() => {
-      expect(getByTestId("delete-model-button")).toBeDisabled();
+      const deleteButton = screen.getByRole("button", { name: /delete model/i });
+      expect(deleteButton).toBeDisabled();
     });
   });
 
-  describe("View Model", () => {
-    it("should render the model info view", async () => {
-      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
-      await waitFor(() => {
-        expect(getByText("Model Settings")).toBeInTheDocument();
-      });
+  it("should display overview and raw JSON tabs", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /overview/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /raw json/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should display model information in overview tab", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Provider")).toBeInTheDocument();
+      expect(screen.getByText("LiteLLM Model")).toBeInTheDocument();
+      expect(screen.getByText("Pricing")).toBeInTheDocument();
+    });
+  });
+
+  it("should display edit settings button when user can edit model", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should not display edit settings button when model is not a DB model", async () => {
+    const nonDbModelData = {
+      ...defaultModelData,
+      model_info: {
+        ...defaultModelData.model_info,
+        db_model: false,
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [nonDbModelData],
+      },
+      isLoading: false,
+      error: null,
     });
 
-    it("should render tags in the view model", async () => {
-      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
-      await waitFor(() => {
-        expect(getByText("Tags")).toBeInTheDocument();
-      });
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /edit settings/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it("should enter edit mode when edit settings button is clicked", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
+    await user.click(editButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should display form fields in edit mode", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
+    await user.click(editButton);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Enter model name")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Enter LiteLLM model name")).toBeInTheDocument();
+    });
+  });
+
+  it("should allow editing model name in edit mode", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
+    await user.click(editButton);
+
+    const modelNameInput = await screen.findByPlaceholderText("Enter model name");
+    await user.clear(modelNameInput);
+    await user.type(modelNameInput, "Updated Model Name");
+
+    expect(modelNameInput).toHaveValue("Updated Model Name");
+  });
+
+  it("should cancel editing when cancel button is clicked", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
+    await user.click(editButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    });
+
+    const cancelButton = screen.getByRole("button", { name: /cancel/i });
+    await user.click(cancelButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it("should save model changes when save button is clicked", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    const editButton = screen.getByRole("button", { name: /edit settings/i });
+    await user.click(editButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const saveButton = screen.getByRole("button", { name: /save changes/i });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Model settings updated successfully");
+      expect(mockOnModelUpdate).toHaveBeenCalled();
+    });
+  });
+
+  it("should display tags section", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Tags")).toBeInTheDocument();
+    });
+  });
+
+  it("should display LiteLLM Params section", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("LiteLLM Params")).toBeInTheDocument();
+    });
+  });
+
+  it("should display health check model field for wildcard models", async () => {
+    const wildcardModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "openai/gpt-4*",
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [wildcardModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Health Check Model")).toBeInTheDocument();
+    });
+  });
+
+  it("should not display health check model field for non-wildcard models", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+      expect(screen.queryByText("Health Check Model")).not.toBeInTheDocument();
+    });
+  });
+
+  it("should display edit auto router button for auto router models", async () => {
+    const autoRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        auto_router_config: {},
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [autoRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit auto router/i })).toBeInTheDocument();
+    });
+  });
+
+
+  it("should display model access groups field", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Model Access Groups")).toBeInTheDocument();
+    });
+  });
+
+  it("should display guardrails field", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Guardrails")).toBeInTheDocument();
+    });
+  });
+
+  it("should display pricing information", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText(/Input:/)).toBeInTheDocument();
+      expect(screen.getByText(/Output:/)).toBeInTheDocument();
+    });
+  });
+
+  it("should display created at and created by information", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText(/Created At/)).toBeInTheDocument();
+      expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
   });
 });

@@ -1724,3 +1724,360 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
     assert credentials["custom_llm_provider"] == "bedrock"
+
+
+def test_get_available_guardrail_single_deployment():
+    """
+    Test get_available_guardrail returns the single guardrail when only one exists.
+    """
+    guardrail_config = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    result = router.get_available_guardrail(guardrail_name="content-filter")
+    assert result == guardrail_config
+
+
+def test_get_available_guardrail_multiple_deployments():
+    """
+    Test get_available_guardrail load balances across multiple guardrails.
+    """
+    guardrail_1 = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+    guardrail_2 = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-2",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_1, guardrail_2],
+    )
+
+    # Call multiple times to verify load balancing
+    results = set()
+    for _ in range(20):
+        result = router.get_available_guardrail(guardrail_name="content-filter")
+        results.add(result["id"])
+
+    # Both guardrails should be selected at least once
+    assert "guardrail-1" in results or "guardrail-2" in results
+
+
+def test_get_available_guardrail_not_found():
+    """
+    Test get_available_guardrail raises ValueError when guardrail not found.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[],
+    )
+
+    with pytest.raises(ValueError, match="No guardrail found with name"):
+        router.get_available_guardrail(guardrail_name="non-existent")
+
+
+@pytest.mark.asyncio
+async def test_aguardrail_helper():
+    """
+    Test _aguardrail_helper selects a guardrail and executes the original function.
+    """
+    guardrail_config = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    # Mock the original function
+    async def mock_original_function(**kwargs):
+        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+
+    result = await router._aguardrail_helper(
+        model="content-filter",
+        original_generic_function=mock_original_function,
+    )
+
+    assert result["result"] == "success"
+    assert result["selected_guardrail"] == guardrail_config
+
+
+@pytest.mark.asyncio
+async def test_aguardrail():
+    """
+    Test aguardrail executes a guardrail with load balancing and fallbacks.
+    """
+    guardrail_config = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    # Mock the original function
+    async def mock_original_function(**kwargs):
+        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+
+    result = await router.aguardrail(
+        guardrail_name="content-filter",
+        original_function=mock_original_function,
+    )
+
+    assert result["result"] == "success"
+    assert result["selected_guardrail"]["id"] == "guardrail-1"
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_call_type_is_cached():
+    """
+    Regression test: Verify that anthropic_messages call type is allowed
+    in PromptCachingDeploymentCheck.async_log_success_event.
+    """
+    import asyncio
+    from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
+        PromptCachingDeploymentCheck,
+    )
+    from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+    from litellm.caching.dual_cache import DualCache
+    from litellm.types.utils import CallTypes
+    from litellm.types.utils import (
+        StandardLoggingPayload,
+        StandardLoggingModelInformation,
+        StandardLoggingMetadata,
+        StandardLoggingHiddenParams,
+    )
+    
+    # Create mock standard logging payload inline
+    def create_standard_logging_payload() -> StandardLoggingPayload:
+        return StandardLoggingPayload(
+            id="test_id",
+            call_type="completion",
+            response_cost=0.1,
+            response_cost_failure_debug_info=None,
+            status="success",
+            total_tokens=30,
+            prompt_tokens=20,
+            completion_tokens=10,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=1234567890.5,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai-gpt",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_org_id=None,
+                user_api_key_alias="test_alias",
+                user_api_key_team_id="test_team",
+                user_api_key_user_id="test_user",
+                user_api_key_team_alias="test_team_alias",
+                spend_logs_metadata=None,
+                requester_ip_address="127.0.0.1",
+                requester_metadata=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address="127.0.0.1",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            response={"choices": [{"message": {"content": "Hi there!"}}]},
+            error_str=None,
+            model_parameters={"stream": True},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.1",
+                additional_headers=None,
+            ),
+        )
+    
+    cache = DualCache()
+    deployment_check = PromptCachingDeploymentCheck(cache=cache)
+    prompt_cache = PromptCachingCache(cache=cache)
+    
+    # Create messages with enough tokens to pass the caching threshold
+    test_messages = [
+        {
+            "role": "user", 
+            "content": [
+                {
+                    "type": "text", 
+                    "text": "test long message here" * 1024,
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "5m"
+                    }
+                }
+            ]
+        }
+    ]
+    test_model_id = "test-model-id-123"
+    
+    # Create a payload with anthropic_messages call type
+    payload = create_standard_logging_payload()
+    payload["call_type"] = CallTypes.anthropic_messages.value
+    payload["messages"] = test_messages
+    payload["model"] = "anthropic/claude-3-5-sonnet-20240620"
+    payload["model_id"] = test_model_id
+    
+    # Log the success event (should cache the model_id)
+    await deployment_check.async_log_success_event(
+        kwargs={"standard_logging_object": payload},
+        response_obj={},
+        start_time=1234567890.0,
+        end_time=1234567891.0,
+    )
+    
+    # Small delay to ensure cache write completes
+    await asyncio.sleep(0.1)
+    
+    # Verify that the model_id was actually cached
+    cached_result = await prompt_cache.async_get_model_id(
+        messages=test_messages,
+        tools=None,
+    )
+    
+    # This assertion will FAIL if anthropic_messages is filtered out
+    assert cached_result is not None, "Model ID should be cached for anthropic_messages call type"
+    assert cached_result["model_id"] == test_model_id, f"Expected {test_model_id}, got {cached_result['model_id']}"
+
+
+def test_update_kwargs_with_deployment_propagates_model_tags():
+    """
+    Test that deployment-level tags from litellm_params are merged into
+    kwargs metadata when _update_kwargs_with_deployment is called.
+
+    This ensures model-level tags defined in config.yaml appear in SpendLogs.
+    See: https://github.com/BerriAI/litellm/issues/XXXX
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "tags": ["openai-account", "production"],
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Deployment tags should be propagated to kwargs metadata
+    assert "tags" in kwargs["metadata"]
+    assert "openai-account" in kwargs["metadata"]["tags"]
+    assert "production" in kwargs["metadata"]["tags"]
+
+
+def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
+    """
+    Test that when both request-level and deployment-level tags exist,
+    they are merged without duplicates.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "tags": ["openai-account", "shared-tag"],
+                },
+            },
+        ],
+    )
+
+    # Simulate request that already has tags (from request body or key/team level)
+    kwargs: dict = {"metadata": {"tags": ["user-tag", "shared-tag"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Both sources should be merged, no duplicates
+    assert "user-tag" in kwargs["metadata"]["tags"]
+    assert "openai-account" in kwargs["metadata"]["tags"]
+    assert "shared-tag" in kwargs["metadata"]["tags"]
+    assert kwargs["metadata"]["tags"].count("shared-tag") == 1
+
+
+def test_update_kwargs_with_deployment_no_tags():
+    """
+    Test that when deployment has no tags, kwargs metadata is not affected.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # No tags key should be added if deployment has no tags
+    assert "tags" not in kwargs["metadata"]

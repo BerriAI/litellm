@@ -19,7 +19,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return "gpt-5" in model
+        # gpt-5-chat* behaves like a regular chat model (supports temperature, etc.)
+        # Don't route it through GPT-5 reasoning-specific parameter restrictions.
+        return "gpt-5" in model and "gpt-5-chat" not in model
 
     @classmethod
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:
@@ -50,6 +52,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         """Check if the model is the gpt-5.2-pro snapshot/alias."""
         model_name = model.split("/")[-1]
         return model_name.startswith("gpt-5.2-pro")
+
+    @classmethod
+    def is_model_gpt_5_2_model(cls, model: str) -> bool:
+        """Check if the model is a gpt-5.2 variant (including pro)."""
+        model_name = model.split("/")[-1]
+        return model_name.startswith("gpt-5.2")
 
     def get_supported_openai_params(self, model: str) -> list:
         from litellm.utils import supports_tool_choice
@@ -89,14 +97,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if reasoning_effort is not None and reasoning_effort == "xhigh":
             if not (
                 self.is_model_gpt_5_1_codex_max_model(model)
-                or self.is_model_gpt_5_2_pro_model(model)
+                or self.is_model_gpt_5_2_model(model)
             ):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max."
+                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max and gpt-5.2 models."
                         ),
                         status_code=400,
                     )

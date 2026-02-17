@@ -93,6 +93,12 @@ Implement `POST /beta/litellm_basic_guardrail_api`
     "user_api_key_end_user_id": "end user id associated with the litellm virtual key used",
     "user_api_key_org_id": "org id associated with the litellm virtual key used"
   },
+  "request_headers": {  // optional: inbound request headers (allowlist). Allowed headers show their value; all others show "[present]" to indicate the header existed.
+    "User-Agent": "OpenAI/Python 2.17.0",
+    "Content-Type": "application/json",
+    "X-Request-Id": "[present]"
+  },
+  "litellm_version": "1.x.y",  // optional: LiteLLM library version running this proxy
   "input_type": "request",  // "request" or "response"
   "litellm_call_id": "unique_call_id",  // the call id of the individual LLM call
   "litellm_trace_id": "trace_id",  // the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
@@ -236,6 +242,27 @@ litellm_settings:
           threshold: 0.8
           language: "en"
 ```
+
+### Example: Pillar Security
+
+[Pillar Security](https://pillar.security) uses the Generic Guardrail API to provide comprehensive AI security scanning including prompt injection protection, PII/PCI detection, secret detection, and content moderation.
+
+```yaml
+guardrails:
+  - guardrail_name: "pillar-security"
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: https://api.pillar.security/api/v1/integrations/litellm
+      api_key: os.environ/PILLAR_API_KEY
+      default_on: true
+      additional_provider_specific_params:
+        plr_mask: true      # Enable automatic masking of sensitive data
+        plr_evidence: true  # Include detection evidence in response
+        plr_scanners: true  # Include scanner details in response
+```
+
+See the [Pillar Security documentation](../proxy/guardrails/pillar_security.md) for full configuration options.
 
 ## Usage
 

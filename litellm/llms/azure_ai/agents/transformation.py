@@ -1,17 +1,24 @@
 """
-Transformation for Azure AI Agent Service API.
+Transformation for Azure Foundry Agent Service API.
 
-Azure AI Agent Service provides an Assistants-like API for running agents.
+Azure Foundry Agent Service provides an Assistants-like API for running agents.
 This follows the OpenAI Assistants pattern: create thread -> add messages -> create/poll run.
 
 Model format: azure_ai/agents/<agent_id>
 
+API Base format: https://<AIFoundryResourceName>.services.ai.azure.com/api/projects/<ProjectName>
+
+Authentication: Uses Azure AD Bearer tokens (not API keys)
+  Get token via: az account get-access-token --resource 'https://ai.azure.com'
+
 The API uses these endpoints:
-- POST /openai/threads - Create a thread
-- POST /openai/threads/{thread_id}/messages - Add message to thread
-- POST /openai/threads/{thread_id}/runs - Create a run
-- GET /openai/threads/{thread_id}/runs/{run_id} - Poll run status
-- GET /openai/threads/{thread_id}/messages - List messages in thread
+- POST /threads - Create a thread
+- POST /threads/{thread_id}/messages - Add message to thread
+- POST /threads/{thread_id}/runs - Create a run
+- GET /threads/{thread_id}/runs/{run_id} - Poll run status
+- GET /threads/{thread_id}/messages - List messages in thread
+
+See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
@@ -59,8 +66,10 @@ class AzureAIAgentsConfig(BaseConfig):
     4. Retrieve the assistant's response messages
     """
 
-    # Default API version for Azure AI Agent Service
-    DEFAULT_API_VERSION = "2024-07-01-preview"
+    # Default API version for Azure Foundry Agent Service
+    # GA version: 2025-05-01, Preview: 2025-05-15-preview
+    # See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
+    DEFAULT_API_VERSION = "2025-05-01"
     
     # Polling configuration
     MAX_POLL_ATTEMPTS = 60
@@ -236,13 +245,19 @@ class AzureAIAgentsConfig(BaseConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         """
-        Validate and set up environment for Azure Agents requests.
+        Validate and set up environment for Azure Foundry Agents requests.
+        
+        Azure Foundry Agents uses Bearer token authentication with Azure AD tokens.
+        Get token via: az account get-access-token --resource 'https://ai.azure.com'
+        
+        See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
         """
         headers["Content-Type"] = "application/json"
 
-        # Add API key if provided
+        # Azure Foundry Agents uses Bearer token authentication
+        # The api_key here is expected to be an Azure AD token
         if api_key:
-            headers["api-key"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
 
         return headers
 
@@ -310,15 +325,38 @@ class AzureAIAgentsConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> Any:
         """
-        Dispatch method for Azure AI Agents completion.
+        Dispatch method for Azure Foundry Agents completion.
         
         Routes to sync or async completion based on acompletion flag.
         Supports native streaming via SSE when stream=True and acompletion=True.
+        
+        Authentication: Uses Azure AD Bearer tokens.
+        - Pass api_key directly as an Azure AD token
+        - Or set up Azure AD credentials via environment variables for automatic token retrieval:
+          - AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET (Service Principal)
+        
+        See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
         """
+        from litellm.llms.azure.common_utils import get_azure_ad_token
         from litellm.llms.azure_ai.agents.handler import azure_ai_agents_handler
+        from litellm.types.router import GenericLiteLLMParams
 
+        # If no api_key is provided, try to get Azure AD token
         if api_key is None:
-            raise ValueError("api_key is required for Azure AI Agents")
+            # Try to get Azure AD token using the existing Azure auth mechanisms
+            # This uses the scope for Azure AI (ai.azure.com) instead of cognitive services
+            # Create a GenericLiteLLMParams with the scope override for Azure Foundry Agents
+            azure_auth_params = dict(litellm_params) if litellm_params else {}
+            azure_auth_params["azure_scope"] = "https://ai.azure.com/.default"
+            api_key = get_azure_ad_token(GenericLiteLLMParams(**azure_auth_params))
+            
+        if api_key is None:
+            raise ValueError(
+                "api_key (Azure AD token) is required for Azure Foundry Agents. "
+                "Either pass api_key directly, or set AZURE_TENANT_ID, AZURE_CLIENT_ID, "
+                "and AZURE_CLIENT_SECRET environment variables for Service Principal auth. "
+                "Manual token: az account get-access-token --resource 'https://ai.azure.com'"
+            )
         if acompletion:
             if stream:
                 # Native async streaming via SSE - return the async generator directly

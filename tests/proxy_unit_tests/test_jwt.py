@@ -413,7 +413,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
 
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "headers": []})
     request._url = URL(url="/chat/completions")
 
     ## 1. INITIAL TEAM CALL - should fail
@@ -446,7 +446,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
                 models=["gpt-3.5-turbo", "gpt-4"],
             ),
             user_api_key_dict=result,
-            http_request=Request(scope={"type": "http"}),
+            http_request=Request(scope={"type": "http", "headers": []}),
         )
     except Exception as e:
         pytest.fail(f"This should not fail - {str(e)}")
@@ -614,7 +614,7 @@ async def aaaatest_user_token_output(
 
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "headers": []})
     request._url = URL(url="/chat/completions")
 
     ## 1. INITIAL TEAM CALL - should fail
@@ -641,7 +641,7 @@ async def aaaatest_user_token_output(
                 models=["gpt-3.5-turbo", "gpt-4"],
             ),
             user_api_key_dict=result,
-            http_request=Request(scope={"type": "http"}),
+            http_request=Request(scope={"type": "http", "headers": []}),
         )
         if default_team_id:
             await new_team(
@@ -652,7 +652,7 @@ async def aaaatest_user_token_output(
                     models=["gpt-3.5-turbo", "gpt-4"],
                 ),
                 user_api_key_dict=result,
-                http_request=Request(scope={"type": "http"}),
+                http_request=Request(scope={"type": "http", "headers": []}),
             )
     except Exception as e:
         pytest.fail(f"This should not fail - {str(e)}")
@@ -834,7 +834,7 @@ async def test_allowed_routes_admin(
             actual_routes.extend(LiteLLMRoutes[route].value)
 
     for route in actual_routes:
-        request = Request(scope={"type": "http"})
+        request = Request(scope={"type": "http", "headers": []})
 
         request._url = URL(url=route)
 
@@ -923,10 +923,19 @@ def public_jwt_key():
     return {"private_key": private_key, "public_jwk": public_jwk}
 
 
-def mock_user_object(*args, **kwargs):
+async def mock_user_object(*args, **kwargs):
     print("Args: {}".format(args))
     print("kwargs: {}".format(kwargs))
     assert kwargs["user_id_upsert"] is True
+    # Return a mock user object
+    user_id = kwargs.get("user_id")
+    user_email = kwargs.get("user_email")
+    return LiteLLM_UserTable(
+        spend=0, 
+        user_id=user_id, 
+        max_budget=None, 
+        user_email=user_email
+    )
 
 
 @pytest.mark.parametrize(
@@ -999,7 +1008,7 @@ async def test_allow_access_by_email(
     ## RUN IT THROUGH USER API KEY AUTH
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "headers": []})
 
     request._url = URL(url="/chat/completions")
 
@@ -1266,7 +1275,7 @@ def test_user_api_key_auth_jwt_hashing():
     from litellm.proxy.auth.handle_jwt import JWTHandler
     
     # Test with a JWT token (3 parts separated by dots)
-    jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    jwt_token = "test-jwt-token-header.payload.signature"
     
     # Create UserAPIKeyAuth instance with JWT
     user_auth = UserAPIKeyAuth(api_key=jwt_token)
@@ -1303,7 +1312,7 @@ def test_jwt_handler_is_jwt_static_method():
     from litellm.proxy.auth.handle_jwt import JWTHandler
     
     # Test with valid JWT format
-    valid_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    valid_jwt = "test-jwt-token-header.payload.signature"
     assert JWTHandler.is_jwt(valid_jwt) == True
     
     # Test with invalid JWT format (only 2 parts)

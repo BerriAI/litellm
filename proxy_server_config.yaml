@@ -46,7 +46,7 @@ model_list:
       model: dall-e-3
   - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/fake
+      model: openai/gpt-3.5-turbo-0301
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
   - model_name: fake-openai-endpoint-2
@@ -152,6 +152,7 @@ model_list:
 litellm_settings:
   # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
   drop_params: True
+  success_callback: ["prometheus"]
   # max_budget: 100 
   # budget_duration: 30d
   num_retries: 5

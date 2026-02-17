@@ -1,9 +1,9 @@
 """
-Tests for Azure AI Agent Service integration.
+Tests for Azure Foundry Agent Service integration.
 
-These tests require an Azure AI Agent Service endpoint and a pre-configured agent.
+These tests require an Azure Foundry Agent Service endpoint and a pre-configured agent.
 
-The Azure AI Agent Service uses the Assistants API pattern:
+The Azure Foundry Agent Service uses the Assistants API pattern:
 1. Create a thread
 2. Add messages to the thread
 3. Create and poll a run
@@ -11,9 +11,16 @@ The Azure AI Agent Service uses the Assistants API pattern:
 
 Model format: azure_ai/agents/<agent_id>
 
+API Base format: https://<AIFoundryResourceName>.services.ai.azure.com/api/projects/<ProjectName>
+
+Authentication: Uses Azure AD Bearer tokens (not API keys)
+  Get token via: az account get-access-token --resource 'https://ai.azure.com'
+
 Example environment variables:
-  AZURE_AI_API_BASE=https://your-project.services.ai.azure.com
-  AZURE_AI_API_KEY=your-api-key
+  AZURE_AGENTS_API_BASE=https://litellm-ci-cd-prod.services.ai.azure.com/api/projects/litellm-ci-cd
+  AZURE_AGENTS_API_KEY=<Azure AD Bearer token>
+
+See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
 import os
@@ -29,13 +36,15 @@ import litellm
 @pytest.mark.asyncio
 async def test_azure_ai_agents_acompletion_non_streaming():
     """
-    Test non-streaming acompletion call to Azure AI Agent Service.
+    Test non-streaming acompletion call to Azure Foundry Agent Service.
     Uses the multi-step flow: create thread -> add messages -> create/poll run -> get messages
     """
-    api_base = os.environ.get("AZURE_API_BASE")
-    api_key = os.environ.get("AZURE_API_KEY")
-    agent_id = "asst_shNRIVxMPuvSRVWP5WvVe4jE"
+    api_base = os.environ.get("AZURE_AGENTS_API_BASE")
+    api_key = os.environ.get("AZURE_AGENTS_API_KEY")
+    agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
+    if not api_base or not api_key:
+        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
 
     response = await litellm.acompletion(
         model=f"azure_ai/agents/{agent_id}",
@@ -62,12 +71,15 @@ async def test_azure_ai_agents_acompletion_non_streaming():
 @pytest.mark.asyncio
 async def test_azure_ai_agents_acompletion_streaming():
     """
-    Test native streaming acompletion call to Azure AI Agent Service.
+    Test native streaming acompletion call to Azure Foundry Agent Service.
     Uses the create-thread-and-run endpoint with stream=True for SSE streaming.
     """
-    api_base = os.environ.get("AZURE_API_BASE")
-    api_key = os.environ.get("AZURE_API_KEY")
-    agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_shNRIVxMPuvSRVWP5WvVe4jE")
+    api_base = os.environ.get("AZURE_AGENTS_API_BASE")
+    api_key = os.environ.get("AZURE_AGENTS_API_KEY")
+    agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
+
+    if not api_base or not api_key:
+        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
 
     response = await litellm.acompletion(
         model=f"azure_ai/agents/{agent_id}",
@@ -223,7 +235,7 @@ def test_azure_ai_agents_config_transform_request():
     assert request["messages"][0]["role"] == "system"
     assert request["messages"][1]["role"] == "user"
     assert "api_version" in request
-    assert request["api_version"] == "2024-07-01-preview"
+    assert request["api_version"] == "2025-05-01"
 
 
 def test_azure_ai_agents_provider_detection():
@@ -243,7 +255,9 @@ def test_azure_ai_agents_provider_detection():
 
 def test_azure_ai_agents_validate_environment():
     """
-    Test that headers are correctly set up.
+    Test that headers are correctly set up with Bearer token authentication.
+    
+    Azure Foundry Agents uses Bearer token authentication (Azure AD tokens).
     """
     from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
 
@@ -255,41 +269,44 @@ def test_azure_ai_agents_validate_environment():
         messages=[],
         optional_params={},
         litellm_params={},
-        api_key="test-api-key",
-        api_base="https://test.services.ai.azure.com",
+        api_key="test-azure-ad-token",
+        api_base="https://test.services.ai.azure.com/api/projects/test-project",
     )
 
     assert headers["Content-Type"] == "application/json"
-    assert headers["api-key"] == "test-api-key"
+    assert headers["Authorization"] == "Bearer test-azure-ad-token"
 
 
 def test_azure_ai_agents_handler_url_builders():
     """
     Test the URL building methods in the handler.
+    
+    Azure Foundry Agents API uses direct paths without /openai/ prefix.
+    See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
     """
     from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
 
     handler = AzureAIAgentsHandler()
-    api_base = "https://test.services.ai.azure.com"
-    api_version = "2024-07-01-preview"
+    api_base = "https://test.services.ai.azure.com/api/projects/test-project"
+    api_version = "2025-05-01"
     thread_id = "thread_abc123"
     run_id = "run_xyz789"
 
-    # Test thread URL - uses /openai/ prefix
+    # Test thread URL - direct path without /openai/ prefix
     thread_url = handler._build_thread_url(api_base, api_version)
-    assert thread_url == f"{api_base}/openai/threads?api-version={api_version}"
+    assert thread_url == f"{api_base}/threads?api-version={api_version}"
 
     # Test messages URL
     messages_url = handler._build_messages_url(api_base, thread_id, api_version)
-    assert messages_url == f"{api_base}/openai/threads/{thread_id}/messages?api-version={api_version}"
+    assert messages_url == f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
 
     # Test runs URL
     runs_url = handler._build_runs_url(api_base, thread_id, api_version)
-    assert runs_url == f"{api_base}/openai/threads/{thread_id}/runs?api-version={api_version}"
+    assert runs_url == f"{api_base}/threads/{thread_id}/runs?api-version={api_version}"
 
     # Test run status URL
     status_url = handler._build_run_status_url(api_base, thread_id, run_id, api_version)
-    assert status_url == f"{api_base}/openai/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+    assert status_url == f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
 
 
 def test_azure_ai_agents_extract_content_from_messages():
@@ -340,12 +357,12 @@ async def test_azure_ai_agents_conversation_continuity():
     """
     Test that thread_id can be used for conversation continuity.
     """
-    api_base = os.environ.get("AZURE_AI_API_BASE")
-    api_key = os.environ.get("AZURE_AI_API_KEY")
-    agent_id = os.environ.get("AZURE_AI_AGENTS_AGENT_ID", "asst_shNRIVxMPuvSRVWP5WvVe4jE")
+    api_base = os.environ.get("AZURE_AGENTS_API_BASE")
+    api_key = os.environ.get("AZURE_AGENTS_API_KEY")
+    agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
     if not api_base or not api_key:
-        pytest.skip("AZURE_AI_API_BASE and AZURE_AI_API_KEY environment variables required")
+        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
 
     try:
         # First message

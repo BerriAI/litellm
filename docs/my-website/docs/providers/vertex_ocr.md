@@ -140,7 +140,7 @@ with open("document.pdf", "rb") as f:
     pdf_base64 = base64.b64encode(f.read()).decode()
 
 response = litellm.ocr(
-    model="vertex_ai/mistral-ocr-2505",
+    model="vertex_ai/mistral-ocr-2505", # This doesn't work for deepseek
     document={
         "type": "document_url",
         "document_url": f"data:application/pdf;base64,{pdf_base64}"
@@ -219,7 +219,7 @@ print(f"Cost: ${response._hidden_params.get('response_cost', 0)}")
 ## Important Notes
 
 :::info URL Conversion
-Vertex AI OCR endpoints don't have internet access. LiteLLM automatically converts public URLs to base64 data URIs before sending requests to Vertex AI.
+Vertex AI Mistral OCR endpoints don't have internet access. LiteLLM automatically converts public URLs to base64 data URIs before sending requests to Vertex AI.
 :::
 
 :::tip Regional Availability
@@ -227,11 +227,14 @@ Mistral OCR is available in multiple regions. Specify `vertex_location` to use a
 - `us-central1` (default)
 - `europe-west1`
 - `asia-southeast1`
+
+Deepseek OCR is only available in global region.
 :::
 
 ## Supported Models
 
 - `mistral-ocr-2505` - Latest Mistral OCR model on Vertex AI
+- `deepseek-ocr-maas` - Lates Deepseek OCR model on Vertex AI
 
 Use the Vertex AI provider prefix: `vertex_ai/<model-name>`
 

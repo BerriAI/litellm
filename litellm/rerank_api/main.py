@@ -347,6 +347,12 @@ def rerank(  # noqa: PLR0915
                 or get_secret("BEDROCK_API_BASE")  # type: ignore
             )
 
+            # Merge headers and extra_headers if both are provided
+            merged_headers = headers or litellm.headers or {}
+            extra_headers_from_kwargs = kwargs.get("extra_headers")
+            if extra_headers_from_kwargs:
+                merged_headers = {**merged_headers, **extra_headers_from_kwargs}
+
             response = bedrock_rerank.rerank(
                 model=model,
                 query=query,
@@ -358,6 +364,7 @@ def rerank(  # noqa: PLR0915
                 _is_async=_is_async,
                 optional_params=optional_params.model_dump(exclude_unset=True),
                 api_base=api_base,
+                extra_headers=merged_headers,
                 logging_obj=litellm_logging_obj,
                 client=client,
             )

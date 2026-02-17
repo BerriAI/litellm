@@ -28,5 +28,6 @@
     "response": "{}",
     "proxy_server_request": "{}",
     "status": "success",
-    "mcp_namespaced_tool_name": null
+    "mcp_namespaced_tool_name": null,
+    "agent_id": null
 }

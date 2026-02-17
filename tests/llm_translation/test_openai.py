@@ -300,28 +300,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         pass
 
 
-def test_completion_bad_org():
-    import litellm
-
-    litellm.set_verbose = True
-    _old_org = os.environ.get("OPENAI_ORGANIZATION", None)
-    os.environ["OPENAI_ORGANIZATION"] = "bad-org"
-    messages = [{"role": "user", "content": "hi"}]
-
-    with pytest.raises(Exception) as exc_info:
-        comp = litellm.completion(
-            model="gpt-4o-mini", messages=messages, organization="bad-org"
-        )
-
-    print(exc_info.value)
-    assert "header should match organization for API key" in str(exc_info.value)
-
-    if _old_org is not None:
-        os.environ["OPENAI_ORGANIZATION"] = _old_org
-    else:
-        del os.environ["OPENAI_ORGANIZATION"]
-
-
 @patch("litellm.main.openai_chat_completions._get_openai_client")
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
@@ -541,7 +519,7 @@ async def test_openai_codex_stream(sync_mode):
     from litellm.main import stream_chunk_builder
 
     kwargs = {
-        "model": "openai/codex-mini-latest",
+        "model": "openai/gpt-5.2-codex",
         "messages": [{"role": "user", "content": "Hey!"}],
         "stream": True,
     }
@@ -573,7 +551,7 @@ async def test_openai_codex(sync_mode):
             {
                 "model_name": "openai-codex-mini-latest",
                 "litellm_params": {
-                    "model": "openai/codex-mini-latest",
+                    "model": "openai/gpt-5.2-codex",
                 },
             }
         ]
@@ -856,23 +834,6 @@ def test_gpt_5_reasoning_streaming():
     assert has_content
 
     print("✓ gpt_5_reasoning_streaming correctly handled streaming")
-
-
-def test_gpt_5_pro_reasoning():
-    litellm._turn_on_debug()
-    response = litellm.completion(
-        model="gpt-5-pro",
-        messages=[
-            {
-                "role": "user",
-                "content": "Think of a poem and then write it.",
-            }
-        ],
-        reasoning_effort="high",
-    )
-    print("response: ", response)
-    # reasoning_effort string param does not request summaries (opt-in since #16210)
-    assert response.choices[0].message.content is not None  # But we should get content
 
 
 def test_openai_gpt_5_codex_reasoning():

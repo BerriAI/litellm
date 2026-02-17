@@ -37,6 +37,24 @@ for event in response:
     print(event)
 ```
 
+#### Web Search
+```python showLineNumbers title="OpenAI Responses with Web Search"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-5",
+    input="What is the capital of France?",
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "medium"  # Options: "low", "medium", "high"
+    }]
+)
+
+print(response)
+```
+
+For full details, see the [Web Search guide](../../completion/web_search.md).
+
 #### Image Generation with Streaming
 ```python showLineNumbers title="OpenAI Streaming Image Generation"
 import litellm
@@ -623,6 +641,58 @@ display(styled_df)
 </TabItem>
 </Tabs>
 
+## Function Calling
+
+```python showLineNumbers title="Function Calling with Parallel Tool Calls"
+import litellm
+import json
+
+tools = [
+    {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"}
+            },
+            "required": ["location"]
+        }
+    }
+]
+
+# Step 1: Request with tools (parallel_tool_calls=True allows multiple calls)
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input=[{"role": "user", "content": "What's the weather in Paris and Tokyo?"}],
+    tools=tools,
+    parallel_tool_calls=True, # Defaults = True
+)
+
+# Step 2: Execute tool calls and collect results
+tool_results = []
+for output in response.output:
+    if output.type == "function_call":
+        result = {"temperature": 15, "condition": "sunny"}  # Your function logic here
+        tool_results.append({
+            "type": "function_call_output",
+            "call_id": output.call_id,
+            "output": json.dumps(result)
+        })
+
+# Step 3: Send results back
+final_response = litellm.responses(
+    model="openai/gpt-4o",
+    input=tool_results,
+    tools=tools,
+)
+
+print(final_response.output)
+```
+
+Set `parallel_tool_calls=False` to ensure zero or one tool is called per turn. [More details](https://platform.openai.com/docs/guides/function-calling#parallel-function-calling).
+
 ## Free-form Function Calling
 
 <Tabs>
@@ -633,7 +703,6 @@ display(styled_df)
 import litellm
 
 response = litellm.responses(
-    response = client.responses.create(
     model="gpt-5-mini",
     input="Please use the code_exec tool to calculate the area of a circle with radius equal to the number of 'r's in strawberry",
     text={"format": {"type": "text"}},

@@ -26,7 +26,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
-    PromptTokensDetails,
+    PromptTokensDetailsWrapper,
     SpecialEnums,
     Usage,
 )
@@ -198,11 +198,14 @@ class ResponsesAPIRequestUtils:
         model_id = model_info.get("id")
 
         # access the response id based on the object type
-        response_id = (
-            responses_api_response["id"]
-            if isinstance(responses_api_response, dict)
-            else responses_api_response.id
-        )
+        if isinstance(responses_api_response, dict):
+            response_id = responses_api_response.get("id")
+        else:
+            response_id = getattr(responses_api_response, "id", None)
+        
+        # If no response_id, return the response as-is (likely an error response)
+        if response_id is None:
+            return responses_api_response
 
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
@@ -431,32 +434,52 @@ class ResponseAPILoggingUtils:
     def _transform_response_api_usage_to_chat_usage(
         usage_input: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
-        """Tranforms the ResponseAPIUsage object to a Usage object"""
+        """
+        Transforms ResponseAPIUsage or ImageUsage to a Usage object.
+
+        Both have the same spec with input_tokens, output_tokens, and
+        input_tokens_details (text_tokens, image_tokens).
+        """
         if usage_input is None:
             return Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
             )
-        response_api_usage: ResponseAPIUsage = (
-            ResponseAPIUsage(**usage_input)
-            if isinstance(usage_input, dict)
-            else usage_input
-        )
+        response_api_usage: ResponseAPIUsage
+        if isinstance(usage_input, dict):
+            total_tokens = usage_input.get("total_tokens")
+            if total_tokens is None:
+                input_tokens = usage_input.get("input_tokens")
+                output_tokens = usage_input.get("output_tokens")
+                if input_tokens is not None and output_tokens is not None:
+                    total_tokens = input_tokens + output_tokens
+                    usage_input["total_tokens"] = total_tokens
+            response_api_usage = ResponseAPIUsage(**usage_input)
+        else:
+            response_api_usage = usage_input
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if response_api_usage.input_tokens_details:
-            prompt_tokens_details = PromptTokensDetails(
-                cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
-                audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
-            )
-        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        if response_api_usage.output_tokens_details:
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(
-                    response_api_usage.output_tokens_details, "reasoning_tokens", None
+            if isinstance(response_api_usage.input_tokens_details, dict):
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **response_api_usage.input_tokens_details
                 )
+            else:
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
+                    audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
+                    text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
+                    image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
+                )
+        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
+        if output_tokens_details:
+            completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None),
+                image_tokens=getattr(output_tokens_details, "image_tokens", None),
+                text_tokens=getattr(output_tokens_details, "text_tokens", None),
             )
             
         chat_usage = Usage(

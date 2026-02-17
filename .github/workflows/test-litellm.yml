@@ -1,8 +1,12 @@
 name: LiteLLM Mock Tests (folder - tests/test_litellm)
 
+# DEPRECATED: This workflow is replaced by test-litellm-matrix.yml which runs
+# the same tests in parallel across 10 jobs for faster CI times.
+# Kept for manual debugging only.
 on:
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:  # Manual trigger only
+  # pull_request:
+  #   branches: [ main ]
 
 jobs:
   test:
@@ -34,7 +38,8 @@ jobs:
         poetry run pip install "google-genai==1.22.0"
         poetry run pip install "google-cloud-aiplatform>=1.38"
         poetry run pip install "fastapi-offline==1.7.3"
-        poetry run pip install "python-multipart==0.0.18"
+        poetry run pip install "python-multipart==0.0.22"
+        poetry run pip install "openapi-core"
     - name: Setup litellm-enterprise as local package
       run: |
         cd enterprise

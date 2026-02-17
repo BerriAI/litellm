@@ -68,19 +68,68 @@ def _convert_detail_to_media_resolution_enum(
 ) -> Optional[Dict[str, str]]:
     if detail == "low":
         return {"level": "MEDIA_RESOLUTION_LOW"}
+    elif detail == "medium":
+        return {"level": "MEDIA_RESOLUTION_MEDIUM"}
     elif detail == "high":
         return {"level": "MEDIA_RESOLUTION_HIGH"}
+    elif detail == "ultra_high":
+        return {"level": "MEDIA_RESOLUTION_ULTRA_HIGH"}
     return None
 
 
-def _process_gemini_image(
-    image_url: str, 
+def _apply_gemini_3_metadata(
+    part: PartType,
+    model: Optional[str],
+    media_resolution_enum: Optional[Dict[str, str]],
+    video_metadata: Optional[Dict[str, Any]],
+) -> PartType:
+    """
+    Apply the unique media_resolution and video_metadata parameters of Gemini 3+    
+    """
+    if model is None:
+        return part
+
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    if not VertexGeminiConfig._is_gemini_3_or_newer(model):
+        return part
+
+    part_dict = dict(part)
+
+    if media_resolution_enum is not None:
+        part_dict["media_resolution"] = media_resolution_enum
+
+    if video_metadata is not None:
+        gemini_video_metadata = {}
+        if "fps" in video_metadata:
+            gemini_video_metadata["fps"] = video_metadata["fps"]
+        if "start_offset" in video_metadata:
+            gemini_video_metadata["startOffset"] = video_metadata["start_offset"]
+        if "end_offset" in video_metadata:
+            gemini_video_metadata["endOffset"] = video_metadata["end_offset"]
+        if gemini_video_metadata:
+            part_dict["video_metadata"] = gemini_video_metadata
+
+    return cast(PartType, part_dict)
+
+
+def _process_gemini_media(
+    image_url: str,
     format: Optional[str] = None,
     media_resolution_enum: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
+    video_metadata: Optional[Dict[str, Any]] = None,
 ) -> PartType:
     """
-    Given an image URL, return the appropriate PartType for Gemini
+    Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
+    By the way, actually video_metadata can only be used with videos; it cannot be used with images, audio, or files. However, I haven't made any special handling because vertex returns a parameter error.
+
+    Args:
+        image_url: The URL or base64 string of the media (image, audio, or video)
+        format: The MIME type of the media
+        media_resolution_enum: Media resolution level (for Gemini 3+)
+        model: The model name (to check version compatibility)
+        video_metadata: Video-specific metadata (fps, start_offset, end_offset)
     """
 
     try:
@@ -102,42 +151,26 @@ def _process_gemini_image(
                 mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            
-            if media_resolution_enum is not None and model is not None:
-                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    part_dict = dict(part)
-                    part_dict["media_resolution"] = media_resolution_enum
-                    return cast(PartType, part_dict)
-            return part
+            return _apply_gemini_3_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         elif (
             "https://" in image_url
             and (image_type := format or _get_image_mime_type_from_url(image_url))
             is not None
         ):
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
+            file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            
-            if media_resolution_enum is not None and model is not None:
-                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    part_dict = dict(part)
-                    part_dict["media_resolution"] = media_resolution_enum
-                    return cast(PartType, part_dict)
-            return part
+            return _apply_gemini_3_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
-            
             part = {"inline_data": cast(BlobType, _blob)}
-            
-            if media_resolution_enum is not None and model is not None:
-                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    part_dict = dict(part)
-                    part_dict["media_resolution"] = media_resolution_enum
-                    return cast(PartType, part_dict)
-            return part
+            return _apply_gemini_3_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
@@ -251,8 +284,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(
-                                image_url=image_url, 
+                            _part = _process_gemini_media(
+                                image_url=image_url,
                                 format=format,
                                 media_resolution_enum=media_resolution_enum,
                                 model=model,
@@ -277,7 +310,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                         )
                                     )
                                 )
-                                _part = _process_gemini_image(
+                                _part = _process_gemini_media(
                                     image_url=openai_image_str,
                                     format=audio_format_modified,
                                     model=model,
@@ -288,16 +321,24 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             file_id = file_element["file"].get("file_id")
                             format = file_element["file"].get("format")
                             file_data = file_element["file"].get("file_data")
+                            detail = file_element["file"].get("detail")
+                            video_metadata = file_element["file"].get("video_metadata")
                             passed_file = file_id or file_data
                             if passed_file is None:
                                 raise Exception(
                                     "Unknown file type. Please pass in a file_id or file_data"
                                 )
+
+                            # Convert detail to media_resolution_enum
+                            media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+
                             try:
-                                _part = _process_gemini_image(
-                                    image_url=passed_file, 
+                                _part = _process_gemini_media(
+                                    image_url=passed_file,
                                     format=format,
                                     model=model,
+                                    media_resolution_enum=media_resolution_enum,
+                                    video_metadata=video_metadata,
                                 )
                                 _parts.append(_part)
                             except Exception:
@@ -383,7 +424,39 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     and isinstance(_message_content, str)
                 ):
                     assistant_text = _message_content
-                    assistant_content.append(PartType(text=assistant_text))  # type: ignore
+                    # Check if message has thought_signatures in provider_specific_fields
+                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                    thought_signatures = None
+                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
+                        thought_signatures = provider_specific_fields.get("thought_signatures")
+                    
+                    # If we have thought signatures, add them to the part
+                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                        # Use the first signature for the text part (Gemini expects one signature per part)
+                        assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
+                    else:
+                        assistant_content.append(PartType(text=assistant_text))  # type: ignore
+
+                ## HANDLE ASSISTANT IMAGES FIELD
+                # Process images field if present (for generated images from assistant)
+                assistant_images = assistant_msg.get("images")
+                if assistant_images is not None and isinstance(assistant_images, list):
+                    for image_item in assistant_images:
+                        if isinstance(image_item, dict):
+                            image_url_obj = image_item.get("image_url")
+                            if isinstance(image_url_obj, dict):
+                                assistant_image_url = image_url_obj.get("url")
+                                format = image_url_obj.get("format")
+                                detail = image_url_obj.get("detail")
+                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                                if assistant_image_url:
+                                    _part = _process_gemini_media(
+                                        image_url=assistant_image_url,
+                                        format=format,
+                                        media_resolution_enum=media_resolution_enum,
+                                        model=model,
+                                    )
+                                    assistant_content.append(_part)
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
@@ -454,6 +527,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         return contents
     except Exception as e:
         raise e
+
+
+def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
+    """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
+    extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+    if extra_body is not None:
+        data_dict: dict = data  # type: ignore[assignment]
+        for k, v in extra_body.items():
+            if k in data_dict and isinstance(data_dict[k], dict) and isinstance(v, dict):
+                data_dict[k].update(v)
+            else:
+                data_dict[k] = v
 
 
 def _transform_request_body(
@@ -539,13 +624,14 @@ def _transform_request_body(
             data["toolConfig"] = tool_choice
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
-        if generation_config is not None:
+        if generation_config is not None and len(generation_config) > 0:
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
+        _pop_and_merge_extra_body(data, optional_params)
     except Exception as e:
         raise e
 

@@ -3,9 +3,11 @@ import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
 
-# LiteLLM Content Filter
+# LiteLLM Content Filter (Built-in Guardrails)
 
 **Built-in guardrail** for detecting and filtering sensitive information using regex patterns and keyword matching. No external dependencies required.
+
+**When to use?** Good for cases which do not require an ML model to detect sensitive information.
 
 ## Overview
 
@@ -56,6 +58,44 @@ Test examples:
 
 ### Step 1: Define Guardrails in config.yaml
 
+<Tabs>
+<TabItem label="Harmful Content Detection" value="harmful">
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "harmful-content-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Enable harmful content categories
+      categories:
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "harmful_illegal_weapons"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+```
+
+</TabItem>
+
+<TabItem label="PII Protection" value="pii">
+
 ```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: gpt-3.5-turbo
@@ -85,6 +125,48 @@ guardrails:
           action: "BLOCK"
           description: "Sensitive internal information"
 ```
+
+</TabItem>
+
+<TabItem label="Combined" value="combined">
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "comprehensive-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Harmful content categories
+      categories:
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"
+      
+      # PII patterns
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "us_ssn"
+          action: "BLOCK"
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"
+      
+      # Custom keywords
+      blocked_words:
+        - keyword: "confidential"
+          action: "BLOCK"
+```
+
+</TabItem>
+</Tabs>
 
 ### Step 2: Start LiteLLM Gateway
 
@@ -175,7 +257,7 @@ Contact me at [EMAIL_REDACTED]
 | `amex` | American Express cards | `3782-822463-10005` |
 | `aws_access_key` | AWS access keys | `AKIAIOSFODNN7EXAMPLE` |
 | `aws_secret_key` | AWS secret keys | `wJalrXUtnFEMI/K7MDENG/bPxRfi...` |
-| `github_token` | GitHub tokens | `ghp_16C7e42F292c6912E7710c838347Ae178B4a` |
+| `github_token` | GitHub tokens | `example-github-token-123` |
 
 ### Using Prebuilt Patterns
 
@@ -310,6 +392,85 @@ for chunk in response:
     # Emails automatically masked in real-time
 ```
 
+## Image Content Filtering
+
+Content filter can analyze images by generating descriptions and applying filters to the text descriptions.
+
+:::warning
+
+This can introduce significant latency to the request - depending on the speed of the vision-capable model.
+
+This is because, each request containing images will be sent to the vision-capable model to generate a description.
+
+:::
+
+### Configuration
+
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-4-vision
+    litellm_params:
+      model: openai/gpt-4-vision-preview
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "image-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      image_model: "gpt-4-vision"  # value is `model_name` of the vision-capable model
+      
+      # Apply same filters to image descriptions
+      categories:
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+      
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"
+```
+
+### How It Works
+
+1. Image is sent to the vision model to generate a text description
+2. Content filters are applied to the description
+3. If harmful content is detected, request is blocked with context about the image
+
+**Example:**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4-vision",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+        ]
+    }],
+    extra_body={"guardrails": ["image-filter"]}
+)
+```
+
+If the image description contains filtered content, you'll get:
+
+```json
+{
+  "error": "Content blocked: harmful_violence category keyword 'weapon' detected (severity: high) (Image description): The image shows..."
+}
+```
+
 ## Customizing Redaction Tags
 
 When using the `MASK` action, sensitive content is replaced with redaction tags. You can customize how these tags appear.
@@ -363,9 +524,171 @@ Output: "Email ***EMAIL***, SSN ***US_SSN***, ***REDACTED*** data"
 - Pattern names are automatically uppercased (e.g., `email` → `EMAIL`)
 - `keyword_redaction_tag` is a fixed string (no placeholders)
 
+## Content Categories
+
+Prebuilt categories use **keyword matching** to detect harmful content, bias, and inappropriate advice. Keywords are matched with word boundaries (single words) or as substrings (multi-word phrases), case-insensitive.
+
+### Available Categories
+
+| Category | Description |
+|----------|-------------|
+| **Harmful Content** | |
+| `harmful_self_harm` | Self-harm, suicide, eating disorders |
+| `harmful_violence` | Violence, criminal planning, attacks |
+| `harmful_illegal_weapons` | Illegal weapons, explosives, dangerous materials |
+| **Bias Detection** | |
+| `bias_gender` | Gender-based discrimination, stereotypes |
+| `bias_sexual_orientation` | LGBTQ+ discrimination, homophobia, transphobia |
+| `bias_racial` | Racial/ethnic discrimination, stereotypes |
+| `bias_religious` | Religious discrimination, stereotypes |
+| **Denied Advice** | |
+| `denied_financial_advice` | Personalized financial advice, investment recommendations |
+| `denied_medical_advice` | Medical advice, diagnosis, treatment recommendations |
+| `denied_legal_advice` | Legal advice, representation, legal strategy |
+
+:::info Bias Detection Considerations
+
+Bias detection is **complex and context-dependent**. Rule-based systems catch explicit discriminatory language but may generate false positives on legitimate discussions. Start with **high severity thresholds** and test thoroughly. For mission-critical bias detection, consider combining with AI-based guardrails (e.g., HiddenLayer, Lakera).
+
+:::
+
+### Configuration
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "content-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      categories:
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"  # Blocks medium+ severity
+        
+        - category: "bias_gender"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"  # Only explicit discrimination
+        
+        - category: "denied_financial_advice"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+```
+
+**Severity Thresholds:**
+- `"high"` - Only blocks high severity items
+- `"medium"` - Blocks medium and high severity (default)
+- `"low"` - Blocks all severity levels
+
+### Custom Category Files
+
+Override default categories with custom keyword lists:
+
+```yaml showLineNumbers title="config.yaml"
+categories:
+  - category: "harmful_self_harm"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+    category_file: "/path/to/custom.yaml"
+```
+
+```yaml showLineNumbers title="custom.yaml"
+category_name: "harmful_self_harm"
+description: "Custom self-harm detection"
+default_action: "BLOCK"
+
+keywords:
+  - keyword: "suicide"
+    severity: "high"
+  - keyword: "harm myself"
+    severity: "high"
+
+exceptions:
+  - "suicide prevention"
+  - "mental health"
+```
+
 ## Use Cases
 
-### 1. PII Protection
+### 1. Harmful Content Detection
+
+Block or detect requests containing harmful, illegal, or dangerous content:
+
+```yaml
+categories:
+  - category: "harmful_self_harm"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+  - category: "harmful_violence"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "high"
+  - category: "harmful_illegal_weapons"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+```
+
+### 2. Bias and Discrimination Detection
+
+Detect and block biased, discriminatory, or hateful content across multiple dimensions:
+
+```yaml
+categories:
+  # Gender-based discrimination
+  - category: "bias_gender"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+  
+  # LGBTQ+ discrimination
+  - category: "bias_sexual_orientation"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+  
+  # Racial/ethnic discrimination
+  - category: "bias_racial"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "high"  # Only explicit to reduce false positives
+  
+  # Religious discrimination
+  - category: "bias_religious"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+```
+
+**Sensitivity Tuning:**
+
+For bias detection, severity thresholds are critical to balance safety and legitimate discourse:
+
+```yaml
+# Conservative (low false positives, may miss subtle bias)
+categories:
+  - category: "bias_racial"
+    severity_threshold: "high"  # Only blocks explicit discriminatory language
+
+# Balanced (recommended)
+categories:
+  - category: "bias_gender"
+    severity_threshold: "medium"  # Blocks stereotypes and explicit discrimination
+
+# Strict (high safety, may have more false positives)
+categories:
+  - category: "bias_sexual_orientation"
+    severity_threshold: "low"  # Blocks all potentially problematic content
+```
+
+
+
+### 3. PII Protection
 Block or mask personally identifiable information before sending to LLMs:
 
 ```yaml
@@ -409,10 +732,64 @@ For large lists of sensitive terms, use a file:
 blocked_words_file: "/path/to/sensitive_terms.yaml"
 ```
 
-### 4. Compliance
+### 4. Safe AI for Consumer Applications
+
+Combining harmful content and bias detection for consumer-facing AI:
+
+```yaml
+guardrails:
+  - guardrail_name: "safe-consumer-ai"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      categories:
+        # Harmful content - strict
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        # Bias detection - balanced
+        - category: "bias_gender"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"  # Avoid blocking legitimate gender discussions
+        
+        - category: "bias_sexual_orientation"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "bias_racial"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"  # Education and news may discuss race
+```
+
+**Perfect for:**
+- Chatbots and virtual assistants
+- Educational AI tools
+- Customer service AI
+- Content generation platforms
+- Public-facing AI applications
+
+### 5. Compliance
 Ensure regulatory compliance by filtering sensitive data types:
 
 ```yaml
+# Categories checked first (high priority)
+# Category keywords are matched first
+categories:
+  - category: "harmful_self_harm"
+    severity_threshold: "high"
+
+# Then regex patterns
 patterns:
   - pattern_type: "prebuilt"
     pattern_name: "visa"
@@ -422,34 +799,4 @@ patterns:
     action: "BLOCK"
 ```
 
-## Troubleshooting
-
-### Pattern Not Matching
-
-**Issue:** Regex pattern isn't detecting expected content
-
-**Solution:** Test your regex pattern:
-```python
-import re
-pattern = r'\b[A-Z]{3}-\d{4}\b'
-test_text = "Employee ID: ABC-1234"
-print(re.search(pattern, test_text))  # Should match
-```
-
-### Multiple Pattern Matches
-
-**Issue:** Text contains multiple sensitive patterns
-
-**Solution:** First matching pattern/keyword is processed. Order patterns by priority:
-```yaml
-patterns:
-  # Most critical first
-  - pattern_type: "prebuilt"
-    pattern_name: "us_ssn"
-    action: "BLOCK"
-  # Less critical
-  - pattern_type: "prebuilt"
-    pattern_name: "email"
-    action: "MASK"
-```
 

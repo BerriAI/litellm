@@ -68,13 +68,6 @@ You can:
 
 **Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
 
-> **Prerequisite:**
-> To enable team member rate limits, you must set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` before starting the proxy server. Without this, team member rate limits will not be enforced.
-
-👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
-
-:::
-
 
 #### **Add budgets to teams**
 ```shell 
@@ -545,6 +538,26 @@ You can set:
 - max parallel requests
 - rpm / tpm limits per model for a given key
 
+### TPM Rate Limit Type (Input/Output/Total)
+
+By default, TPM (tokens per minute) rate limits count **total tokens** (input + output). You can configure this to count only input tokens or only output tokens instead.
+
+Set `token_rate_limit_type` in your `config.yaml`:
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  token_rate_limit_type: "output"  # Options: "input", "output", "total" (default)
+```
+
+| Value | Description |
+|-------|-------------|
+| `total` | Count total tokens (prompt + completion). **Default behavior.** |
+| `input` | Count only prompt/input tokens |
+| `output` | Count only completion/output tokens |
+
+This setting applies globally to all TPM rate limit checks (keys, users, teams, etc.).
+
 
 <Tabs>
 <TabItem value="per-team" label="Per Team">
@@ -802,12 +815,10 @@ Expected Response:
 }
 ```
 
-### [BETA] Multi-instance rate limiting
+### Multi-instance rate limiting
 
-Enable multi-instance rate limiting with the env var `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"`
 
 **Important Notes:**
-- Setting `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"` is required for team member rate limits to function, not just for multi-instance scenarios.
 - **Rate limits do not apply to proxy admin users.** 
 - When testing rate limits, use internal user roles (non-admin) to ensure limits are enforced as expected.
 

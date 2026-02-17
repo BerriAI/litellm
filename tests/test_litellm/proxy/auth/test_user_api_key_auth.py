@@ -41,6 +41,12 @@ def test_get_api_key():
         ("Basic sk-12345678", "sk-12345678", "Basic sk-12345678"),
         ("bearer sk-12345678", "sk-12345678", "bearer sk-12345678"),
         ("sk-12345678", "sk-12345678", "sk-12345678"),
+        # AWS Signature V4 format (LangChain AWS SDK)
+        (
+            "AWS4-HMAC-SHA256 Credential=Bearer sk-12345678/20260210/us-east-1/bedrock/aws4_request, SignedHeaders=host, Signature=abc123",
+            "sk-12345678",
+            "AWS4-HMAC-SHA256 Credential=Bearer sk-12345678/20260210/us-east-1/bedrock/aws4_request, SignedHeaders=host, Signature=abc123",
+        ),
     ],
 )
 def test_get_api_key_with_custom_litellm_key_header(
@@ -243,10 +249,10 @@ async def test_proxy_admin_expired_key_from_cache():
     Regression test for issue where PROXY_ADMIN keys from cache skipped expiration check.
     """
     from datetime import datetime, timedelta, timezone
-    
+
     from fastapi import Request
     from starlette.datastructures import URL
-    
+
     from litellm.proxy._types import (
         LitellmUserRoles,
         ProxyErrorTypes,
@@ -255,7 +261,7 @@ async def test_proxy_admin_expired_key_from_cache():
     )
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
-    
+
     # Create an expired PROXY_ADMIN key
     api_key = "sk-test-proxy-admin-key"
     hashed_key = hash_token(api_key)
@@ -278,8 +284,8 @@ async def test_proxy_admin_expired_key_from_cache():
     mock_proxy_logging_obj.internal_usage_cache = MagicMock()
     mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
-    # Mock post_call_failure_hook as async function
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    # Mock post_call_failure_hook as async function returning None (no transformation)
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     
     # Mock prisma_client
     mock_prisma_client = MagicMock()
@@ -338,6 +344,17 @@ async def test_proxy_admin_expired_key_from_cache():
                 f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"
             )
             
+            # Verify that the param field does NOT leak the full API key (Issue #18731)
+            # The param should be abbreviated like "sk-...XXXX" not the full plaintext key
+            assert exc_info.value.param is not None, "Exception should have 'param' attribute"
+            assert exc_info.value.param != api_key, (
+                f"SECURITY: Full API key should NOT be in param field! "
+                f"Got: {exc_info.value.param}, Expected abbreviated format like 'sk-...XXXX'"
+            )
+            assert exc_info.value.param.startswith("sk-..."), (
+                f"Param should be abbreviated to 'sk-...XXXX' format. Got: {exc_info.value.param}"
+            )
+            
             # Verify that cache deletion was called
             mock_delete_cache.assert_called_once()
             call_args = mock_delete_cache.call_args
@@ -347,3 +364,135 @@ async def test_proxy_admin_expired_key_from_cache():
         finally:
             # Clean up - restore original values if needed
             pass
+
+
+
+@pytest.mark.asyncio
+async def test_return_user_api_key_auth_obj_user_spend_and_budget():
+    """
+    Test that _return_user_api_key_auth_obj correctly sets user_spend and user_max_budget
+    from user_obj attributes.
+    """
+    from datetime import datetime
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    
+    user_obj = type(
+        "LiteLLM_UserTable",
+        (),
+        {
+            "tpm_limit": 1000,
+            "rpm_limit": 100,
+            "user_email": "test@example.com",
+            "spend": 250.0,
+            "max_budget": 1000.0,
+            "user_role": "internal_user",
+        },
+    )
+    
+    api_key = "sk-test-key"
+    valid_token_dict = {
+        "user_id": "test-user",
+        "org_id": "test-org",
+    }
+    route = "/chat/completions"
+    start_time = datetime.now()
+    
+    mock_service_logger = MagicMock()
+    mock_service_logger.async_service_success_hook = AsyncMock()
+    
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_service_logger_obj",
+        new=mock_service_logger,
+    ):
+        result = await _return_user_api_key_auth_obj(
+            user_obj=user_obj,
+            api_key=api_key,
+            parent_otel_span=None,
+            valid_token_dict=valid_token_dict,
+            route=route,
+            start_time=start_time,
+            user_role=None,
+        )
+    
+    assert isinstance(result, UserAPIKeyAuth)
+    assert result.user_spend == 250.0
+    assert result.user_max_budget == 1000.0
+    assert result.user_tpm_limit == 1000
+    assert result.user_rpm_limit == 100
+    assert result.user_email == "test@example.com"
+
+
+def test_proxy_admin_jwt_auth_includes_identity_fields():
+    """
+    Test that the proxy admin early-return path in JWT auth populates
+    user_id, team_id, team_alias, team_metadata, org_id, and end_user_id.
+
+    Regression test: previously the is_proxy_admin branch only set user_role
+    and parent_otel_span, discarding all identity fields resolved from the JWT.
+    This caused blank Team Name and Internal User in Request Logs UI.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, UserAPIKeyAuth
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        team_alias="my-team",
+        metadata={"tags": ["prod"], "env": "production"},
+    )
+
+    # Simulate the proxy admin early-return path (user_api_key_auth.py ~line 586)
+    result = UserAPIKeyAuth(
+        api_key=None,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="user-abc",
+        team_id="team-123",
+        team_alias=(
+            team_object.team_alias if team_object is not None else None
+        ),
+        team_metadata=team_object.metadata if team_object is not None else None,
+        org_id="org-456",
+        end_user_id="end-user-789",
+        parent_otel_span=None,
+    )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert result.user_id == "user-abc"
+    assert result.team_id == "team-123"
+    assert result.team_alias == "my-team"
+    assert result.team_metadata == {"tags": ["prod"], "env": "production"}
+    assert result.org_id == "org-456"
+    assert result.end_user_id == "end-user-789"
+    assert result.api_key is None
+
+
+def test_proxy_admin_jwt_auth_handles_no_team_object():
+    """
+    Test that the proxy admin early-return path works correctly when
+    team_object is None (user has admin role but no team association).
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    team_object = None
+
+    result = UserAPIKeyAuth(
+        api_key=None,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        team_id=None,
+        team_alias=(
+            team_object.team_alias if team_object is not None else None
+        ),
+        team_metadata=team_object.metadata if team_object is not None else None,
+        org_id=None,
+        end_user_id=None,
+        parent_otel_span=None,
+    )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert result.user_id == "admin-user"
+    assert result.team_id is None
+    assert result.team_alias is None
+    assert result.team_metadata is None
+    assert result.org_id is None
+    assert result.end_user_id is None

@@ -23,26 +23,75 @@ From v1.76.0, SSO is now Free for up to 5 users.
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
 
-1. Add Okta credentials to your .env
+#### Step 1: Create an OIDC Application in Okta
+
+In your Okta Admin Console, create a new **OIDC Web Application**. See [Okta's guide on creating OIDC app integrations](https://help.okta.com/en-us/content/topics/apps/apps_app_integration_wizard_oidc.htm) for detailed instructions.
+
+When configuring the application:
+- **Sign-in redirect URI**: `https://<your-proxy-base-url>/sso/callback`
+- **Sign-out redirect URI** (optional): `https://<your-proxy-base-url>`
+
+<Image img={require('../../img/okta_redirect_uri.png')} />
+
+After creating the app, copy your **Client ID** and **Client Secret** from the application's General tab:
+
+<Image img={require('../../img/okta_client_credentials.png')} />
+
+#### Step 2: Assign Users to the Application
+
+Ensure users are assigned to the app in the **Assignments** tab. If Federation Broker Mode is enabled, you may need to disable it to assign users manually.
+
+#### Step 3: Configure Authorization Server Access Policy
+
+:::warning Important
+This step is required. Without an Access Policy for your app, users will get a `no_matching_policy` error when attempting to log in.
+:::
+
+1. Go to **Security** → **API**
+
+<Image img={require('../../img/okta_security_api.png')} />
+
+2. Select the **default** authorization server (or your custom one)
+
+<Image img={require('../../img/okta_authorization_server.png')} />
+
+3. Click on **Access Policies** tab, create a new policy assigned to your LiteLLM app
+4. Add a rule that allows the **Authorization Code** grant type
+
+<Image img={require('../../img/okta_access_policies.png')} />
+
+See [Okta's Access Policy documentation](https://help.okta.com/en-us/content/topics/security/api-access-management/access-policies.htm) for more details.
+
+#### Step 4: Configure LiteLLM Environment Variables
 
 ```bash
-GENERIC_CLIENT_ID = "<your-okta-client-id>"
-GENERIC_CLIENT_SECRET = "<your-okta-client-secret>" 
-GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/authorize
-GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
-GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
-GENERIC_CLIENT_STATE = "random-string" # [OPTIONAL] REQUIRED BY OKTA, if not set random state value is generated
-GENERIC_SSO_HEADERS = "Content-Type=application/json, X-Custom-Header=custom-value" # [OPTIONAL] Comma-separated list of additional headers to add to the request - e.g. Content-Type=application/json, etc.
+GENERIC_CLIENT_ID="<your-client-id>"
+GENERIC_CLIENT_SECRET="<your-client-secret>"
+GENERIC_AUTHORIZATION_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/authorize"
+GENERIC_TOKEN_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/token"
+GENERIC_USERINFO_ENDPOINT="https://<your-okta-domain>/oauth2/default/v1/userinfo"
+GENERIC_CLIENT_STATE="random-string"
+PROXY_BASE_URL="https://<your-proxy-base-url>"
 ```
 
-You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
+:::tip
+You can find all OAuth endpoints at `https://<your-okta-domain>/.well-known/openid-configuration`
+:::
 
-2. Add proxy url as callback_url on Okta
+#### Step 5: Test the SSO Flow
 
-On Okta, add the 'callback_url' as `<proxy_base_url>/sso/callback`
+1. Start your LiteLLM proxy
+2. Navigate to `https://<your-proxy-base-url>/ui`
+3. Click the SSO login button
+4. Authenticate with Okta and verify you're redirected back to LiteLLM
 
+#### Troubleshooting
 
-<Image img={require('../../img/okta_callback_url.png')} />
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `redirect_uri` error | Redirect URI not configured | Add `<proxy_base_url>/sso/callback` to Sign-in redirect URIs in Okta |
+| `access_denied` | User not assigned to app | Assign the user in the Assignments tab |
+| `no_matching_policy` | Missing Access Policy | Create an Access Policy in the Authorization Server (see Step 3) |
 
 </TabItem>
 <TabItem value="google" label="Google SSO">
@@ -73,8 +122,21 @@ GOOGLE_CLIENT_SECRET=
 ```shell
 MICROSOFT_CLIENT_ID="84583a4d-"
 MICROSOFT_CLIENT_SECRET="nbk8Q~"
-MICROSOFT_TENANT="5a39737
+MICROSOFT_TENANT="5a39737"
 ```
+
+**Optional: Custom Microsoft SSO Endpoints**
+
+If you need to use custom Microsoft SSO endpoints (e.g., for a custom identity provider, sovereign cloud, or proxy), you can override the default endpoints:
+
+```shell
+MICROSOFT_AUTHORIZATION_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/token"
+MICROSOFT_USERINFO_ENDPOINT="https://your-custom-graph-api.com/v1.0/me"
+```
+
+If these are not set, the default Microsoft endpoints are used based on your tenant.
+
 - Set Redirect URI on your App Registration on https://portal.azure.com/
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
@@ -97,6 +159,42 @@ To set up app roles:
 3. Use one of the supported role names above (e.g., `proxy_admin`)
 4. Assign users to these roles in your Enterprise Application
 5. When users sign in via SSO, LiteLLM will automatically assign them the corresponding role
+
+**Advanced: Custom User Attribute Mapping**
+
+For certain Microsoft Entra ID configurations, you may need to override the default user attribute field names. This is useful when your organization uses custom claims or non-standard attribute names in the SSO response.
+
+**Step 1: Debug SSO Response**
+
+First, inspect the JWT fields returned by your Microsoft SSO provider using the [SSO Debug Route](#debugging-sso-jwt-fields).
+
+1. Add `/sso/debug/callback` as a redirect URL in your Azure App Registration
+2. Navigate to `https://<proxy_base_url>/sso/debug/login`
+3. Complete the SSO flow to see the returned user attributes
+
+**Step 2: Identify Field Attribute Names**
+
+From the debug response, identify the field names used for email, display name, user ID, first name, and last name.
+
+**Step 3: Set Environment Variables**
+
+Override the default attribute names by setting these environment variables:
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `MICROSOFT_USER_EMAIL_ATTRIBUTE` | Field name for user email | `userPrincipalName` |
+| `MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE` | Field name for display name | `displayName` |
+| `MICROSOFT_USER_ID_ATTRIBUTE` | Field name for user ID | `id` |
+| `MICROSOFT_USER_FIRST_NAME_ATTRIBUTE` | Field name for first name | `givenName` |
+| `MICROSOFT_USER_LAST_NAME_ATTRIBUTE` | Field name for last name | `surname` |
+
+**Step 4: Restart the Proxy**
+
+After setting the environment variables, restart the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
 
 </TabItem>
 
@@ -125,6 +223,7 @@ GENERIC_USER_FIRST_NAME_ATTRIBUTE = "first_name"
 GENERIC_USER_LAST_NAME_ATTRIBUTE = "last_name"
 GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
 GENERIC_USER_PROVIDER_ATTRIBUTE = "provider"
+GENERIC_USER_EXTRA_ATTRIBUTES = "department,employee_id,manager" # comma-separated list of additional fields to extract from SSO response
 GENERIC_CLIENT_STATE = "some-state" # if the provider needs a state parameter
 GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id is not in the body
 GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
@@ -140,6 +239,40 @@ Use `GENERIC_USER_ROLE_ATTRIBUTE` to specify which attribute in the SSO token co
 - `internal_user_view_only` - Can login, view their own keys, view their own spend
 
 Nested attribute paths are supported (e.g., `claims.role` or `attributes.litellm_role`).
+
+**Capturing Additional SSO Fields**
+
+Use `GENERIC_USER_EXTRA_ATTRIBUTES` to extract additional fields from the SSO provider response beyond the standard user attributes (id, email, name, etc.). This is useful when you need to access custom organization-specific data (e.g., department, employee ID, groups) in your [custom SSO handler](./custom_sso.md).
+
+```shell
+# Comma-separated list of field names to extract
+GENERIC_USER_EXTRA_ATTRIBUTES="department,employee_id,manager,groups"
+```
+
+**Accessing Extra Fields in Custom SSO Handler:**
+
+```python
+from litellm.proxy.management_endpoints.types import CustomOpenID
+
+async def custom_sso_handler(userIDPInfo: CustomOpenID):
+    # Access the extra fields
+    extra_fields = getattr(userIDPInfo, 'extra_fields', None) or {}
+    
+    user_department = extra_fields.get("department")
+    employee_id = extra_fields.get("employee_id")
+    user_groups = extra_fields.get("groups", [])
+    
+    # Use these fields for custom logic (e.g., team assignment, access control)
+    # ...
+```
+
+**Nested Field Paths:**
+
+Dot notation is supported for nested fields:
+
+```shell
+GENERIC_USER_EXTRA_ATTRIBUTES="org_info.department,org_info.cost_center,metadata.employee_type"
+```
 
 - Set Redirect URI, if your provider requires it
     - Set a redirect url = `<your proxy base url>/sso/callback`

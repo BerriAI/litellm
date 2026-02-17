@@ -145,16 +145,19 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm.proxy.proxy_server import open_telemetry_logger
+                _otel_logger_to_use: Optional[OpenTelemetry] = None
+                if isinstance(callback, OpenTelemetry):
+                    _otel_logger_to_use = callback
+                else:
+                    from litellm.proxy.proxy_server import open_telemetry_logger
 
-                await self.init_otel_logger_if_none()
+                    if open_telemetry_logger is not None and isinstance(
+                        open_telemetry_logger, OpenTelemetry
+                    ):
+                        _otel_logger_to_use = open_telemetry_logger
 
-                if (
-                    parent_otel_span is not None
-                    and open_telemetry_logger is not None
-                    and isinstance(open_telemetry_logger, OpenTelemetry)
-                ):
-                    await self.otel_logger.async_service_success_hook(
+                if _otel_logger_to_use is not None and parent_otel_span is not None:
+                    await _otel_logger_to_use.async_service_success_hook(
                         payload=payload,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
@@ -253,20 +256,24 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm.proxy.proxy_server import open_telemetry_logger
+                _otel_logger_to_use: Optional[OpenTelemetry] = None
+                if isinstance(callback, OpenTelemetry):
+                    _otel_logger_to_use = callback
+                else:
+                    from litellm.proxy.proxy_server import open_telemetry_logger
 
-                await self.init_otel_logger_if_none()
+                    if open_telemetry_logger is not None and isinstance(
+                        open_telemetry_logger, OpenTelemetry
+                    ):
+                        _otel_logger_to_use = open_telemetry_logger
 
                 if not isinstance(error, str):
                     error = str(error)
 
-                if (
-                    parent_otel_span is not None
-                    and open_telemetry_logger is not None
-                    and isinstance(open_telemetry_logger, OpenTelemetry)
-                ):
-                    await self.otel_logger.async_service_success_hook(
+                if _otel_logger_to_use is not None and parent_otel_span is not None:
+                    await _otel_logger_to_use.async_service_failure_hook(
                         payload=payload,
+                        error=error,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
@@ -305,10 +312,12 @@ class ServiceLogging(CustomLogger):
                         _duration, type(_duration)
                     )
                 )  # invalid _duration value
+            # Batch polling callbacks (check_batch_cost) don't include call_type in kwargs.
+            # Use .get() to avoid KeyError.
             await self.async_service_success_hook(
                 service=ServiceTypes.LITELLM,
                 duration=_duration,
-                call_type=kwargs["call_type"],
+                call_type=kwargs.get("call_type", "unknown")
             )
         except Exception as e:
             raise e

@@ -87,11 +87,12 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "stop",
             "logprobs",
             "frequency_penalty",
+            "presence_penalty",
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
         ]
-        if supports_reasoning(model):
+        if supports_reasoning(model, custom_llm_provider="gemini"):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
         if self.is_model_gemini_audio_model(model):

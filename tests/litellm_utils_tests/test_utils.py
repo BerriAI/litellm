@@ -37,6 +37,7 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
 )
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -972,11 +973,11 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
             litellm_logging_obj._get_trace_id(service_name="langfuse")
             == langfuse_trace_id
         )
-    ## if existing_trace_id exists
+    ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
     else:
         assert (
             litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_call_id
+            == litellm_logging_obj.litellm_trace_id
         )
 
 
@@ -1064,6 +1065,7 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         ("vertex_ai/gemini-1.5-pro", True),
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
+        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
         ("gpt-3.5-turbo", False),
         ("groq/llama-3.3-70b-versatile", False),
     ],
@@ -1383,7 +1385,7 @@ def test_models_by_provider():
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys()
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(provider)
 
 
 @pytest.mark.parametrize(

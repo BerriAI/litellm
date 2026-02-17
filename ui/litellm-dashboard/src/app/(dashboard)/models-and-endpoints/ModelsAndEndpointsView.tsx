@@ -1,52 +1,36 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { Col, Grid, Text } from "@tremor/react";
-import React, { useEffect, useRef, useState } from "react";
-
-import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
-
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
-import { Team } from "@/components/key_team_helpers/key_list";
-import CredentialsPanel from "@/components/model_add/credentials";
-import {
-  adminGlobalActivityExceptions,
-  adminGlobalActivityExceptionsPerDeployment,
-  allEndUsersCall,
-  getCallbacksCall,
-  modelCostMap,
-  modelExceptionsCall,
-  modelMetricsCall,
-  modelMetricsSlowResponsesCall,
-  modelSettingsCall,
-  setCallbacksCall,
-  streamingModelMetricsCall,
-} from "@/components/networking";
-import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
-import { getDisplayModelName } from "@/components/view_model/model_name_display";
-import { RefreshIcon } from "@heroicons/react/outline";
-import { DateRangePickerValue, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
-import type { UploadProps } from "antd";
-import { Form, Typography } from "antd";
-import AddModelTab from "../../../components/add_model/add_model_tab";
-import ModelInfoView from "../../../components/model_info_view";
-import TeamInfoView from "../../../components/team/team_info";
-
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
-import ModelAnalyticsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/ModelAnalyticsTab";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
+import { Team } from "@/components/key_team_helpers/key_list";
+import CredentialsPanel from "@/components/model_add/credentials";
+import { getCallbacksCall, setCallbacksCall } from "@/components/networking";
+import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
+import { getDisplayModelName } from "@/components/view_model/model_name_display";
+import { transformModelData } from "./utils/modelDataTransformer";
+import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import { RefreshIcon } from "@heroicons/react/outline";
+import { useQueryClient } from "@tanstack/react-query";
+import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
+import type { UploadProps } from "antd";
+import { Form, Typography } from "antd";
+import { PlusCircleOutlined } from "@ant-design/icons";
+import React, { useEffect, useMemo, useState } from "react";
+import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
+import ModelInfoView from "../../../components/model_info_view";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
 import PassThroughSettings from "../../../components/pass_through_settings";
+import TeamInfoView from "../../../components/team/TeamInfo";
+import useAuthorized from "../hooks/useAuthorized";
 
 interface ModelDashboardProps {
-  accessToken: string | null;
   token: string | null;
-  userRole: string | null;
-  userID: string | null;
   modelData: any;
   keys: any[] | null;
   setModelData: any;
@@ -62,123 +46,84 @@ interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
 }
 
-interface GlobalExceptionActivityData {
-  sum_num_rate_limit_exceptions: number;
-  daily_data: { date: string; num_rate_limit_exceptions: number }[];
-}
-
-//["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
-
-interface ProviderFields {
-  field_name: string;
-  field_type: string;
-  field_description: string;
-  field_value: string;
-}
-
-interface ProviderSettings {
-  name: string;
-  fields: ProviderFields[];
-}
-
-const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
-  accessToken,
-  token,
-  userRole,
-  userID,
-  modelData = { data: [] },
-  keys,
-  setModelData,
-  premiumUser,
-  teams,
-}) => {
+const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
+  const { accessToken, token, userRole, userId: userID } = useAuthorized();
   const [addModelForm] = Form.useForm();
-  const [modelMap, setModelMap] = useState<any>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
-
-  const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
-
-  const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>([]);
+  const [providerModels, setProviderModels] = useState<Array<string>>([]);
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
-  const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
-
-  const [selectedModel, setSelectedModel] = useState<any>(null);
-  const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
-  const [availableModelAccessGroups, setAvailableModelAccessGroups] = useState<Array<string>>([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
-  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
-  const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>([]);
-  const [streamingModelMetrics, setStreamingModelMetrics] = useState<any[]>([]);
-  const [streamingModelMetricsCategories, setStreamingModelMetricsCategories] = useState<any[]>([]);
-  const [modelExceptions, setModelExceptions] = useState<any[]>([]);
-  const [allExceptions, setAllExceptions] = useState<any[]>([]);
-  const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-    to: new Date(),
-  });
 
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
   const [globalRetryPolicy, setGlobalRetryPolicy] = useState<GlobalRetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
-
-  const [globalExceptionData, setGlobalExceptionData] = useState<GlobalExceptionActivityData>(
-    {} as GlobalExceptionActivityData,
-  );
-  const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] = useState<any[]>([]);
-
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
-  const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null);
-  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
-
-  const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
-
-  // Model Group Alias state
   const [modelGroupAlias, setModelGroupAlias] = useState<{ [key: string]: string }>({});
-
-  // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
-
-  // Add these state variables
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-  const [editModel, setEditModel] = useState<boolean>(false);
-
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
-
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
 
   const queryClient = useQueryClient();
-  const {
-    data: modelDataResponse,
-    isLoading: isLoadingModels,
-    refetch: refetchModels,
-  } = useModelsInfo(accessToken, userID, userRole);
-  const { data: credentialsResponse } = useCredentials(accessToken);
+  const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
+  const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
+  const { data: credentialsResponse, isLoading: isLoadingCredentials } = useCredentials();
   const credentialsList = credentialsResponse?.credentials || [];
-  const { data: uiSettings } = useUISettings(accessToken || "");
+  const { data: uiSettings, isLoading: isLoadingUISettings } = useUISettings();
 
-  const isInternalUser = userRole && internalUserRoles.includes(userRole);
-  const shouldHideAddModelTab = isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
+  const availableModelGroups = useMemo(() => {
+    if (!modelDataResponse?.data) return [];
+    const allModelGroups = new Set<string>();
+    for (const model of modelDataResponse.data) {
+      allModelGroups.add(model.model_name);
+    }
+    return Array.from(allModelGroups).sort();
+  }, [modelDataResponse?.data]);
 
-  const setProviderModelsFn = (provider: Providers) => {
-    const _providerModels = getProviderModels(provider, modelMap);
-    setProviderModels(_providerModels);
+  const availableModelAccessGroups = useMemo(() => {
+    if (!modelDataResponse?.data) return [];
+    const allModelAccessGroups = new Set<string>();
+    for (const model of modelDataResponse.data) {
+      const modelInfo = model.model_info;
+      if (modelInfo?.access_groups) {
+        for (const group of modelInfo.access_groups) {
+          allModelAccessGroups.add(group);
+        }
+      }
+    }
+    return Array.from(allModelAccessGroups);
+  }, [modelDataResponse?.data]);
+
+  const allModelsOnProxy = useMemo<string[]>(() => {
+    if (!modelDataResponse?.data) return [];
+    return modelDataResponse.data.map((model: any) => model.model_name);
+  }, [modelDataResponse?.data]);
+
+  const getProviderFromModel = (model: string) => {
+    if (modelCostMapData !== null && modelCostMapData !== undefined) {
+      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+        return modelCostMapData[model]["litellm_provider"];
+      }
+    }
+    return "openai";
   };
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    };
+  const processedModelData = useMemo(() => {
+    if (!modelDataResponse?.data) return { data: [] };
+    return transformModelData(modelDataResponse, getProviderFromModel);
+  }, [modelDataResponse?.data, getProviderFromModel]);
 
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  const isProxyAdmin = userRole && isProxyAdminRole(userRole);
+  const isInternalUser = userRole && internalUserRoles.includes(userRole);
+  const isUserTeamAdmin = userID && isUserTeamAdminForAnyTeam(teams, userID);
+  const addModelDisabledForInternalUsers =
+    isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
+  // Hide tab if user is NOT a proxy admin AND (internal user with setting enabled OR not a team admin)
+  const shouldHideAddModelTab = !isProxyAdmin && (addModelDisabledForInternalUsers || !isUserTeamAdmin);
+
+  const setProviderModelsFn = (provider: Providers) => {
+    const _providerModels = getProviderModels(provider, modelCostMapData);
+    setProviderModels(_providerModels);
+  };
 
   const uploadProps: UploadProps = {
     name: "file",
@@ -195,7 +140,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         };
         reader.readAsText(file);
       }
-      // Prevent upload
       return false;
     },
     onChange(info) {
@@ -208,10 +152,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   };
 
   const handleRefreshClick = () => {
-    // Update the 'lastRefreshed' state to the current date and time
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
-    // Invalidate and refetch models data using React Query
     queryClient.invalidateQueries({ queryKey: ["models", "list"] });
     refetchModels();
   };
@@ -227,7 +169,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       };
 
       if (selectedModelGroup === "global") {
-        // Only update global retry policy
         if (globalRetryPolicy) {
           payload.router_settings.retry_policy = globalRetryPolicy;
         }
@@ -251,114 +192,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        setModelData(modelDataResponse);
-        const _providerSettings = await modelSettingsCall(accessToken);
-        if (_providerSettings) {
-          setProviderSettings(_providerSettings);
-        }
-
-        // loop through modelDataResponse and get all`model_name` values
-        let all_model_groups: Set<string> = new Set();
-        for (let i = 0; i < modelDataResponse.data.length; i++) {
-          const model = modelDataResponse.data[i];
-          all_model_groups.add(model.model_name);
-        }
-        let _array_model_groups = Array.from(all_model_groups);
-        // sort _array_model_groups alphabetically
-        _array_model_groups = _array_model_groups.sort();
-
-        setAvailableModelGroups(_array_model_groups);
-
-        let all_model_access_groups: Set<string> = new Set();
-        for (let i = 0; i < modelDataResponse.data.length; i++) {
-          const model = modelDataResponse.data[i];
-          let model_info: any | null = model.model_info;
-          if (model_info) {
-            let access_groups = model_info.access_groups;
-            if (access_groups) {
-              for (let j = 0; j < access_groups.length; j++) {
-                all_model_access_groups.add(access_groups[j]);
-              }
-            }
-          }
-        }
-
-        setAvailableModelAccessGroups(Array.from(all_model_access_groups));
-
-        let _initial_model_group = "all";
-        if (_array_model_groups.length > 0) {
-          _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
-        }
-
-        const modelMetricsResponse = await modelMetricsCall(
-          accessToken,
-          userID,
-          userRole,
-          _initial_model_group,
-          dateValue.from?.toISOString(),
-          dateValue.to?.toISOString(),
-          selectedAPIKey?.token,
-          selectedCustomer,
-        );
-
-        setModelMetrics(modelMetricsResponse.data);
-        setModelMetricsCategories(modelMetricsResponse.all_api_bases);
-
-        const streamingModelMetricsResponse = await streamingModelMetricsCall(
-          accessToken,
-          _initial_model_group,
-          dateValue.from?.toISOString(),
-          dateValue.to?.toISOString(),
-        );
-
-        // Assuming modelMetricsResponse now contains the metric data for the specified model group
-        setStreamingModelMetrics(streamingModelMetricsResponse.data);
-        setStreamingModelMetricsCategories(streamingModelMetricsResponse.all_api_bases);
-
-        const modelExceptionsResponse = await modelExceptionsCall(
-          accessToken,
-          userID,
-          userRole,
-          _initial_model_group,
-          dateValue.from?.toISOString(),
-          dateValue.to?.toISOString(),
-          selectedAPIKey?.token,
-          selectedCustomer,
-        );
-        setModelExceptions(modelExceptionsResponse.data);
-        setAllExceptions(modelExceptionsResponse.exception_types);
-
-        const slowResponses = await modelMetricsSlowResponsesCall(
-          accessToken,
-          userID,
-          userRole,
-          _initial_model_group,
-          dateValue.from?.toISOString(),
-          dateValue.to?.toISOString(),
-          selectedAPIKey?.token,
-          selectedCustomer,
-        );
-
-        const dailyExceptions = await adminGlobalActivityExceptions(
-          accessToken,
-          dateValue.from?.toISOString().split("T")[0],
-          dateValue.to?.toISOString().split("T")[0],
-          _initial_model_group,
-        );
-
-        setGlobalExceptionData(dailyExceptions);
-
-        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
-          accessToken,
-          dateValue.from?.toISOString().split("T")[0],
-          dateValue.to?.toISOString().split("T")[0],
-          _initial_model_group,
-        );
-
-        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-        setSlowResponsesData(slowResponses);
-        let all_end_users_data = await allEndUsersCall(accessToken);
-        setAllEndUsers(all_end_users_data?.map((u: any) => u.user_id));
         const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
         let router_settings = routerSettingsInfo.router_settings;
 
@@ -369,7 +202,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         setGlobalRetryPolicy(router_settings.retry_policy);
         setDefaultRetry(default_retries);
 
-        // Set model group alias
         const model_group_alias = router_settings.model_group_alias || {};
         setModelGroupAlias(model_group_alias);
       } catch (error) {
@@ -380,110 +212,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     if (accessToken && token && userRole && userID && modelDataResponse) {
       fetchData();
     }
-
-    const fetchModelMap = async () => {
-      const data = await modelCostMap();
-      console.log(`received model cost map data: ${Object.keys(data)}`);
-      setModelMap(data);
-    };
-    if (modelMap == null) {
-      fetchModelMap();
-    }
   }, [accessToken, token, userRole, userID, modelDataResponse]);
 
-  if (!modelData || isLoadingModels) {
-    return <div>Loading...</div>;
-  }
-
-  if (!accessToken || !token || !userRole || !userID) {
-    return <div>Loading...</div>;
-  }
-  let all_models_on_proxy: any[] = [];
-  let all_providers: string[] = [];
-
-  // loop through model data and edit each row
-  for (let i = 0; i < modelData.data.length; i++) {
-    let curr_model = modelData.data[i];
-    let litellm_model_name = curr_model?.litellm_params?.model;
-    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
-    let model_info = curr_model?.model_info;
-
-    let defaultProvider = "openai";
-    let provider = "";
-    let input_cost = "Undefined";
-    let output_cost = "Undefined";
-    let max_tokens = "Undefined";
-    let max_input_tokens = "Undefined";
-    let cleanedLitellmParams = {};
-
-    const getProviderFromModel = (model: string) => {
-      /**
-       * Use model map
-       * - check if model in model map
-       * - return it's litellm_provider, if so
-       */
-      if (modelMap !== null && modelMap !== undefined) {
-        if (typeof modelMap == "object" && model in modelMap) {
-          return modelMap[model]["litellm_provider"];
-        }
-      }
-      return "openai";
-    };
-
-    // Check if litellm_model_name is null or undefined
-    if (litellm_model_name) {
-      // Split litellm_model_name based on "/"
-      let splitModel = litellm_model_name.split("/");
-
-      // Get the first element in the split
-      let firstElement = splitModel[0];
-
-      // If there is only one element, default provider to openai
-      provider = custom_llm_provider;
-      if (!provider) {
-        provider = splitModel.length === 1 ? getProviderFromModel(litellm_model_name) : firstElement;
-      }
-    } else {
-      // litellm_model_name is null or undefined, default provider to openai
-      provider = "-";
-    }
-
-    if (model_info) {
-      input_cost = model_info?.input_cost_per_token;
-      output_cost = model_info?.output_cost_per_token;
-      max_tokens = model_info?.max_tokens;
-      max_input_tokens = model_info?.max_input_tokens;
-    }
-
-    if (curr_model?.litellm_params) {
-      cleanedLitellmParams = Object.fromEntries(
-        Object.entries(curr_model?.litellm_params).filter(([key]) => key !== "model" && key !== "api_base"),
-      );
-    }
-
-    modelData.data[i].provider = provider;
-    modelData.data[i].input_cost = input_cost;
-    modelData.data[i].output_cost = output_cost;
-    modelData.data[i].litellm_model_name = litellm_model_name;
-    all_providers.push(provider);
-
-    // Convert Cost in terms of Cost per 1M tokens
-    if (modelData.data[i].input_cost) {
-      modelData.data[i].input_cost = (Number(modelData.data[i].input_cost) * 1000000).toFixed(2);
-    }
-
-    if (modelData.data[i].output_cost) {
-      modelData.data[i].output_cost = (Number(modelData.data[i].output_cost) * 1000000).toFixed(2);
-    }
-
-    modelData.data[i].max_tokens = max_tokens;
-    modelData.data[i].max_input_tokens = max_input_tokens;
-    modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
-    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
-
-    all_models_on_proxy.push(curr_model.model_name);
-  }
-  // when users click request access show pop up to allow them to request access
+  const isLoading = isLoadingModels || isLoadingModelCostMap || isLoadingCredentials || isLoadingUISettings;
 
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
@@ -494,62 +225,20 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       </div>
     );
   }
-  const customTooltip = (props: any) => {
-    const { payload, active } = props;
-    if (!active || !payload) return null;
 
-    // Extract the date from the first item in the payload array
-    const date = payload[0]?.payload?.date;
-
-    // Sort the payload array by category.value in descending order
-    let sortedPayload = payload.sort((a: any, b: any) => b.value - a.value);
-
-    // Only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
-    if (sortedPayload.length > 5) {
-      let remainingItems = sortedPayload.length - 5;
-      sortedPayload = sortedPayload.slice(0, 5);
-      sortedPayload.push({
-        dataKey: `${remainingItems} other deployments`,
-        value: payload.slice(5).reduce((acc: number, curr: any) => acc + curr.value, 0),
-        color: "gray",
-      });
+  const handleOk = async () => {
+    try {
+      const values = await addModelForm.validateFields();
+      await handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
+    } catch (error: any) {
+      const errorMessages =
+        error.errorFields
+          ?.map((field: any) => {
+            return `${field.name.join(".")}: ${field.errors.join(", ")}`;
+          })
+          .join(" | ") || "Unknown validation error";
+      NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
     }
-
-    return (
-      <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
-        {date && <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>}
-        {sortedPayload.map((category: any, idx: number) => {
-          const roundedValue = parseFloat(category.value.toFixed(5));
-          const displayValue = roundedValue === 0 && category.value > 0 ? "<0.00001" : roundedValue.toFixed(5);
-          return (
-            <div key={idx} className="flex justify-between">
-              <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
-                <p className="text-tremor-content">{category.dataKey}</p>
-              </div>
-              <p className="font-medium text-tremor-content-emphasis text-righ ml-2">{displayValue}</p>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const handleOk = () => {
-    addModelForm
-      .validateFields()
-      .then((values: any) => {
-        handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
-      })
-      .catch((error: any) => {
-        const errorMessages =
-          error.errorFields
-            ?.map((field: any) => {
-              return `${field.name.join(".")}: ${field.errors.join(", ")}`;
-            })
-            .join(" | ") || "Unknown validation error";
-        NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
-      });
   };
 
   Object.keys(Providers).find((key) => (Providers as { [index: string]: any })[key] === selectedProvider);
@@ -563,9 +252,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           accessToken={accessToken}
           is_team_admin={userRole === "Admin"}
           is_proxy_admin={userRole === "Proxy Admin"}
-          userModels={all_models_on_proxy}
+          userModels={allModelsOnProxy}
           editTeam={false}
           onUpdate={handleRefreshClick}
+          premiumUser={premiumUser}
         />
       </div>
     );
@@ -586,39 +276,52 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               )}
             </div>
           </div>
-          {selectedModelId ? (
+
+          {/* Missing Provider Banner */}
+          <div className="mb-4 px-4 py-3 bg-blue-50 rounded-lg border border-blue-100 flex items-center gap-4">
+            <div className="flex-shrink-0 w-10 h-10 bg-white rounded-full flex items-center justify-center border border-blue-200">
+              <PlusCircleOutlined style={{ fontSize: "18px", color: "#6366f1" }} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-gray-900 font-semibold text-sm m-0">Missing a provider?</h4>
+              <p className="text-gray-500 text-xs m-0 mt-0.5">
+                The LiteLLM engineering team is constantly adding support for new LLM models, providers, endpoints. If
+                you don&apos;t see the one you need, let us know and we&apos;ll prioritize it.
+              </p>
+            </div>
+            <a
+              href="https://models.litellm.ai/?request=true"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              Request Provider
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                />
+              </svg>
+            </a>
+          </div>
+          {selectedModelId && !isLoading ? (
             <ModelInfoView
               modelId={selectedModelId}
-              editModel={true}
               onClose={() => {
                 setSelectedModelId(null);
-                setEditModel(false);
               }}
-              modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
-              setEditModalVisible={setEditModalVisible}
-              setSelectedModel={setSelectedModel}
               onModelUpdate={(updatedModel) => {
-                // Handle model deletion
-                if (updatedModel.deleted) {
-                  const updatedModelData = {
-                    ...modelData,
-                    data: modelData.data.filter((model: any) => model.model_info.id !== updatedModel.model_info.id),
-                  };
-                  setModelData(updatedModelData);
-                } else {
-                  // Update the model in the modelData.data array
-                  const updatedModelData = {
-                    ...modelData,
-                    data: modelData.data.map((model: any) =>
-                      model.model_info.id === updatedModel.model_info.id ? updatedModel : model,
-                    ),
-                  };
-                  setModelData(updatedModelData);
-                }
-                // Invalidate cache and trigger a refresh to update UI
                 queryClient.invalidateQueries({ queryKey: ["models", "list"] });
                 handleRefreshClick();
               }}
@@ -633,7 +336,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Health Status</Tab>}
-                  {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Model Group Alias</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Price Data Reload</Tab>}
@@ -658,8 +360,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   availableModelAccessGroups={availableModelAccessGroups}
                   setSelectedModelId={setSelectedModelId}
                   setSelectedTeamId={setSelectedTeamId}
-                  setEditModel={setEditModel}
-                  modelData={modelData}
                 />
                 {!shouldHideAddModelTab && (
                   <TabPanel className="h-full">
@@ -678,7 +378,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                       credentials={credentialsList}
                       accessToken={accessToken}
                       userRole={userRole}
-                      premiumUser={premiumUser}
                     />
                   </TabPanel>
                 )}
@@ -690,54 +389,20 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                     accessToken={accessToken}
                     userRole={userRole}
                     userID={userID}
-                    modelData={modelData}
+                    modelData={processedModelData}
                     premiumUser={premiumUser}
                   />
                 </TabPanel>
                 <TabPanel>
                   <HealthCheckComponent
                     accessToken={accessToken}
-                    modelData={modelData}
-                    all_models_on_proxy={all_models_on_proxy}
+                    modelData={processedModelData}
+                    all_models_on_proxy={allModelsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
+                    teams={teams}
                   />
                 </TabPanel>
-                <ModelAnalyticsTab
-                  dateValue={dateValue}
-                  setDateValue={setDateValue}
-                  selectedModelGroup={selectedModelGroup}
-                  availableModelGroups={availableModelGroups}
-                  setShowAdvancedFilters={setShowAdvancedFilters}
-                  modelMetrics={modelMetrics}
-                  modelMetricsCategories={modelMetricsCategories}
-                  streamingModelMetrics={streamingModelMetrics}
-                  streamingModelMetricsCategories={streamingModelMetricsCategories}
-                  customTooltip={customTooltip}
-                  slowResponsesData={slowResponsesData}
-                  modelExceptions={modelExceptions}
-                  globalExceptionData={globalExceptionData}
-                  allExceptions={allExceptions}
-                  globalExceptionPerDeployment={globalExceptionPerDeployment}
-                  allEndUsers={allEndUsers}
-                  keys={keys}
-                  setSelectedAPIKey={setSelectedAPIKey}
-                  setSelectedCustomer={setSelectedCustomer}
-                  teams={teams}
-                  selectedAPIKey={selectedAPIKey}
-                  selectedCustomer={selectedCustomer}
-                  selectedTeam={selectedTeam}
-                  setAllExceptions={setAllExceptions}
-                  setGlobalExceptionData={setGlobalExceptionData}
-                  setGlobalExceptionPerDeployment={setGlobalExceptionPerDeployment}
-                  setModelExceptions={setModelExceptions}
-                  setModelMetrics={setModelMetrics}
-                  setModelMetricsCategories={setModelMetricsCategories}
-                  setSelectedModelGroup={setSelectedModelGroup}
-                  setSlowResponsesData={setSlowResponsesData}
-                  setStreamingModelMetrics={setStreamingModelMetrics}
-                  setStreamingModelMetricsCategories={setStreamingModelMetricsCategories}
-                />
                 <ModelRetrySettingsTab
                   selectedModelGroup={selectedModelGroup}
                   setSelectedModelGroup={setSelectedModelGroup}
@@ -756,7 +421,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                     onAliasUpdate={setModelGroupAlias}
                   />
                 </TabPanel>
-                <PriceDataManagementTab setModelMap={setModelMap} />
+                <PriceDataManagementTab />
               </TabPanels>
             </TabGroup>
           )}

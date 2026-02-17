@@ -8,6 +8,7 @@ from .openai import ChatCompletionToolCallChunk
 
 class CachePointBlock(TypedDict, total=False):
     type: Literal["default"]
+    ttl: str
 
 
 class SystemContentBlock(TypedDict, total=False):
@@ -93,6 +94,67 @@ class GuardrailConverseContentBlock(TypedDict, total=False):
     text: GuardrailConverseTextBlock
 
 
+class CitationWebLocationBlock(TypedDict, total=False):
+    """
+    Web location block for Nova grounding citations.
+    Contains the URL and domain from web search results.
+
+    Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+    """
+
+    url: str
+    domain: str
+
+
+class CitationLocationBlock(TypedDict, total=False):
+    """
+    Location block containing the web location for a citation.
+    """
+
+    web: CitationWebLocationBlock
+
+
+class CitationReferenceBlock(TypedDict, total=False):
+    """
+    Citation reference block containing a single citation with its location.
+
+    Each citation contains:
+    - location.web.url: The URL of the source
+    - location.web.domain: The domain of the source
+    """
+
+    location: CitationLocationBlock
+
+
+class CitationsContentBlock(TypedDict, total=False):
+    """
+    Citations content block returned by Nova grounding (web search) tool.
+
+    When Nova grounding is enabled via systemTool, the model may return
+    citationsContent blocks containing web search citation references.
+
+    Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+
+    Example response structure:
+        {
+            "citationsContent": {
+                "citations": [
+                    {
+                        "location": {
+                            "web": {
+                                "url": "https://example.com/article",
+                                "domain": "example.com"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    """
+
+    citations: List[CitationReferenceBlock]
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -103,6 +165,7 @@ class ContentBlock(TypedDict, total=False):
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
     guardContent: GuardrailConverseContentBlock
+    citationsContent: CitationsContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -128,14 +191,19 @@ class ConverseTokenUsageBlock(TypedDict):
     cacheWriteInputTokens: int
 
 
-class ConverseResponseBlock(TypedDict):
+class ServiceTierBlock(TypedDict):
+    type: Literal["priority", "default", "flex"]
+
+
+class ConverseResponseBlock(TypedDict, total=False):
     additionalModelResponseFields: dict
     metrics: ConverseMetricsBlock
-    output: ConverseResponseOutputBlock
-    stopReason: (
-        str  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
-    )
-    usage: ConverseTokenUsageBlock
+    output: Required[ConverseResponseOutputBlock]
+    stopReason: Required[
+        str
+    ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
+    usage: Required[ConverseTokenUsageBlock]
+    serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
 
 class ToolJsonSchemaBlock(TypedDict, total=False):
@@ -154,8 +222,24 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
+class SystemToolBlock(TypedDict, total=False):
+    """
+    System tool block for Nova grounding and other built-in tools.
+
+    Example:
+        {
+            "systemTool": {
+                "name": "nova_grounding"
+            }
+        }
+    """
+
+    name: Required[str]
+
+
 class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]
     cachePoint: Optional[CachePointBlock]
 
 
@@ -205,19 +289,17 @@ class ContentBlockStartEvent(TypedDict, total=False):
 class ContentBlockDeltaEvent(TypedDict, total=False):
     """
     Either 'text' or 'toolUse' will be specified for Converse API streaming response.
+    May also include 'citationsContent' when Nova grounding is enabled.
     """
 
     text: str
     toolUse: ToolBlockDeltaEvent
     reasoningContent: BedrockConverseReasoningContentBlockDelta
+    citationsContent: CitationsContentBlock
 
 
 class PerformanceConfigBlock(TypedDict):
     latency: Literal["optimized", "throughput"]
-
-
-class ServiceTierBlock(TypedDict):
-    type: Literal["priority", "default", "flex"]
 
 
 class CommonRequestObject(
@@ -316,6 +398,7 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+    output_dimension: int
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
@@ -878,3 +961,9 @@ class BedrockGetBatchResponse(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
+
+
+class BedrockToolBlock(TypedDict, total=False):
+    toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]  # For Nova grounding
+    cachePoint: Optional[CachePointBlock]

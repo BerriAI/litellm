@@ -230,7 +230,70 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 
 These also support the `OPENAI_BASE_URL` environment variable, which can be used to specify a custom API endpoint.
 
-## OpenAI Vision Models 
+### OpenAI Web Search Models
+
+OpenAI has two ways to use web search, depending on the endpoint:
+
+| Approach | Endpoint | Models | How to enable |
+|----------|----------|--------|---------------|
+| **Search Models** | `/chat/completions` | `gpt-5-search-api`, `gpt-4o-search-preview`, `gpt-4o-mini-search-preview` | Pass `web_search_options` parameter |
+| **Web Search Tool** | `/responses` | `gpt-5`, `gpt-4.1`, `gpt-4o`, and other regular models | Pass `web_search_preview` tool |
+
+<Tabs>
+<TabItem value="sdk-completion" label="SDK - /chat/completions">
+
+```python showLineNumbers
+from litellm import completion
+
+response = completion(
+    model="openai/gpt-5-search-api",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    web_search_options={
+        "search_context_size": "medium"  # Options: "low", "medium", "high"
+    }
+)
+```
+
+</TabItem>
+<TabItem value="sdk-responses" label="SDK - /responses">
+
+```python showLineNumbers
+from litellm import responses
+
+response = responses(
+    model="openai/gpt-5",
+    input="What is the capital of France?",
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "low"
+    }]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  # Search model for /chat/completions
+  - model_name: gpt-5-search-api
+    litellm_params:
+      model: openai/gpt-5-search-api
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Regular model for /responses with web_search_preview tool
+  - model_name: gpt-5
+    litellm_params:
+      model: openai/gpt-5
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+</TabItem>
+</Tabs>
+
+For full details, see the [Web Search guide](../completion/web_search.md).
+
+## OpenAI Vision Models
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
 | gpt-4o   | `response = completion(model="gpt-4o", messages=messages)` |
@@ -433,7 +496,7 @@ Expected Response:
 
 ### Advanced: Using `reasoning_effort` with `summary` field
 
-By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`—`"xhigh"` is only supported on `gpt-5.1-codex-max`) and only sets the effort level without including a reasoning summary.
+By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`—`"xhigh"` is only supported on `gpt-5.1-codex-max` and `gpt-5.2` models) and only sets the effort level without including a reasoning summary.
 
 To opt-in to the `summary` feature, you can pass `reasoning_effort` as a dictionary. **Note:** The `summary` field requires your OpenAI organization to have verification status. Using `summary` without verification will result in a 400 error from OpenAI.
 
@@ -495,17 +558,19 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 |-------|----------------------|------------------|
 | `gpt-5.1` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5` | `medium` | `minimal`, `low`, `medium`, `high` |
-| `gpt-5-mini` | `medium` | `none`, `minimal`, `low`, `medium`, `high` |
+| `gpt-5-mini` | `medium` | `minimal`, `low`, `medium`, `high` |
 | `gpt-5-nano` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex-mini` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex-max` | `adaptive` | `low`, `medium`, `high`, `xhigh` (no `minimal`) |
+| `gpt-5.2` | `medium` | `none`, `low`, `medium`, `high`, `xhigh` |
+| `gpt-5.2-pro` | `high` | `low`, `medium`, `high`, `xhigh` |
 | `gpt-5-pro` | `high` | `high` only |
 
 **Note:**
 - GPT-5.1 introduced a new `reasoning_effort="none"` setting for faster, lower-latency responses. This replaces the `"minimal"` setting from GPT-5.
-- `gpt-5.1-codex-max` is the only model that supports `reasoning_effort="xhigh"`. All other models will reject this value.
+- `gpt-5.1-codex-max` and `gpt-5.2` models support `reasoning_effort="xhigh"`. All other models will reject this value.
 - `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error.
 - When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
 

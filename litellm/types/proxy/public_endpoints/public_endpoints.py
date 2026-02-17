@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union, Any
 
 from pydantic import BaseModel
 
@@ -7,7 +7,10 @@ class PublicModelHubInfo(BaseModel):
     docs_title: str
     custom_docs_description: Optional[str]
     litellm_version: str
-    useful_links: Optional[Dict[str, str]]
+    # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
+    # New format: { "displayName": { "url": "...", "index": 0 } }
+    # Old format: { "displayName": "url" } (for backward compatibility)
+    useful_links: Optional[Dict[str, Union[str, Dict[str, Any]]]]
 
 
 class ProviderCredentialField(BaseModel):

@@ -1,32 +1,35 @@
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import moment from "moment";
-import { useQuery } from "@tanstack/react-query";
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall, allEndUsersCall } from "../networking";
-import { DataTable } from "./table";
-import { columns, LogEntry } from "./columns";
-import { Row } from "@tanstack/react-table";
-import { prefetchLogDetails } from "./prefetch";
-import { RequestResponsePanel } from "./RequestResponsePanel";
-import { ErrorViewer } from "./ErrorViewer";
-import { internalUserRoles } from "../../utils/roles";
-import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { Tooltip } from "antd";
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import KeyInfoView from "../templates/key_info_view";
-import { SessionView } from "./SessionView";
-import { VectorStoreViewer } from "./VectorStoreViewer";
+import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
-import FilterComponent from "../molecules/filter";
-import { FilterOption } from "../molecules/filter";
-import { useLogFilterLogic } from "./log_filter_logic";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/react";
-import AuditLogs from "./audit_logs";
-import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
+import { SettingOutlined, SyncOutlined } from "@ant-design/icons";
+import { Row } from "@tanstack/react-table";
+import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Button, Tooltip } from "antd";
+import { internalUserRoles } from "../../utils/roles";
+import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
+import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
+import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
+import FilterComponent, { FilterOption } from "../molecules/filter";
+import { allEndUsersCall, keyInfoV1Call, keyListCall, uiSpendLogsCall } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
+import AuditLogs from "./audit_logs";
+import { createColumns, LogEntry, type LogsSortField } from "./columns";
+import { ConfigInfoMessage } from "./ConfigInfoMessage";
+import { ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
+import { CostBreakdownViewer } from "./CostBreakdownViewer";
+import { ErrorViewer } from "./ErrorViewer";
+import { useLogFilterLogic } from "./log_filter_logic";
+import { LogDetailsDrawer } from "./LogDetailsDrawer";
+import { getTimeRangeDisplay } from "./logs_utils";
+import { RequestResponsePanel } from "./RequestResponsePanel";
+import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
+import { DataTable } from "./table";
+import { VectorStoreViewer } from "./VectorStoreViewer";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -43,11 +46,6 @@ export interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
-}
-
-interface PrefetchedLog {
-  messages: any[];
-  response: any;
 }
 
 export default function SpendLogsTable({
@@ -77,7 +75,7 @@ export default function SpendLogsTable({
   const [tempKeyHash, setTempKeyHash] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
-  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedModelId, setSelectedModelId] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState("");
@@ -85,8 +83,13 @@ export default function SpendLogsTable({
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
   const [activeTab, setActiveTab] = useState("request logs");
 
-  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
+  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
+
+  const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   const queryClient = useQueryClient();
 
@@ -166,7 +169,9 @@ export default function SpendLogsTable({
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
       selectedStatus,
-      selectedModel,
+      selectedModelId,
+      sortBy,
+      sortOrder,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -185,46 +190,39 @@ export default function SpendLogsTable({
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
       // Get base response from API
-      const response = await uiSpendLogsCall(
+      // NOTE: We only fetch the list of logs here (lightweight).
+      // Log details (messages/response) are fetched on-demand when user clicks a row.
+      const response = await uiSpendLogsCall({
         accessToken,
-        selectedKeyHash || undefined,
-        selectedTeamId || undefined,
-        undefined,
-        formattedStartTime,
-        formattedEndTime,
-        currentPage,
-        pageSize,
-        filterByCurrentUser ? userID : undefined,
-        selectedEndUser,
-        selectedStatus,
-        selectedModel,
-      );
-
-      // Trigger prefetch for all logs
-      await prefetchLogDetails(response.data, formattedStartTime, accessToken, queryClient);
-
-      // Update logs with prefetched data if available
-      response.data = response.data.map((log: LogEntry) => {
-        const prefetchedData = queryClient.getQueryData<PrefetchedLog>([
-          "logDetails",
-          log.request_id,
-          formattedStartTime,
-        ]);
-
-        if (prefetchedData?.messages && prefetchedData?.response) {
-          log.messages = prefetchedData.messages;
-          log.response = prefetchedData.response;
-          return log;
-        }
-        return log;
+        start_date: formattedStartTime,
+        end_date: formattedEndTime,
+        page: currentPage,
+        page_size: pageSize,
+        params: {
+          api_key: selectedKeyHash || undefined,
+          team_id: selectedTeamId || undefined,
+          user_id: filterByCurrentUser ? userID ?? undefined : undefined,
+          end_user: selectedEndUser || undefined,
+          status_filter: selectedStatus || undefined,
+          model_id: selectedModelId || undefined,
+          sort_by: sortBy,
+          sort_order: sortOrder,
+        },
       });
 
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
     refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
+    placeholderData: keepPreviousData,
     refetchIntervalInBackground: true,
   });
+
+  // Defer the transition from "Fetching" to "Fetch" so the button stays loading until
+  // the table has rendered with the new data (avoids the visual gap where the button
+  // exits loading state before the table updates)
+  const isFetchingDeferred = useDeferredValue(logs.isFetching);
+  const isButtonLoading = logs.isFetching || isFetchingDeferred;
 
   const logsData = logs.data || {
     data: [],
@@ -240,7 +238,7 @@ export default function SpendLogsTable({
     allTeams: hookAllTeams,
     allKeyAliases,
     handleFilterChange,
-    handleFilterReset,
+    handleFilterReset: handleFilterResetFromHook,
   } = useLogFilterLogic({
     logs: logsData,
     accessToken,
@@ -251,6 +249,9 @@ export default function SpendLogsTable({
     setCurrentPage,
     userID,
     userRole,
+    sortBy,
+    sortOrder,
+    currentPage,
   });
 
   const fetchKeyHashForAlias = useCallback(
@@ -272,6 +273,16 @@ export default function SpendLogsTable({
     [accessToken, currentPage, pageSize],
   );
 
+  const handleFilterReset = useCallback(() => {
+    handleFilterResetFromHook();
+    // Reset custom time range to default (last 24 hours)
+    setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
+    setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+    setIsCustomDate(false);
+    setSelectedTimeInterval({ value: 24, unit: "hours" });
+    setCurrentPage(1);
+  }, [handleFilterResetFromHook]);
+
   // Add this effect to update selected filters when filter changes
   useEffect(() => {
     if (!accessToken) return;
@@ -282,7 +293,7 @@ export default function SpendLogsTable({
       setSelectedTeamId("");
     }
     setSelectedStatus(filters["Status"] || "");
-    setSelectedModel(filters["Model"] || "");
+    setSelectedModelId(filters["Model"] || "");
     setSelectedEndUser(filters["End User"] || "");
 
     if (filters["Key Hash"]) {
@@ -294,76 +305,97 @@ export default function SpendLogsTable({
     }
   }, [filters, accessToken, fetchKeyHashForAlias]);
 
-  // Fetch logs for a session if selected
-  const sessionLogs = useQuery<PaginatedResponse>({
-    queryKey: ["sessionLogs", selectedSessionId],
-    queryFn: async () => {
-      if (!accessToken || !selectedSessionId) return { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 };
-      const response = await sessionSpendLogsCall(accessToken, selectedSessionId);
-      // If the API returns an array, wrap it in the same shape as PaginatedResponse
-      return {
-        data: response.data || response || [],
-        total: (response.data || response || []).length,
-        page: 1,
-        page_size: 1000,
-        total_pages: 1,
-      };
-    },
-    enabled: !!accessToken && !!selectedSessionId,
-  });
-
-  // Add this effect to preserve expanded state when data refreshes
-  useEffect(() => {
-    if (logs.data?.data && expandedRequestId) {
-      // Check if the expanded request ID still exists in the new data
-      const stillExists = logs.data.data.some((log) => log.request_id === expandedRequestId);
-      if (!stillExists) {
-        // If the request ID no longer exists in the data, clear the expanded state
-        setExpandedRequestId(null);
-      }
-    }
-  }, [logs.data?.data, expandedRequestId]);
-
   if (!accessToken || !token || !userRole || !userID) {
     return null;
   }
 
+  const searchedLogs = filteredLogs.data.filter((log) => {
+    const matchesSearch =
+      !searchTerm ||
+      log.request_id.includes(searchTerm) ||
+      log.model.includes(searchTerm) ||
+      (log.user && log.user.includes(searchTerm));
+
+    // No need for additional filtering since we're now handling this in the API call
+    return matchesSearch;
+  });
+
+  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; mcp: number }>>((acc, log) => {
+    if (!log.session_id) return acc;
+    if (!acc[log.session_id]) {
+      acc[log.session_id] = { llm: 0, mcp: 0 };
+    }
+    if (MCP_CALL_TYPES.includes(log.call_type)) {
+      acc[log.session_id].mcp += 1;
+    } else {
+      acc[log.session_id].llm += 1;
+    }
+    return acc;
+  }, {});
+
+  // Build a single-pass map of session_id → representative request_id.
+  // Prefers an LLM row over an MCP row as the representative.
+  const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
+  for (const log of searchedLogs) {
+    if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
+    const isMcp = MCP_CALL_TYPES.includes(log.call_type);
+    const existing = sessionRepresentativeMap.get(log.session_id);
+    if (!existing || (existing.isMcp && !isMcp)) {
+      sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
+    }
+  }
+
   const filteredData =
-    filteredLogs.data
-      .filter((log) => {
-        const matchesSearch =
-          !searchTerm ||
-          log.request_id.includes(searchTerm) ||
-          log.model.includes(searchTerm) ||
-          (log.user && log.user.includes(searchTerm));
-
-        // No need for additional filtering since we're now handling this in the API call
-        return matchesSearch;
+    searchedLogs
+      .map((log) => {
+        const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
+        return {
+          ...log,
+          duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
+          session_llm_count: sessionComposition?.llm ?? undefined,
+          session_mcp_count: sessionComposition?.mcp ?? undefined,
+          onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
+          onSessionClick: (sessionId: string) => {
+            if (sessionId) {
+              setSelectedSessionId(sessionId);
+              setSelectedLog(log);
+              setIsDrawerOpen(true);
+            }
+          },
+        };
       })
-      .map((log) => ({
-        ...log,
-        duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
-        onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-        onSessionClick: (sessionId: string) => {
-          if (sessionId) setSelectedSessionId(sessionId);
-        },
-      })) || [];
-
-  // For session logs, add onKeyHashClick/onSessionClick as well
-  const sessionData =
-    sessionLogs.data?.data?.map((log) => ({
-      ...log,
-      onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-      onSessionClick: (sessionId: string) => {},
-    })) || [];
+      // Deduplicate multi-call sessions using the pre-built map (O(1) per row).
+      .filter((log) => {
+        if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
+        return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
+      }) || [];
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
     logs.refetch();
   };
 
-  const handleRowExpand = (requestId: string | null) => {
-    setExpandedRequestId(requestId);
+  const handleRowClick = (log: LogEntry) => {
+    // Multi-call session row: open in the same right-side drawer (session mode)
+    if (log.session_id && (log.session_total_count || 1) > 1) {
+      setSelectedSessionId(log.session_id);
+      setSelectedLog(log);
+      setIsDrawerOpen(true);
+      return;
+    }
+    // Single-call row: open the detail drawer
+    setSelectedSessionId(null);
+    setSelectedLog(log);
+    setIsDrawerOpen(true);
+  };
+
+  const handleCloseDrawer = () => {
+    setIsDrawerOpen(false);
+    setSelectedSessionId(null);
+  };
+
+  const handleSelectLog = (log: LogEntry) => {
+    setSelectedLog(log);
   };
 
   const logFilterOptions: FilterOption[] = [
@@ -397,7 +429,7 @@ export default function SpendLogsTable({
     {
       name: "Model",
       label: "Model",
-      isSearchable: false,
+      customComponent: PaginatedModelSelect,
     },
     {
       name: "Key Alias",
@@ -427,24 +459,31 @@ export default function SpendLogsTable({
       },
     },
     {
+      name: "Error Code",
+      label: "Error Code",
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!searchText) return ERROR_CODE_OPTIONS;
+        const lower = searchText.toLowerCase();
+        const filtered = ERROR_CODE_OPTIONS.filter((opt) => opt.label.toLowerCase().includes(lower));
+        const isExactValue = ERROR_CODE_OPTIONS.some((opt) => opt.value === searchText.trim());
+        if (!isExactValue && searchText.trim()) {
+          filtered.push({ label: `Use custom code: ${searchText.trim()}`, value: searchText.trim() });
+        }
+        return filtered;
+      },
+    },
+    {
       name: "Key Hash",
       label: "Key Hash",
       isSearchable: false,
     },
+    {
+      name: "Error Message",
+      label: "Error Message",
+      isSearchable: false,
+    },
   ];
-
-  // When a session is selected, render the SessionView component
-  if (selectedSessionId && sessionLogs.data) {
-    return (
-      <div className="w-full p-6">
-        <SessionView
-          sessionId={selectedSessionId}
-          logs={sessionLogs.data.data}
-          onBack={() => setSelectedSessionId(null)}
-        />
-      </div>
-    );
-  }
 
   const formatTimeUnit = (value: number, unit: string) => {
     if (value === 1) {
@@ -455,15 +494,7 @@ export default function SpendLogsTable({
     return unit;
   };
 
-  const quickSelectOptions = [
-    { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-    { label: "Last Hour", value: 1, unit: "hours" },
-    { label: "Last 4 Hours", value: 4, unit: "hours" },
-    { label: "Last 24 Hours", value: 24, unit: "hours" },
-    { label: "Last 7 Days", value: 7, unit: "days" },
-  ];
-
-  const selectedOption = quickSelectOptions.find(
+  const selectedOption = QUICK_SELECT_OPTIONS.find(
     (option) => option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit,
   );
 
@@ -475,54 +506,38 @@ export default function SpendLogsTable({
         <TabList>
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
+          <Tab>Deleted Keys</Tab>
+          <Tab>Deleted Teams</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
-              <h1 className="text-xl font-semibold">
-                {selectedSessionId ? (
-                  <>
-                    Session: <span className="font-mono">{selectedSessionId}</span>
-                    <button
-                      className="ml-4 px-3 py-1 text-sm border rounded hover:bg-gray-50"
-                      onClick={() => setSelectedSessionId(null)}
-                    >
-                      ← Back to All Logs
-                    </button>
-                  </>
-                ) : (
-                  "Request Logs"
-                )}
-              </h1>
+              <h1 className="text-xl font-semibold">Request Logs</h1>
+              <Button
+                icon={<SettingOutlined />}
+                onClick={() => setIsSpendLogsSettingsModalVisible(true)}
+                title="Spend Logs Settings"
+              />
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
-                premiumUser={premiumUser}
                 backButtonText="Back to Logs"
               />
-            ) : selectedSessionId ? (
-              <div className="bg-white rounded-lg shadow">
-                <DataTable
-                  columns={columns}
-                  data={sessionData}
-                  renderSubComponent={RequestViewer}
-                  getRowCanExpand={() => true}
-                  // Optionally: add session-specific row expansion state
-                />
-              </div>
             ) : (
               <>
                 <FilterComponent
                   options={logFilterOptions}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
+                />
+                <SpendLogsSettingsModal
+                  isVisible={isSpendLogsSettingsModalVisible}
+                  onCancel={() => setIsSpendLogsSettingsModalVisible(false)}
+                  onSuccess={() => setIsSpendLogsSettingsModalVisible(false)}
                 />
                 <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
                   <div className="border-b px-6 py-4 w-full max-w-full box-border">
@@ -571,12 +586,11 @@ export default function SpendLogsTable({
                             {quickSelectOpen && (
                               <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                                 <div className="space-y-1">
-                                  {quickSelectOptions.map((option) => (
+                                  {QUICK_SELECT_OPTIONS.map((option) => (
                                     <button
                                       key={option.label}
-                                      className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                        displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
-                                      }`}
+                                      className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
+                                        }`}
                                       onClick={() => {
                                         setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
                                         setStartTime(
@@ -594,9 +608,8 @@ export default function SpendLogsTable({
                                   ))}
                                   <div className="border-t my-2" />
                                   <button
-                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                      isCustomDate ? "bg-blue-50 text-blue-600" : ""
-                                    }`}
+                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${isCustomDate ? "bg-blue-50 text-blue-600" : ""
+                                      }`}
                                     onClick={() => setIsCustomDate(!isCustomDate)}
                                   >
                                     Custom Range
@@ -608,26 +621,15 @@ export default function SpendLogsTable({
 
                           <LiveTailControls />
 
-                          <button
+                          <Button
+                            type="default"
+                            icon={<SyncOutlined spin={isButtonLoading} />}
                             onClick={handleRefresh}
-                            className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                            title="Refresh data"
+                            disabled={isButtonLoading}
+                            title="Fetch data"
                           >
-                            <svg
-                              className={`w-4 h-4 ${logs.isFetching ? "animate-spin" : ""}`}
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                              />
-                            </svg>
-                            <span>Refresh</span>
-                          </button>
+                            {isButtonLoading ? "Fetching" : "Fetch"}
+                          </Button>
                         </div>
 
                         {isCustomDate && (
@@ -706,10 +708,18 @@ export default function SpendLogsTable({
                     </div>
                   )}
                   <DataTable
-                    columns={columns}
+                    columns={createColumns({
+                      sortBy,
+                      sortOrder,
+                      onSortChange: (newSortBy, newSortOrder) => {
+                        setSortBy(newSortBy);
+                        setSortOrder(newSortOrder);
+                        setCurrentPage(1);
+                      },
+                    })}
                     data={filteredData}
-                    renderSubComponent={RequestViewer}
-                    getRowCanExpand={() => true}
+                    onRowClick={handleRowClick}
+                    isLoading={logs.isLoading}
                   />
                 </div>
               </>
@@ -726,13 +736,28 @@ export default function SpendLogsTable({
               allTeams={allTeams}
             />
           </TabPanel>
+          <TabPanel><DeletedKeysPage /></TabPanel>
+          <TabPanel><DeletedTeamsPage /></TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {/* Log Details Drawer */}
+      <LogDetailsDrawer
+        open={isDrawerOpen}
+        onClose={handleCloseDrawer}
+        logEntry={selectedLog}
+        sessionId={selectedSessionId}
+        accessToken={accessToken}
+        onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
+        allLogs={filteredData}
+        onSelectLog={handleSelectLog}
+        startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
+      />
     </div>
   );
 }
 
-export function RequestViewer({ row }: { row: Row<LogEntry> }) {
+export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onOpenSettings?: () => void }) {
   // Helper function to clean metadata by removing specific fields
   const formatData = (input: any) => {
     if (typeof input === "string") {
@@ -767,7 +792,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       ? row.original.messages.length > 0
       : Object.keys(row.original.messages).length > 0);
   const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
-  const missingData = !hasMessages && !hasResponse;
+  const missingData = !hasMessages && !hasResponse && !hasError;
 
   // Format the response with error details if present
   const formattedResponse = () => {
@@ -909,11 +934,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <div className="flex">
               <span className="font-medium w-1/3">Status:</span>
               <span
-                className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
-                  (row.original.metadata?.status || "Success").toLowerCase() !== "failure"
-                    ? "bg-green-100 text-green-800"
-                    : "bg-red-100 text-red-800"
-                }`}
+                className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${(row.original.metadata?.status || "Success").toLowerCase() !== "failure"
+                  ? "bg-green-100 text-green-800"
+                  : "bg-red-100 text-red-800"
+                  }`}
               >
                 {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
               </span>
@@ -930,12 +954,21 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span className="font-medium w-1/3">Duration:</span>
               <span>{row.original.duration} s.</span>
             </div>
+            {row.original.metadata?.litellm_overhead_time_ms !== undefined && (
+              <div className="flex">
+                <span className="font-medium w-1/3">LiteLLM Overhead:</span>
+                <span>{row.original.metadata.litellm_overhead_time_ms} ms</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
+      {/* Cost Breakdown - Show if cost breakdown data is available */}
+      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
+
       {/* Configuration Info Message - Show when data is missing */}
-      <ConfigInfoMessage show={missingData} />
+      <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
 
       {/* Request/Response Panel */}
       <div className="w-full max-w-full overflow-hidden">

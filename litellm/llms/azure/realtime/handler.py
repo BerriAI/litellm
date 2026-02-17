@@ -94,7 +94,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
-                extra_headers={
+                additional_headers={
                     "api-key": api_key,  # type: ignore
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,

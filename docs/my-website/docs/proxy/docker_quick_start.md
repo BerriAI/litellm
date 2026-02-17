@@ -20,7 +20,7 @@ End-to-End tutorial for LiteLLM Proxy to:
 <TabItem value="docker" label="Docker">
 
 ```
-docker pull ghcr.io/berriai/litellm:main-latest
+docker pull docker.litellm.ai/berriai/litellm:main-latest
 ```
 
 [**See all docker images**](https://github.com/orgs/BerriAI/packages)
@@ -119,7 +119,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
 
 # RUNNING on http://0.0.0.0:4000
@@ -302,7 +302,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
 
