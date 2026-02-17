@@ -936,9 +936,6 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
-            # Decide whether to add prefix based on number of allowed servers
-            add_prefix = not (len(allowed_mcp_servers) == 1)
-
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
             ) -> List[MCPTool]:
@@ -959,7 +956,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -1077,8 +1074,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        # Always add server prefix to tool names
-        add_prefix = True
 
         # Get prompts from each allowed server
         all_prompts = []
@@ -1099,7 +1094,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
 
@@ -1138,8 +1133,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        # Always add server prefix to names
-        add_prefix = True
 
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
@@ -1159,7 +1152,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
@@ -1196,8 +1189,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        # Always add server prefix to names
-        add_prefix = True
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1218,7 +1209,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                 )
@@ -1676,8 +1667,6 @@ if MCP_AVAILABLE:
                 detail="User not allowed to get this prompt.",
             )
 
-        # Always add server prefix to names
-        add_prefix = True
 
         # Extract server name from prefixed prompt name
         original_prompt_name, server_name = split_server_prefix_from_name(name)
