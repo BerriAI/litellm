@@ -2420,6 +2420,19 @@ def supports_response_schema(
     )
 
 
+def supports_structured_outputs(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if a model supports native structured outputs (e.g. Anthropic output_format).
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_structured_outputs",
+    )
+
+
 def supports_parallel_function_calling(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -5677,6 +5690,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 supports_response_schema=_model_info.get(
                     "supports_response_schema", None
+                ),
+                supports_structured_outputs=_model_info.get(
+                    "supports_structured_outputs", None
                 ),
                 supports_vision=_model_info.get("supports_vision", None),
                 supports_function_calling=_model_info.get(

@@ -857,17 +857,28 @@ def test_anthropic_structured_output_beta_header():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "claude-opus-4-6-20250918",
-        "claude-opus-4.6-20250918",
+        "claude-opus-4-6",
+        "claude-opus-4-6-20260205",
+        "claude-opus-4-5",
         "claude-opus-4-5-20251101",
-        "claude-opus-4.5-20251101",
+        "claude-sonnet-4-5",
+        "claude-sonnet-4-5-20250929",
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
     ],
 )
-def test_opus_uses_native_structured_output(model_name):
+def test_structured_output_uses_native_output_format(model_name):
     """
-    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
-    (output_format) rather than the tool-based workaround.
+    Test that models with supports_structured_outputs=True in model DB
+    use native Anthropic structured outputs (output_format) rather than
+    the tool-based workaround.
     """
+    import litellm
+
+    # Ensure the flag is set in model cost map for test reliability
+    if model_name in litellm.model_cost:
+        litellm.model_cost[model_name]["supports_structured_outputs"] = True
+
     config = AnthropicConfig()
 
     response_format = {
@@ -905,10 +916,17 @@ def test_opus_uses_native_structured_output(model_name):
     assert optional_params.get("json_mode") is True
 
 
-def test_non_structured_output_model_uses_tool_workaround():
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-3-5-sonnet-20241022",
+        "claude-3-haiku-20240307",
+    ],
+)
+def test_non_structured_output_model_uses_tool_workaround(model_name):
     """
-    Test that models NOT in the native structured output list still use the
-    tool-based workaround for response_format.
+    Test that models without supports_structured_outputs in model DB
+    use the tool-based workaround for response_format.
     """
     config = AnthropicConfig()
 
@@ -928,7 +946,7 @@ def test_non_structured_output_model_uses_tool_workaround():
     optional_params = config.map_openai_params(
         non_default_params={"response_format": response_format},
         optional_params={},
-        model="claude-3-5-sonnet-20241022",
+        model=model_name,
         drop_params=False,
     )
 

@@ -7759,7 +7759,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_structured_outputs": true
     },
     "claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -7780,7 +7781,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_structured_outputs": true
     },
     "claude-3-5-sonnet-20240620": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -8059,7 +8061,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "claude-sonnet-4-5-20250929": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -8090,7 +8093,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -8225,7 +8229,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_structured_outputs": true
     },
     "claude-opus-4-5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -8252,7 +8257,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_structured_outputs": true
     },
     "claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -8283,7 +8289,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "fast/claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -8314,7 +8321,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "us/claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -8345,7 +8353,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "fast/us/claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -8376,7 +8385,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "claude-opus-4-6-20260205": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -8407,7 +8417,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "fast/claude-opus-4-6-20260205": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -8438,7 +8449,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "us/claude-opus-4-6-20260205": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -8469,7 +8481,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 346
+        "tool_use_system_prompt_tokens": 346,
+        "supports_structured_outputs": true
     },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-05-14",
