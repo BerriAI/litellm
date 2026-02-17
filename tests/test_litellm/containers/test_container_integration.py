@@ -385,6 +385,15 @@ class TestContainerIntegration:
     @pytest.mark.parametrize("provider", ["openai"])
     def test_provider_support(self, provider):
         """Test that the container API works with supported providers."""
+        import importlib
+        import litellm.containers.main as containers_main_module
+
+        # Reload the module to ensure it has a fresh reference to base_llm_http_handler
+        # after conftest reloads litellm (same pattern as test_error_handling_integration)
+        importlib.reload(containers_main_module)
+
+        from litellm.containers.main import create_container as create_container_fresh
+
         mock_response = ContainerObject(
             id="cntr_provider_test",
             object="container",
@@ -398,7 +407,7 @@ class TestContainerIntegration:
         with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
             mock_handler.container_create_handler.return_value = mock_response
             
-            response = create_container(
+            response = create_container_fresh(
                 name="Provider Test Container",
                 custom_llm_provider=provider
             )
