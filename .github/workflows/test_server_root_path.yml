@@ -1,0 +1,96 @@
+name: Test Proxy SERVER_ROOT_PATH Routing
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-server-root-path:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      matrix:
+        root_path: ["/api/v1", "/llmproxy"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.database
+          tags: litellm-test:${{ github.sha }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start LiteLLM container with SERVER_ROOT_PATH
+        run: |
+          docker run -d \
+            --name litellm-test \
+            -p 4000:4000 \
+            -e SERVER_ROOT_PATH="${{ matrix.root_path }}" \
+            -e LITELLM_MASTER_KEY="sk-1234" \
+            litellm-test:${{ github.sha }} \
+            --detailed_debug
+
+      - name: Wait for container to be healthy
+        run: |
+          echo "Waiting for LiteLLM to start..."
+          max_attempts=30
+          attempt=0
+
+          while [ $attempt -lt $max_attempts ]; do
+            if docker logs litellm-test 2>&1 | grep -q "Uvicorn running"; then
+              echo "LiteLLM started successfully"
+              break
+            fi
+            attempt=$((attempt + 1))
+            echo "Attempt $attempt/$max_attempts - waiting for server to start..."
+            sleep 2
+          done
+
+          if [ $attempt -eq $max_attempts ]; then
+            echo "Server failed to start within timeout"
+            docker logs litellm-test
+            exit 1
+          fi
+
+          sleep 5
+
+      - name: Show container logs
+        if: always()
+        run: docker logs litellm-test
+
+      - name: Test UI endpoint with root path
+        run: |
+          ROOT_PATH="${{ matrix.root_path }}"
+          echo "Testing UI at: http://localhost:4000${ROOT_PATH}/ui/"
+
+          for i in 1 2 3; do
+            content=$(curl -sL --max-time 5 -H "Authorization: Bearer sk-1234" "http://localhost:4000${ROOT_PATH}/ui/")
+            if echo "$content" | grep -q -E "(html|<!DOCTYPE|<head|<body)"; then
+              echo "UI page contains valid HTML content"
+              exit 0
+            fi
+            echo "Attempt $i/3 - no valid HTML, retrying in 5s..."
+            sleep 5
+          done
+          echo "UI page does not contain expected HTML content"
+          echo "Response: $content"
+          docker logs litellm-test
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker stop litellm-test || true
+          docker rm litellm-test || true

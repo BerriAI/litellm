@@ -66,6 +66,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
   const hasGuardrailData = guardrailEntries.length > 0;
   const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
   const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
+  const guardrailPolicyNames = Array.from(
+    new Set(guardrailEntries.map((e: any) => e?.policy_template).filter(Boolean))
+  ) as string[];
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
@@ -124,7 +127,7 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
             )}
             {hasGuardrailData && (
               <Descriptions.Item label="Guardrail">
-                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} />
+                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} policyNames={guardrailPolicyNames} />
               </Descriptions.Item>
             )}
           </Descriptions>
@@ -164,7 +167,11 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       )}
 
       {/* Guardrail Data */}
-      {hasGuardrailData && <GuardrailViewer data={guardrailInfo} />}
+      {hasGuardrailData && (
+        <div id="guardrail-section">
+          <GuardrailViewer data={guardrailInfo} />
+        </div>
+      )}
 
       {/* Vector Store Data */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
@@ -218,15 +225,23 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
   );
 }
 
-function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: number }) {
+function GuardrailLabel({ label, maskedCount, policyNames }: { label: string; maskedCount: number; policyNames: string[] }) {
+  const handleClick = () => {
+    const el = document.getElementById("guardrail-section");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
     <Space size={SPACING_MEDIUM}>
-      <span>{label}</span>
+      <a onClick={handleClick} style={{ cursor: "pointer" }}>{label}</a>
       {maskedCount > 0 && (
         <Tag color="blue">
           {maskedCount} masked
         </Tag>
       )}
+      {policyNames.map((name) => (
+        <Tag key={name} color="purple">{name}</Tag>
+      ))}
     </Space>
   );
 }
