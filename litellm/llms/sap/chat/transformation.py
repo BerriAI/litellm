@@ -205,10 +205,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        model_params = {
-            k: v for k, v in optional_params.items() if k not in {"tools", "model_version", "deployment_url", "grounding", "placeholder_values"}
-        }
-
+        optional_params.pop("deployment_url", None)
         model_version = optional_params.pop("model_version", "latest")
         template = messages
 
@@ -218,7 +215,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         else:
             tools = {}
 
-        response_format = model_params.pop("response_format", {})
+        response_format = optional_params.pop("response_format", {})
         resp_type = response_format.get("type", None)
         if resp_type:
             if resp_type== "json_schema":
@@ -226,47 +223,50 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             else:
                 response_format = validate_dict(response_format, ResponseFormat)
             response_format = {"response_format": response_format}
-        model_params.pop("stream", False)
+        optional_params.pop("stream", False)
         stream_config = {}
-        if "stream_options" in model_params:
-            # stream_config["enabled"] = True
-            stream_options = model_params.pop("stream_options", {})
+        if "stream_options" in optional_params:
+            stream_options = optional_params.pop("stream_options", {})
             stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options.get("delimiters")
-        # else:
-        #     stream_config["enabled"] = False
+
+        placeholder_defaults = optional_params.pop("placeholder_defaults", {})
+        if placeholder_defaults:
+            placeholder_defaults = {"defaults": placeholder_defaults}
+
+        placeholder_values = optional_params.pop("placeholder_values", {})
+        if placeholder_values:
+            placeholder_values = {"placeholder_values": placeholder_values}
+
+        optional_modules = {}
+        optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
+        for module in optional_modules_lst:
+            if optional_params.get(module, None):
+                optional_modules[module] = optional_params.pop(module)
+
         request_body = {
             "config": {
                 "modules": {
                     "prompt_templating": {
                         "prompt": {
                             "template": template,
+                            **placeholder_defaults,
                             **tools,
                             **response_format
                         },
                         "model": {
                             "name": model,
-                            "params": model_params,
+                            "params": optional_params,
                             "version": model_version,
                         },
                     },
+                    **optional_modules
                 },
                 "stream": stream_config,
-            }
+            },
+            **placeholder_values,
         }
-
-        placeholder_defaults = optional_params.pop("placeholder_defaults", {})
-        if placeholder_defaults:
-            request_body["config"]["modules"]["prompt_templating"]["prompt"]["defaults"] = placeholder_defaults
-
-        placeholder_values = optional_params.pop("placeholder_values", {})
-        if placeholder_values:
-            request_body["placeholder_values"] = placeholder_values
-
-        grounding_config = optional_params.pop("grounding", {})
-        if grounding_config:
-            request_body["config"]["modules"]["grounding"] = grounding_config
 
         validate_dict(request_body, OrchestrationRequest)
 
