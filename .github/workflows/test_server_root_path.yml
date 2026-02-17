@@ -3,8 +3,17 @@ permissions:
   contents: read
 
 on:
+<<<<<<< HEAD
   pull_request:
     branches: [main]
+=======
+  push:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+>>>>>>> 8ab2c91722a1a951664873fae467f761f9c4dbb9
 
 jobs:
   test-server-root-path:
