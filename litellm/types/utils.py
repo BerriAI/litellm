@@ -3097,6 +3097,7 @@ class LlmProviders(str, Enum):
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
     DEEPSEEK = "deepseek"
+    KOMILION = "komilion"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
     VOYAGE = "voyage"

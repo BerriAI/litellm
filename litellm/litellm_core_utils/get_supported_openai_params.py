@@ -94,6 +94,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.VLLMConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepseek":
         return litellm.DeepSeekChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "komilion":
+        return litellm.KomilionChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
         return litellm.CohereChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "maritalk":

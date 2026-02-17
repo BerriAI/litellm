@@ -271,6 +271,7 @@ LLM_CONFIG_NAMES = (
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
+    "KomilionChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
@@ -1028,6 +1029,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     ),
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "KomilionChatConfig": (".llms.komilion.chat.transformation", "KomilionChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",

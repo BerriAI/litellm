@@ -1424,6 +1424,7 @@ if TYPE_CHECKING:
     # Import config classes that need type stubs (for mypy) - import with _ prefix to avoid circular reference
     from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
     from .llms.deepseek.chat.transformation import DeepSeekChatConfig as _DeepSeekChatConfig
+    from .llms.komilion.chat.transformation import KomilionChatConfig as _KomilionChatConfig
     from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig
     from .llms.sap.embed.transformation import GenAIHubEmbeddingConfig as _GenAIHubEmbeddingConfig
     from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config as _AzureOpenAIO1Config
@@ -1442,6 +1443,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    KomilionChatConfig: Type[_KomilionChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
