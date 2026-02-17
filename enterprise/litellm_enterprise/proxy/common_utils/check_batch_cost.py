@@ -124,8 +124,16 @@ class CheckBatchCost:
                     **credentials,
                 )
 
+                # Access content - handle both direct attribute and method call
+                if hasattr(_file_content, 'content'):
+                    content_bytes = _file_content.content
+                elif hasattr(_file_content, 'read'):
+                    content_bytes = await _file_content.read()
+                else:
+                    content_bytes = _file_content
+
                 file_content_as_dict = _get_file_content_as_dictionary(
-                    _file_content.content
+                    content_bytes
                 )
 
                 deployment_info = self.llm_router.get_deployment(model_id=model_id)
