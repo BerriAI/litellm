@@ -25,13 +25,12 @@ def test_validate_environment_sets_headers(config: OpenAIEvalsConfig):
     assert result["Content-Type"] == "application/json"
 
 
-def test_validate_environment_requires_api_key(config: OpenAIEvalsConfig):
+def test_validate_environment_requires_api_key(config: OpenAIEvalsConfig, monkeypatch):
     """Test that validate_environment raises error when no API key is provided"""
     import os
 
     # Ensure OPENAI_API_KEY environment variable is None before validation
-    if "OPENAI_API_KEY" in os.environ:
-        del os.environ["OPENAI_API_KEY"]
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     headers: dict = {}
     params = GenericLiteLLMParams()
