@@ -7817,6 +7817,7 @@ class ProviderConfigManager:
             ),
             # Simple provider mappings (no model parameter needed)
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
+            LlmProviders.KOMILION: (lambda: litellm.KomilionChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
             LlmProviders.A2A: (lambda: litellm.A2AConfig(), False),
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
