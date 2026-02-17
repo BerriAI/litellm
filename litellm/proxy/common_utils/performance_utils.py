@@ -8,7 +8,6 @@ for line-by-line profiling.
 See performance_utils.md for detailed usage examples and documentation.
 """
 
-import asyncio
 import atexit
 import cProfile
 import functools

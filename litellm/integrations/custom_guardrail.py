@@ -822,7 +822,6 @@ def log_guardrail_information(func):
         - during_call
         - post_call
     """
-    import asyncio
     import functools
     import inspect
 
