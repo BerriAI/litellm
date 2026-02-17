@@ -591,6 +591,39 @@ async def test_health_check_respects_concurrency_limit():
 
 
 @pytest.mark.asyncio
+async def test_health_check_creates_only_bounded_initial_tasks():
+    from litellm.proxy.health_check import _perform_health_check
+
+    model_list = [
+        {"litellm_params": {"model": f"openai/gpt-4o-mini-{i}", "api_key": "fake-key"}}
+        for i in range(10)
+    ]
+    release_event = asyncio.Event()
+    create_task_call_count = 0
+    real_create_task = asyncio.create_task
+
+    async def mock_health_check(litellm_params, **kwargs):
+        await release_event.wait()
+        return {"status": "healthy"}
+
+    def tracked_create_task(coro):
+        nonlocal create_task_call_count
+        create_task_call_count += 1
+        return real_create_task(coro)
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check), patch(
+        "litellm.proxy.health_check.asyncio.create_task", side_effect=tracked_create_task
+    ):
+        perform_task = real_create_task(
+            _perform_health_check(model_list, max_concurrency=2)
+        )
+        await asyncio.sleep(0.05)
+        assert create_task_call_count == 2
+        release_event.set()
+        await perform_task
+
+
+@pytest.mark.asyncio
 async def test_timeout_does_not_cancel_other_health_checks():
     from litellm.proxy.health_check import _perform_health_check
 

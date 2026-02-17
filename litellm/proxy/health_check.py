@@ -83,10 +83,6 @@ async def _perform_health_check(
     max_concurrency: Optional limit on concurrent health check requests.
     """
 
-    semaphore: Optional[asyncio.Semaphore] = None
-    if isinstance(max_concurrency, int) and max_concurrency > 0:
-        semaphore = asyncio.Semaphore(max_concurrency)
-
     async def _run_model_health_check(model: dict):
         litellm_params = model["litellm_params"]
         model_info = model.get("model_info", {})
@@ -96,28 +92,63 @@ async def _perform_health_check(
         )
         timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
 
-        async def _run():
-            return await run_with_timeout(
-                litellm.ahealth_check(
-                    litellm_params,
-                    mode=mode,
-                    prompt=DEFAULT_HEALTH_CHECK_PROMPT,
-                    input=["test from litellm"],
-                ),
-                timeout,
+        return await run_with_timeout(
+            litellm.ahealth_check(
+                litellm_params,
+                mode=mode,
+                prompt=DEFAULT_HEALTH_CHECK_PROMPT,
+                input=["test from litellm"],
+            ),
+            timeout,
+        )
+
+    async def _run_health_checks_with_bounded_concurrency(
+        models: list, concurrency_limit: int
+    ) -> list:
+        """
+        Run health checks with at most `concurrency_limit` active tasks.
+        Preserves result ordering to match `models`.
+        """
+        results: list = [None] * len(models)
+        tasks_to_index: dict[asyncio.Task, int] = {}
+        model_iter = iter(enumerate(models))
+
+        def _schedule_next() -> bool:
+            try:
+                idx, next_model = next(model_iter)
+            except StopIteration:
+                return False
+            task = asyncio.create_task(_run_model_health_check(next_model))
+            tasks_to_index[task] = idx
+            return True
+
+        for _ in range(min(concurrency_limit, len(models))):
+            _schedule_next()
+
+        while tasks_to_index:
+            done, _ = await asyncio.wait(
+                set(tasks_to_index.keys()),
+                return_when=asyncio.FIRST_COMPLETED,
             )
+            for task in done:
+                idx = tasks_to_index.pop(task)
+                try:
+                    results[idx] = task.result()
+                except Exception as e:
+                    results[idx] = e
+                _schedule_next()
 
-        if semaphore is None:
-            return await _run()
+        return results
 
-        async with semaphore:
-            return await _run()
-
-    tasks = [
-        asyncio.create_task(_run_model_health_check(model)) for model in model_list
-    ]
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    if isinstance(max_concurrency, int) and max_concurrency > 0:
+        results = await _run_health_checks_with_bounded_concurrency(
+            model_list, max_concurrency
+        )
+    else:
+        tasks = [
+            asyncio.create_task(_run_model_health_check(model)) for model in model_list
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
     healthy_endpoints = []
     unhealthy_endpoints = []
