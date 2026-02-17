@@ -73,6 +73,13 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_interaction": "/interactions/{interaction_id}",
     "adelete_interaction": "/interactions/{interaction_id}",
     "acancel_interaction": "/interactions/{interaction_id}/cancel",
+    # OpenAI Evals API routes
+    "acreate_eval": "/evals",
+    "alist_evals": "/evals",
+    "aget_eval": "/evals/{eval_id}",
+    "aupdate_eval": "/evals/{eval_id}",
+    "adelete_eval": "/evals/{eval_id}",
+    "acancel_eval": "/evals/{eval_id}/cancel",
 }
 
 
@@ -190,6 +197,12 @@ async def route_request(
         "acancel_interaction",
         "acancel_batch",
         "afile_delete",
+        "acreate_eval",
+        "alist_evals",
+        "aget_eval",
+        "aupdate_eval",
+        "adelete_eval",
+        "acancel_eval",
     ],
 ):
     """
@@ -256,6 +269,36 @@ async def route_request(
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        # Evals API: always route to litellm directly (not through router)
+        # But extract model credentials if a model is provided
+        if route_type in [
+            "acreate_eval",
+            "alist_evals",
+            "aget_eval",
+            "aupdate_eval",
+            "adelete_eval",
+            "acancel_eval",
+        ]:
+            # If a model is provided, get its credentials from the router
+            model = data.get("model")
+            if model and llm_router:
+                try:
+                    # Try to get deployment credentials for this model
+                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
+                    if not deployment_creds:
+                        # Try by model group name
+                        deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        if deployment and deployment.litellm_params:
+                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
+
+                    # If we found credentials, merge them into data (but don't override user-provided values)
+                    if deployment_creds:
+                        data.update(deployment_creds)
+                except Exception:
+                    # If we can't get deployment creds, continue without them
+                    pass
+
+            return getattr(litellm, f"{route_type}")(**data)
         # Skip model-based routing for container operations
         if route_type in [
             "acreate_container",
