@@ -31,6 +31,7 @@ import {
   customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
+  teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
 } from "../../../networking";
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
@@ -121,14 +122,25 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       );
       setSpendData(data);
     } else if (entityType === "team") {
-      const data = await teamDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
-      );
-      setSpendData(data);
+      const teamIds = selectedTags.length > 0 ? selectedTags : null;
+      try {
+        const data = await teamDailyActivityAggregatedCall(
+          accessToken,
+          startTime,
+          endTime,
+          teamIds,
+        );
+        setSpendData(data);
+      } catch {
+        const data = await teamDailyActivityCall(
+          accessToken,
+          startTime,
+          endTime,
+          1,
+          teamIds,
+        );
+        setSpendData(data);
+      }
     } else if (entityType === "organization") {
       const data = await organizationDailyActivityCall(
         accessToken,

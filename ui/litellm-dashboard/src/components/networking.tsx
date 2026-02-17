@@ -1771,9 +1771,6 @@ export const teamDailyActivityCall = async (
   page: number = 1,
   teamIds: string[] | null = null,
 ) => {
-  /**
-   * Get daily user activity on proxy
-   */
   return fetchDailyActivity({
     accessToken,
     endpoint: "/team/daily/activity",
@@ -1785,6 +1782,52 @@ export const teamDailyActivityCall = async (
       exclude_team_ids: "litellm-dashboard",
     },
   });
+};
+
+export const teamDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[] | null = null,
+) => {
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    const baseUrl = proxyBaseUrl ? `${proxyBaseUrl}/team/daily/activity/aggregated` : `/team/daily/activity/aggregated`;
+    const params = new URLSearchParams();
+    params.append("start_date", formatDate(startTime));
+    params.append("end_date", formatDate(endTime));
+    params.append("timezone", new Date().getTimezoneOffset().toString());
+    params.append("exclude_team_ids", "litellm-dashboard");
+    if (teamIds && teamIds.length > 0) {
+      params.append("team_ids", teamIds.join(","));
+    }
+    const url = `${baseUrl}?${params.toString()}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch aggregated team daily activity:", error);
+    throw error;
+  }
 };
 
 export const organizationDailyActivityCall = async (

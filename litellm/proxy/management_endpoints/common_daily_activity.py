@@ -619,7 +619,7 @@ async def get_daily_activity_aggregated(
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     exclude_entity_ids: Optional[List[str]] = None,
     timezone_offset_minutes: Optional[int] = None,
 ) -> SpendAnalyticsPaginatedResponse:
