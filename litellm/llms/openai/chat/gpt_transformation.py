@@ -20,6 +20,7 @@ from typing import (
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
     _handle_invalid_parallel_tool_calls,
@@ -160,6 +161,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "web_search_options",
             "service_tier",
             "safety_identifier",
+            "prompt_cache_key",
         ]  # works across all models
 
         model_specific_params = []
@@ -586,8 +588,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 enhancements=None,
             )
 
-            translated_choice.finish_reason = self._get_finish_reason(
-                translated_message, choice["finish_reason"]
+            translated_choice.finish_reason = map_finish_reason(
+                self._get_finish_reason(
+                    translated_message, choice["finish_reason"]
+                )
             )
             transformed_choices.append(translated_choice)
 
@@ -768,12 +772,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            return ModelResponseStream(
-                id=chunk["id"],
-                object="chat.completion.chunk",
-                created=chunk["created"],
-                model=chunk["model"],
-                choices=chunk["choices"],
-            )
+            kwargs = {
+                "id": chunk["id"],
+                "object": "chat.completion.chunk",
+                "created": chunk.get("created"),
+                "model": chunk.get("model"),
+                "choices": chunk.get("choices", []),
+            }
+            if "usage" in chunk and chunk["usage"] is not None:
+                kwargs["usage"] = chunk["usage"]
+            return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e

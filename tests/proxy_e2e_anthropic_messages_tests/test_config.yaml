@@ -1,0 +1,46 @@
+model_list:
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-5-20250929"
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: bedrock-claude-sonnet-3.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-sonnet-4.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-opus-4.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/us.amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"
+
+  # Converse API models
+  - model_name: bedrock-converse-claude-sonnet-4.5
+    litellm_params:
+      model: "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
+
+  # Vertex AI models
+  - model_name: vertex-ai-claude-opus-4-6
+    litellm_params:
+      model: "vertex_ai/claude-opus-4-6"
+      vertex_ai_project: "pathrise-convert-1606954137718"
+      vertex_ai_location: "asia-southeast1"
+
+general_settings:  
+  forward_client_headers_to_llm_api: true

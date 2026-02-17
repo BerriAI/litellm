@@ -103,7 +103,7 @@ Expected Response
 {
   "spend": 0.0011120000000000001, # 👈 SPEND
   "max_budget": null,
-  "token": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+  "token": "example-api-key-123",
   "customer_id": "krrish12",  # 👈 CUSTOMER ID
   "user_id": null,
   "team_id": null,

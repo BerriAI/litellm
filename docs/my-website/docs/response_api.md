@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # /responses
 
 
-LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+LiteLLM provides an endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
 
 Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
 
@@ -1022,6 +1022,134 @@ curl http://localhost:4000/v1/responses \
 
 
 
+
+## Server-side compaction
+
+For long-running conversations, you can enable **server-side compaction** so that when the rendered context size crosses a threshold, the server automatically runs compaction in-stream and emits a compaction item—no separate `POST /v1/responses/compact` call is required.
+
+Supported on the OpenAI Responses API when using the `openai` or `azure` provider. Pass `context_management` with a compaction entry and `compact_threshold` (token count; minimum 1000). When the context crosses the threshold, the server compacts in-stream and continues. Chain turns with `previous_response_id` or by appending output items to your next input array. See [OpenAI Compaction guide](https://developers.openai.com/api/docs/guides/compaction) for details.
+
+For explicit control over when compaction runs, use the standalone compact endpoint (`POST /v1/responses/compact`) instead.
+
+### Python SDK
+
+```python showLineNumbers title="Server-side compaction with LiteLLM Python SDK"
+import litellm
+
+# Non-streaming: enable compaction when context exceeds 200k tokens
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+
+# Streaming: same context_management, compaction runs in-stream if threshold is crossed
+stream = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    stream=True,
+)
+for event in stream:
+    print(event)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `context_management` to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Server-side compaction via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",  # LiteLLM Proxy (AI Gateway)
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+```
+
+**curl (proxy):**
+
+```bash title="Server-side compaction via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "input": "Your conversation input...",
+    "context_management": [{"type": "compaction", "compact_threshold": 200000}],
+    "max_output_tokens": 1024
+  }'
+```
+
+## Shell tool
+
+The **Shell tool** lets the model run commands in a hosted container or local runtime (OpenAI Responses API). You pass `tools=[{"type": "shell", "environment": {...}}]`; the `environment` object configures the runtime (e.g. `type: "container_auto"` for auto-provisioned containers). See [OpenAI Shell tool guide](https://developers.openai.com/api/docs/guides/tools-shell) for full options.
+
+Supported when using the `openai` or `azure` provider with a model that supports the Shell tool.
+
+### Python SDK
+
+```python showLineNumbers title="Shell tool with LiteLLM Python SDK"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data and run python --version.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `tools` (including `type: "shell"`) to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Shell tool via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+**curl:**
+
+```bash title="Shell tool via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-5.2",
+    "input": "List files in /mnt/data.",
+    "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
+    "tool_choice": "auto",
+    "max_output_tokens": 1024
+  }'
+```
 
 ## Session Management
 

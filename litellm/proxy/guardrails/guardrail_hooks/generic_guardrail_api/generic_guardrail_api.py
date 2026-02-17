@@ -5,26 +5,137 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import fnmatch
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm._version import version as litellm_version
+from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "generic_guardrail_api"
+
+# Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
+_HEADER_VALUE_ALLOWLIST = frozenset({
+    "host",
+    "accept-encoding",
+    "connection",
+    "accept",
+    "content-type",
+    "user-agent",
+    "x-stainless-*",
+    "x-litellm-*",
+    "content-length",
+})
+
+# Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
+_HEADER_PRESENT_PLACEHOLDER = "[present]"
+
+
+def _header_value_allowed(header_name: str) -> bool:
+    """Return True if this header's value may be forwarded (allowlist, including globs)."""
+    lower = header_name.lower()
+    if lower in _HEADER_VALUE_ALLOWLIST:
+        return True
+    for pattern in _HEADER_VALUE_ALLOWLIST:
+        if "*" in pattern and fnmatch.fnmatch(lower, pattern):
+            return True
+    return False
+
+
+def _sanitize_inbound_headers(headers: Any) -> Optional[Dict[str, str]]:
+    """
+    Sanitize inbound headers before passing them to a 3rd party guardrail service.
+
+    - Allowlist: only headers in the allowlist have their values forwarded (exact + glob: x-stainless-*, x-litellm-*).
+    - All other headers are included with value "[present]" so the guardrail knows the header existed.
+    - Coerces values to str (for JSON serialization).
+    """
+    if not headers or not isinstance(headers, dict):
+        return None
+
+    sanitized: Dict[str, str] = {}
+    for k, v in headers.items():
+        if k is None:
+            continue
+        key = str(k)
+        if _header_value_allowed(key):
+            try:
+                sanitized[key] = str(v)
+            except Exception:
+                continue
+        else:
+            sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
+
+    return sanitized or None
+
+
+def _extract_inbound_headers(
+    request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
+) -> Optional[Dict[str, str]]:
+    """
+    Extract inbound headers from available request context.
+
+    We try multiple locations to support different call paths:
+    - proxy endpoints: request_data["proxy_server_request"]["headers"]
+    - if the guardrail is passed the proxy_server_request object directly
+    - metadata headers captured in litellm_pre_call_utils
+    - response hooks: fallback to logging_obj.model_call_details
+    """
+    # 1) Most common path (proxy): full request context in proxy_server_request
+    headers = request_data.get("proxy_server_request", {}).get("headers")
+    if headers:
+        return _sanitize_inbound_headers(headers)
+
+    # 2) Some guardrails pass proxy_server_request as request_data itself
+    headers = request_data.get("headers")
+    if headers:
+        return _sanitize_inbound_headers(headers)
+
+    # 3) Pre-call: headers stored in request metadata
+    metadata_headers = (request_data.get("metadata") or {}).get("headers")
+    if metadata_headers:
+        return _sanitize_inbound_headers(metadata_headers)
+
+    litellm_metadata_headers = (request_data.get("litellm_metadata") or {}).get(
+        "headers"
+    )
+    if litellm_metadata_headers:
+        return _sanitize_inbound_headers(litellm_metadata_headers)
+
+    # 4) Post-call: headers not present on response; fallback to logging object
+    if logging_obj and getattr(logging_obj, "model_call_details", None):
+        try:
+            details = logging_obj.model_call_details or {}
+            headers = (
+                details.get("litellm_params", {})
+                .get("metadata", {})
+                .get("headers", None)
+            )
+            if headers:
+                return _sanitize_inbound_headers(headers)
+        except Exception:
+            pass
+
+    return None
 
 
 class GenericGuardrailAPI(CustomGuardrail):
@@ -53,6 +164,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         self,
         headers: Optional[Dict[str, Any]] = None,
         api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -60,6 +172,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
         self.headers = headers or {}
+
+        # If api_key is provided, add it as x-api-key header
+        if api_key:
+            self.headers["x-api-key"] = api_key
+
         base_url = api_base or os.environ.get("GENERIC_GUARDRAIL_API_BASE")
 
         if not base_url:
@@ -142,6 +259,7 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         return result_metadata
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -177,6 +295,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools = inputs.get("tools")
         structured_messages = inputs.get("structured_messages")
         tool_calls = inputs.get("tool_calls")
+        model = inputs.get("model")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -194,6 +313,7 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
+        inbound_headers = _extract_inbound_headers(request_data=request_data, logging_obj=logging_obj)
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
@@ -201,12 +321,15 @@ class GenericGuardrailAPI(CustomGuardrail):
             litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
             texts=texts,
             request_data=user_metadata,
+            request_headers=inbound_headers,
+            litellm_version=litellm_version,
             images=images,
             tools=tools,
             structured_messages=structured_messages,
             tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
+            model=model,
         )
 
         # Prepare headers
@@ -216,9 +339,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         try:
             # Make the API request
+            # Use mode="json" to ensure all iterables are converted to lists
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.model_dump(),
+                json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
             )
 
@@ -240,7 +364,11 @@ class GenericGuardrailAPI(CustomGuardrail):
                 verbose_proxy_logger.warning(
                     "Generic Guardrail API blocked request: %s", error_message
                 )
-                raise Exception(f"Content blocked by guardrail: {error_message}")
+                raise GuardrailRaisedException(
+                    guardrail_name=GUARDRAIL_NAME,
+                    message=error_message,
+                    should_wrap_with_default_message=False,
+                )
 
             # Action is NONE or no modifications needed
             return_inputs = GenericGuardrailAPIInputs(texts=texts)
@@ -256,10 +384,10 @@ class GenericGuardrailAPI(CustomGuardrail):
                 return_inputs["tools"] = tools
             return return_inputs
 
+        except GuardrailRaisedException:
+            # Re-raise guardrail exceptions as-is
+            raise
         except Exception as e:
-            # Check if it's already an exception we raised
-            if "Content blocked by guardrail" in str(e):
-                raise
             verbose_proxy_logger.error(
                 "Generic Guardrail API: failed to make request: %s", str(e)
             )

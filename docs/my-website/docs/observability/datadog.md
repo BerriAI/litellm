@@ -7,6 +7,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
+- `datadog_cost_management` [Datadog Cloud Cost Management](#datadog-cloud-cost-management)
 - `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
 ## Datadog Logs
@@ -73,7 +74,7 @@ Send logs through a local DataDog agent (useful for containerized environments):
 ```shell
 LITELLM_DD_AGENT_HOST="localhost"         # hostname or IP of DataDog agent
 LITELLM_DD_AGENT_PORT="10518"             # [OPTIONAL] port of DataDog agent (default: 10518)
-DD_API_KEY="5f2d0f310***********"         # [OPTIONAL] your datadog API Key (agent handles auth)
+DD_API_KEY="5f2d0f310***********"         # [OPTIONAL] your datadog API Key (Agent handles auth for Logs. REQUIRED for LLM Observability)
 DD_SOURCE="litellm_dev"                   # [OPTIONAL] your datadog source
 ```
 
@@ -83,6 +84,9 @@ When `LITELLM_DD_AGENT_HOST` is set, logs are sent to the agent instead of direc
 - Leveraging agent-side processing and filtering
 
 **Note:** We use `LITELLM_DD_AGENT_HOST` instead of `DD_AGENT_HOST` to avoid conflicts with `ddtrace` which automatically sets `DD_AGENT_HOST` for APM tracing.
+
+> [!IMPORTANT]
+> **Datadog LLM Observability**: `DD_API_KEY` is **REQUIRED** even when using the Datadog Agent (`LITELLM_DD_AGENT_HOST`). The agent acts as a proxy but the API key header is mandatory for the LLM Observability endpoint.
 
 **Step 3**: Start the proxy, make a test request
 
@@ -161,6 +165,50 @@ On the Datadog LLM Observability page, you should see that both input messages a
 
 
 
+<Image img={require('../../img/dd_llm_obs.png')} />
+
+
+## Datadog Cloud Cost Management
+
+| Feature | Details |
+|---------|---------|
+| **What is logged** | Aggregated LLM Costs (FOCUS format) |
+| **Events** | Periodic Uploads of Aggregated Cost Data |
+| **Product Link** | [Datadog Cloud Cost Management](https://docs.datadoghq.com/cost_management/) |
+
+We will use the `--config` to set `litellm.callbacks = ["datadog_cost_management"]`. This will periodically upload aggregated LLM cost data to Datadog.
+
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["datadog_cost_management"]
+```
+
+**Step 2**: Set Required env variables
+
+```shell
+DD_API_KEY="your-api-key"
+DD_APP_KEY="your-app-key" # REQUIRED for Cost Management
+DD_SITE="us5.datadoghq.com"
+```
+
+**Step 3**: Start the proxy
+
+```shell
+litellm --config config.yaml
+```
+
+**How it works**
+* LiteLLM aggregates costs in-memory by Provider, Model, Date, and Tags.
+* Requires `DD_APP_KEY` for the Custom Costs API.
+* Costs are uploaded periodically (flushed).
+
+
 ### Datadog Tracing
 
 Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
@@ -181,7 +229,7 @@ docker run \
     -e USE_DDTRACE=true \
     -e USE_DDPROFILER=true \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
 
@@ -203,5 +251,5 @@ LiteLLM supports customizing the following Datadog environment variables
 | `POD_NAME` | Pod name tag (useful for Kubernetes deployments) | "unknown" | ❌ No |
 
 \* **Required when using Direct API** (default): `DD_API_KEY` and `DD_SITE` are required  
-\* **Optional when using DataDog Agent**: Set `LITELLM_DD_AGENT_HOST` to use agent mode; `DD_API_KEY` and `DD_SITE` are not required
+\* **Optional when using DataDog Agent**: Set `LITELLM_DD_AGENT_HOST` to use agent mode; `DD_API_KEY` and `DD_SITE` are not required for **Datadog Logs**. (**Note: `DD_API_KEY` IS REQUIRED for Datadog LLM Observability**)
 

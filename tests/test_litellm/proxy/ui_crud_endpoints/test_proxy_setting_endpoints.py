@@ -290,6 +290,10 @@ class TestProxySettingEndpoints:
         assert "google_client_id" in data["field_schema"]["properties"]
         assert "description" in data["field_schema"]["properties"]["google_client_id"]
         
+        # Verify role_mappings is present in response (can be None if not set)
+        assert "role_mappings" in values
+        assert values["role_mappings"] is None
+        
         # Verify find_unique was called with correct parameters
         mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once()
         call_args = mock_prisma.db.litellm_ssoconfig.find_unique.call_args
@@ -738,18 +742,16 @@ class TestProxySettingEndpoints:
     ):
         """Test updating UI settings with an allowlisted field"""
         from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy._types import UserAPIKeyAuth
 
-        class MockUser:
-            def __init__(self, user_role):
-                self.user_role = user_role
-
-        async def mock_admin_auth():
-            return MockUser(LitellmUserRoles.PROXY_ADMIN)
-
-        monkeypatch.setattr(
-            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
-            mock_admin_auth,
+        # Override the FastAPI dependency with a proper mock
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
         )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
@@ -757,7 +759,11 @@ class TestProxySettingEndpoints:
 
         payload = {"disable_model_add_for_internal_users": True}
 
-        response = client.patch("/update/ui_settings", json=payload)
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            # Clean up the dependency override
+            app.dependency_overrides.clear()
 
         assert response.status_code == 200
         data = response.json()
@@ -776,18 +782,16 @@ class TestProxySettingEndpoints:
     ):
         """Test non-allowlisted UI settings are ignored on update"""
         from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy._types import UserAPIKeyAuth
 
-        class MockUser:
-            def __init__(self, user_role):
-                self.user_role = user_role
-
-        async def mock_admin_auth():
-            return MockUser(LitellmUserRoles.PROXY_ADMIN)
-
-        monkeypatch.setattr(
-            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
-            mock_admin_auth,
+        # Override the FastAPI dependency with a proper mock
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
         )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
@@ -798,7 +802,11 @@ class TestProxySettingEndpoints:
             "unsupported_flag": True,
         }
 
-        response = client.patch("/update/ui_settings", json=payload)
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            # Clean up the dependency override
+            app.dependency_overrides.clear()
 
         assert response.status_code == 200
         data = response.json()
@@ -863,6 +871,10 @@ class TestProxySettingEndpoints:
         assert values["google_client_secret"] == "decrypted_google_secret"
         assert values["microsoft_client_id"] == "decrypted_microsoft_id"
         assert values["proxy_base_url"] == "https://decrypted.example.com"
+        
+        # Verify role_mappings is present in response (can be None if not set)
+        assert "role_mappings" in values
+        assert values["role_mappings"] is None
 
     def test_update_sso_settings_to_database(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test updating SSO settings saves to the dedicated database table"""
@@ -1062,6 +1074,7 @@ class TestProxySettingEndpoints:
         assert values.get("google_client_id") is None
         assert values.get("google_client_secret") is None
         assert values.get("microsoft_client_id") is None
+        assert values.get("role_mappings") is None
 
     def test_update_sso_settings_no_database_connection(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test updating SSO settings when database is not connected"""
@@ -1088,3 +1101,239 @@ class TestProxySettingEndpoints:
         data = response.json()
         assert "error" in data["detail"]
         assert "Database not connected" in data["detail"]["error"]
+
+    def test_get_sso_settings_with_role_mappings(self, mock_proxy_config, mock_auth, monkeypatch):
+        """Test getting SSO settings when role_mappings is present in database"""
+        from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy._types import LitellmUserRoles
+
+        # Mock the prisma client with database record containing role_mappings
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.sso_settings = {
+            "google_client_id": "test_google_client_id",
+            "role_mappings": {
+                "provider": "google",
+                "group_claim": "groups",
+                "default_role": LitellmUserRoles.INTERNAL_USER,
+                "roles": {
+                    LitellmUserRoles.PROXY_ADMIN: ["admin-group"],
+                },
+            },
+        }
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        # Mock decryption to return the values as-is (role_mappings should not be passed to decryption)
+        from litellm.proxy.proxy_server import proxy_config
+        def mock_decrypt(environment_variables):
+            # role_mappings should not be in environment_variables since it's extracted before decryption
+            assert "role_mappings" not in environment_variables
+            return environment_variables
+        
+        monkeypatch.setattr(
+            proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt
+        )
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify role_mappings is returned correctly
+        values = data["values"]
+        assert "role_mappings" in values
+        assert values["role_mappings"] is not None
+        assert values["role_mappings"]["provider"] == "google"
+        assert values["role_mappings"]["group_claim"] == "groups"
+        assert values["role_mappings"]["default_role"] == LitellmUserRoles.INTERNAL_USER
+        assert values["role_mappings"]["roles"][LitellmUserRoles.PROXY_ADMIN] == ["admin-group"]
+
+    def test_role_mappings_stored_and_retrieved(self, mock_proxy_config, mock_auth, monkeypatch):
+        """Test that role_mappings is properly stored and retrieved from SSO settings"""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy._types import LitellmUserRoles
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        # Mock the prisma client
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        # Mock encryption to return values as-is
+        from litellm.proxy.proxy_server import proxy_config
+        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", lambda environment_variables: environment_variables)
+
+        # SSO settings with role_mappings
+        role_mappings_data = {
+            "provider": "google",
+            "group_claim": "groups",
+            "default_role": LitellmUserRoles.INTERNAL_USER,
+            "roles": {
+                LitellmUserRoles.PROXY_ADMIN: ["admin-group"],
+                LitellmUserRoles.INTERNAL_USER: ["user-group"],
+            },
+        }
+
+        new_sso_settings = {
+            "google_client_id": "test_google_id",
+            "role_mappings": role_mappings_data,
+        }
+
+        response = client.patch("/update/sso_settings", json=new_sso_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "role_mappings" in data["settings"]
+        
+        # Verify role_mappings structure in response
+        returned_role_mappings = data["settings"]["role_mappings"]
+        assert returned_role_mappings["provider"] == "google"
+        assert returned_role_mappings["group_claim"] == "groups"
+        assert returned_role_mappings["default_role"] == LitellmUserRoles.INTERNAL_USER
+        assert returned_role_mappings["roles"][LitellmUserRoles.PROXY_ADMIN] == ["admin-group"]
+
+        # Verify upsert was called with role_mappings in the data
+        assert mock_prisma.db.litellm_ssoconfig.upsert.called
+        call_args = mock_prisma.db.litellm_ssoconfig.upsert.call_args
+        create_data = call_args.kwargs["data"]["create"]
+        stored_sso_settings = json.loads(create_data["sso_settings"])
+        assert "role_mappings" in stored_sso_settings
+        assert stored_sso_settings["role_mappings"]["provider"] == "google"
+
+        # Now test retrieving role_mappings
+        mock_db_record = MagicMock()
+        mock_db_record.sso_settings = stored_sso_settings
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr(
+            proxy_config, "_decrypt_and_set_db_env_variables", lambda environment_variables: environment_variables
+        )
+
+        get_response = client.get("/get/sso_settings")
+        assert get_response.status_code == 200
+        get_data = get_response.json()
+        
+        # Verify role_mappings is returned correctly
+        assert "role_mappings" in get_data["values"]
+        retrieved_role_mappings = get_data["values"]["role_mappings"]
+        assert retrieved_role_mappings is not None
+        assert retrieved_role_mappings["provider"] == "google"
+        assert retrieved_role_mappings["group_claim"] == "groups"
+        assert retrieved_role_mappings["default_role"] == LitellmUserRoles.INTERNAL_USER
+
+    def test_setup_role_mappings_custom_logic_with_env_vars(self, monkeypatch):
+        """Test the _setup_role_mappings function directly with custom role mapping logic from environment variables"""
+        import asyncio
+        import os
+        from litellm.proxy.management_endpoints.ui_sso import _setup_role_mappings
+        from litellm.proxy._types import LitellmUserRoles
+
+        # Set up environment variables for custom role mappings using valid Python dict format
+        monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_ROLES", "{'proxy_admin': ['custom-admin-group'], 'internal_user': ['custom-user-group'], 'proxy_admin_viewer': ['custom-viewer-group']}")
+        monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", "custom-groups")
+        monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE", "internal_user_viewer")
+
+        # Debug: Print environment variables
+        print("GENERIC_ROLE_MAPPINGS_ROLES:", os.getenv("GENERIC_ROLE_MAPPINGS_ROLES"))
+        print("GENERIC_ROLE_MAPPINGS_GROUP_CLAIM:", os.getenv("GENERIC_ROLE_MAPPINGS_GROUP_CLAIM"))
+        print("GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE:", os.getenv("GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE"))
+
+        # Run the async function
+        role_mappings = asyncio.run(_setup_role_mappings())
+        
+        # Debug: Print result
+        print("role_mappings result:", role_mappings)
+
+        # Verify role_mappings is returned correctly from environment variables
+        assert role_mappings is not None
+        assert role_mappings.provider == "generic"
+        assert role_mappings.group_claim == "custom-groups"
+        assert role_mappings.default_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        assert role_mappings.roles[LitellmUserRoles.PROXY_ADMIN] == ["custom-admin-group"]
+        assert role_mappings.roles[LitellmUserRoles.INTERNAL_USER] == ["custom-user-group"]
+        assert role_mappings.roles[LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY] == ["custom-viewer-group"]
+
+    def test_setup_role_mappings_custom_logic_with_no_config(self, monkeypatch):
+        """Test the _setup_role_mappings function returns None when no configuration is available"""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy.management_endpoints.ui_sso import _setup_role_mappings
+
+        # Ensure environment variables are not set
+        monkeypatch.delenv("GENERIC_ROLE_MAPPINGS_ROLES", raising=False)
+        monkeypatch.delenv("GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", raising=False)
+        monkeypatch.delenv("GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE", raising=False)
+
+        # Mock the prisma client to return None (no database record)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        # Run the async function
+        role_mappings = asyncio.run(_setup_role_mappings())
+
+        # Should return None when no configuration is available
+        assert role_mappings is None
+
+    def test_get_sso_settings_with_env_role_mappings(self, mock_proxy_config, mock_auth, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy._types import LitellmUserRoles
+        
+        monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_ROLES", '{"proxy_admin": ["custom-admin-group"], "internal_user": ["custom-user-group"], "proxy_admin_viewer": ["custom-viewer-group"]}')
+        monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", "custom-groups")
+        monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE", "internal_user_viewer")
+        
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.sso_settings = {
+            "google_client_id": "test_google_client_id",
+            "role_mappings": {
+                "provider": "google",
+                "group_claim": "db-groups",
+                "default_role": "proxy_admin",
+                "roles": {
+                    "proxy_admin": ["db-admin-group"],
+                },
+            },
+        }
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        
+        from litellm.proxy.proxy_server import proxy_config
+        monkeypatch.setattr(
+            proxy_config, "_decrypt_and_set_db_env_variables", lambda environment_variables: environment_variables
+        )
+        
+        response = client.get("/get/sso_settings")
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        values = data["values"]
+        assert "role_mappings" in values
+        assert values["role_mappings"] is not None
+        
+        # The database values shoeld override the environment variables
+        assert values["role_mappings"]["provider"] == "google"
+        assert values["role_mappings"]["group_claim"] == "db-groups"
+        assert values["role_mappings"]["default_role"] == LitellmUserRoles.PROXY_ADMIN
+        assert values["role_mappings"]["roles"][LitellmUserRoles.PROXY_ADMIN] == ["db-admin-group"]
+        
+        # Verify that the database was checked but environment variables took priority
+        mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once_with(
+            where={"id": "sso_config"}
+        )
+        
+        # Verify other SSO settings are still correctly returned
+        assert values["google_client_id"] == "test_google_client_id"
+        
+        # Verify field_schema is still present
+        assert "field_schema" in data
+        assert "properties" in data["field_schema"]
+        assert "role_mappings" in data["field_schema"]["properties"]

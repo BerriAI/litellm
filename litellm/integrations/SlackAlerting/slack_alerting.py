@@ -531,8 +531,9 @@ class SlackAlerting(CustomBatchLogger):
         self,
         type: Literal[
             "token_budget",
-            "soft_budget",
             "user_budget",
+            "soft_budget",
+            "max_budget_alert",
             "team_budget",
             "organization_budget",
             "proxy_budget",
@@ -1377,6 +1378,11 @@ Model Info:
         """
         if self.alerting is None:
             return
+        
+        # Start periodic flush if not already started
+        if not self.periodic_started and self.alerting is not None and len(self.alerting) > 0:
+            asyncio.create_task(self.periodic_flush())
+            self.periodic_started = True
 
         if (
             "webhook" in self.alerting

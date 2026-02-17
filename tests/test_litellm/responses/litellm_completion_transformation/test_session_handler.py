@@ -27,7 +27,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         {
             "request_id": "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb",
             "call_type": "aresponses",
-            "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "api_key": "sk-test-mock-api-key-123",
             "spend": 0.004803,
             "total_tokens": 329,
             "prompt_tokens": 11,
@@ -68,7 +68,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         {
             "request_id": "chatcmpl-370760c9-39fa-4db7-b034-d1f8d933c935",
             "call_type": "aresponses",
-            "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "api_key": "sk-test-mock-api-key-123",
             "spend": 0.010437,
             "total_tokens": 967,
             "prompt_tokens": 339,

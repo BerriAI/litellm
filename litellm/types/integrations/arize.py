@@ -14,3 +14,4 @@ class ArizeConfig(BaseModel):
     api_key: Optional[str] = None
     protocol: Protocol
     endpoint: str
+    project_name: Optional[str] = None

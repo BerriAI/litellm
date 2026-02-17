@@ -10,6 +10,7 @@ Has 4 primary methods:
 
 import ast
 import asyncio
+import hashlib
 import inspect
 import json
 import time
@@ -145,9 +146,17 @@ class RedisCache(BaseCache):
         except Exception:
             pass
 
-        ### ASYNC HEALTH PING ###
+        self._setup_health_pings()
+
+        if litellm.default_redis_ttl is not None:
+            super().__init__(default_ttl=int(litellm.default_redis_ttl))
+        else:
+            super().__init__()  # defaults to 60s
+
+    def _setup_health_pings(self):
+        """Setup async and sync health pings for Redis."""
+        # ASYNC HEALTH PING
         try:
-            # asyncio.get_running_loop().create_task(self.ping())
             _ = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
             if "no running event loop" in str(e):
@@ -159,8 +168,9 @@ class RedisCache(BaseCache):
                     "Error connecting to Async Redis client - {}".format(str(e)),
                     extra={"error": str(e)},
                 )
+                self._handle_async_ping_error(e)
 
-        ### SYNC HEALTH PING ###
+        # SYNC HEALTH PING
         try:
             if hasattr(self.redis_client, "ping"):
                 self.redis_client.ping()  # type: ignore
@@ -168,11 +178,53 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
+            self._handle_sync_ping_error(e)
 
-        if litellm.default_redis_ttl is not None:
-            super().__init__(default_ttl=int(litellm.default_redis_ttl))
-        else:
-            super().__init__()  # defaults to 60s
+    def _handle_async_ping_error(self, e: Exception):
+        """Handle async ping error with service failure hook."""
+        try:
+            loop = asyncio.get_running_loop()
+            start_time = time.time()
+            end_time = start_time
+            loop.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="redis_async_ping",
+                )
+            )
+        except Exception:
+            pass
+
+    def _handle_sync_ping_error(self, e: Exception):
+        """Handle sync ping error with service failure hook."""
+        try:
+            loop = asyncio.get_running_loop()
+            start_time = time.time()
+            end_time = start_time
+            loop.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="redis_sync_ping",
+                )
+            )
+        except Exception:
+            pass
+
+    def _get_async_client_cache_key(self) -> str:
+        """
+        Generate a cache key for the async Redis client based on connection parameters.
+        This ensures different Redis configurations use different cached clients.
+        """
+        # Create a stable representation of redis_kwargs for hashing
+        # Sort keys to ensure consistent hash regardless of parameter order
+        sorted_kwargs = sorted(self.redis_kwargs.items())
+        kwargs_str = json.dumps(sorted_kwargs, sort_keys=True)
+        kwargs_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
+        return f"async-redis-client-{kwargs_hash}"
 
     def init_async_client(
         self,
@@ -181,7 +233,8 @@ class RedisCache(BaseCache):
 
         from .._redis import get_redis_async_client, get_redis_connection_pool
 
-        cached_client = in_memory_llm_clients_cache.get_cache(key="async-redis-client")
+        cache_key = self._get_async_client_cache_key()
+        cached_client = in_memory_llm_clients_cache.get_cache(key=cache_key)
         if cached_client is not None:
             redis_async_client = cast(
                 Union[async_redis_client, async_redis_cluster_client], cached_client
@@ -193,7 +246,7 @@ class RedisCache(BaseCache):
                 connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
             )
             in_memory_llm_clients_cache.set_cache(
-                key="async-redis-client", value=redis_async_client
+                key=cache_key, value=redis_async_client
             )
 
         self.redis_async_client = redis_async_client  # type: ignore
@@ -1070,7 +1123,7 @@ class RedisCache(BaseCache):
             redis_client = redis_async.Redis(**self.redis_kwargs)
             
             # Test the connection
-            ping_result = await redis_client.ping()
+            ping_result = await redis_client.ping()  # type: ignore[misc]
 
             # Close the connection
             await redis_client.aclose()  # type: ignore[attr-defined]

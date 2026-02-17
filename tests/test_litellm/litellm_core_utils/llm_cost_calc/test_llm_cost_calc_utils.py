@@ -313,10 +313,12 @@ def test_string_cost_values():
     }
 
     # Test usage with various token types
+    # Note: prompt_tokens must equal sum of details to avoid double-counting adjustment
+    # text_tokens(700) + audio_tokens(100) + cached_tokens(200) + cache_creation_tokens(150) = 1150
     usage = Usage(
-        prompt_tokens=1000,
+        prompt_tokens=1150,
         completion_tokens=500,
-        total_tokens=1500,
+        total_tokens=1650,
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None, cache_creation_tokens=150
         ),
@@ -809,3 +811,54 @@ def test_bedrock_anthropic_prompt_caching():
     assert completion_cost >= 0
     assert round(prompt_cost, 3) == 0.111
     assert round(completion_cost, 5) == 0.00820
+
+
+def test_reasoning_tokens_without_text_tokens_gpt5_nano():
+    """
+    Test fix for GitHub issue #18599:
+    https://github.com/BerriAI/litellm/issues/18599
+
+    When OpenAI models (gpt-5-nano, o1, o3) return reasoning_tokens but don't provide
+    text_tokens, LiteLLM should calculate text_tokens as:
+      text_tokens = completion_tokens - reasoning_tokens - audio_tokens - image_tokens
+
+    This ensures ALL completion tokens are billed, not just reasoning tokens.
+    """
+    model = "gpt-5-nano"
+    custom_llm_provider = "openai"
+
+    # Simulate OpenAI gpt-5-nano response where text_tokens is NOT provided
+    # completion_tokens: 977 total
+    # reasoning_tokens: 768
+    # text_tokens: should be calculated as 977 - 768 = 209
+    usage = Usage(
+        prompt_tokens=17,
+        completion_tokens=977,
+        total_tokens=994,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=768,
+            audio_tokens=0,
+            # text_tokens NOT provided - this is the key part of the bug
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    # gpt-5-nano pricing: $0.05/1M input, $0.40/1M output
+    expected_prompt_cost = 17 * 0.05 / 1_000_000
+    expected_completion_cost = 977 * 0.40 / 1_000_000  # ALL tokens, not just reasoning
+
+    assert abs(prompt_cost - expected_prompt_cost) < 1e-10, \
+        f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
+
+    assert abs(completion_cost - expected_completion_cost) < 1e-10, \
+        f"Completion cost incorrect: {completion_cost} vs {expected_completion_cost}"
+
+    # Verify it's NOT using only reasoning_tokens (the bug)
+    wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
+    assert abs(completion_cost - wrong_cost) > 1e-6, \
+        "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"

@@ -49,6 +49,29 @@ LiteLLM is a unified interface for 100+ LLMs that:
    - Test provider-specific functionality thoroughly
    - Consider adding load tests for performance-critical changes
 
+### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
+
+1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
+   - The only exception is the Tremor Table component and its required Tremor Table sub components.
+
+2. **Use Common Components as much as possible**:
+   - These are usually defined in the `common_components` directory
+   - Use these components as much as possible and avoid building new components unless needed
+
+3. **Testing**:
+   - The codebase uses **Vitest** and **React Testing Library**
+   - **Query Priority Order**: Use query methods in this order: `getByRole`, `getByLabelText`, `getByPlaceholderText`, `getByText`, `getByTestId`
+   - **Always use `screen`** instead of destructuring from `render()` (e.g., use `screen.getByText()` not `getByText`)
+   - **Wrap user interactions in `act()`**: Always wrap `fireEvent` calls with `act()` to ensure React state updates are properly handled
+   - **Use `query` methods for absence checks**: Use `queryBy*` methods (not `getBy*`) when expecting an element to NOT be present
+   - **Test names must start with "should"**: All test names should follow the pattern `it("should ...")`
+   - **Mock external dependencies**: Check `setupTests.ts` for global mocks and mock child components/networking calls as needed
+   - **Structure tests properly**:
+     - First test should verify the component renders successfully
+     - Subsequent tests should focus on functionality and user interactions
+     - Use `waitFor` for async operations that aren't already awaited
+   - **Avoid using `querySelector`**: Prefer React Testing Library queries over direct DOM manipulation
+
 ### IMPORTANT PATTERNS
 
 1. **Function/Tool Calling**:

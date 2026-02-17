@@ -12,10 +12,89 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+
 import litellm.proxy.proxy_server as ps
+
+
+def _default_date_range():
+    """Return (start_date, end_date) for the common 7-day range used in UI spend tests."""
+    now = datetime.datetime.now(timezone.utc)
+    return (
+        (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S"),
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+
+
+def _filter_logs_by_date_range(logs, where):
+    """Filter logs by startTime gte/lte from where conditions."""
+    if "startTime" not in where:
+        return logs
+    date_filters = where["startTime"]
+    filtered = []
+    for log in logs:
+        log_date = datetime.datetime.fromisoformat(
+            log["startTime"].replace("Z", "+00:00")
+        )
+        if "gte" in date_filters:
+            fd = date_filters["gte"]
+            filter_date = (
+                datetime.datetime.fromisoformat(fd.replace("Z", "+00:00"))
+                if "T" in fd
+                else datetime.datetime.strptime(fd, "%Y-%m-%d %H:%M:%S")
+            )
+            if log_date < filter_date:
+                continue
+        if "lte" in date_filters:
+            fd = date_filters["lte"]
+            filter_date = (
+                datetime.datetime.fromisoformat(fd.replace("Z", "+00:00"))
+                if "T" in fd
+                else datetime.datetime.strptime(fd, "%Y-%m-%d %H:%M:%S")
+            )
+            if log_date > filter_date:
+                continue
+        filtered.append(log)
+    return filtered
+
+
+def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None):
+    """
+    Create a MockPrismaClient for /spend/logs/ui endpoint tests.
+
+    Args:
+        mock_spend_logs: List of mock spend log dicts.
+        filter_fn: Callable[[dict], list] - receives where_conditions from count(),
+                   returns the filtered list of logs for that query.
+        team_lookup_fn: Optional async callable for team RBAC (find_unique).
+                        If provided, adds litellm_teamtable to db.
+    """
+    filtered_holder = []
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            filtered = filter_fn(where)
+            filtered_holder.clear()
+            filtered_holder.extend(filtered)
+            return len(filtered)
+
+        async def query_raw(self, sql_query, *params):
+            page_size = params[-2] if len(params) >= 2 else 50
+            skip = params[-1] if len(params) >= 1 else 0
+            return filtered_holder[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+            if team_lookup_fn is not None:
+                self.db.litellm_teamtable = self
+                self.find_unique = team_lookup_fn
+
+    return MockPrismaClient()
 from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
@@ -201,6 +280,14 @@ ignored_keys = [
     "metadata.usage_object",
     "metadata.cold_storage_object_key",
     "metadata.additional_usage_values.prompt_tokens_details.cache_creation_tokens",
+    "metadata.additional_usage_values.completion_tokens_details",
+    "metadata.additional_usage_values.prompt_tokens_details",
+    "metadata.additional_usage_values.cache_creation_input_tokens",
+    "metadata.additional_usage_values.cache_read_input_tokens",
+    "metadata.additional_usage_values.inference_geo",
+    "metadata.additional_usage_values.speed",
+    "metadata.litellm_overhead_time_ms",
+    "metadata.cost_breakdown",
 ]
 
 MODEL_LIST = [
@@ -249,7 +336,6 @@ def reset_router_callbacks():
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
-    # Mock data for the test
     mock_spend_logs = [
         {
             "id": "log1",
@@ -273,43 +359,17 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Filter based on user_id in the where conditions
-            print("kwargs to find_many", json.dumps(kwargs, indent=4))
-            if (
-                "where" in kwargs
-                and "user" in kwargs["where"]
-                and kwargs["where"]["user"] == "test_user_1"
-            ):
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
+    def filter_by_user(where):
+        if "user" in where and where["user"] == "test_user_1":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
 
-        async def count(self, *args, **kwargs):
-            # Return count based on user_id filter
-            if (
-                "where" in kwargs
-                and "user" in kwargs["where"]
-                and kwargs["where"]["user"] == "test_user_1"
-            ):
-                return 1
-            return len(mock_spend_logs)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_user),
+    )
 
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    # Apply the monkeypatch to replace the prisma_client
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Set up test dates
-    start_date = (
-        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-    ).strftime("%Y-%m-%d %H:%M:%S")
-    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    start_date, end_date = _default_date_range()
 
     # Make the request with user_id filter
     response = client.get(
@@ -339,9 +399,202 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["data"][0]["user"] == "test_user_1"
 
 
+# Mock spend logs with distinct values for sorting tests.
+# req_a: spend=0.10, tokens=500, start/end earliest
+# req_b: spend=0.05, tokens=200, start/end 2nd
+# req_c: spend=0.20, tokens=50, start/end latest
+# req_d: spend=0.01, tokens=100, start/end 3rd
+_SORT_TEST_LOGS = [
+    {
+        "request_id": "req_a",
+        "api_key": "sk-test-key",
+        "user": "user1",
+        "spend": 0.10,
+        "total_tokens": 500,
+        "startTime": "2025-01-01T00:00:00+00:00",
+        "endTime": "2025-01-01T00:01:00+00:00",
+        "model": "gpt-3.5-turbo",
+    },
+    {
+        "request_id": "req_b",
+        "api_key": "sk-test-key",
+        "user": "user1",
+        "spend": 0.05,
+        "total_tokens": 200,
+        "startTime": "2025-01-01T00:00:01+00:00",
+        "endTime": "2025-01-01T00:01:01+00:00",
+        "model": "gpt-3.5-turbo",
+    },
+    {
+        "request_id": "req_c",
+        "api_key": "sk-test-key",
+        "user": "user1",
+        "spend": 0.20,
+        "total_tokens": 50,
+        "startTime": "2025-01-01T00:00:03+00:00",
+        "endTime": "2025-01-01T00:01:03+00:00",
+        "model": "gpt-3.5-turbo",
+    },
+    {
+        "request_id": "req_d",
+        "api_key": "sk-test-key",
+        "user": "user1",
+        "spend": 0.01,
+        "total_tokens": 100,
+        "startTime": "2025-01-01T00:00:02+00:00",
+        "endTime": "2025-01-01T00:01:02+00:00",
+        "model": "gpt-3.5-turbo",
+    },
+]
+
+
+def _sort_logs(logs, order_clause):
+    """Sort logs by the given Prisma-style order clause, e.g. {'spend': 'asc'}."""
+    if not order_clause:
+        return list(logs)
+    key, direction = next(iter(order_clause.items()))
+    reverse = direction.lower() == "desc"
+    return sorted(logs, key=lambda x: x.get(key, 0), reverse=reverse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sort_by,sort_order,expected_request_ids",
+    [
+        # spend: 0.01(d) < 0.05(b) < 0.10(a) < 0.20(c)
+        ("spend", "asc", ["req_d", "req_b", "req_a", "req_c"]),
+        ("spend", "desc", ["req_c", "req_a", "req_b", "req_d"]),
+        # total_tokens: 50(c) < 100(d) < 200(b) < 500(a)
+        ("total_tokens", "asc", ["req_c", "req_d", "req_b", "req_a"]),
+        ("total_tokens", "desc", ["req_a", "req_b", "req_d", "req_c"]),
+        # startTime: 00:00:00(a) < 00:00:01(b) < 00:00:02(d) < 00:00:03(c)
+        ("startTime", "asc", ["req_a", "req_b", "req_d", "req_c"]),
+        ("startTime", "desc", ["req_c", "req_d", "req_b", "req_a"]),
+        # endTime: same ordering as startTime
+        ("endTime", "asc", ["req_a", "req_b", "req_d", "req_c"]),
+        ("endTime", "desc", ["req_c", "req_d", "req_b", "req_a"]),
+        # default when sort_by not provided: startTime desc
+        (None, "desc", ["req_c", "req_d", "req_b", "req_a"]),
+    ],
+)
+async def test_ui_view_spend_logs_sort_by_and_sort_order(
+    client, monkeypatch, sort_by, sort_order, expected_request_ids
+):
+    """Test that spend logs are returned in the correct order for each sort_by/sort_order."""
+    base_logs = list(_SORT_TEST_LOGS)
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        # Endpoint uses raw SQL with ORDER BY startTime DESC; mock returns sorted data
+        order = {"startTime": "desc"} if sort_by is None else {sort_by: sort_order or "desc"}
+        sorted_logs = _sort_logs(base_logs, order)
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return sorted_logs[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date = "2024-12-25 00:00:00"
+        end_date = "2025-01-02 23:59:59"
+
+        params = {
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        if sort_by is not None:
+            params["sort_by"] = sort_by
+        if sort_order is not None:
+            params["sort_order"] = sort_order
+
+        response = client.get(
+            "/spend/logs/ui",
+            params=params,
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "data" in data
+
+        actual_ids = [log["request_id"] for log in data["data"]]
+        assert actual_ids == expected_request_ids, (
+            f"Expected order {expected_request_ids}, got {actual_ids} "
+            f"(sort_by={sort_by}, sort_order={sort_order})"
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sort_by,sort_order",
+    [
+        ("invalid", "asc"),
+        ("spend", "invalid"),
+    ],
+)
+async def test_ui_view_spend_logs_sort_validation_errors(
+    client, monkeypatch, sort_by, sort_order
+):
+    """Test that invalid sort_by and sort_order return 400."""
+    async def mock_count(*args, **kwargs):
+        return 0
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.find_many = AsyncMock(return_value=[])
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date = "2024-12-25 00:00:00"
+        end_date = "2025-01-02 23:59:59"
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
-    # Mock data for the test
     mock_spend_logs = [
         {
             "id": "log1",
@@ -365,54 +618,25 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Filter based on team_id in the where conditions
-            if (
-                "where" in kwargs
-                and "team_id" in kwargs["where"]
-                and kwargs["where"]["team_id"] == "team1"
-            ):
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
+    def filter_by_team(where):
+        if "team_id" in where and where["team_id"] == "team1":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
 
-        async def count(self, *args, **kwargs):
-            # Return count based on team_id filter
-            if (
-                "where" in kwargs
-                and "team_id" in kwargs["where"]
-                and kwargs["where"]["team_id"] == "team1"
-            ):
-                return 1
-            return len(mock_spend_logs)
-
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
- 
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    
-    # Mock _is_admin_view_safe to return True to bypass permission checks
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_team),
+    )
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
-        lambda user_api_key_dict: True
+        lambda user_api_key_dict: True,
     )
-
-    # Override auth dependency to return PROXY_ADMIN
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
     try:
-        # Set up test dates
-        start_date = (
-            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-        ).strftime("%Y-%m-%d %H:%M:%S")
-        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        start_date, end_date = _default_date_range()
 
         # Make the request with team_id filter
         response = client.get(
@@ -442,43 +666,26 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, m
     """
     Internal users should only be able to view their own spend even if user_id is not provided.
     """
-    # Mock spend logs for 2 users
     mock_spend_logs = [
         {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "internal_user_1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
         {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "internal_user_2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
     ]
 
-    # Prisma client mock that filters by "user" where condition
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            where = kwargs.get("where", {})
-            if "user" in where and where["user"] == "internal_user_1":
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
+    def filter_by_user(where):
+        if "user" in where and where["user"] == "internal_user_1":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
 
-        async def count(self, *args, **kwargs):
-            where = kwargs.get("where", {})
-            if "user" in where and where["user"] == "internal_user_1":
-                return 1
-            return len(mock_spend_logs)
-
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Override auth dependency to return INTERNAL_USER with specific user_id
-    # Override using the function reference attached to the running app module
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_user),
+    )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user_1"
     )
 
     try:
-        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        start_date, end_date = _default_date_range()
 
         # No user_id provided; should auto-scope to authenticated internal user's own id
         response = client.get(
@@ -501,55 +708,32 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
     """
     Team admins should be able to view team-wide spend when team_id is provided.
     """
-    # Mock spend logs for two teams
     mock_spend_logs = [
         {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "member1", "team_id": "team_admin_team", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
         {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "member2", "team_id": "team_other", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
     ]
 
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            where = kwargs.get("where", {})
-            if "team_id" in where and where["team_id"] == "team_admin_team":
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
+    def filter_by_team(where):
+        if "team_id" in where and where["team_id"] == "team_admin_team":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
 
-        async def count(self, *args, **kwargs):
-            where = kwargs.get("where", {})
-            if "team_id" in where and where["team_id"] == "team_admin_team":
-                return 1
-            return len(mock_spend_logs)
+    class TeamTable:
+        members_with_roles = [Member(user_id="admin_user", role="admin")]
 
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-            # Team lookup for RBAC check
-            class TeamTable:
-                def __init__(self):
-                    # user "admin_user" is team admin
-                    self.members_with_roles = [Member(user_id="admin_user", role="admin")]
+    async def team_lookup(where):
+        return TeamTable() if where == {"team_id": "team_admin_team"} else None
 
-            async def find_unique(where: dict):
-                if where == {"team_id": "team_admin_team"}:
-                    return TeamTable()
-                return None
-
-            self.db.litellm_teamtable = self
-            self.litellm_teamtable = self
-            self.find_unique = find_unique
-
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Override auth dependency to return INTERNAL_USER (who is a team admin via team.members_with_roles)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_team, team_lookup),
+    )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin_user"
     )
 
     try:
-        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        start_date, end_date = _default_date_range()
 
         response = client.get(
             "/spend/logs/ui",
@@ -567,7 +751,6 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_pagination(client, monkeypatch):
-    # Create a larger set of mock data for pagination testing
     mock_spend_logs = [
         {
             "id": f"log{i}",
@@ -582,31 +765,12 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
         for i in range(1, 26)  # 25 records
     ]
 
-    # Create a mock prisma client with pagination support
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Handle pagination
-            skip = kwargs.get("skip", 0)
-            take = kwargs.get("take", 10)
-            return mock_spend_logs[skip : skip + take]
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, lambda where: mock_spend_logs),
+    )
 
-        async def count(self, *args, **kwargs):
-            return len(mock_spend_logs)
-
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Set up test dates
-    start_date = (
-        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-    ).strftime("%Y-%m-%d %H:%M:%S")
-    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    start_date, end_date = _default_date_range()
 
     # Test first page
     response = client.get(
@@ -669,11 +833,11 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
             assert kwargs.get("where") == {"session_id": "session-123"}
             return len(mock_spend_logs)
 
-        async def find_many(self, *args, **kwargs):
-            assert kwargs.get("where") == {"session_id": "session-123"}
-            assert kwargs.get("order") == {"startTime": "asc"}
-            assert kwargs.get("skip") == 1  # page=2, page_size=1
-            assert kwargs.get("take") == 1
+        async def query_raw(self, sql_query, session_id, page_size, skip):
+            # Endpoint uses raw SQL for pagination - verify params
+            assert session_id == "session-123"
+            assert page_size == 1
+            assert skip == 1  # page=2, page_size=1
             return [mock_spend_logs[1]]
 
     class MockPrismaClient:
@@ -702,9 +866,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
-    # Create mock data with different dates
     today = datetime.datetime.now(timezone.utc)
-
     mock_spend_logs = [
         {
             "id": "log1",
@@ -728,70 +890,15 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client with date filtering
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Check for date range filtering
-            if "where" in kwargs and "startTime" in kwargs["where"]:
-                date_filters = kwargs["where"]["startTime"]
-                filtered_logs = []
+    def filter_by_date(where):
+        return _filter_logs_by_date_range(mock_spend_logs, where)
 
-                for log in mock_spend_logs:
-                    log_date = datetime.datetime.fromisoformat(
-                        log["startTime"].replace("Z", "+00:00")
-                    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_date),
+    )
 
-                    # Apply gte filter if it exists
-                    if "gte" in date_filters:
-                        # Handle ISO format date strings
-                        if "T" in date_filters["gte"]:
-                            filter_date = datetime.datetime.fromisoformat(
-                                date_filters["gte"].replace("Z", "+00:00")
-                            )
-                        else:
-                            filter_date = datetime.datetime.strptime(
-                                date_filters["gte"], "%Y-%m-%d %H:%M:%S"
-                            )
-
-                        if log_date < filter_date:
-                            continue
-
-                    # Apply lte filter if it exists
-                    if "lte" in date_filters:
-                        # Handle ISO format date strings
-                        if "T" in date_filters["lte"]:
-                            filter_date = datetime.datetime.fromisoformat(
-                                date_filters["lte"].replace("Z", "+00:00")
-                            )
-                        else:
-                            filter_date = datetime.datetime.strptime(
-                                date_filters["lte"], "%Y-%m-%d %H:%M:%S"
-                            )
-
-                        if log_date > filter_date:
-                            continue
-
-                    filtered_logs.append(log)
-
-                return filtered_logs
-
-            return mock_spend_logs
-
-        async def count(self, *args, **kwargs):
-            # For simplicity, we'll just call find_many and count the results
-            logs = await self.find_many(*args, **kwargs)
-            return len(logs)
-
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Test with a date range that should only include the second log
+    # Date range that should only include the second log (log1 is 10 days ago, log2 is 2 days ago)
     start_date = (today - datetime.timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
     end_date = today.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -827,7 +934,6 @@ async def test_ui_view_spend_logs_unauthorized(client):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_status(client, monkeypatch):
-    # Mock data for the test
     mock_spend_logs = [
         {
             "id": "log1",
@@ -853,49 +959,19 @@ async def test_ui_view_spend_logs_with_status(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Filter based on status in the where conditions
-            if "where" in kwargs:
-                where_conditions = kwargs["where"]
-                if "OR" in where_conditions:
-                    # Handle success case (which includes None status)
-                    return [mock_spend_logs[0]]
-                elif (
-                    "status" in where_conditions
-                    and where_conditions["status"]["equals"] == "failure"
-                ):
-                    return [mock_spend_logs[1]]
-            return mock_spend_logs
+    def filter_by_status(where):
+        if "OR" in where:
+            return [mock_spend_logs[0]]  # success
+        if "status" in where and where["status"].get("equals") == "failure":
+            return [mock_spend_logs[1]]
+        return mock_spend_logs
 
-        async def count(self, *args, **kwargs):
-            # Return count based on status filter
-            if "where" in kwargs:
-                where_conditions = kwargs["where"]
-                if "OR" in where_conditions:
-                    return 1
-                elif (
-                    "status" in where_conditions
-                    and where_conditions["status"]["equals"] == "failure"
-                ):
-                    return 1
-            return len(mock_spend_logs)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_status),
+    )
 
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Set up test dates
-    start_date = (
-        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-    ).strftime("%Y-%m-%d %H:%M:%S")
-    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    start_date, end_date = _default_date_range()
 
     # Test success status
     response = client.get(
@@ -934,7 +1010,6 @@ async def test_ui_view_spend_logs_with_status(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_model(client, monkeypatch):
-    # Mock data for the test
     mock_spend_logs = [
         {
             "id": "log1",
@@ -960,42 +1035,17 @@ async def test_ui_view_spend_logs_with_model(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Filter based on model in the where conditions
-            if (
-                "where" in kwargs
-                and "model" in kwargs["where"]
-                and kwargs["where"]["model"] == "gpt-3.5-turbo"
-            ):
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
+    def filter_by_model(where):
+        if "model" in where and where["model"] == "gpt-3.5-turbo":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
 
-        async def count(self, *args, **kwargs):
-            # Return count based on model filter
-            if (
-                "where" in kwargs
-                and "model" in kwargs["where"]
-                and kwargs["where"]["model"] == "gpt-3.5-turbo"
-            ):
-                return 1
-            return len(mock_spend_logs)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_model),
+    )
 
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Set up test dates
-    start_date = (
-        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-    ).strftime("%Y-%m-%d %H:%M:%S")
-    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    start_date, end_date = _default_date_range()
 
     # Make the request with model filter
     response = client.get(
@@ -1019,8 +1069,66 @@ async def test_ui_view_spend_logs_with_model(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_model_id(client, monkeypatch):
+    """Test that the model_id query param filters spend logs by litellm model deployment id."""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "model_id": "deployment-id-1",
+            "status": "success",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "model_id": "deployment-id-2",
+            "status": "success",
+        },
+    ]
+
+    def filter_by_model_id(where):
+        if "model_id" in where and where["model_id"] == "deployment-id-1":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_model_id),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "model_id": "deployment-id-1",
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert len(data["data"]) == 1
+    assert data["data"][0]["model_id"] == "deployment-id-1"
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
-    # Mock data for the test
     mock_spend_logs = [
         {
             "id": "log1",
@@ -1044,42 +1152,17 @@ async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client
-    class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Filter based on key_hash in the where conditions
-            if (
-                "where" in kwargs
-                and "api_key" in kwargs["where"]
-                and kwargs["where"]["api_key"] == "sk-test-key-1"
-            ):
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
+    def filter_by_api_key(where):
+        if "api_key" in where and where["api_key"] == "sk-test-key-1":
+            return [mock_spend_logs[0]]
+        return mock_spend_logs
 
-        async def count(self, *args, **kwargs):
-            # Return count based on key_hash filter
-            if (
-                "where" in kwargs
-                and "api_key" in kwargs["where"]
-                and kwargs["where"]["api_key"] == "sk-test-key-1"
-            ):
-                return 1
-            return len(mock_spend_logs)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_api_key),
+    )
 
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Set up test dates
-    start_date = (
-        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-    ).strftime("%Y-%m-%d %H:%M:%S")
-    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    start_date, end_date = _default_date_range()
 
     # Make the request with key_hash filter
     response = client.get(
@@ -1240,7 +1323,7 @@ class TestSpendLogsPayload:
                     "model": "claude-3-7-sonnet-20250219",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1332,7 +1415,7 @@ class TestSpendLogsPayload:
                     "model": "claude-3-7-sonnet-20250219",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1856,3 +1939,214 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     assert "spend" in data[0]
     assert "users" in data[0]
     assert "models" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_code(client):
+    """Test filtering spend logs by error code"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"error_information": {"error_code": "404"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"error_information": {"error_code": "500"}}',
+        },
+    ]
+
+    def filter_by_error_code(where):
+        if "metadata" in where:
+            mf = where["metadata"]
+            if mf.get("path") == ["error_information", "error_code"]:
+                code = str(mf.get("equals", "")).strip('"')
+                if code == "404":
+                    return [mock_spend_logs[0]]
+                if code == "500":
+                    return [mock_spend_logs[1]]
+        return mock_spend_logs
+
+    with patch.object(
+        ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code)
+    ):
+        start_date, end_date = _default_date_range()
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_code": "404",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "error_information" in metadata
+        assert metadata["error_information"]["error_code"] == "404"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_message(client):
+    """Test filtering spend logs by error message"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"error_information": {"error_message": "Rate limit exceeded"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"error_information": {"error_message": "Invalid API key"}}',
+        },
+    ]
+
+    def filter_by_error_message(where):
+        if "metadata" in where:
+            mf = where["metadata"]
+            if mf.get("path") == ["error_information", "error_message"]:
+                msg = mf.get("string_contains")
+                if msg == "Rate limit":
+                    return [mock_spend_logs[0]]
+                if msg == "Invalid API":
+                    return [mock_spend_logs[1]]
+        return mock_spend_logs
+
+    with patch.object(
+        ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_message)
+    ):
+        start_date, end_date = _default_date_range()
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_message": "Rate limit",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "error_information" in metadata
+        assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
+    """Test merging error_code and key_alias filters with AND logic"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"user_api_key_alias": "test-key-1", "error_information": {"error_code": "404"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"user_api_key_alias": "test-key-2", "error_information": {"error_code": "500"}}',
+        },
+        {
+            "id": "log3",
+            "request_id": "req3",
+            "api_key": "sk-test-key",
+            "user": "test_user_3",
+            "team_id": "team1",
+            "spend": 0.15,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"user_api_key_alias": "test-key-1", "error_information": {"error_code": "500"}}',
+        },
+    ]
+
+    def filter_by_error_code_and_key_alias(where):
+        if "AND" in where:
+            key_alias = error_code = None
+            for cond in where["AND"]:
+                if "metadata" in cond:
+                    mf = cond["metadata"]
+                    if mf.get("path") == ["user_api_key_alias"]:
+                        key_alias = mf.get("string_contains")
+                    elif mf.get("path") == ["error_information", "error_code"]:
+                        error_code = str(mf.get("equals", "")).strip('"')
+            if key_alias == "test-key-1" and error_code == "500":
+                return [mock_spend_logs[2]]
+        return mock_spend_logs
+
+    with patch.object(
+        ps,
+        "prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code_and_key_alias),
+    ):
+        start_date, end_date = _default_date_range()
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_code": "500",
+                "key_alias": "test-key-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log3"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "user_api_key_alias" in metadata
+        assert metadata["user_api_key_alias"] == "test-key-1"
+        assert "error_information" in metadata
+        assert metadata["error_information"]["error_code"] == "500"

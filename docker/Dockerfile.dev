@@ -40,7 +40,8 @@ COPY enterprise/ ./enterprise/
 COPY docker/ ./docker/
 
 # Build Admin UI once
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# Convert Windows line endings to Unix and make executable
+RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -60,7 +61,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatomic1 \
     nodejs \
     npm \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 \
+    && GLOBAL="$(npm root -g)" \
+    && find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+          rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+       done \
+    && find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+          rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+       done \
+    && find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+          rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+       done \
+    && npm cache clean --force
 
 WORKDIR /app
 
@@ -78,9 +91,27 @@ RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ 
     rm -f *.whl && \
     rm -rf /wheels
 
+# SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
+# npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
+# Patch every copy of tar, glob, and brace-expansion inside that tree.
+RUN GLOBAL="$(npm root -g)" && \
+    find /usr/lib -path "*/nodejs_wheel/*/node_modules/tar" -type d | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find /usr/lib -path "*/nodejs_wheel/*/node_modules/glob" -type d | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find /usr/lib -path "*/nodejs_wheel/*/node_modules/@isaacs/brace-expansion" -type d | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done
+
 # Generate prisma client and set permissions
+# Convert Windows line endings to Unix for entrypoint scripts
 RUN prisma generate && \
-    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh
+    sed -i 's/\r$//' docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && \
+    chmod +x docker/entrypoint.sh && \
+    chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 

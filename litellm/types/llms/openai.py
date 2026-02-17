@@ -14,6 +14,7 @@ from typing import (
 )
 
 import httpx
+from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
@@ -61,6 +62,7 @@ except (ImportError, AttributeError):
         ResponseTextConfigParam as ResponseText,
     )
 
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -69,7 +71,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_validator
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -346,6 +348,20 @@ class OpenAIFileObject(BaseModel):
 CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
 
 
+# File expiration policy
+class FileExpiresAfter(TypedDict):
+    """
+    File expiration policy
+
+    Properties:
+        anchor: Anchor timestamp after which the expiration policy applies. Supported anchors: created_at.
+        seconds: The number of seconds after the anchor time that the file will expire. Must be between 3600 (1 hour) and 2592000 (30 days).
+    """
+
+    anchor: Required[Literal["created_at"]]
+    seconds: Required[int]
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
@@ -357,6 +373,7 @@ class CreateFileRequest(TypedDict, total=False):
         purpose: Literal['assistants', 'batch', 'fine-tune']
 
     Optional Params:
+        expires_after: Optional[FileExpiresAfter] - The expiration policy for a file
         extra_headers: Optional[Dict[str, str]]
         extra_body: Optional[Dict[str, str]] = None
         timeout: Optional[float] = None
@@ -364,6 +381,7 @@ class CreateFileRequest(TypedDict, total=False):
 
     file: Required[FileTypes]
     purpose: Required[CREATE_FILE_REQUESTS_PURPOSE]
+    expires_after: Optional[FileExpiresAfter]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
@@ -442,6 +460,7 @@ class ListBatchRequest(TypedDict, total=False):
 # OpenAI Batch Result Types
 class OpenAIErrorBody(TypedDict, total=False):
     """Error body in OpenAI batch response format."""
+
     error: Dict[str, str]
 
 
@@ -635,6 +654,8 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     file_id: str
     filename: str
     format: str
+    detail: str  # For video/image resolution control (low, medium, high, ultra_high)
+    video_metadata: Dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -743,6 +764,68 @@ ValidUserMessageContentTypes = [
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
+ValidUserMessageContentTypesLiteral = Literal[
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+]
+
+ValidUserMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+
+# Assistant message content types (text, thinking, redacted_thinking)
+ValidAssistantMessageContentTypesLiteral = Literal[
+    "text",
+    "thinking",
+    "redacted_thinking",
+]
+
+ValidAssistantMessageContentTypes = [
+    "text",
+    "thinking",
+    "redacted_thinking",
+]
+
+# Combined valid content types for chat completion messages
+ValidChatCompletionMessageContentTypesLiteral = Literal[
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+    "thinking",
+    "redacted_thinking",
+]
+
+ValidChatCompletionMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+    "thinking",
+    "redacted_thinking",
+]
+
 AllMessageValues = Union[
     ChatCompletionUserMessage,
     ChatCompletionAssistantMessage,
@@ -822,6 +905,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     functions: List
     user: str
     metadata: dict  # litellm specific param
+    reasoning_effort: str  # OpenAI o1/o3 reasoning parameter
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
@@ -947,6 +1031,19 @@ OpenAIImageGenerationOptionalParams = Literal[
     "user",
 ]
 
+OpenAIImageEditOptionalParams = Literal[
+    "background",
+    "n",
+    "mask"
+    "output_compression",
+    "output_format",
+    "quality",
+    "partial_images",
+    "response_format",
+    "size",
+    "style",
+    "user",
+]
 
 class ComputerToolParam(TypedDict, total=False):
     display_height: Required[float]
@@ -961,7 +1058,20 @@ class ComputerToolParam(TypedDict, total=False):
     type: Required[Union[Literal["computer_use_preview"], str]]
 
 
-ALL_RESPONSES_API_TOOL_PARAMS = Union[ToolParam, ComputerToolParam]
+class ShellToolParam(TypedDict, total=False):
+    """
+    Shell tool for Responses API: run commands in hosted containers or local runtime.
+    See https://developers.openai.com/api/docs/guides/tools-shell.
+    """
+
+    type: Required[Union[Literal["shell"], str]]
+    """The type of tool. Use ``\"shell\"``."""
+
+    environment: Required[Dict[str, Any]]
+    """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
+
+
+ALL_RESPONSES_API_TOOL_PARAMS = Union[ToolParam, ComputerToolParam, ShellToolParam]
 
 
 class PromptObject(TypedDict, total=False):
@@ -975,6 +1085,19 @@ class PromptObject(TypedDict, total=False):
 
     version: Optional[str]
     """Optional version of the prompt template."""
+
+
+class ContextManagementEntry(TypedDict, total=False):
+    """
+    Context management configuration entry for a request.
+    See https://developers.openai.com/api/docs/guides/compaction.
+    """
+
+    type: str
+    """The context management entry type. Currently only ``'compaction'`` is supported."""
+
+    compact_threshold: int
+    """Token threshold at which compaction is triggered for this entry. Minimum 1000."""
 
 
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
@@ -1007,6 +1130,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     partial_images: Optional[
         int
     ]  # Number of partial images to generate (1-3) for streaming image generation
+    context_management: Optional[List[ContextManagementEntry]]
+    """Context management configuration. E.g. [{\"type\": \"compaction\", \"compact_threshold\": 200000}] for server-side compaction (minimum 1000)."""
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1017,7 +1142,7 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: Optional[int] = None
+    reasoning_tokens: int = 0
 
     text_tokens: Optional[int] = None
 
@@ -1026,7 +1151,7 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: Optional[int] = None
-    cached_tokens: Optional[int] = None
+    cached_tokens: int = 0
     text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
@@ -1074,7 +1199,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
-        List[Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]],
+        List[
+            Union[
+                GenericResponseOutputItem,
+                OutputFunctionToolCall,
+                OutputImageGenerationCall,
+                ResponseFunctionToolCall,
+            ]
+        ],
     ]
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
@@ -1085,7 +1217,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     top_p: Optional[float] = None
     max_output_tokens: Optional[int] = None
     previous_response_id: Optional[str] = None
-    reasoning: Optional[Reasoning] = None
+    reasoning: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
     text: Optional[Union["ResponseText", Dict[str, Any]]] = None
     truncation: Optional[Literal["auto", "disabled"]] = None
@@ -1094,6 +1226,61 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @field_validator("reasoning", mode="before")
+    @classmethod
+    def validate_reasoning_to_dict(cls, value: Any) -> Optional[Dict[str, Any]]:
+        """Accept API reasoning dict (including effort 'none'/'xhigh'); always store as dict."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "model_dump"):
+            return value.model_dump()
+        return value
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def validate_usage(cls, value):
+        """Convert usage dict to ResponseAPIUsage object if needed"""
+        if value is None:
+            return value
+        if isinstance(value, dict):
+            return ResponseAPIUsage(**value)
+        return value
+
+    @property
+    def output_text(self) -> str:
+        """
+        Convenience property that aggregates all `output_text` items from the `output` list.
+
+        If no `output_text` content blocks exist, then an empty string is returned.
+
+        This matches the OpenAI SDK's Response.output_text behavior.
+        """
+        texts: List[str] = []
+        for output_item in self.output:
+            # Handle both dict and object access patterns
+            if isinstance(output_item, dict):
+                item_type = output_item.get("type")
+                content = output_item.get("content", [])
+            else:
+                item_type = getattr(output_item, "type", None)
+                content = getattr(output_item, "content", [])
+
+            if item_type == "message" and content:
+                for content_item in content:
+                    if isinstance(content_item, dict):
+                        content_type = content_item.get("type")
+                        text = content_item.get("text", "") or ""
+                    else:
+                        content_type = getattr(content_item, "type", None)
+                        text = getattr(content_item, "text", "") or ""
+
+                    if content_type == "output_text":
+                        texts.append(text)
+
+        return "".join(texts)
 
 
 class ResponsesAPIStreamEvents(str, Enum):
@@ -1113,6 +1300,8 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Reasoning summary events
     RESPONSE_PART_ADDED = "response.reasoning_summary_part.added"
     REASONING_SUMMARY_TEXT_DELTA = "response.reasoning_summary_text.delta"
+    REASONING_SUMMARY_TEXT_DONE = "response.reasoning_summary_text.done"
+    REASONING_SUMMARY_PART_DONE = "response.reasoning_summary_part.done"
 
     # Output item events
     OUTPUT_ITEM_ADDED = "response.output_item.added"
@@ -1158,6 +1347,11 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Image generation events
     IMAGE_GENERATION_PARTIAL_IMAGE = "image_generation.partial_image"
 
+    # Shell tool events (Responses API; passthrough via GenericEvent)
+    SHELL_CALL_IN_PROGRESS = "response.shell_call.in_progress"
+    SHELL_CALL_COMPLETED = "response.shell_call.completed"
+    SHELL_CALL_OUTPUT = "response.shell_call_output.done"
+
     # Error event
     ERROR = "error"
 
@@ -1200,6 +1394,24 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     delta: str
+
+
+class ReasoningSummaryTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE]
+    item_id: str
+    output_index: int
+    sequence_number: int
+    summary_index: int
+    text: str
+
+
+class ReasoningSummaryPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE]
+    item_id: str
+    output_index: int
+    sequence_number: int
+    summary_index: int
+    part: BaseLiteLLMOpenAIResponseObject
 
 
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1426,12 +1638,12 @@ class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
 
 
 class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
-    """Nested error object within ErrorEvent"""
+    """Nested error object within ErrorEvent."""
 
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: Optional[str]
+    param: Optional[str] = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1456,6 +1668,8 @@ ResponsesAPIStreamingResponse = Annotated[
         ResponseIncompleteEvent,
         ResponsePartAddedEvent,
         ReasoningSummaryTextDeltaEvent,
+        ReasoningSummaryTextDoneEvent,
+        ReasoningSummaryPartDoneEvent,
         OutputItemAddedEvent,
         OutputItemDoneEvent,
         ContentPartAddedEvent,
@@ -1829,6 +2043,7 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
 # OpenAI Batch Result Types (defined after OpenAIChatCompletionResponse for forward reference)
 class OpenAIBatchResponse(TypedDict, total=False):
     """Response wrapper in OpenAI batch result format."""
+
     status_code: int
     request_id: str
     body: Union[OpenAIChatCompletionResponse, OpenAIErrorBody]
@@ -1836,12 +2051,13 @@ class OpenAIBatchResponse(TypedDict, total=False):
 
 class OpenAIBatchResult(TypedDict, total=False):
     """OpenAI batch result format."""
+
     custom_id: str
     response: OpenAIBatchResponse
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length"
+    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
 ]
 
 

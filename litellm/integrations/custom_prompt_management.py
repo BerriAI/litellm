@@ -68,3 +68,16 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         raise NotImplementedError(
             "Custom prompt management does not support compile prompt helper"
         )
+
+    async def async_compile_prompt_helper(
+        self,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> PromptManagementClient:
+        raise NotImplementedError(
+            "Custom prompt management does not support async compile prompt helper"
+        )

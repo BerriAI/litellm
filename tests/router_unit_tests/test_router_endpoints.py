@@ -89,7 +89,6 @@ class MyCustomHandler(CustomLogger):
 
 
 # Set litellm.callbacks = [proxy_handler_instance] on the proxy
-# need to set litellm.callbacks = [proxy_handler_instance] # on the proxy
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=10)
 async def test_transcription_on_router():

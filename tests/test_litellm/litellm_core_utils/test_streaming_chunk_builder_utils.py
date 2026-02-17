@@ -158,6 +158,76 @@ def test_get_combined_tool_content():
     ]
 
 
+def test_get_combined_thinking_content_preserves_interleaved_blocks():
+    base_chunk = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": "claude-sonnet-4-20250514",
+    }
+
+    def make_chunk(**delta_kwargs):
+        return ModelResponseStream(
+            **base_chunk,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(**delta_kwargs),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+    chunks = [
+        make_chunk(role="assistant", content=None),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": "Step 1 analysis...", "signature": None}
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": None, "signature": "sig_block1"}
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {
+                    "type": "redacted_thinking",
+                    "data": "EuoBCoYBGAIi...encrypted...",
+                }
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": "Step 2 analysis...", "signature": None}
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": None, "signature": "sig_block2"}
+            ]
+        ),
+    ]
+
+    thinking_chunks = [
+        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
+    ]
+    processor = ChunkProcessor(chunks=chunks)
+    result = processor.get_combined_thinking_content(thinking_chunks)
+
+    assert result is not None
+    assert len(result) == 3
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "Step 1 analysis..."
+    assert result[0]["signature"] == "sig_block1"
+    assert result[1]["type"] == "redacted_thinking"
+    assert result[1]["data"] == "EuoBCoYBGAIi...encrypted..."
+    assert result[2]["type"] == "thinking"
+    assert result[2]["thinking"] == "Step 2 analysis..."
+    assert result[2]["signature"] == "sig_block2"
+
+
 def test_cache_read_input_tokens_retained():
     chunk1 = ModelResponseStream(
         id="chatcmpl-95aabb85-c39f-443d-ae96-0370c404d70c",
@@ -326,6 +396,42 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
+
+
+def test_get_model_from_chunks_azure_model_router():
+    """
+    Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.
+    
+    Azure Model Router returns the request model (e.g., 'azure-model-router') in the first chunk,
+    but subsequent chunks contain the actual model (e.g., 'gpt-4.1-nano-2025-04-14').
+    This is important for accurate cost calculation.
+    """
+    # First chunk has request model, subsequent chunks have actual model
+    chunks = [
+        {"model": "azure-model-router", "id": "chatcmpl-123", "choices": []},
+        {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
+        {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
+    ]
+    
+    result = ChunkProcessor._get_model_from_chunks(
+        chunks=chunks, first_chunk_model="azure-model-router"
+    )
+    
+    # Should return the actual model, not the request model
+    assert result == "gpt-4.1-nano-2025-04-14"
+    
+    # Test when all chunks have the same model (non-router case)
+    chunks_same_model = [
+        {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
+        {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
+    ]
+    
+    result_same = ChunkProcessor._get_model_from_chunks(
+        chunks=chunks_same_model, first_chunk_model="gpt-4"
+    )
+    
+    # Should return the first chunk's model when all are the same
+    assert result_same == "gpt-4"
 
 
 def test_stream_chunk_builder_anthropic_web_search():

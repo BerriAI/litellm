@@ -14,7 +14,6 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
@@ -23,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -101,35 +101,75 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     return data_json
 
 
+async def _check_duplicate_user_field(
+    field_name: str,
+    field_value: Optional[str],
+    prisma_client: Any,
+    *,
+    case_insensitive: bool = False,
+    label: Optional[str] = None,
+) -> None:
+    """
+    Helper function to check if a field already exists in the user table.
+
+    Args:
+        field_name (str): Database field name to check.
+        field_value (Optional[str]): Value to check for duplicates.
+        prisma_client (Any): Database client instance.
+        case_insensitive (bool): Whether to use case-insensitive comparison.
+        label (Optional[str]): Human readable label for error messages.
+
+    Raises:
+        Exception: If database is not connected.
+        HTTPException: If a user with the given field value already exists.
+    """
+    if field_value:
+        if prisma_client is None:
+            raise Exception("Database not connected")
+
+        value = field_value.strip()
+        where_clause = {field_name: {"equals": value}}
+        if case_insensitive:
+            where_clause[field_name]["mode"] = "insensitive"
+
+        existing_user = await prisma_client.db.litellm_usertable.find_first(
+            where=where_clause
+        )
+
+        if existing_user is not None:
+            existing_value = getattr(existing_user, field_name, value)
+            error_label = label or field_name
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f"User with {error_label} {existing_value} already exists"},
+            )
+
+
 async def _check_duplicate_user_email(
     user_email: Optional[str], prisma_client: Any
 ) -> None:
     """
     Helper function to check if a user email already exists in the database.
-
-    Args:
-        user_email (Optional[str]): Email to check
-        prisma_client (Any): Database client instance
-
-    Raises:
-        Exception: If database is not connected
-        HTTPException: If user with email already exists
     """
-    if user_email:
-        if prisma_client is None:
-            raise Exception("Database not connected")
+    await _check_duplicate_user_field(
+        field_name="user_email",
+        field_value=user_email,
+        prisma_client=prisma_client,
+        case_insensitive=True,
+        label="email",
+    )
 
-        existing_user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": {"equals": user_email.strip(), "mode": "insensitive"}}
-        )
 
-        if existing_user is not None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"User with email {existing_user.user_email} already exists"
-                },
-            )
+async def _check_duplicate_user_id(user_id: Optional[str], prisma_client: Any) -> None:
+    """
+    Helper function to check if a user id already exists in the database.
+    """
+    await _check_duplicate_user_field(
+        field_name="user_id",
+        field_value=user_id,
+        prisma_client=prisma_client,
+        label="id",
+    )
 
 
 async def _add_user_to_organizations(
@@ -315,6 +355,7 @@ async def new_user(
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
     - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
     - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
+    - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
@@ -361,7 +402,8 @@ async def new_user(
                 status_code=500,
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
-        # Check for duplicate email
+        # Check for duplicate user_id or email
+        await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
 
         # Check if license is over limit
@@ -370,6 +412,19 @@ async def new_user(
             raise HTTPException(
                 status_code=403,
                 detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+            )
+        
+        # Only proxy admins can create administrative users
+        # Check if user_api_key_dict is actually a UserAPIKeyAuth instance (not a Depends object)
+        # This can happen when the function is called directly in tests
+        if (
+            data.user_role in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
+            and isinstance(user_api_key_dict, UserAPIKeyAuth)
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}"
             )
 
         data_json = data.json()  # type: ignore
@@ -758,8 +813,13 @@ def _update_internal_user_params(
     data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
 ) -> dict:
     non_default_values = {}
+    fields_set = data.fields_set() if hasattr(data, 'fields_set') else set()
+    
     for k, v in data_json.items():
-        if (
+        if k == "max_budget":
+            if "max_budget" in fields_set:
+                non_default_values[k] = v
+        elif (
             v is not None
             and v
             not in (
@@ -1006,6 +1066,7 @@ async def user_update(
         - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
         - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
         - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
+        - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
@@ -1850,11 +1911,20 @@ async def get_user_daily_activity(
         default=None,
         description="Filter by specific API key",
     ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
     page_size: int = fastapi.Query(
         default=50, description="Items per page", ge=1, le=1000
+    ),
+    timezone: Optional[int] = fastapi.Query(
+        default=None,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
@@ -1889,9 +1959,21 @@ async def get_user_daily_activity(
         )
 
     try:
-        entity_id: Optional[str] = None
-        if not _user_has_admin_view(user_api_key_dict):
-            entity_id = user_api_key_dict.user_id
+        is_admin = _user_has_admin_view(user_api_key_dict)
+
+        if is_admin:
+            entity_id = user_id  # None means global view, otherwise filter by user
+        else:
+            if user_id is None:
+                user_id = user_api_key_dict.user_id
+            if user_id != user_api_key_dict.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Non-admin users can only view their own spend data."
+                    },
+                )
+            entity_id = user_id
 
         return await get_daily_activity(
             prisma_client=prisma_client,
@@ -1905,8 +1987,11 @@ async def get_user_daily_activity(
             api_key=api_key,
             page=page,
             page_size=page_size,
+            timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/spend/daily/analytics: Exception occured - {}".format(str(e))
@@ -1941,6 +2026,15 @@ async def get_user_daily_activity_aggregated(
         default=None,
         description="Filter by specific API key",
     ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
+    timezone: Optional[int] = fastapi.Query(
+        default=None,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -1962,9 +2056,21 @@ async def get_user_daily_activity_aggregated(
         )
 
     try:
-        entity_id: Optional[str] = None
-        if not _user_has_admin_view(user_api_key_dict):
-            entity_id = user_api_key_dict.user_id
+        is_admin = _user_has_admin_view(user_api_key_dict)
+
+        if is_admin:
+            entity_id = user_id  # None means global view, otherwise filter by user
+        else:
+            if user_id is None:
+                user_id = user_api_key_dict.user_id
+            if user_id != user_api_key_dict.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Non-admin users can only view their own spend data."
+                    },
+                )
+            entity_id = user_id
 
         return await get_daily_activity_aggregated(
             prisma_client=prisma_client,
@@ -1976,8 +2082,11 @@ async def get_user_daily_activity_aggregated(
             end_date=end_date,
             model=model,
             api_key=api_key,
+            timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/user/daily/activity/aggregated: Exception occured - {}".format(str(e))

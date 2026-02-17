@@ -72,8 +72,8 @@ describe("dataUtils", () => {
     });
 
     it("should handle zero and non-finite values", () => {
-      expect(formatNumberWithCommas(0)).toBe("-");
-      expect(formatNumberWithCommas(0, 2)).toBe("-");
+      expect(formatNumberWithCommas(0)).toBe("0");
+      expect(formatNumberWithCommas(0, 2)).toBe("0.00");
       expect(formatNumberWithCommas(Infinity)).toBe("-");
       expect(formatNumberWithCommas(Number.NaN)).toBe("-");
     });
@@ -82,6 +82,18 @@ describe("dataUtils", () => {
       expect(formatNumberWithCommas(1_234_567, 1, true)).toBe("1.2M");
       expect(formatNumberWithCommas(12_345, 2, true)).toBe("12.35K");
       expect(formatNumberWithCommas(-1_200, 2, true)).toBe("-1.20K");
+    });
+
+    it("should show zero when showZero is true", () => {
+      expect(formatNumberWithCommas(0, 0, false, true)).toBe("0");
+      expect(formatNumberWithCommas(0, 2, false, true)).toBe("0.00");
+      expect(formatNumberWithCommas(0, 0, true, true)).toBe("0");
+    });
+
+    it("should return '-' for zero when showZero is false", () => {
+      expect(formatNumberWithCommas(0, 0, false, false)).toBe("-");
+      expect(formatNumberWithCommas(0, 2, false, false)).toBe("-");
+      expect(formatNumberWithCommas(0, 0, true, false)).toBe("-");
     });
   });
 

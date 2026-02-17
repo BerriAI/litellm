@@ -812,9 +812,19 @@
   },
   {
     "provider": "Databricks",
-    "provider_display_name": "Databricks (Qwen API)",
+    "provider_display_name": "Databricks",
     "litellm_provider": "databricks",
     "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
       {
         "key": "api_key",
         "label": "API Key",
@@ -1669,6 +1679,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "MINIMAX",
+    "provider_display_name": "MiniMax",
+    "litellm_provider": "minimax",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "your-minimax-api-key",
+        "tooltip": "MiniMax API Key from https://platform.minimaxi.com/",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base URL",
+        "placeholder": "https://api.minimax.io/v1",
+        "tooltip": "International: https://api.minimax.io/v1, China: https://api.minimaxi.com/v1",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://api.minimax.io/v1"
+      }
+    ],
+    "default_model_placeholder": "minimax/MiniMax-M2"
   },
   {
     "provider": "MOONSHOT",
@@ -2689,8 +2727,8 @@
         "key": "vertex_credentials",
         "label": "Vertex Credentials",
         "placeholder": null,
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Optional - Upload your GCP service account JSON file. If not provided, uses default GCP credentials (ADC).",
+        "required": false,
         "field_type": "upload",
         "options": null,
         "default_value": null
@@ -2855,7 +2893,7 @@
         "key": "api_base",
         "label": "API Base",
         "placeholder": null,
-        "tooltip": null,
+        "tooltip": "Base URL of your WatsonX instance",
         "required": false,
         "field_type": "text",
         "options": null,
@@ -2865,14 +2903,54 @@
         "key": "api_key",
         "label": "API Key",
         "placeholder": null,
-        "tooltip": null,
+        "tooltip": "IBM Cloud API key. Required if not using Token or Zen API Key",
         "required": false,
         "field_type": "password",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "token",
+        "label": "IAM Token",
+        "placeholder": null,
+        "tooltip": "Pre-generated IAM bearer token. Use instead of API Key if you manage tokens externally",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "zen_api_key",
+        "label": "Zen API Key",
+        "placeholder": null,
+        "tooltip": "Zen API Key for Cloud Pak for Data deployments. Use instead of API Key for on-premises",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "project_id",
+        "label": "Project ID",
+        "placeholder": null,
+        "tooltip": "Optional: Your Watsonx.ai Project ID",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "space_id",
+        "label": "Deployment Space ID",
+        "placeholder": null,
+        "tooltip": "Optional: Watsonx.ai Deployment Space ID",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       }
     ],
-    "default_model_placeholder": "gpt-3.5-turbo"
+    "default_model_placeholder": "watsonx/ibm/granite-3-3-8b-instruct"
   },
   {
     "provider": "WATSONX_TEXT",

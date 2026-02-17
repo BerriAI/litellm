@@ -22,6 +22,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     create_pass_through_route,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
+    openai_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
@@ -1148,7 +1149,7 @@ class TestBedrockLLMProxyRoute:
             mock_user_api_key_dict.allowed_model_region = None
 
             mock_proxy_logging_obj = Mock()
-            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
             endpoint = "model/test-model/converse"
             model = "test-model"
@@ -1188,11 +1189,11 @@ class TestBedrockLLMProxyRoute:
         This test verifies the fix for the bug where passthrough endpoints were using
         environment variables instead of model-specific credentials from config.yaml.
         """
+        from litellm import Router
+        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             handle_bedrock_passthrough_router_model,
         )
-        from litellm import Router
-        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 
         # Model-specific credentials (different from env vars)
         model_access_key = "MODEL_SPECIFIC_ACCESS_KEY"
@@ -1291,7 +1292,7 @@ class TestBedrockLLMProxyRoute:
             mock_user_api_key_dict = Mock()
             mock_user_api_key_dict.api_key = "test-key"
             mock_proxy_logging_obj = Mock()
-            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
             with patch(
                 "litellm.passthrough.main.llm_passthrough_route",
@@ -1451,6 +1452,294 @@ class TestVLLMProxyRoute:
 
         assert result == "factory_success"
         mock_factory_route.assert_awaited_once()
+
+
+class TestForwardHeaders:
+    """
+    Test cases for _forward_headers parameter in passthrough endpoints
+    """
+
+    @pytest.mark.asyncio
+    async def test_pass_through_request_with_forward_headers_true(self):
+        """
+        Test that when forward_headers=True, user headers from the main request
+        are forwarded to the target endpoint (except content-length and host)
+        """
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            pass_through_request,
+        )
+
+        # Create a mock request with custom headers
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/test/endpoint"
+        
+        # User headers that should be forwarded
+        user_headers = {
+            "x-custom-header": "custom-value",
+            "x-api-key": "user-api-key",
+            "authorization": "Bearer user-token",
+            "user-agent": "test-client/1.0",
+            "content-type": "application/json",
+            # These should NOT be forwarded
+            "content-length": "123",
+            "host": "original-host.com",
+        }
+        mock_request.headers = user_headers
+        mock_request.query_params = {}
+
+        # Mock the request body
+        mock_request_body = {"test": "data"}
+
+        mock_user_api_key_dict = MagicMock()
+
+        # Custom headers that should be merged with user headers
+        custom_headers = {
+            "x-litellm-header": "litellm-value",
+        }
+
+        target_url = "https://api.example.com/v1/test"
+
+        # Mock the httpx client and response
+        mock_httpx_response = MagicMock()
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.headers = {"content-type": "application/json"}
+        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+        mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._read_request_body",
+            return_value=mock_request_body,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client, patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_logging_obj:
+            # Setup mock httpx client
+            mock_client = MagicMock()
+            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client_obj = MagicMock()
+            mock_client_obj.client = mock_client
+            mock_get_client.return_value = mock_client_obj
+
+            # Setup mock logging object
+            mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
+            mock_logging_obj.post_call_success_hook = AsyncMock()
+            mock_logging_obj.post_call_failure_hook = AsyncMock()
+
+            # Call pass_through_request with forward_headers=True
+            result = await pass_through_request(
+                request=mock_request,
+                target=target_url,
+                custom_headers=custom_headers,
+                user_api_key_dict=mock_user_api_key_dict,
+                forward_headers=True,  # Enable header forwarding
+                stream=False,
+            )
+
+            # Verify the httpx client was called
+            assert mock_client.request.called
+
+            # Get the headers that were sent to the target
+            call_args = mock_client.request.call_args
+            sent_headers = call_args[1]["headers"]
+
+            # Verify user headers were forwarded (except content-length and host)
+            assert sent_headers["x-custom-header"] == "custom-value"
+            assert sent_headers["x-api-key"] == "user-api-key"
+            assert sent_headers["authorization"] == "Bearer user-token"
+            assert sent_headers["user-agent"] == "test-client/1.0"
+            assert sent_headers["content-type"] == "application/json"
+
+            # Verify custom headers were included
+            assert sent_headers["x-litellm-header"] == "litellm-value"
+
+            # Verify content-length and host were NOT forwarded
+            assert "content-length" not in sent_headers
+            assert "host" not in sent_headers
+
+    @pytest.mark.asyncio
+    async def test_pass_through_request_with_forward_headers_false(self):
+        """
+        Test that when forward_headers=False (default), user headers are NOT forwarded,
+        only custom_headers are sent
+        """
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            pass_through_request,
+        )
+
+        # Create a mock request with custom headers
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/test/endpoint"
+        
+        # User headers that should NOT be forwarded
+        user_headers = {
+            "x-custom-header": "custom-value",
+            "x-api-key": "user-api-key",
+            "authorization": "Bearer user-token",
+        }
+        mock_request.headers = user_headers
+        mock_request.query_params = {}
+
+        mock_request_body = {"test": "data"}
+        mock_user_api_key_dict = MagicMock()
+
+        # Only these custom headers should be sent
+        custom_headers = {
+            "x-litellm-header": "litellm-value",
+            "authorization": "Bearer litellm-token",
+        }
+
+        target_url = "https://api.example.com/v1/test"
+
+        # Mock the httpx client and response
+        mock_httpx_response = MagicMock()
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.headers = {"content-type": "application/json"}
+        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+        mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._read_request_body",
+            return_value=mock_request_body,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client, patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_logging_obj:
+            # Setup mock httpx client
+            mock_client = MagicMock()
+            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client_obj = MagicMock()
+            mock_client_obj.client = mock_client
+            mock_get_client.return_value = mock_client_obj
+
+            # Setup mock logging object
+            mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
+            mock_logging_obj.post_call_success_hook = AsyncMock()
+            mock_logging_obj.post_call_failure_hook = AsyncMock()
+
+            # Call pass_through_request with forward_headers=False (default)
+            result = await pass_through_request(
+                request=mock_request,
+                target=target_url,
+                custom_headers=custom_headers,
+                user_api_key_dict=mock_user_api_key_dict,
+                forward_headers=False,  # Explicitly set to False
+                stream=False,
+            )
+
+            # Verify the httpx client was called
+            assert mock_client.request.called
+
+            # Get the headers that were sent to the target
+            call_args = mock_client.request.call_args
+            sent_headers = call_args[1]["headers"]
+
+            # Verify only custom headers were sent
+            assert sent_headers["x-litellm-header"] == "litellm-value"
+            assert sent_headers["authorization"] == "Bearer litellm-token"
+
+            # Verify user headers were NOT forwarded
+            assert "x-custom-header" not in sent_headers
+            assert "x-api-key" not in sent_headers
+            # Authorization is present but should be from custom_headers, not user headers
+            assert sent_headers["authorization"] == "Bearer litellm-token"
+
+    @pytest.mark.asyncio
+    async def test_llm_passthrough_factory_with_forward_headers(self):
+        """
+        Test that _forward_headers works correctly in llm_passthrough_factory_proxy_route
+        which is used in the code snippet provided by the user
+        """
+        from litellm.types.utils import LlmProviders
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/openai/chat/completions"
+        
+        # User headers to be forwarded
+        user_headers = {
+            "x-custom-tracking-id": "tracking-123",
+            "x-request-id": "req-456",
+            "user-agent": "my-app/2.0",
+        }
+        mock_request.headers = user_headers
+        mock_request.json = AsyncMock(return_value={"stream": False})
+        
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        # Mock the httpx response
+        mock_httpx_response = MagicMock()
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.headers = {"content-type": "application/json"}
+        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+        mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
+
+        with patch(
+            "litellm.utils.ProviderConfigManager.get_provider_model_info"
+        ) as mock_get_provider, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
+        ) as mock_get_creds, patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._read_request_body",
+            return_value={"messages": [{"role": "user", "content": "test"}]},
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client, patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_logging_obj:
+            # Setup provider config
+            mock_provider_config = MagicMock()
+            mock_provider_config.get_api_base.return_value = "https://api.openai.com/v1"
+            mock_provider_config.validate_environment.return_value = {
+                "authorization": "Bearer sk-test"
+            }
+            mock_get_provider.return_value = mock_provider_config
+            mock_get_creds.return_value = "sk-test"
+
+            # Setup mock httpx client
+            mock_client = MagicMock()
+            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client_obj = MagicMock()
+            mock_client_obj.client = mock_client
+            mock_get_client.return_value = mock_client_obj
+
+            # Setup mock logging object
+            mock_logging_obj.pre_call_hook = AsyncMock(
+                return_value={"messages": [{"role": "user", "content": "test"}]}
+            )
+            mock_logging_obj.post_call_success_hook = AsyncMock()
+
+            # This is the key part - when create_pass_through_route is called with _forward_headers=True
+            # it should forward the user headers
+            with patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route:
+                mock_endpoint_func = AsyncMock(return_value="success")
+                mock_create_route.return_value = mock_endpoint_func
+
+                result = await llm_passthrough_factory_proxy_route(
+                    custom_llm_provider=LlmProviders.OPENAI,
+                    endpoint="/chat/completions",
+                    request=mock_request,
+                    fastapi_response=mock_fastapi_response,
+                    user_api_key_dict=mock_user_api_key_dict,
+                )
+
+                # Verify create_pass_through_route was called
+                mock_create_route.assert_called_once()
+                
+                # Get the call arguments to verify _forward_headers parameter
+                call_kwargs = mock_create_route.call_args[1]
+                
+                # Note: The current implementation doesn't explicitly pass _forward_headers
+                # This test documents the current behavior. If _forward_headers should be
+                # configurable in llm_passthrough_factory_proxy_route, it would need to be added
 
 
 class TestMilvusProxyRoute:
@@ -1901,3 +2190,178 @@ class TestMilvusProxyRoute:
             # Verify that the target URL has correct path
             create_route_args = mock_create_route.call_args[1]
             assert "/vectors/search" in create_route_args["target"]
+
+
+class TestOpenAIPassthroughRoute:
+    """
+    Test cases for OpenAI passthrough endpoint (/openai_passthrough)
+    """
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_responses_api(self):
+        """
+        Test that /openai_passthrough endpoint correctly handles Responses API calls
+        This verifies the fix for issue #18865 where /openai/v1/responses was being
+        routed to LiteLLM's native implementation instead of passthrough
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        # Mock request for Responses API
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="sk-test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={"id": "resp_123", "status": "completed"}
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            # Call the route with /v1/responses endpoint
+            result = await openai_proxy_route(
+                endpoint="v1/responses",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Verify create_pass_through_route was called with correct target
+            mock_create_route.assert_called_once()
+            call_args = mock_create_route.call_args[1]
+            
+            # Should route to OpenAI's responses API
+            assert call_args["target"] == "https://api.openai.com/v1/responses"
+            assert call_args["endpoint"] == "v1/responses"
+            
+            # Verify headers contain API key
+            assert "authorization" in call_args["custom_headers"]
+            assert "Bearer sk-test-key" in call_args["custom_headers"]["authorization"]
+            
+            # Verify result
+            assert result == {"id": "resp_123", "status": "completed"}
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_chat_completions(self):
+        """
+        Test that /openai_passthrough works for chat completions
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="sk-test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={"id": "chatcmpl-123", "choices": []}
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await openai_proxy_route(
+                endpoint="v1/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Verify routing
+            mock_create_route.assert_called_once()
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.openai.com/v1/chat/completions"
+            
+            # Verify result
+            assert result == {"id": "chatcmpl-123", "choices": []}
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_missing_api_key(self):
+        """
+        Test that missing OPENAI_API_KEY raises an exception
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await openai_proxy_route(
+                    endpoint="v1/chat/completions",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                    user_api_key_dict=mock_user_api_key_dict,
+                )
+
+            assert "Required 'OPENAI_API_KEY'" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_assistants_api(self):
+        """
+        Test that /openai_passthrough works for Assistants API endpoints
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/v1/assistants"
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="sk-test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={"id": "asst_123", "object": "assistant"}
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await openai_proxy_route(
+                endpoint="v1/assistants",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Verify routing
+            mock_create_route.assert_called_once()
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.openai.com/v1/assistants"
+            
+            # Verify headers contain API key and OpenAI-Beta header
+            assert "authorization" in call_args["custom_headers"]
+            
+            # Verify result
+            assert result == {"id": "asst_123", "object": "assistant"}

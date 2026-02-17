@@ -2,6 +2,7 @@
 Integration tests for Vertex AI rerank functionality.
 These tests demonstrate end-to-end usage of the Vertex AI rerank feature.
 """
+import importlib
 import os
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +14,14 @@ from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 
 class TestVertexAIRerankIntegration:
     def setup_method(self):
-        self.config = VertexAIRerankConfig()
+        # Reload modules to ensure fresh references after conftest reloads litellm.
+        # This ensures the class being patched is the same one used by the tests.
+        import litellm.llms.vertex_ai.rerank.transformation as rerank_transformation_module
+        importlib.reload(rerank_transformation_module)
+
+        # Re-import after reload to get the fresh class
+        from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as FreshConfig
+        self.config = FreshConfig()
         self.model = "semantic-ranker-default@latest"
 
     @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')

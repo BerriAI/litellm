@@ -14,5 +14,81 @@
   "helicone": {
     "base_url": "https://ai-gateway.helicone.ai/",
     "api_key_env": "HELICONE_API_KEY"
+  },
+  "veniceai": {
+    "base_url": "https://api.venice.ai/api/v1",
+    "api_key_env": "VENICE_AI_API_KEY"
+  },
+  "xiaomi_mimo": {
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "api_key_env": "XIAOMI_MIMO_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "scaleway": {
+    "base_url": "https://api.scaleway.ai/v1",
+    "api_key_env": "SCW_SECRET_KEY"
+  },
+  "synthetic": {
+    "base_url": "https://api.synthetic.new/openai/v1",
+    "api_key_env": "SYNTHETIC_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "apertis": {
+    "base_url": "https://api.stima.tech/v1",
+    "api_key_env": "STIMA_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "nano-gpt": {
+    "base_url": "https://nano-gpt.com/api/v1",
+    "api_key_env": "NANOGPT_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "poe": {
+    "base_url": "https://api.poe.com/v1",
+    "api_key_env": "POE_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "chutes": {
+    "base_url": "https://llm.chutes.ai/v1/",
+    "api_key_env": "CHUTES_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "abliteration": {
+    "base_url": "https://api.abliteration.ai/v1",
+    "api_key_env": "ABLITERATION_API_KEY"
+  },
+  "llamagate": {
+    "base_url": "https://api.llamagate.dev/v1",
+    "api_key_env": "LLAMAGATE_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "gmi": {
+    "base_url": "https://api.gmi-serving.com/v1",
+    "api_key_env": "GMI_API_KEY"
+  },
+  "sarvam": {
+    "base_url": "https://api.sarvam.ai/v1",
+    "api_key_env": "SARVAM_API_KEY",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "headers": {
+      "api-subscription-key": "{api_key}"
+    }
   }
 }

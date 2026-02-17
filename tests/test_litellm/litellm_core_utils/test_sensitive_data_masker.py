@@ -75,3 +75,49 @@ def test_excluded_keys_exact_match():
     assert masked["api_key"] == "sk-1234567890abcdef"  # Should NOT be masked
     assert masked["access_token"] != "token-12345"  # Should still be masked
     assert "*" in masked["access_token"]
+
+
+def test_extra_headers_are_masked_recursively():
+    """
+    Ensure nested dictionaries (like extra_headers) are masked.
+    """
+    masker = SensitiveDataMasker()
+
+    data = {
+        "litellm_params": {
+            "model": "openai/gpt-4",
+            "extra_headers": {
+                "rits_api_key": "sk-secret-12345-very-sensitive",
+                "Authorization": "Bearer token123",
+            },
+        }
+    }
+
+    masked = masker.mask_dict(data)
+    extra_headers = masked["litellm_params"]["extra_headers"]
+
+    assert extra_headers["rits_api_key"] != "sk-secret-12345-very-sensitive"
+    assert "*" in extra_headers["rits_api_key"]
+    assert extra_headers["Authorization"] != "Bearer token123"
+    assert "*" in extra_headers["Authorization"]
+
+
+def test_lists_with_sensitive_keys_are_masked():
+    """
+    Lists belonging to sensitive keys should have their values masked.
+    """
+    masker = SensitiveDataMasker()
+    data = {
+        "api_key": ["sk-1234567890abcdef", "sk-9876543210fedcba"],
+        "tags": ["prod", "test"],
+    }
+
+    masked = masker.mask_dict(data)
+    # sensitive key list entries should be masked
+    assert masked["api_key"][0] != "sk-1234567890abcdef"
+    assert "*" in masked["api_key"][0]
+    assert masked["api_key"][1] != "sk-9876543210fedcba"
+    assert "*" in masked["api_key"][1]
+
+    # non-sensitive list should remain unchanged
+    assert masked["tags"] == ["prod", "test"]

@@ -1,14 +1,15 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+from typing_extensions import TYPE_CHECKING, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
@@ -50,17 +51,28 @@ class GenericGuardrailAPIRequest(BaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]
-    litellm_call_id: Optional[str]  # the call id of the individual LLM call
+    litellm_call_id: Optional[str] = None  # the call id of the individual LLM call
     litellm_trace_id: Optional[
         str
-    ]  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
-    structured_messages: Optional[List[AllMessageValues]]
-    images: Optional[List[str]]
-    tools: Optional[List[ChatCompletionToolParam]]
-    texts: Optional[List[str]]
+    ] = None  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
+    structured_messages: Optional[List[AllMessageValues]] = None
+    images: Optional[List[str]] = None
+    tools: Optional[List[ChatCompletionToolParam]] = None
+    texts: Optional[List[str]] = None
     request_data: GenericGuardrailAPIMetadata
-    additional_provider_specific_params: Optional[Dict[str, Any]]
-    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
+    request_headers: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Sanitized inbound request headers from the original proxy request.",
+    )
+    litellm_version: Optional[str] = Field(
+        default=None,
+        description="LiteLLM library version running this proxy.",
+    )
+    additional_provider_specific_params: Optional[Dict[str, Any]] = None
+    tool_calls: Optional[
+        Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]
+    ] = None
+    model: Optional[str] = None  # the model being used for the LLM call
 
 
 class GenericGuardrailAPIResponse:

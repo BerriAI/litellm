@@ -7,7 +7,7 @@ Users can define
 """
 
 import copy
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -20,6 +20,11 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionCachedContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -198,11 +203,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        litellm_logging_obj: Any,
+        litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: Optional[PromptSpec] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """Async version - delegates to sync since no async operations needed."""
         return self.get_chat_completion_prompt(
@@ -212,8 +219,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             dynamic_callback_params=dynamic_callback_params,
+            prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     @staticmethod

@@ -9,7 +9,9 @@ LiteLLM provides flexible cost tracking and pricing customization for all LLM pr
 - **Custom Pricing** - Override default model costs or set pricing for custom models
 - **Cost Per Token** - Track costs based on input/output tokens (most common)
 - **Cost Per Second** - Track costs based on runtime (e.g., Sagemaker)
-- **Provider Discounts** - Apply percentage-based discounts to specific providers
+- **Zero-Cost Models** - Bypass budget checks for free/on-premises models by setting costs to 0
+- **[Provider Discounts](./provider_discounts.md)** - Apply percentage-based discounts to specific providers
+- **[Provider Margins](./provider_margins.md)** - Add fees/margins to LLM costs for internal billing
 - **Base Model Mapping** - Ensure accurate cost tracking for Azure deployments
 
 By default, the response cost is accessible in the logging object via `kwargs["response_cost"]` on success (sync + async). [**Learn More**](../observability/custom_callback.md)
@@ -66,58 +68,6 @@ model_list:
       output_cost_per_token: 0.000520 # 👈 ONLY to track cost per token
 ```
 
-## Provider-Specific Cost Discounts
-
-Apply percentage-based discounts to specific providers (e.g., negotiated enterprise pricing).
-
-#### Usage with LiteLLM Proxy Server
-
-**Step 1: Add discount config to config.yaml**
-
-```yaml
-# Apply 5% discount to all Vertex AI and Gemini costs
-cost_discount_config:
-  vertex_ai: 0.05  # 5% discount
-  gemini: 0.05     # 5% discount
-  openrouter: 0.05 # 5% discount
-  # openai: 0.10   # 10% discount (example)
-```
-
-**Step 2: Start proxy**
-
-```bash
-litellm /path/to/config.yaml
-```
-
-The discount will be automatically applied to all cost calculations for the configured providers.
-
-
-#### How Discounts Work
-
-- Discounts are applied **after** all other cost calculations (tokens, caching, tools, etc.)
-- The discount is a percentage (0.05 = 5%, 0.10 = 10%, etc.)
-- Discounts only apply to the configured providers
-- Original cost, discount amount, and final cost are tracked in cost breakdown logs
-- Discount information is returned in response headers:
-  - `x-litellm-response-cost` - Final cost after discount
-  - `x-litellm-response-cost-original` - Cost before discount
-  - `x-litellm-response-cost-discount-amount` - Discount amount in USD
-
-#### Supported Providers
-
-You can apply discounts to all LiteLLM supported providers. Common examples:
-
-- `vertex_ai` - Google Vertex AI
-- `gemini` - Google Gemini
-- `openai` - OpenAI
-- `anthropic` - Anthropic
-- `azure` - Azure OpenAI
-- `bedrock` - AWS Bedrock
-- `cohere` - Cohere
-- `openrouter` - OpenRouter
-
-See the full list of providers in the [LlmProviders](https://github.com/BerriAI/litellm/blob/main/litellm/types/utils.py) enum.
-
 ## Override Model Cost Map
 
 You can override [our model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) with your own custom pricing for a mapped model.
@@ -157,6 +107,51 @@ There are other keys you can use to specify costs for different scenarios and mo
 
 These keys evolve based on how new models handle multimodality. The latest version can be found at [https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
 
+## Zero-Cost Models (Bypass Budget Checks)
+
+**Use Case**: You have on-premises or free models that should be accessible even when users exceed their budget limits.
+
+**Solution** ✅: Set both `input_cost_per_token` and `output_cost_per_token` to `0` (explicitly) to bypass all budget checks for that model.
+
+:::info
+
+When a model is configured with zero cost, LiteLLM will automatically skip ALL budget checks (user, team, team member, end-user, organization, and global proxy budget) for requests to that model.
+
+**Important**: Both costs must be **explicitly set to 0**. If costs are `null` or undefined, the model will be treated as having cost and budget checks will apply.
+
+:::
+
+### Configuration Example
+
+```yaml
+model_list:
+  # On-premises model - free to use
+  - model_name: on-prem-llama
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://localhost:11434
+    model_info:
+      input_cost_per_token: 0   # 👈 Explicitly set to 0
+      output_cost_per_token: 0  # 👈 Explicitly set to 0
+  
+  # Paid cloud model - budget checks apply
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+    # No model_info - uses default pricing from cost map
+```
+
+### Behavior
+
+With the above configuration:
+
+- **User over budget** → Can still use `on-prem-llama` ✅, but blocked from `gpt-4` ❌
+- **Team over budget** → Can still use `on-prem-llama` ✅, but blocked from `gpt-4` ❌
+- **End-user over budget** → Can still use `on-prem-llama` ✅, but blocked from `gpt-4` ❌
+
+This ensures your free/on-premises models remain accessible regardless of budget constraints, while paid models are still properly governed.
+
 ## Set 'base_model' for Cost Tracking (e.g. Azure deployments)
 
 **Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
@@ -176,6 +171,28 @@ model_list:
       api_version: "2023-07-01-preview"
     model_info:
       base_model: azure/gpt-4-1106-preview
+```
+
+### OpenAI Models with Dated Versions
+
+`base_model` is also useful when OpenAI returns a dated model name in the response that differs from your configured model name.
+
+**Example**: You configure custom pricing for `gpt-4o-mini-audio-preview`, but OpenAI returns `gpt-4o-mini-audio-preview-2024-12-17` in the response. Since LiteLLM uses the response model name for pricing lookup, your custom pricing won't be applied.
+
+**Solution** ✅: Set `base_model` to the key you want LiteLLM to use for pricing lookup.
+
+```yaml
+model_list:
+  - model_name: my-audio-model
+    litellm_params:
+      model: openai/gpt-4o-mini-audio-preview
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      base_model: gpt-4o-mini-audio-preview  # 👈 Used for pricing lookup
+      input_cost_per_token: 0.0000006
+      output_cost_per_token: 0.0000024
+      input_cost_per_audio_token: 0.00001
+      output_cost_per_audio_token: 0.00002
 ```
 
 

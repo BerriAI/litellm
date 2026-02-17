@@ -1,5 +1,5 @@
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from httpx._types import RequestFiles
 
@@ -30,8 +30,8 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -40,14 +40,19 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
         Transform image edit request for DALL-E-2.
 
         DALL-E-2 only accepts a single image with field name "image" (not "image[]").
-        """
-        request = ImageEditRequestParams(
-            model=model,
-            image=image,
-            prompt=prompt,
+        """        
+        request_params = {
+            "model": model,
             **image_edit_optional_request_params,
-        )
+        }
+        if image is not None:
+            request_params["image"] = image
+        if prompt is not None:
+            request_params["prompt"] = prompt
+            
+        request = ImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request)
+
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`

@@ -1605,3 +1605,59 @@ async def test_sap_chat(
 
         assert response
         assert response.data[0]["embedding"]
+
+
+@pytest.mark.asyncio
+async def test_sap_embedding_required_headers(
+    respx_mock,
+    sap_api_response,
+    fake_token_creator,
+    fake_deployment_url,
+):
+    """Test that required headers are correctly set in SAP embedding requests."""
+    import litellm
+
+    # Define required headers for SAP requests
+    required_headers = {
+        "Authorization": "Bearer FAKE_TOKEN",
+        "AI-Resource-Group": "fake-group",
+        "Content-Type": "application/json",
+        "AI-Client-Type": "LiteLLM",
+    }
+
+    litellm.disable_aiohttp_transport = True
+    with patch(
+        "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+        new_callable=PropertyMock,
+        return_value=fake_deployment_url,
+    ), patch(
+        "litellm.llms.sap.embed.transformation.get_token_creator",
+        return_value=fake_token_creator,
+    ):
+        model = "sap/text-embedding-3-small"
+        input = "Hi"
+
+        # Setup respx_mock to capture request
+        route = respx_mock.post(f"{fake_deployment_url}/v2/embeddings")
+        route.respond(json=sap_api_response)
+
+        response = await litellm.aembedding(model=model, input=input)
+
+        # Verify the response is valid
+        assert response
+        assert response.data[0]["embedding"]
+
+        # Verify the request was made
+        assert route.called
+
+        # Get the request and verify all required headers are present
+        request = route.calls[0].request
+        for header_name, expected_value in required_headers.items():
+            assert header_name in request.headers, (
+                f"Required header '{header_name}' missing from request. "
+                f"Found headers: {list(request.headers.keys())}"
+            )
+            assert request.headers[header_name] == expected_value, (
+                f"Header '{header_name}' has incorrect value. "
+                f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
+            )

@@ -14,7 +14,7 @@ import PremiumLoggingSettings from "@/components/common_components/PremiumLoggin
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchMCPAccessGroups, getGuardrailsList, Organization, Team, teamCreateCall } from "@/components/networking";
+import { fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, Organization, Team, teamCreateCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 
@@ -76,6 +76,7 @@ const CreateTeamModal = ({
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
@@ -136,7 +137,22 @@ const CreateTeamModal = ({
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        if (accessToken == null) {
+          return;
+        }
+
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPolicies();
   }, [accessToken]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -177,6 +193,20 @@ const CreateTeamModal = ({
           };
 
           formValues.metadata = JSON.stringify(metadata);
+        }
+
+        if (formValues.secret_manager_settings) {
+          if (typeof formValues.secret_manager_settings === "string") {
+            if (formValues.secret_manager_settings.trim() === "") {
+              delete formValues.secret_manager_settings;
+            } else {
+              try {
+                formValues.secret_manager_settings = JSON.parse(formValues.secret_manager_settings);
+              } catch (e) {
+                throw new Error("Failed to parse secret manager settings: " + e);
+              }
+            }
+          }
         }
 
         // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
@@ -439,6 +469,36 @@ const CreateTeamModal = ({
                 <Input.TextArea rows={4} />
               </Form.Item>
               <Form.Item
+                label="Secret Manager Settings"
+                name="secret_manager_settings"
+                help={
+                  premiumUser
+                    ? "Enter secret manager configuration as a JSON object."
+                    : "Premium feature - Upgrade to manage secret manager settings."
+                }
+                rules={[
+                  {
+                    validator: async (_, value) => {
+                      if (!value) {
+                        return Promise.resolve();
+                      }
+                      try {
+                        JSON.parse(value);
+                        return Promise.resolve();
+                      } catch (error) {
+                        return Promise.reject(new Error("Please enter valid JSON"));
+                      }
+                    },
+                  },
+                ]}
+              >
+                <Input.TextArea
+                  rows={4}
+                  placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                  disabled={!premiumUser}
+                />
+              </Form.Item>
+              <Form.Item
                 label={
                   <span>
                     Guardrails{" "}
@@ -482,9 +542,39 @@ const CreateTeamModal = ({
                 valuePropName="checked"
                 help="Bypass global guardrails for this team"
               >
-                <Switch 
+                <Switch
                   checkedChildren="Yes"
                   unCheckedChildren="No"
+                />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <span>
+                    Policies{" "}
+                    <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                      <a
+                        href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      </a>
+                    </Tooltip>
+                  </span>
+                }
+                name="policies"
+                className="mt-8"
+                help="Select existing policies or enter new ones"
+              >
+                <Select2
+                  mode="tags"
+                  style={{ width: "100%" }}
+                  placeholder="Select or enter policies"
+                  options={policiesList.map((name) => ({
+                    value: name,
+                    label: name,
+                  }))}
                 />
               </Form.Item>
               <Form.Item

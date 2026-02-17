@@ -1,5 +1,5 @@
 """
-Handler for Azure AI Agent Service API.
+Handler for Azure Foundry Agent Service API.
 
 This handler executes the multi-step agent flow:
 1. Create thread (or use existing)
@@ -8,8 +8,14 @@ This handler executes the multi-step agent flow:
 4. Retrieve the assistant's response messages
 
 Model format: azure_ai/agents/<agent_id>
+API Base format: https://<AIFoundryResourceName>.services.ai.azure.com/api/projects/<ProjectName>
+
+Authentication: Uses Azure AD Bearer tokens (not API keys)
+  Get token via: az account get-access-token --resource 'https://ai.azure.com'
 
 Supports both polling-based and native streaming (SSE) modes.
+
+See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
 import asyncio
@@ -60,24 +66,27 @@ class AzureAIAgentsHandler:
     # -------------------------------------------------------------------------
     # URL Builders
     # -------------------------------------------------------------------------
+    # Azure Foundry Agents API uses /assistants, /threads, etc. directly
+    # See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
+    # -------------------------------------------------------------------------
     def _build_thread_url(self, api_base: str, api_version: str) -> str:
-        return f"{api_base}/openai/threads?api-version={api_version}"
+        return f"{api_base}/threads?api-version={api_version}"
 
     def _build_messages_url(self, api_base: str, thread_id: str, api_version: str) -> str:
-        return f"{api_base}/openai/threads/{thread_id}/messages?api-version={api_version}"
+        return f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
 
     def _build_runs_url(self, api_base: str, thread_id: str, api_version: str) -> str:
-        return f"{api_base}/openai/threads/{thread_id}/runs?api-version={api_version}"
+        return f"{api_base}/threads/{thread_id}/runs?api-version={api_version}"
 
     def _build_run_status_url(self, api_base: str, thread_id: str, run_id: str, api_version: str) -> str:
-        return f"{api_base}/openai/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+        return f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
 
     def _build_list_messages_url(self, api_base: str, thread_id: str, api_version: str) -> str:
-        return f"{api_base}/openai/threads/{thread_id}/messages?api-version={api_version}"
+        return f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
 
     def _build_create_thread_and_run_url(self, api_base: str, api_version: str) -> str:
         """URL for the create-thread-and-run endpoint (supports streaming)."""
-        return f"{api_base}/openai/threads/runs?api-version={api_version}"
+        return f"{api_base}/threads/runs?api-version={api_version}"
 
     # -------------------------------------------------------------------------
     # Response Helpers
@@ -140,12 +149,21 @@ class AzureAIAgentsHandler:
         optional_params: dict,
         headers: Optional[dict],
     ) -> tuple:
-        """Prepare common parameters for completion."""
+        """Prepare common parameters for completion.
+        
+        Azure Foundry Agents API uses Bearer token authentication:
+        - Authorization: Bearer <token> (Azure AD token from 'az account get-access-token --resource https://ai.azure.com')
+        
+        See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
+        """
         if headers is None:
             headers = {}
         headers["Content-Type"] = "application/json"
+        
+        # Azure Foundry Agents uses Bearer token authentication
+        # The api_key here is expected to be an Azure AD token
         if api_key:
-            headers["api-key"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
 
         api_version = optional_params.get("api_version", self.config.DEFAULT_API_VERSION)
         agent_id = self.config._get_agent_id(model, optional_params)

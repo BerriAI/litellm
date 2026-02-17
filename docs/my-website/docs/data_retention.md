@@ -10,7 +10,7 @@ This policy outlines the requirements and controls/procedures LiteLLM Cloud has 
 For Customers
 1. Active Accounts
 
-- Customer data is retained for as long as the customer’s account is in active status. This includes data such as prompts, generated content, logs, and usage metrics.
+- Customer data is retained for as long as the customer’s account is in active status. This includes data such as prompts, generated content, logs, and usage metrics. By default, we do not store the message / response content of your API requests or responses. Cloud users need to explicitly opt in to store the message / response content of your API requests or responses.
 
 2. Voluntary Account Closure
 

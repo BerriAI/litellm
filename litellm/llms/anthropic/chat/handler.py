@@ -58,6 +58,9 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from .transformation import AnthropicConfig
 
 if TYPE_CHECKING:
@@ -75,6 +78,7 @@ async def make_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
+    speed: Optional[str] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
@@ -103,6 +107,7 @@ async def make_call(
         streaming_response=response.aiter_lines(),
         sync_stream=False,
         json_mode=json_mode,
+        speed=speed,
     )
 
     # LOGGING
@@ -126,6 +131,7 @@ def make_sync_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
+    speed: Optional[str] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
@@ -159,7 +165,7 @@ def make_sync_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True, json_mode=json_mode
+        streaming_response=response.iter_lines(), sync_stream=True, json_mode=json_mode, speed=speed
     )
 
     # LOGGING
@@ -213,6 +219,7 @@ class AnthropicChatCompletion(BaseLLM):
             logging_obj=logging_obj,
             timeout=timeout,
             json_mode=json_mode,
+            speed=optional_params.get("speed") if optional_params else None,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -317,6 +324,7 @@ class AnthropicChatCompletion(BaseLLM):
         stream = optional_params.pop("stream", None)
         json_mode: bool = optional_params.pop("json_mode", False)
         is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
+        optional_params.pop("vertex_count_tokens_location", None)
         _is_function_call = False
         messages = copy.deepcopy(messages)
         headers = AnthropicConfig().validate_environment(
@@ -326,6 +334,10 @@ class AnthropicChatCompletion(BaseLLM):
             messages=messages,
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
+        )
+
+        headers = update_headers_with_filtered_beta(
+            headers=headers, provider=custom_llm_provider
         )
 
         config = ProviderConfigManager.get_provider_chat_config(
@@ -340,7 +352,7 @@ class AnthropicChatCompletion(BaseLLM):
         data = config.transform_request(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -426,6 +438,7 @@ class AnthropicChatCompletion(BaseLLM):
                     logging_obj=logging_obj,
                     timeout=timeout,
                     json_mode=json_mode,
+                    speed=optional_params.get("speed") if optional_params else None,
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
@@ -484,13 +497,14 @@ class AnthropicChatCompletion(BaseLLM):
 
 class ModelResponseIterator:
     def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False, speed: Optional[str] = None
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
+        self.speed = speed
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
@@ -511,6 +525,9 @@ class ModelResponseIterator:
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: List[Dict[str, Any]] = []
+        
+        # Accumulate compaction blocks for multi-turn reconstruction
+        self.compaction_blocks: List[Dict[str, Any]] = []
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -537,7 +554,7 @@ class ModelResponseIterator:
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
         return AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
+            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None, speed=self.speed
         )
 
     def _content_block_delta_helper(self, chunk: dict) -> Tuple[
@@ -591,6 +608,12 @@ class ModelResponseIterator:
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
+        elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
+            # Handle compaction delta
+            provider_specific_fields["compaction_delta"] = {
+                "type": "compaction_delta",
+                "content": content_block["delta"]["content"]
+            }
 
         return text, tool_use, thinking_blocks, provider_specific_fields
 
@@ -690,8 +713,11 @@ class ModelResponseIterator:
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
-                elif content_block_start["content_block"]["type"] == "tool_use":
+                elif content_block_start["content_block"]["type"] == "tool_use" or content_block_start["content_block"]["type"] == "server_tool_use":
                     self.tool_index += 1
+                    # Use empty string for arguments in content_block_start - actual arguments
+                    # come in subsequent content_block_delta chunks and get accumulated.
+                    # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
                     tool_use = ChatCompletionToolCallChunk(
                         id=content_block_start["content_block"]["id"],
                         type="function",
@@ -706,18 +732,6 @@ class ModelResponseIterator:
                         caller_data = content_block_start["content_block"]["caller"]
                         if caller_data:
                             tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore[typeddict-item]
-                elif content_block_start["content_block"]["type"] == "server_tool_use":
-                    # Handle server tool use (for tool search)
-                    self.tool_index += 1
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=content_block_start["content_block"]["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=content_block_start["content_block"]["name"],
-                            arguments="",
-                        ),
-                        index=self.tool_index,
-                    )
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
@@ -728,19 +742,54 @@ class ModelResponseIterator:
                         content_block_start=content_block_start,
                         provider_specific_fields=provider_specific_fields,
                     )
-                elif (
-                    content_block_start["content_block"]["type"]
-                    == "web_search_tool_result"
-                ):
-                    # Capture web_search_tool_result for multi-turn reconstruction
-                    # The full content comes in content_block_start, not in deltas
-                    # See: https://github.com/BerriAI/litellm/issues/17737
-                    self.web_search_results.append(
+
+                elif content_block_start["content_block"]["type"] == "compaction":
+                    # Handle compaction blocks
+                    # The full content comes in content_block_start
+                    self.compaction_blocks.append(
                         content_block_start["content_block"]
                     )
-                    provider_specific_fields["web_search_results"] = (
-                        self.web_search_results
+                    provider_specific_fields["compaction_blocks"] = (
+                        self.compaction_blocks
                     )
+                    provider_specific_fields["compaction_start"] = {
+                        "type": "compaction",
+                        "content": content_block_start["content_block"].get("content", "")
+                    }
+
+                elif content_block_start["content_block"]["type"].endswith("_tool_result"):
+                    # Handle all tool result types (web_search, bash_code_execution, text_editor, etc.)
+                    content_type = content_block_start["content_block"]["type"]
+                    
+                    # Special handling for web_search_tool_result for backwards compatibility
+                    if content_type == "web_search_tool_result":
+                        # Capture web_search_tool_result for multi-turn reconstruction
+                        # The full content comes in content_block_start, not in deltas
+                        # See: https://github.com/BerriAI/litellm/issues/17737
+                        self.web_search_results.append(
+                            content_block_start["content_block"]
+                        )
+                        provider_specific_fields["web_search_results"] = (
+                            self.web_search_results
+                        )
+                    elif content_type == "web_fetch_tool_result":
+                        # Capture web_fetch_tool_result for multi-turn reconstruction
+                        # The full content comes in content_block_start, not in deltas
+                        # Fixes: https://github.com/BerriAI/litellm/issues/18137
+                        self.web_search_results.append(
+                            content_block_start["content_block"]
+                        )
+                        provider_specific_fields["web_search_results"] = (
+                            self.web_search_results
+                        )
+                    elif content_type != "tool_search_tool_result":
+                        # Handle other tool results (code execution, etc.)
+                        # Skip tool_search_tool_result as it's internal metadata
+                        if not hasattr(self, "tool_results"):
+                            self.tool_results = []
+                        self.tool_results.append(content_block_start["content_block"])
+                        provider_specific_fields["tool_results"] = self.tool_results
+
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block - only for tool_use and server_tool_use blocks
@@ -765,7 +814,9 @@ class ModelResponseIterator:
                 # These are automatically handled by Anthropic API, we just pass them through
                 pass
             elif type_chunk == "message_delta":
-                finish_reason, usage = self._handle_message_delta(chunk)
+                finish_reason, usage, container = self._handle_message_delta(chunk)
+                if container:
+                    provider_specific_fields["container"] = container
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -881,15 +932,15 @@ class ModelResponseIterator:
 
         return text, tool_use
 
-    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage]]:
+    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage], Optional[Dict[str, Any]]]:
         """
-        Handle message_delta event for finish_reason and usage.
+        Handle message_delta event for finish_reason, usage, and container.
 
         Args:
             chunk: The message_delta chunk
 
         Returns:
-            Tuple of (finish_reason, usage)
+            Tuple of (finish_reason, usage, container)
         """
         message_delta = MessageBlockDelta(**chunk)  # type: ignore
         finish_reason = map_finish_reason(
@@ -900,7 +951,8 @@ class ModelResponseIterator:
         if self.converted_response_format_tool:
             finish_reason = "stop"
         usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
-        return finish_reason, usage
+        container = message_delta["delta"].get("container")
+        return finish_reason, usage, container
 
     def _handle_accumulated_json_chunk(
         self, data_str: str
@@ -1063,9 +1115,12 @@ class ModelResponseIterator:
         str_line = chunk
         if isinstance(chunk, bytes):  # Handle binary data
             str_line = chunk.decode("utf-8")  # Convert bytes to string
-            index = str_line.find("data:")
-            if index != -1:
-                str_line = str_line[index:]
+
+        # Extract the data line from SSE format
+        # SSE events can be: "event: X\ndata: {...}\n\n" or just "data: {...}\n\n"
+        index = str_line.find("data:")
+        if index != -1:
+            str_line = str_line[index:]
 
         if str_line.startswith("data:"):
             data_json = json.loads(str_line[5:])

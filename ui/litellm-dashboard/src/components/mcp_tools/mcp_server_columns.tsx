@@ -10,6 +10,7 @@ export const mcpServerColumns = (
   onView: (serverId: string) => void,
   onEdit: (serverId: string) => void,
   onDelete: (serverId: string) => void,
+  isLoadingHealth?: boolean,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -35,7 +36,11 @@ export const mcpServerColumns = (
     id: "url",
     header: "URL",
     cell: ({ row }) => {
-      const { maskedUrl } = getMaskedAndFullUrl(row.original.url);
+      const url = row.original.url;
+      if (!url) {
+        return <span className="text-gray-400">—</span>;
+      }
+      const { maskedUrl } = getMaskedAndFullUrl(url);
       return <span className="font-mono text-sm">{maskedUrl}</span>;
     },
   },
@@ -57,6 +62,19 @@ export const mcpServerColumns = (
       const status = server.status || "unknown";
       const lastCheck = server.last_health_check;
       const error = server.health_check_error;
+
+      // Show loading spinner if health check is in progress
+      if (isLoadingHealth) {
+        return (
+          <div className="flex items-center text-gray-500">
+            <svg className="animate-spin h-4 w-4 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span className="text-xs">Loading...</span>
+          </div>
+        );
+      }
 
       const getStatusColor = (status: string) => {
         switch (status) {
@@ -125,6 +143,18 @@ export const mcpServerColumns = (
         }
       }
       return <span className="text-gray-400 italic">None</span>;
+    },
+  },
+  {
+    id: "available_on_public_internet",
+    header: "Network Access",
+    cell: ({ row }) => {
+      const isPublic = row.original.available_on_public_internet;
+      return isPublic ? (
+        <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">Public</span>
+      ) : (
+        <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs font-medium">Internal</span>
+      );
     },
   },
   {

@@ -12,6 +12,7 @@ sys.path.insert(
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    split_concatenated_json_objects,
     update_messages_with_model_file_ids,
 )
 
@@ -143,3 +144,58 @@ def test_convert_prefix_message_to_non_prefix_messages():
         },
         {"role": "assistant", "content": "value"},
     ]
+
+
+# ── split_concatenated_json_objects tests ──
+
+
+def test_split_concatenated_json_single_object():
+    """A single valid JSON object is returned as a one-element list."""
+    result = split_concatenated_json_objects('{"location": "Boston"}')
+    assert result == [{"location": "Boston"}]
+
+
+def test_split_concatenated_json_multiple_objects():
+    """
+    Multiple JSON objects concatenated without separators are split correctly.
+    This is the exact pattern from issue #20543 where Bedrock Claude Sonnet 4.5
+    returns concatenated JSON in a single tool call arguments string.
+    """
+    raw = (
+        '{"command": ["curl", "-i", "http://localhost:9009"]}'
+        '{"command": ["curl", "-i", "http://localhost:9009/robots.txt"]}'
+        '{"command": ["curl", "-i", "http://localhost:9009/sitemap.xml"]}'
+    )
+    result = split_concatenated_json_objects(raw)
+    assert len(result) == 3
+    assert result[0] == {"command": ["curl", "-i", "http://localhost:9009"]}
+    assert result[1] == {"command": ["curl", "-i", "http://localhost:9009/robots.txt"]}
+    assert result[2] == {"command": ["curl", "-i", "http://localhost:9009/sitemap.xml"]}
+
+
+def test_split_concatenated_json_with_whitespace():
+    """Objects separated by whitespace are handled correctly."""
+    raw = '{"a": 1}  {"b": 2}\n{"c": 3}'
+    result = split_concatenated_json_objects(raw)
+    assert len(result) == 3
+    assert result[0] == {"a": 1}
+    assert result[1] == {"b": 2}
+    assert result[2] == {"c": 3}
+
+
+def test_split_concatenated_json_empty_string():
+    """Empty or whitespace-only strings return an empty list."""
+    assert split_concatenated_json_objects("") == []
+    assert split_concatenated_json_objects("   ") == []
+
+
+def test_split_concatenated_json_non_dict_value():
+    """Non-dict JSON values (e.g. arrays, strings) are replaced with {}."""
+    result = split_concatenated_json_objects('[1, 2, 3]')
+    assert result == [{}]
+
+
+def test_split_concatenated_json_invalid_raises():
+    """Completely invalid JSON raises JSONDecodeError."""
+    with pytest.raises(json.JSONDecodeError):
+        split_concatenated_json_objects("not json at all")
