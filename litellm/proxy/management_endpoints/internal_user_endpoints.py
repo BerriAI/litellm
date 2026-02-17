@@ -1995,6 +1995,8 @@ async def get_user_daily_activity(
             timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/spend/daily/analytics: Exception occured - {}".format(str(e))
@@ -2093,6 +2095,8 @@ async def get_user_daily_activity_aggregated(
             timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/user/daily/activity/aggregated: Exception occured - {}".format(str(e))
