@@ -1152,6 +1152,28 @@ from .skills.main import (
     delete_skill,
     adelete_skill,
 )
+from .evals.main import (
+    create_eval,
+    acreate_eval,
+    list_evals,
+    alist_evals,
+    get_eval,
+    aget_eval,
+    delete_eval,
+    adelete_eval,
+    cancel_eval,
+    acancel_eval,
+    create_run,
+    acreate_run,
+    list_runs,
+    alist_runs,
+    get_run,
+    aget_run,
+    delete_run,
+    adelete_run,
+    cancel_run,
+    acancel_run,
+)
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
