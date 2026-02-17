@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch
+import time
 
 
 def create_mock_user_api_key_auth():
@@ -88,11 +89,7 @@ def test_model_list_with_fallback_metadata(
     # The important thing is that our function signature and logic are correct
     
     # Import the constants we need
-    try:
-        from litellm.proxy.proxy_server import DEFAULT_MODEL_CREATED_AT_TIME
-    except ImportError:
-        DEFAULT_MODEL_CREATED_AT_TIME = 1640995200  # Default fallback
-    
+    TEST_MODEL_CREATED_TIME = 1640995200  # Default fallback
     # Test with include_metadata=True (should default to general fallbacks)
     all_models = ["claude-4-sonnet", "bedrock-claude-sonnet-4"]
     
@@ -102,7 +99,7 @@ def test_model_list_with_fallback_metadata(
         model_info = {
             "id": model,
             "object": "model",
-            "created": DEFAULT_MODEL_CREATED_AT_TIME,
+            "created": TEST_MODEL_CREATED_TIME,
             "owned_by": "openai",
         }
         

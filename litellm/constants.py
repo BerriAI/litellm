@@ -1,6 +1,7 @@
 import os
 import sys
 from typing import List, Literal
+import time
 
 from litellm.litellm_core_utils.env_utils import get_env_int
 
@@ -1336,9 +1337,7 @@ DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )
-DEFAULT_MODEL_CREATED_AT_TIME = int(
-    os.getenv("DEFAULT_MODEL_CREATED_AT_TIME", 1677610602)
-)  # returns on `/models` endpoint
+# returns on `/models` endpoint
 DEFAULT_SLACK_ALERTING_THRESHOLD = int(
     os.getenv("DEFAULT_SLACK_ALERTING_THRESHOLD", 300)
 )

@@ -23,7 +23,7 @@ from typing import (
 )
 
 from litellm import _custom_logger_compatible_callbacks_literal
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
+from litellm.constants import MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
@@ -4695,7 +4695,7 @@ def create_model_info_response(
     model_info = {
         "id": model_id,
         "object": "model",
-        "created": DEFAULT_MODEL_CREATED_AT_TIME,
+        "created": int(time.time()),
         "owned_by": provider,
     }
 
