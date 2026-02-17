@@ -456,8 +456,13 @@ class ProxyLogging:
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         self._add_proxy_hooks(llm_router)
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
+
+        # Track string callbacks that we convert to instances so we can replace them
+        string_callbacks_to_replace: List[tuple] = []  # (original_string, instance)
+
         for callback in litellm.callbacks:
             if isinstance(callback, str):
+                original_string = callback
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
@@ -467,7 +472,20 @@ class ProxyLogging:
                 if callback is None:
                     continue
 
-            litellm.logging_callback_manager.add_litellm_callback(callback)
+                # Track string callbacks to replace with their instances
+                # This prevents double-counting when post_call_success_hook iterates
+                # through litellm.callbacks (which would otherwise contain both the
+                # string and the instance)
+                string_callbacks_to_replace.append((original_string, callback))
+            else:
+                # For non-string callbacks, add them normally
+                litellm.logging_callback_manager.add_litellm_callback(callback)
+
+        # Replace string callbacks with their instances to prevent double-counting
+        for original_string, instance in string_callbacks_to_replace:
+            if original_string in litellm.callbacks:
+                idx = litellm.callbacks.index(original_string)
+                litellm.callbacks[idx] = instance
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
