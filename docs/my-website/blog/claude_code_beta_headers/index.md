@@ -162,7 +162,7 @@ The `anthropic_beta_headers_config.json` file maps input headers to provider-spe
 
 ## Resolution steps for users
 
-For users still experiencing issues, update to the latest LiteLLM version:
+For users still experiencing issues, update to the latest LiteLLM version if < v1.81.11-nightly:
 
 ```bash
 pip install --upgrade litellm
