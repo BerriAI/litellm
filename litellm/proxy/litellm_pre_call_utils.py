@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeAlias, Union
 
 from fastapi import Request
 from starlette.datastructures import Headers
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
-    ProxyConfig = _ProxyConfig
+    ProxyConfig: TypeAlias = _ProxyConfig
 else:
     ProxyConfig = Any
     PolicyMatchContext = Any
@@ -564,11 +564,15 @@ class LiteLLMProxyRequestSetup:
         trace_id_from_header = headers.get("x-litellm-trace-id")
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
-            verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
-        
+            verbose_proxy_logger.debug(
+                f"Extracted agent_id from header: {agent_id_from_header}"
+            )
+
         if trace_id_from_header:
             metadata_from_headers["trace_id"] = trace_id_from_header
-            verbose_proxy_logger.debug(f"Extracted trace_id from header: {trace_id_from_header}")
+            verbose_proxy_logger.debug(
+                f"Extracted trace_id from header: {trace_id_from_header}"
+            )
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -1022,6 +1026,24 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_user_max_budget"
     ] = user_api_key_dict.user_max_budget
+
+    # Extract allowed access groups for router filtering (GitHub issue #18333)
+    # This allows the router to filter deployments based on team's access groups
+    if llm_router is not None:
+        from litellm.proxy.auth.model_checks import get_access_groups_from_models
+
+        model_access_groups = llm_router.get_model_access_groups()
+        # Combine key models and team models to get all allowed access groups
+        all_models = list(user_api_key_dict.models) + list(
+            user_api_key_dict.team_models or []
+        )
+        allowed_access_groups = get_access_groups_from_models(
+            model_access_groups=model_access_groups, models=all_models
+        )
+        if allowed_access_groups:
+            data[_metadata_variable_name][
+                "user_api_key_allowed_access_groups"
+            ] = allowed_access_groups
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
