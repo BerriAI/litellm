@@ -249,6 +249,7 @@ from .types.utils import (
     FileTypes,
     HiddenParams,
     LlmProviders,
+    LlmProvidersSet,
     PromptTokensDetails,
     ProviderSpecificHeader,
     all_litellm_params,
@@ -1104,8 +1105,6 @@ def completion(  # type: ignore # noqa: PLR0915
     stop = validate_openai_optional_params(stop=stop)
 
     ######### unpacking kwargs #####################
-    args = locals()
-
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import (
@@ -1284,12 +1283,12 @@ def completion(  # type: ignore # noqa: PLR0915
         logging: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
-            return completion_with_fallbacks(**args)
+            return completion_with_fallbacks(**locals())
         if model_list is not None:
             deployments = [
                 m["litellm_params"] for m in model_list if m["model_name"] == model
             ]
-            return litellm.batch_completion_models(deployments=deployments, **args)
+            return litellm.batch_completion_models(deployments=deployments, **locals())
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -1394,9 +1393,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         provider_config: Optional[BaseConfig] = None
-        if custom_llm_provider is not None and custom_llm_provider in [
-            provider.value for provider in LlmProviders
-        ]:
+        if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -4306,9 +4303,11 @@ def completion(  # type: ignore # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=args,
+            completion_kwargs={"messages": messages},
             extra_kwargs=kwargs,
         )
+
+
 
 
 def completion_with_retries(*args, **kwargs):

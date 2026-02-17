@@ -3874,9 +3874,7 @@ def get_optional_params(  # noqa: PLR0915
         custom_llm_provider=custom_llm_provider,
     )
     provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
+    if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)
         )
