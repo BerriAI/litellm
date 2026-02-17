@@ -10,11 +10,17 @@ import httpx
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai_evals import (
     CancelEvalResponse,
+    CancelRunResponse,
     CreateEvalRequest,
+    CreateRunRequest,
     DeleteEvalResponse,
     Eval,
     ListEvalsParams,
     ListEvalsResponse,
+    ListRunsParams,
+    ListRunsResponse,
+    Run,
+    RunDeleteResponse,
     UpdateEvalRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -312,6 +318,213 @@ class BaseEvalsAPIConfig(ABC):
 
         Returns:
             CancelEvalResponse object
+        """
+        pass
+
+    # Run API Transformations
+    @abstractmethod
+    def transform_create_run_request(
+        self,
+        eval_id: str,
+        create_request: CreateRunRequest,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform create run request to provider-specific format
+
+        Args:
+            eval_id: Eval ID
+            create_request: Run creation parameters
+            litellm_params: LiteLLM parameters
+            headers: Request headers
+
+        Returns:
+            Tuple of (url, request_body)
+        """
+        pass
+
+    @abstractmethod
+    def transform_create_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Run:
+        """
+        Transform provider response to Run object
+
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+
+        Returns:
+            Run object
+        """
+        pass
+
+    @abstractmethod
+    def transform_list_runs_request(
+        self,
+        eval_id: str,
+        list_params: ListRunsParams,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform list runs request parameters
+
+        Args:
+            eval_id: Eval ID
+            list_params: List parameters (pagination, filters)
+            litellm_params: LiteLLM parameters
+            headers: Request headers
+
+        Returns:
+            Tuple of (url, query_params)
+        """
+        pass
+
+    @abstractmethod
+    def transform_list_runs_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ListRunsResponse:
+        """
+        Transform provider response to ListRunsResponse
+
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+
+        Returns:
+            ListRunsResponse object
+        """
+        pass
+
+    @abstractmethod
+    def transform_get_run_request(
+        self,
+        eval_id: str,
+        run_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform get run request
+
+        Args:
+            eval_id: Eval ID
+            run_id: Run ID
+            api_base: Base API URL
+            litellm_params: LiteLLM parameters
+            headers: Request headers
+
+        Returns:
+            Tuple of (url, headers)
+        """
+        pass
+
+    @abstractmethod
+    def transform_get_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Run:
+        """
+        Transform provider response to Run object
+
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+
+        Returns:
+            Run object
+        """
+        pass
+
+    @abstractmethod
+    def transform_cancel_run_request(
+        self,
+        eval_id: str,
+        run_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """
+        Transform cancel run request
+
+        Args:
+            eval_id: Eval ID
+            run_id: Run ID
+            api_base: Base API URL
+            litellm_params: LiteLLM parameters
+            headers: Request headers
+
+        Returns:
+            Tuple of (url, headers, body)
+        """
+        pass
+
+    @abstractmethod
+    def transform_cancel_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CancelRunResponse:
+        """
+        Transform provider response to CancelRunResponse
+
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+
+        Returns:
+            CancelRunResponse object
+        """
+        pass
+
+    @abstractmethod
+    def transform_delete_run_request(
+        self,
+        eval_id: str,
+        run_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """
+        Transform delete run request
+
+        Args:
+            eval_id: Eval ID
+            run_id: Run ID
+            api_base: Base API URL
+            litellm_params: LiteLLM parameters
+            headers: Request headers
+
+        Returns:
+            Tuple of (url, headers, body)
+        """
+        pass
+
+    @abstractmethod
+    def transform_delete_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> "RunDeleteResponse":
+        """
+        Transform provider response to RunDeleteResponse
+
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+
+        Returns:
+            RunDeleteResponse object
         """
         pass
 
