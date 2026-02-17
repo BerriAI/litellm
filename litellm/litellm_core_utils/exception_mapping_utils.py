@@ -70,6 +70,11 @@ class ExceptionCheckers:
         Check if an error string indicates a context window exceeded error.
         """
         _error_str_lowercase = error_str.lower()
+        # Exclude param validation errors (e.g. OpenAI "user" param max 64 chars)
+        if "string_above_max_length" in _error_str_lowercase:
+            return False
+        if "invalid 'user'" in _error_str_lowercase and "string too long" in _error_str_lowercase:
+            return False
         known_exception_substrings = [
             "exceed context limit",
             "this model's maximum context length is",
@@ -98,16 +103,18 @@ class ExceptionCheckers:
         """
         Check if an error string indicates a content policy violation error.
         """
+        _lower = error_str.lower()
         known_exception_substrings = [
-            "invalid_request_error",
             "content_policy_violation",
+            "responsibleaipolicyviolation",
             "the response was filtered due to the prompt triggering azure openai's content management",
             "your task failed as a result of our safety system",
             "the model produced invalid content",
             "content_filter_policy",
+            "your request was rejected as a result of our safety system",
         ]
         for substring in known_exception_substrings:
-            if substring in error_str.lower():
+            if substring in _lower:
                 return True
         return False
 
@@ -2060,6 +2067,19 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     if isinstance(body_dict, dict):
                         if isinstance(body_dict.get("error"), dict):
                             azure_error_code = body_dict["error"].get("code")  # type: ignore[index]
+                            # Also check inner_error for
+                            # ResponsibleAIPolicyViolation which indicates a
+                            # content policy violation even when the top-level
+                            # code is generic (e.g. "invalid_request_error").
+                            if azure_error_code != "content_policy_violation":
+                                _inner = (
+                                    body_dict["error"].get("inner_error")  # type: ignore[index]
+                                    or body_dict["error"].get("innererror")  # type: ignore[index]
+                                )
+                                if isinstance(_inner, dict) and _inner.get(
+                                    "code"
+                                ) == "ResponsibleAIPolicyViolation":
+                                    azure_error_code = "content_policy_violation"
                         else:
                             azure_error_code = body_dict.get("code")
                 except Exception:

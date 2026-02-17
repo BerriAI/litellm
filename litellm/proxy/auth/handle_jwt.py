@@ -659,7 +659,7 @@ class JWTHandler:
                     token,
                     public_key_obj,  # type: ignore
                     algorithms=algorithms,
-                    options=decode_options,
+                    options=decode_options,  # type: ignore[arg-type]
                     audience=audience,
                     leeway=self.leeway,  # allow testing of expired tokens
                 )
@@ -964,7 +964,7 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or can_team_access_model(
+                        or await can_team_access_model(
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
@@ -1065,6 +1065,15 @@ class JWTAuthManager:
                 verbose_proxy_logger.info(
                     f"JWT Auth: Resolved org_alias='{org_alias}' to org_id='{org_object.organization_id}'"
                 )
+
+        # Check if email domain is allowed before attempting to get/create user
+        if valid_user_email is False:
+            raise ProxyException(
+                message=f"Email domain not allowed. User email: {user_email}. Allowed domain: {jwt_handler.litellm_jwtauth.user_allowed_email_domain}",
+                type=ProxyErrorTypes.auth_error,
+                param="user_email",
+                code=403,
+            )
 
         user_object: Optional[LiteLLM_UserTable] = None
         if user_id:

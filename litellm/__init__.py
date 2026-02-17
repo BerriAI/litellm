@@ -175,6 +175,7 @@ _async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # Custo
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+standard_logging_payload_excluded_fields: Optional[List[str]] = None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -336,6 +337,10 @@ model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+)
+anthropic_beta_headers_url: str = os.getenv(
+    "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
 )
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
@@ -1147,6 +1152,28 @@ from .skills.main import (
     delete_skill,
     adelete_skill,
 )
+from .evals.main import (
+    create_eval,
+    acreate_eval,
+    list_evals,
+    alist_evals,
+    get_eval,
+    aget_eval,
+    delete_eval,
+    adelete_eval,
+    cancel_eval,
+    acancel_eval,
+    create_run,
+    acreate_run,
+    list_runs,
+    alist_runs,
+    get_run,
+    aget_run,
+    delete_run,
+    adelete_run,
+    cancel_run,
+    acancel_run,
+)
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
@@ -1155,6 +1182,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     BadGatewayError,
@@ -1393,6 +1421,7 @@ if TYPE_CHECKING:
     from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
     from .llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
+    from .llms.perplexity.responses.transformation import PerplexityResponsesConfig as PerplexityResponsesConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
@@ -1724,6 +1753,37 @@ def __getattr__(name: str) -> Any:
             import litellm._service_logger
             _globals["_service_logger"] = litellm._service_logger
         return _globals["_service_logger"]
+
+    # Lazy load evals module functions
+    if name in ["acreate_eval", "alist_evals", "aget_eval", "aupdate_eval", "adelete_eval", "acancel_eval",
+                "create_eval", "list_evals", "get_eval", "update_eval", "delete_eval", "cancel_eval",
+                "acreate_run", "alist_runs", "aget_run", "acancel_run", "adelete_run",
+                "create_run", "list_runs", "get_run", "cancel_run", "delete_run"]:
+        from litellm.evals.main import (
+            acreate_eval,
+            alist_evals,
+            aget_eval,
+            aupdate_eval,
+            adelete_eval,
+            acancel_eval,
+            create_eval,
+            list_evals,
+            get_eval,
+            update_eval,
+            delete_eval,
+            cancel_eval,
+            acreate_run,
+            alist_runs,
+            aget_run,
+            acancel_run,
+            adelete_run,
+            create_run,
+            list_runs,
+            get_run,
+            cancel_run,
+            delete_run,
+        )
+        return locals()[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

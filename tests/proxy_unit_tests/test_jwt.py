@@ -923,10 +923,19 @@ def public_jwt_key():
     return {"private_key": private_key, "public_jwk": public_jwk}
 
 
-def mock_user_object(*args, **kwargs):
+async def mock_user_object(*args, **kwargs):
     print("Args: {}".format(args))
     print("kwargs: {}".format(kwargs))
     assert kwargs["user_id_upsert"] is True
+    # Return a mock user object
+    user_id = kwargs.get("user_id")
+    user_email = kwargs.get("user_email")
+    return LiteLLM_UserTable(
+        spend=0, 
+        user_id=user_id, 
+        max_budget=None, 
+        user_email=user_email
+    )
 
 
 @pytest.mark.parametrize(

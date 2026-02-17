@@ -1,8 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -68,6 +65,29 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
 
+        # Check for context management
+        context_management_param = optional_params.get("context_management")
+        if context_management_param is not None:
+            # Check edits array for compact_20260112 type
+            edits = context_management_param.get("edits", [])
+            has_compact = False
+            has_other = False
+            
+            for edit in edits:
+                edit_type = edit.get("type", "")
+                if edit_type == "compact_20260112":
+                    has_compact = True
+                else:
+                    has_other = True
+            
+            # Add compact header if any compact edits exist
+            if has_compact:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+            
+            # Add context management header if any other edits exist
+            if has_other:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+
         # Check for web search tool
         for tool in tools:
             if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
@@ -81,12 +101,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
-        
-        # Filter out unsupported beta headers for Vertex AI
-        headers = update_headers_with_filtered_beta(
-            headers=headers,
-            provider="vertex_ai",
-        )
         
         return headers, api_base
 
