@@ -1,4 +1,4 @@
-# OpenAI Evals API
+# /evals
 
 LiteLLM Proxy supports OpenAI's Evaluations (Evals) API, allowing you to create, manage, and run evaluations to measure model performance against defined testing criteria.
 
