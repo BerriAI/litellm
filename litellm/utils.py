@@ -8145,6 +8145,8 @@ class ProviderConfigManager:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageRerankConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            return litellm.IBMWatsonXRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
