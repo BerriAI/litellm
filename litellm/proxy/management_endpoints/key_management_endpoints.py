@@ -480,6 +480,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 "tpm_limit",
                 "rpm_limit",
                 "budget_duration",
+                "duration",
             ]:
                 setattr(data, key, litellm.default_key_generate_params.get(key, None))
             elif key == "models" and value == []:
