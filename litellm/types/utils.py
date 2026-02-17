@@ -1537,7 +1537,13 @@ class Usage(SafeAttributeModel, CompletionUsage):
             del self.server_tool_use
 
         if cost is not None:
-            self.cost = cost
+            # Some providers (e.g. Perplexity) return cost as a dict with total_cost
+            if isinstance(cost, dict):
+                cost = cost.get("total_cost")
+            if cost is not None:
+                self.cost = cost
+            else:
+                del self.cost
         else:
             del self.cost
 

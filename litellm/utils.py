@@ -8226,9 +8226,52 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_responses_api_config(
-        provider: LlmProviders,
+        provider: Union[LlmProviders, str],
         model: Optional[str] = None,
     ) -> Optional[BaseResponsesAPIConfig]:
+        from litellm.llms.openai_like.dynamic_config import (
+            create_responses_config_class,
+        )
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        # Resolve provider string for JSON lookup
+        provider_str = provider.value if isinstance(provider, LlmProviders) else str(provider)
+
+        # Try to convert to enum for Python class lookup first.
+        # Python classes take priority over JSON (they have custom overrides).
+        provider_enum: Optional[LlmProviders] = None
+        if isinstance(provider, LlmProviders):
+            provider_enum = provider
+        else:
+            try:
+                provider_enum = LlmProviders(provider)
+            except ValueError:
+                pass
+
+        # Check Python classes first (custom overrides take priority)
+        result = ProviderConfigManager._get_python_responses_api_config(
+            provider_enum, model
+        )
+        if result is not None:
+            return result
+
+        # Fall back to JSON providers (generic OpenAI-compatible)
+        if JSONProviderRegistry.exists(provider_str) and JSONProviderRegistry.supports_responses_api(provider_str):
+            provider_config = JSONProviderRegistry.get(provider_str)
+            if provider_config is not None:
+                return create_responses_config_class(provider_config)()
+
+        return None
+
+    @staticmethod
+    def _get_python_responses_api_config(
+        provider: Optional[LlmProviders],
+        model: Optional[str] = None,
+    ) -> Optional[BaseResponsesAPIConfig]:
+        """Check for Python-class-based responses API configs (custom overrides)."""
+        if provider is None:
+            return None
+
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
