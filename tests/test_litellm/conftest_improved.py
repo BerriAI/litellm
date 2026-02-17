@@ -79,7 +79,7 @@ def isolate_litellm_state():
         litellm.callbacks = original_callbacks
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="module", autouse=True)
 def setup_and_teardown():
     """
     Module-scoped setup/teardown for heavy initialization.

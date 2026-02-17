@@ -80,6 +80,7 @@ def isolate_litellm_state():
 
 
 @pytest.fixture(scope="module")
+@pytest.fixture(scope="module", autouse=True)
 def setup_and_teardown():
     """
     Module-scoped setup/teardown for heavy initialization.
