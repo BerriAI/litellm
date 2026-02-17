@@ -1072,7 +1072,7 @@ class ProxyLogging:
         prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
         litellm_prompt_id: Optional[str] = None
         if prompt_spec is not None:
-            litellm_prompt_id = prompt_spec.litellm_params.prompt_id
+            litellm_prompt_id = prompt_spec.litellm_params.prompt_id or prompt_id
             data.pop("prompt_id", None)
 
         if custom_logger and prompt_spec is not None:
