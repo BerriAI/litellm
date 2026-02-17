@@ -365,6 +365,77 @@ def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, as
     dummy_logger.log_stream_event.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_wrapper_async_calls_sync_success_callbacks_once():
+    """
+    Regression test: wrapper_async should trigger sync-success callbacks once.
+
+    Historically, wrapper_async invoked handle_sync_success_callbacks_for_async_calls()
+    directly and via _client_async_logging_helper, causing duplicate calls.
+    """
+    import asyncio
+
+    import litellm
+
+    test_logging_obj = LitellmLogging(
+        model="openai/codex-mini-latest",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="test-call-once",
+        function_id="test-function-once",
+    )
+    test_logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    await litellm.acompletion(
+        model="openai/codex-mini-latest",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=10,
+        mock_response="hi",
+        caching=False,
+        litellm_logging_obj=test_logging_obj,
+    )
+    await asyncio.sleep(0.2)
+
+    assert (
+        test_logging_obj.handle_sync_success_callbacks_for_async_calls.call_count == 1
+    )
+
+
+def test_success_handler_does_not_emit_standard_payload_when_called_from_async(logging_obj):
+    """
+    Regression test: sync success handler should not emit standard payload when
+    invoked from async flow (async_success_handler already emits).
+    """
+    from litellm.types.utils import CallTypes
+
+    logging_obj.stream = True
+    logging_obj.call_type = CallTypes.anthropic_messages.value
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="claude-sonnet-4-5",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+    ) as mock_emit:
+        logging_obj.success_handler(result=model_response, called_from_async=True)
+
+    mock_emit.assert_not_called()
+
+
 @pytest.mark.parametrize("call_type", ["completion", "responses"])
 def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call_type):
     """Ensure sync success callbacks execute when call type is sync (completion/responses)."""

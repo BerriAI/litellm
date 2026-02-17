@@ -1922,7 +1922,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 ) is not None:
                     # Only emit for sync requests (async_success_handler handles async)
-                    if is_sync_request:
+                    if (
+                        is_sync_request
+                        and kwargs.get("called_from_async", False) is not True
+                    ):
                         emit_standard_logging_payload(standard_logging_payload)
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
@@ -3105,6 +3108,7 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time,
             end_time,
             cache_hit,
+            called_from_async=True,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
