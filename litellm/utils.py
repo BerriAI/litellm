@@ -2178,6 +2178,10 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
         enc = tokenizer_json["tokenizer"].encode(text)
+    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
+    # extract .ids so the return type is always List[int].
+    if hasattr(enc, "ids"):
+        return enc.ids
     return enc
 
 
