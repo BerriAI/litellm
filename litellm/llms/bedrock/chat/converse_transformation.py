@@ -310,6 +310,99 @@ class AmazonConverseConfig(BaseConfig):
         # Check if the model is specifically Nova Lite 2
         return "nova-2-lite" in model_without_region
 
+    def _is_moonshot_kimi_k2_5_model(self, model: str) -> bool:
+        """
+        Check if the model is Bedrock Moonshot Kimi K2.5.
+
+        Bedrock Kimi K2.5 expects reasoning controls via
+        `additionalModelRequestFields.reasoning_config`.
+        """
+        base_model = BedrockModelInfo.get_base_model(model)
+        return base_model == "moonshotai.kimi-k2.5"
+
+    def _transform_reasoning_effort_to_moonshot_reasoning_config(
+        self, reasoning_effort: Any
+    ) -> Optional[str]:
+        """
+        Transform OpenAI reasoning_effort to Bedrock Moonshot reasoning_config.
+
+        Moonshot K2.5 on Bedrock treats reasoning as a boolean-like switch:
+        - disabled values -> do not set reasoning_config
+        - any other value -> reasoning_config="high"
+        """
+        return self._normalize_moonshot_k2_5_reasoning_value(reasoning_effort)
+
+    def _normalize_moonshot_k2_5_reasoning_value(self, value: Any) -> Optional[str]:
+        """
+        Normalize any reasoning input for Moonshot K2.5 to Bedrock reasoning_config.
+
+        Disabled values:
+        - False
+        - "none"
+        - "false"
+        - "disabled"
+
+        Any other value is treated as enabled and maps to "high".
+        """
+        if value is None:
+            return "high"
+
+        if isinstance(value, bool):
+            return "high" if value else None
+
+        if isinstance(value, str):
+            if value.strip().lower() in ("none", "false", "disabled"):
+                return None
+            return "high"
+
+        if isinstance(value, dict):
+            if "type" in value:
+                return self._normalize_moonshot_k2_5_reasoning_value(value.get("type"))
+            if "effort" in value:
+                return self._normalize_moonshot_k2_5_reasoning_value(
+                    value.get("effort")
+                )
+            if "reasoning_effort" in value:
+                return self._normalize_moonshot_k2_5_reasoning_value(
+                    value.get("reasoning_effort")
+                )
+            if "enabled" in value:
+                return self._normalize_moonshot_k2_5_reasoning_value(
+                    value.get("enabled")
+                )
+            return "high"
+
+        return "high"
+
+    def _transform_thinking_to_moonshot_reasoning_config(
+        self, thinking: Any
+    ) -> Optional[str]:
+        """
+        Transform Anthropic-style thinking param to Bedrock Moonshot reasoning_config.
+
+        Moonshot K2.5 does not consume `thinking`; Bedrock expects `reasoning_config`.
+        """
+        return self._normalize_moonshot_k2_5_reasoning_value(thinking)
+
+    def _set_moonshot_reasoning_state(
+        self, optional_params: dict, reasoning_config: Optional[str]
+    ) -> None:
+        """
+        Track Moonshot K2.5 reasoning state.
+
+        - Any explicit disable request should disable reasoning.
+        - Disable takes precedence over enable if conflicting controls are sent.
+        """
+        if reasoning_config is None:
+            optional_params["_moonshot_reasoning_disabled"] = True
+            optional_params.pop("reasoning_config", None)
+            return
+
+        if optional_params.get("_moonshot_reasoning_disabled") is True:
+            return
+
+        optional_params["reasoning_config"] = reasoning_config
+
     def _map_web_search_options(
         self, web_search_options: dict, model: str
     ) -> Optional[BedrockToolBlock]:
@@ -425,6 +518,15 @@ class AmazonConverseConfig(BaseConfig):
             # GPT-OSS models: keep reasoning_effort as-is
             # It will be passed through to additionalModelRequestFields
             optional_params["reasoning_effort"] = reasoning_effort
+        elif self._is_moonshot_kimi_k2_5_model(model):
+            # Bedrock Moonshot K2.5 expects reasoning_config in additionalModelRequestFields
+            reasoning_config = (
+                self._transform_reasoning_effort_to_moonshot_reasoning_config(
+                    reasoning_effort
+                )
+            )
+            if reasoning_config is not None:
+                optional_params["reasoning_config"] = reasoning_config
         elif self._is_nova_lite_2_model(model):
             # Nova Lite 2 models: transform to reasoningConfig
             reasoning_config = self._transform_reasoning_effort_to_reasoning_config(
@@ -777,11 +879,34 @@ class AmazonConverseConfig(BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "thinking":
-                optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
-                self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
-                )
+                if self._is_moonshot_kimi_k2_5_model(model):
+                    # Bedrock Moonshot K2.5 requires reasoning_config, not thinking
+                    reasoning_config = self._transform_thinking_to_moonshot_reasoning_config(
+                        cast(Union[dict, str, None], value)
+                    )
+                    self._set_moonshot_reasoning_state(
+                        optional_params=optional_params,
+                        reasoning_config=reasoning_config,
+                    )
+                else:
+                    optional_params["thinking"] = value
+            elif param == "reasoning_effort":
+                if self._is_moonshot_kimi_k2_5_model(model):
+                    reasoning_config = (
+                        self._transform_reasoning_effort_to_moonshot_reasoning_config(
+                            value
+                        )
+                    )
+                    self._set_moonshot_reasoning_state(
+                        optional_params=optional_params,
+                        reasoning_config=reasoning_config,
+                    )
+                elif isinstance(value, str):
+                    self._handle_reasoning_effort_parameter(
+                        model=model,
+                        reasoning_effort=value,
+                        optional_params=optional_params,
+                    )
             if param == "requestMetadata":
                 if value is not None and isinstance(value, dict):
                     self._validate_request_metadata(value)  # type: ignore
@@ -1054,6 +1179,45 @@ class AmazonConverseConfig(BaseConfig):
         inference_params = {
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
+
+        # Bedrock Moonshot K2.5 only supports `reasoning_config` for reasoning controls.
+        # Translate legacy reasoning fields when they are passed via extra_body/optional params.
+        if self._is_moonshot_kimi_k2_5_model(model):
+            moonshot_reasoning_disabled = bool(
+                optional_params.get("_moonshot_reasoning_disabled")
+            )
+            if "reasoning_config" not in additional_request_params:
+                if "reasoning_effort" in additional_request_params:
+                    reasoning_config = (
+                        self._transform_reasoning_effort_to_moonshot_reasoning_config(
+                            additional_request_params["reasoning_effort"]
+                        )
+                    )
+                    if reasoning_config is not None:
+                        additional_request_params["reasoning_config"] = reasoning_config
+                    else:
+                        moonshot_reasoning_disabled = True
+                elif "thinking" in additional_request_params:
+                    reasoning_config = self._transform_thinking_to_moonshot_reasoning_config(
+                        additional_request_params["thinking"]
+                    )
+                    if reasoning_config is not None:
+                        additional_request_params["reasoning_config"] = reasoning_config
+                    else:
+                        moonshot_reasoning_disabled = True
+
+            # Keep parity with official API defaults: reasoning is enabled by default.
+            # Only disable when client explicitly requests disable.
+            if (
+                not moonshot_reasoning_disabled
+                and "reasoning_config" not in additional_request_params
+            ):
+                additional_request_params["reasoning_config"] = "high"
+
+            # Remove legacy fields that Bedrock silently ignores for this model.
+            additional_request_params.pop("thinking", None)
+            additional_request_params.pop("reasoning_effort", None)
+            additional_request_params.pop("_moonshot_reasoning_disabled", None)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(
