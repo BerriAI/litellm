@@ -36978,5 +36978,65 @@
         "supports_vision": true,
         "supports_web_search": true,
         "tpm": 8000000
+    },
+    "sarvam/saarika:v2.5": {
+        "input_cost_per_second": 9.2e-05,
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "notes": "Sarvam AI Saarika v2.5 - Speech-to-Text for 11 Indian languages",
+            "original_pricing_inr_per_hour": 30,
+            "calculation": "\u20b930/hour = $0.33/hour \u00f7 3600 sec = $0.000092/sec"
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://www.sarvam.ai/api-pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "sarvam/saaras:v3": {
+        "input_cost_per_second": 9.2e-05,
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "notes": "Sarvam AI Saaras v3 - Speech-to-Text for 11 Indian languages",
+            "original_pricing_inr_per_hour": 30,
+            "calculation": "\u20b930/hour = $0.33/hour \u00f7 3600 sec = $0.000092/sec"
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://www.sarvam.ai/api-pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "sarvam/bulbul:v2": {
+        "input_cost_per_character": 1.65e-05,
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "notes": "Sarvam AI Bulbul v2 - TTS for 11 Indian languages. Speakers: Anushka (default), Manisha, Vidya, Arya (female); Abhilash, Karun, Hitesh (male)",
+            "original_pricing_inr_per_10k_chars": 15,
+            "calculation": "\u20b915/10K chars = $0.165/10K = $0.0000165/char"
+        },
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.0,
+        "source": "https://www.sarvam.ai/api-pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "sarvam/bulbul:v3": {
+        "input_cost_per_character": 3.3e-05,
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "notes": "Sarvam AI Bulbul v3 - TTS for 11 Indian languages",
+            "original_pricing_inr_per_10k_chars": 15,
+            "calculation": "\u20b930/10K chars = $0.33/10K = $0.000033/char"
+        },
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.0,
+        "source": "https://www.sarvam.ai/api-pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
     }
 }

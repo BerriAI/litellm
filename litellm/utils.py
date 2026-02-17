@@ -8222,6 +8222,12 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SARVAM == provider:
+            from litellm.llms.sarvam.audio_transcription.transformation import (
+                SarvamAudioTranscriptionConfig,
+            )
+
+            return SarvamAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8846,6 +8852,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.SARVAM == provider:
+            from litellm.llms.sarvam.text_to_speech.transformation import (
+                SarvamTextToSpeechConfig,
+            )
+
+            return SarvamTextToSpeechConfig()
         return None
 
     @staticmethod
