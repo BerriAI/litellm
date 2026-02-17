@@ -9540,7 +9540,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, params=query_params
+                url=url, headers=headers, params=query_params, timeout=timeout
             )
         except Exception as e:
             raise self._handle_error(
