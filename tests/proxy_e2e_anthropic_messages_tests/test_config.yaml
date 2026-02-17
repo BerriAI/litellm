@@ -40,6 +40,7 @@ model_list:
     litellm_params:
       model: "azure_ai/claude-opus-4.5"
       api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
 
   # Vertex AI models
   - model_name: vertex-ai-claude-opus-4-6
