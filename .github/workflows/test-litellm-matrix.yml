@@ -1,4 +1,4 @@
-name: LiteLLM Unit Tests (Matrix) - Improved
+name: LiteLLM Unit Tests (Matrix)
 
 on:
   pull_request:
@@ -89,8 +89,9 @@ jobs:
         run: |
           poetry config virtualenvs.in-project true
           poetry install --with dev,proxy-dev --extras "proxy semantic-router"
-          # Note: pytest-rerunfailures is already in pyproject.toml (v14.0 for Python 3.9 compat)
-          poetry run pip install pytest-retry==1.6.3 pytest-xdist google-genai==1.22.0 \
+          # pytest-rerunfailures is in pyproject.toml (v14.0 for Python 3.9 compat)
+          # NOTE: Removed pytest-retry to avoid duplicate retry mechanisms
+          poetry run pip install google-genai==1.22.0 \
             google-cloud-aiplatform>=1.38 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core
 
       - name: Setup litellm-enterprise
@@ -98,12 +99,6 @@ jobs:
           cd enterprise && poetry run pip install -e . && cd ..
 
       - name: Run tests - ${{ matrix.test-group.name }}
-        env:
-          # Prevent tests from trying to use real API keys
-          LITELLM_CI: "true"
-          # Set pytest variables for better isolation
-          PYTHONDONTWRITEBYTECODE: "1"
-          PYTHONHASHSEED: "0"
         run: |
           poetry run pytest ${{ matrix.test-group.path }} \
             --tb=short -vv \
@@ -111,19 +106,4 @@ jobs:
             -n ${{ matrix.test-group.workers }} \
             --reruns ${{ matrix.test-group.reruns }} \
             --reruns-delay 1 \
-            --dist loadgroup \
-            --durations=20 \
-            -m "not no_parallel"
-
-      - name: Run sequential tests (no_parallel) - ${{ matrix.test-group.name }}
-        if: always()  # Run even if parallel tests fail
-        env:
-          LITELLM_CI: "true"
-          PYTHONDONTWRITEBYTECODE: "1"
-          PYTHONHASHSEED: "0"
-        run: |
-          poetry run pytest ${{ matrix.test-group.path }} \
-            --tb=short -vv \
-            --maxfail=5 \
-            -m "no_parallel" \
-            --durations=20 || echo "No sequential tests found or tests passed"
+            --durations=20
