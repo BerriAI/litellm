@@ -2408,6 +2408,7 @@ def supports_response_schema(
         litellm.LlmProviders.FIREWORKS_AI,
         litellm.LlmProviders.LM_STUDIO,
         litellm.LlmProviders.NEBIUS,
+        litellm.LlmProviders.DATABRICKS,
     ]
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
