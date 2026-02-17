@@ -37,7 +37,6 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
-
 # ============================================================================
 # FIXTURES
 # ============================================================================
@@ -49,8 +48,8 @@ def setup_and_teardown():
     Standard LiteLLM fixture that reloads litellm before every function
     to speed up testing by removing callbacks being chained.
     """
-    import importlib
     import asyncio
+    import importlib
     import sys
 
     # Reload litellm to ensure clean state
