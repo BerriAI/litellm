@@ -156,3 +156,19 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: migration-sa
+
+  - it: should use chart service account when helm hooks are disabled
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        hooks:
+          helm:
+            enabled: false
+      serviceAccount:
+        create: true
+        name: my-custom-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: my-custom-sa
