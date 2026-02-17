@@ -74,7 +74,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "top_p": (int, float, type(None)),
         "max_output_tokens": (int, type(None)),
         "previous_response_id": (str, type(None)),
-        "reasoning": dict,
+        "reasoning": (dict, type(None)),
         "status": str,
         "text": dict,
         "truncation": (str, type(None)),
