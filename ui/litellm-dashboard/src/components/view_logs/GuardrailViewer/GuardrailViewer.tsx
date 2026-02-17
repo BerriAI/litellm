@@ -53,6 +53,7 @@ interface GuardrailInformation {
   match_details?: MatchDetail[];
   patterns_checked?: number;
   alert_recipients?: string[];
+  risk_score?: number;
 }
 
 interface GuardrailViewerProps {
@@ -85,6 +86,12 @@ const getTotalMasked = (entry: GuardrailInformation): number => {
 
 const isEntrySuccess = (entry: GuardrailInformation): boolean => {
   return (entry.guardrail_status ?? "").toLowerCase() === "success";
+};
+
+const getRiskColor = (score: number): string => {
+  if (score <= 3) return "text-green-600 bg-green-50 border-green-200";
+  if (score <= 6) return "text-amber-600 bg-amber-50 border-amber-200";
+  return "text-red-600 bg-red-50 border-red-200";
 };
 
 const getDisplayName = (entry: GuardrailInformation): string => {
@@ -454,6 +461,14 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
             <span className="px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded text-[11px] font-medium flex-shrink-0">
               {(entry.confidence_score * 100).toFixed(0)}% conf
             </span>
+          )}
+
+          {entry.risk_score != null && success && (
+            <Tooltip title={`Risk score: ${entry.risk_score}/10`}>
+              <span className={`px-2 py-0.5 border rounded text-[11px] font-semibold flex-shrink-0 ${getRiskColor(entry.risk_score)}`}>
+                Risk {entry.risk_score}/10
+              </span>
+            </Tooltip>
           )}
         </div>
 
