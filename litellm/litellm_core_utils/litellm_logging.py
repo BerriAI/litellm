@@ -214,6 +214,17 @@ _CUSTOM_PRICING_KEYS: frozenset = frozenset(
     CustomPricingLiteLLMParams.model_fields.keys()
 )
 
+# CallTypes that represent async requests.
+# Excludes `add_message` which is a sync call type despite starting with "a".
+_ASYNC_CALL_TYPE_VALUES: frozenset[str] = frozenset(
+    call_type.value
+    for call_type in CallTypes
+    if (
+        call_type.value.startswith("a") or call_type.value.startswith("_a")
+    )
+    and call_type.value != "add_message"
+)
+
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -1558,6 +1569,30 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return True
 
+    def _is_async_litellm_request(self, litellm_params: Dict[str, Any]) -> bool:
+        """
+        Best-effort async request detection for logging flows.
+
+        We need this to prevent sync handler payload/callback duplication when the same
+        request is processed by both async and sync callback paths.
+        """
+        if litellm_params.get("async_call", False) is True:
+            return True
+
+        for async_call_type in _ASYNC_CALL_TYPE_VALUES:
+            if litellm_params.get(async_call_type, False) is True:
+                return True
+
+        call_type = self.call_type
+        if isinstance(call_type, CallTypes):
+            call_type_value = call_type.value
+        else:
+            call_type_value = str(call_type)
+            if call_type_value.startswith("CallTypes."):
+                call_type_value = call_type_value.split("CallTypes.", 1)[1]
+
+        return call_type_value in _ASYNC_CALL_TYPE_VALUES
+
     def _update_completion_start_time(self, completion_start_time: datetime.datetime):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
@@ -1873,12 +1908,8 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = (
-            litellm_params.get(CallTypes.acompletion.value, False) is not True
-            and litellm_params.get(CallTypes.aresponses.value, False) is not True
-            and litellm_params.get(CallTypes.aembedding.value, False) is not True
-            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
-            and litellm_params.get(CallTypes.atranscription.value, False) is not True
+        is_sync_request = not self._is_async_litellm_request(
+            litellm_params=litellm_params
         )
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
@@ -2776,12 +2807,8 @@ class Logging(LiteLLMLoggingBaseClass):
         ):  # prevent double logging
             return
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = (
-            litellm_params.get(CallTypes.acompletion.value, False) is not True
-            and litellm_params.get(CallTypes.aresponses.value, False) is not True
-            and litellm_params.get(CallTypes.aembedding.value, False) is not True
-            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
-            and litellm_params.get(CallTypes.atranscription.value, False) is not True
+        is_sync_request = not self._is_async_litellm_request(
+            litellm_params=litellm_params
         )
 
         try:

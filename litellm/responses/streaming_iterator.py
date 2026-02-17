@@ -424,6 +424,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             cache_hit=None,
             start_time=self.start_time,
             end_time=datetime.now(),
+            called_from_async=True,
         )
         self._run_post_success_hooks(end_time=datetime.now())
 

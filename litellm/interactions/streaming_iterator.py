@@ -188,6 +188,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
             cache_hit=None,
             start_time=self.start_time,
             end_time=datetime.now(),
+            called_from_async=True,
         )
 
 
@@ -261,4 +262,3 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
             start_time=self.start_time,
             end_time=datetime.now(),
         )
-

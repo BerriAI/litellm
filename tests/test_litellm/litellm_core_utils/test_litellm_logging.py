@@ -365,6 +365,71 @@ def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, as
     dummy_logger.log_stream_event.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "call_type, expected_async",
+    [
+        ("agenerate_content_stream", True),
+        ("anthropic_messages", True),
+        ("add_message", False),
+        ("completion", False),
+    ],
+)
+def test_is_async_litellm_request_detection_uses_call_type(logging_obj, call_type, expected_async):
+    logging_obj.call_type = call_type
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    assert (
+        logging_obj._is_async_litellm_request(logging_obj.model_call_details["litellm_params"])
+        is expected_async
+    )
+
+
+def test_success_handler_does_not_emit_standard_payload_for_async_call_marker(logging_obj):
+    """
+    Regression test for async call types that don't set legacy `litellm_params` flags
+    (e.g. `agenerate_content_stream`).
+    """
+    from litellm.types.utils import CallTypes
+
+    logging_obj.stream = True
+    logging_obj.call_type = CallTypes.agenerate_content_stream.value
+    logging_obj.model_call_details["litellm_params"] = {"async_call": True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gemini-2.5-pro",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with (
+        patch.object(
+            logging_obj,
+            "_get_assembled_streaming_response",
+            return_value=model_response,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload",
+            return_value={"id": "test-payload"},
+        ),
+        patch.object(logging_obj, "get_combined_callback_list", return_value=[]),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+        ) as mock_emit,
+    ):
+        logging_obj.success_handler(result=model_response)
+
+    mock_emit.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_wrapper_async_calls_sync_success_callbacks_once():
     """
