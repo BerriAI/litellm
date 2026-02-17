@@ -5618,9 +5618,6 @@ async def test_default_key_generate_params_duration(monkeypatch):
     of fields populated from default_key_generate_params.
     """
     import litellm
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        generate_key_helper_fn,
-    )
 
     mock_prisma_client = AsyncMock()
     mock_insert_data = AsyncMock(
