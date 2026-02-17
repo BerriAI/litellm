@@ -775,7 +775,7 @@ async def list_runs(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=str(data.get("model")) if data.get("model") is not None else None,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -848,7 +848,7 @@ async def get_run(
     if model:
         data["model"] = model
 
-    if "custom_llm_provider" not in data:
+    if "custom_llm_provider" not in data and custom_llm_provider is not None:
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
