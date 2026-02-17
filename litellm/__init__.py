@@ -1734,7 +1734,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load evals module functions
     if name in ["acreate_eval", "alist_evals", "aget_eval", "aupdate_eval", "adelete_eval", "acancel_eval",
-                "create_eval", "list_evals", "get_eval", "update_eval", "delete_eval", "cancel_eval"]:
+                "create_eval", "list_evals", "get_eval", "update_eval", "delete_eval", "cancel_eval",
+                "acreate_run", "alist_runs", "aget_run", "acancel_run", "adelete_run",
+                "create_run", "list_runs", "get_run", "cancel_run", "delete_run"]:
         from litellm.evals.main import (
             acreate_eval,
             alist_evals,
@@ -1748,6 +1750,16 @@ def __getattr__(name: str) -> Any:
             update_eval,
             delete_eval,
             cancel_eval,
+            acreate_run,
+            alist_runs,
+            aget_run,
+            acancel_run,
+            adelete_run,
+            create_run,
+            list_runs,
+            get_run,
+            cancel_run,
+            delete_run,
         )
         return locals()[name]
 

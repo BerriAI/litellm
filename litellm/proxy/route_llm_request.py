@@ -80,6 +80,12 @@ ROUTE_ENDPOINT_MAPPING = {
     "aupdate_eval": "/evals/{eval_id}",
     "adelete_eval": "/evals/{eval_id}",
     "acancel_eval": "/evals/{eval_id}/cancel",
+    # OpenAI Evals Runs API routes
+    "acreate_run": "/evals/{eval_id}/runs",
+    "alist_runs": "/evals/{eval_id}/runs",
+    "aget_run": "/evals/{eval_id}/runs/{run_id}",
+    "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
+    "adelete_run": "/evals/{eval_id}/runs/{run_id}",
 }
 
 
@@ -203,6 +209,11 @@ async def route_request(
         "aupdate_eval",
         "adelete_eval",
         "acancel_eval",
+        "acreate_run",
+        "alist_runs",
+        "aget_run",
+        "acancel_run",
+        "adelete_run",
     ],
 ):
     """
@@ -278,6 +289,11 @@ async def route_request(
             "aupdate_eval",
             "adelete_eval",
             "acancel_eval",
+            "acreate_run",
+            "alist_runs",
+            "aget_run",
+            "acancel_run",
+            "adelete_run",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")
