@@ -1726,7 +1726,7 @@ const fetchDailyActivity = async ({
   }
 };
 
-export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
+export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1, userId: string | null = null) => {
   /**
    * Get daily user activity on proxy
    */
@@ -1736,6 +1736,9 @@ export const userDailyActivityCall = async (accessToken: string, startTime: Date
     startTime,
     endTime,
     page,
+    extraQueryParams: {
+      user_id: userId,
+    },
   });
 };
 
@@ -3405,7 +3408,7 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
-export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date, userId: string | null = null) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
@@ -3423,6 +3426,9 @@ export const userDailyActivityAggregatedCall = async (accessToken: string, start
     queryParams.append("end_date", formatDate(endTime));
     // Send timezone offset so backend can adjust date range for UTC storage
     queryParams.append("timezone", new Date().getTimezoneOffset().toString());
+    if (userId) {
+      queryParams.append("user_id", userId);
+    }
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
