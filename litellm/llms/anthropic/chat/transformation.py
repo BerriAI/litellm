@@ -800,11 +800,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if json_schema is None:
             return None
+
+        # Filter unsupported constraints (minimum, maximum, etc.) from the schema.
+        # The output_format path (newer models) already does this via
+        # map_response_format_to_anthropic_output_format, but the tool-based
+        # path for older models was missing it. See #21016.
+        json_schema = self.filter_anthropic_output_schema(json_schema)
+
         """
         When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
         - You usually want to provide a single tool
         - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model's perspective.
         """
 
         _tool = self._create_json_tool_call_for_response_format(
