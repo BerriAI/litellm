@@ -329,10 +329,10 @@ class ContentFilterGuardrail(CustomGuardrail):
                     action if action else category_config_obj.default_action
                 )
 
-                # Handle conditional categories (with identifier_words + inherit_from)
-                if (
-                    category_config_obj.identifier_words
-                    and category_config_obj.inherit_from
+                # Handle conditional categories (with identifier_words + block words)
+                if category_config_obj.identifier_words and (
+                    category_config_obj.inherit_from
+                    or category_config_obj.additional_block_words
                 ):
                     self._load_conditional_category(
                         category_name,
@@ -387,51 +387,55 @@ class ContentFilterGuardrail(CustomGuardrail):
         categories_dir: str,
     ) -> None:
         """
-        Load a conditional category that uses identifier_words + inherited block_words.
+        Load a conditional category that uses identifier_words + block_words.
+        Block words can come from inherited category or additional_block_words.
 
         Args:
             category_name: Name of the category
-            category_config_obj: CategoryConfig object with identifier_words and inherit_from
+            category_config_obj: CategoryConfig object with identifier_words
             category_action: Action to take when match is found
             severity_threshold: Minimum severity threshold
             categories_dir: Directory containing category files
         """
-        # Load the inherited category to get block words
-        inherit_from = category_config_obj.inherit_from
-        if not inherit_from:
-            return
-
-        # Remove .json or .yaml extension if included
-        inherit_base = inherit_from.replace(".json", "").replace(".yaml", "")
-
-        # Find the inherited category file
-        inherit_yaml_path = os.path.join(categories_dir, f"{inherit_base}.yaml")
-        inherit_json_path = os.path.join(categories_dir, f"{inherit_base}.json")
-
-        if os.path.exists(inherit_yaml_path):
-            inherit_file_path = inherit_yaml_path
-        elif os.path.exists(inherit_json_path):
-            inherit_file_path = inherit_json_path
-        else:
-            verbose_proxy_logger.warning(
-                f"Category {category_name}: inherit_from '{inherit_from}' file not found at {categories_dir}"
-            )
-            verbose_proxy_logger.debug(
-                f"Tried paths: {inherit_yaml_path}, {inherit_json_path}"
-            )
-            return
-
         try:
-            # Load the inherited category
-            inherited_category = self._load_category_file(inherit_file_path)
-
-            # Extract block words from inherited category that meet severity threshold
             block_words = []
-            for keyword_data in inherited_category.keywords:
-                keyword = keyword_data["keyword"].lower()
-                severity = keyword_data["severity"]
-                if self._should_apply_severity(severity, severity_threshold):
-                    block_words.append(keyword)
+            inherit_from = category_config_obj.inherit_from
+
+            # Load inherited block words if specified
+            if inherit_from:
+                # Remove .json or .yaml extension if included
+                inherit_base = inherit_from.replace(".json", "").replace(".yaml", "")
+
+                # Find the inherited category file
+                inherit_yaml_path = os.path.join(categories_dir, f"{inherit_base}.yaml")
+                inherit_json_path = os.path.join(categories_dir, f"{inherit_base}.json")
+
+                inherit_file_path = None
+                if os.path.exists(inherit_yaml_path):
+                    inherit_file_path = inherit_yaml_path
+                elif os.path.exists(inherit_json_path):
+                    inherit_file_path = inherit_json_path
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Category {category_name}: inherit_from '{inherit_from}' file not found at {categories_dir}"
+                    )
+                    verbose_proxy_logger.debug(
+                        f"Tried paths: {inherit_yaml_path}, {inherit_json_path}"
+                    )
+
+                if inherit_file_path:
+                    # Load the inherited category
+                    inherited_category = self._load_category_file(inherit_file_path)
+
+                    # Extract block words from inherited category that meet severity threshold
+                    for keyword_data in inherited_category.keywords:
+                        keyword = keyword_data["keyword"].lower()
+                        severity = keyword_data["severity"]
+                        if self._should_apply_severity(severity, severity_threshold):
+                            block_words.append(keyword)
+                else:
+                    # If inherit file not found, set inherit_from to None for logging
+                    inherit_from = None
 
             # Add additional block words specific to this category
             if category_config_obj.additional_block_words:
@@ -445,16 +449,29 @@ class ContentFilterGuardrail(CustomGuardrail):
                 "severity": "high",  # Combinations are always high severity
             }
 
-            verbose_proxy_logger.info(
+            # Build log message
+            log_msg = (
                 f"Loaded conditional category {category_name}: "
                 f"{len(category_config_obj.identifier_words)} identifiers + "
-                f"{len(block_words)} block words "
-                f"({len(category_config_obj.additional_block_words)} additional + "
-                f"{len(block_words) - len(category_config_obj.additional_block_words)} from {inherit_from})"
+                f"{len(block_words)} block words"
             )
+            if inherit_from and category_config_obj.additional_block_words:
+                inherited_count = len(block_words) - len(
+                    category_config_obj.additional_block_words
+                )
+                log_msg += (
+                    f" ({len(category_config_obj.additional_block_words)} additional + "
+                    f"{inherited_count} from {inherit_from})"
+                )
+            elif inherit_from:
+                log_msg += f" (from {inherit_from})"
+            elif category_config_obj.additional_block_words:
+                log_msg += f" ({len(block_words)} from additional_block_words)"
+
+            verbose_proxy_logger.info(log_msg)
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Error loading inherited category for {category_name}: {e}"
+                f"Error loading conditional category for {category_name}: {e}"
             )
 
     def _load_category_file(self, file_path: str) -> CategoryConfig:
