@@ -7752,8 +7752,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                     request_model=request.model,
                 )
             except httpx.HTTPStatusError as e:
-            except httpx.HTTPStatusError as e:
-                error_message = getattr(e, "message", None) or e.response.text or str(e)
+                error_message = getattr(e, "message", None) or str(e)
                 status_code = getattr(e, "status_code", None) or e.response.status_code
                 raise ProxyException(
                     message=error_message,
