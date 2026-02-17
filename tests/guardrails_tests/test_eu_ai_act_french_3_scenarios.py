@@ -248,6 +248,44 @@ class TestFrenchEdgeCases:
             )
 
 
+    @pytest.mark.asyncio
+    async def test_exception_bypass_prevention(self, content_filter_guardrail):
+        """
+        Test that short exception words don't create bypasses.
+        Words like "enjeu" (stake) should not match "jeu" (game) exception.
+        """
+        # "enjeu" contains "jeu" but should NOT trigger exception
+        sentence = "Créer un système de crédit social pour l'enjeu principal de l'entreprise"
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+
+        # Should still block (no exception bypass)
+        with pytest.raises(Exception) as exc_info:
+            await content_filter_guardrail.apply_guardrail(
+                inputs={"texts": [sentence]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        # Verify it was blocked
+        assert "blocked" in str(exc_info.value).lower()
+
+
+    @pytest.mark.asyncio
+    async def test_legitimate_game_context_allowed(self, content_filter_guardrail):
+        """Test that legitimate game context with proper phrasing is allowed."""
+        sentence = "Détecter les émotions des joueurs dans un jeu vidéo"
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+
+        # Should allow (contains "dans un jeu" exception with proper context)
+        result = await content_filter_guardrail.apply_guardrail(
+            inputs={"texts": [sentence]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert result is None or result["texts"][0] == sentence
+
+
 if __name__ == "__main__":
     # Run tests with: pytest test_eu_ai_act_french_3_scenarios.py -v -s
     pytest.main([__file__, "-v", "-s"])

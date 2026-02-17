@@ -213,13 +213,18 @@ exceptions:
   - "test de justice"
 
   # Contextes de divertissement/produits
-  - "film"
+  - "dans un film"
+  - "dans le film"
+  - "pour un film"
   - "cinéma"
-  - "jeu"
+  - "dans un jeu"
+  - "dans le jeu"
+  - "jeu vidéo"
   - "avis sur le produit"
   - "avis produit"
   - "retour client"
   - "commentaires clients"
+  - "feedback client"
 
   # Méta-discussion
   - "expliquer"
@@ -230,6 +235,8 @@ exceptions:
   - "prohibé par"
   - "en quoi consiste"
   - "de manière équitable"
-  - "équitable"
-  - "juste"
+  - "de façon équitable"
+  - "équitablement"
+  - "de manière juste"
   - "de façon juste"
+  - "justement évaluer"
