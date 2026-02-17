@@ -94,6 +94,25 @@ const getRiskColor = (score: number): string => {
   return "text-red-600 bg-red-50 border-red-200";
 };
 
+const getRiskScore = (entry: GuardrailInformation): number | null => {
+  if (!isEntrySuccess(entry)) return null;
+
+  // Prefer backend-computed score
+  if (entry.risk_score != null) return entry.risk_score;
+
+  // Fallback: compute from available data
+  const totalMasked = getTotalMasked(entry);
+  const patternsChecked = entry.patterns_checked ?? 0;
+  const confidence = entry.confidence_score ?? 0;
+
+  if (patternsChecked === 0 && confidence === 0) return 0;
+
+  const matchRatio = patternsChecked > 0 ? totalMasked / patternsChecked : 0;
+  let score = matchRatio * 7 + confidence * 3;
+  if (totalMasked > 0 && score < 2) score = 2;
+  return Math.min(10, Math.round(score * 10) / 10);
+};
+
 const getDisplayName = (entry: GuardrailInformation): string => {
   return entry.policy_template || entry.guardrail_name;
 };
@@ -399,6 +418,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   const displayName = getDisplayName(entry);
   const durationStr = formatDurationMs(entry.duration);
   const modeStr = formatMode(entry.guardrail_mode);
+  const riskScore = getRiskScore(entry);
 
   const guardrailProvider = entry.guardrail_provider ?? "presidio";
   const guardrailResponse = entry.guardrail_response;
@@ -463,10 +483,10 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
             </span>
           )}
 
-          {entry.risk_score != null && success && (
-            <Tooltip title={`Risk score: ${entry.risk_score}/10`}>
-              <span className={`px-2 py-0.5 border rounded text-[11px] font-semibold flex-shrink-0 ${getRiskColor(entry.risk_score)}`}>
-                Risk {entry.risk_score}/10
+          {riskScore != null && success && (
+            <Tooltip title={`Risk score: ${riskScore}/10`}>
+              <span className={`px-2 py-0.5 border rounded text-[11px] font-semibold flex-shrink-0 ${getRiskColor(riskScore)}`}>
+                Risk {riskScore}/10
               </span>
             </Tooltip>
           )}
