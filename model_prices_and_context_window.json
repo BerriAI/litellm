@@ -17112,6 +17112,19 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true
     },
+    "github_copilot/claude-opus-4.6-fast": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
     "github_copilot/claude-opus-41": {
         "litellm_provider": "github_copilot",
         "max_input_tokens": 80000,
@@ -17356,6 +17369,20 @@
         "mode": "chat",
         "supported_endpoints": [
             "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.3-codex": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
             "/v1/responses"
         ],
         "supports_function_calling": true,

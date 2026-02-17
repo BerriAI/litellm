@@ -2644,6 +2644,9 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     alert_recipients: Optional[List[str]]
     """Email addresses that were notified"""
 
+    risk_score: Optional[float]
+    """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
+
 
 class GuardrailTracingDetail(TypedDict, total=False):
     """
@@ -2661,6 +2664,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     match_details: Optional[List[dict]]
     patterns_checked: Optional[int]
     alert_recipients: Optional[List[str]]
+    risk_score: Optional[float]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
