@@ -1373,6 +1373,41 @@ class ContentFilterGuardrail(CustomGuardrail):
         names = [cat.description or cat.category_name for cat in self.loaded_categories.values()]
         return ", ".join(names) if names else None
 
+    def _compute_risk_score(
+        self,
+        detections: List[ContentFilterDetection],
+        masked_entity_count: Dict[str, int],
+        status: "GuardrailStatus",
+    ) -> float:
+        """
+        Compute a risk score from 0-10 for this guardrail evaluation.
+
+        Factors:
+        - Match ratio: how many patterns matched vs total checked
+        - Number of entities masked
+        - Whether the guardrail blocked the request (max risk)
+        """
+        if status == "guardrail_intervened":
+            return 10.0
+
+        total_masked = sum(masked_entity_count.values()) if masked_entity_count else 0
+        patterns_checked = self._get_patterns_checked_count()
+
+        # Match ratio contribution (0-7 points)
+        match_ratio = total_masked / patterns_checked if patterns_checked > 0 else 0.0
+        ratio_score = match_ratio * 7.0
+
+        # Detection count contribution (0-3 points, capped)
+        detection_score = min(len(detections), 5) * 0.6
+
+        score = ratio_score + detection_score
+
+        # Floor: if anything matched, minimum risk is 2
+        if total_masked > 0 and score < 2.0:
+            score = 2.0
+
+        return round(min(10.0, score), 1)
+
     def _log_guardrail_information(
         self,
         request_data: dict,
@@ -1419,6 +1454,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 detection_method=self._get_detection_methods(detections) if detections else None,
                 match_details=self._build_match_details(detections) if detections else None,
                 patterns_checked=self._get_patterns_checked_count(),
+                risk_score=self._compute_risk_score(detections, masked_entity_count, status),
             ),
         )
 
