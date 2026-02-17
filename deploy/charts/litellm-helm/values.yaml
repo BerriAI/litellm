@@ -274,6 +274,10 @@ migrationJob:
   retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
+  # Optional service account for the migration job.
+  # Only used when migrationJob.hooks.helm.enabled=true and serviceAccount.create=true.
+  # In that case, pre-install/pre-upgrade hooks run before normal resources, so this defaults to "default".
+  serviceAccountName: ""
   annotations: {}
   ttlSecondsAfterFinished: 120
   resources: {}
