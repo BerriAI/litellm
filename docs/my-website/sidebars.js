@@ -1136,6 +1136,11 @@ const sidebars = {
       items: [
         {
           type: "link",
+          label: "Day 0 Support: Claude Sonnet 4.6",
+          href: "/blog/claude_sonnet_4_6",
+        },
+        {
+          type: "link",
           label: "Incident: Broken Model Cost Map",
           href: "/blog/model-cost-map-incident",
         },
