@@ -193,6 +193,7 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
 markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
