@@ -66,14 +66,6 @@ Requests succeeded for Anthropic (native support) but failed for other providers
 
 LiteLLM lacked provider-specific beta header validation. When Claude Code introduced new beta features or sent headers that specific providers didn't support, those headers were blindly forwarded, causing provider API errors.
 
-**Timeline:**
-
-1. **Feb 15, 2026 ~18:00 UTC**: Claude Code begins sending new beta headers (e.g., `advanced-tool-use-2025-11-20`)
-2. **Feb 15, 2026 ~18:15 UTC**: Users report `invalid beta flag` errors when using LiteLLM with Bedrock/Azure/Vertex
-3. **Feb 15, 2026 ~20:00 UTC**: Investigation identifies missing provider-specific header validation
-4. **Feb 16, 2026 ~02:00 UTC**: Quick fix deployed - filter out problematic headers
-5. **Feb 16, 2026 ~06:00 UTC**: Comprehensive solution merged with provider-specific configuration and dynamic reload
-
 ---
 
 ## Remediation
