@@ -1175,9 +1175,9 @@ async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeyp
     """
     Test that non-admin users cannot view another user's daily activity data.
     The endpoint should raise 403 when user_id does not match the caller's own user_id.
-    Also verifies that omitting user_id entirely is forbidden for non-admins.
+    Also verifies that omitting user_id defaults to the caller's own user_id.
     """
-    from unittest.mock import MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from fastapi import HTTPException
 
@@ -1197,9 +1197,7 @@ async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeyp
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
 
-    # Case 1: Non-admin tries to view a different user's data
-    # The inner 403 HTTPException is caught by the outer except block and
-    # re-raised as a 500, but the original message is preserved in the detail.
+    # Case 1: Non-admin tries to view a different user's data — should get 403
     with pytest.raises(HTTPException) as exc_info:
         await get_user_daily_activity(
             start_date="2025-01-01",
@@ -1218,9 +1216,14 @@ async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeyp
         exc_info.value.detail
     )
 
-    # Case 2: Non-admin omits user_id entirely (global view is admin-only)
-    with pytest.raises(HTTPException) as exc_info:
-        await get_user_daily_activity(
+    # Case 2: Non-admin omits user_id — should default to their own user_id
+    mock_response = MagicMock()
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_get_daily:
+        result = await get_user_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
             model=None,
@@ -1232,8 +1235,10 @@ async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeyp
             user_api_key_dict=non_admin_key_dict,
         )
 
-    assert exc_info.value.status_code == 403
-    assert "Non-admin users must provide a user_id" in str(exc_info.value.detail)
+        # Verify it called get_daily_activity with the caller's own user_id
+        mock_get_daily.assert_called_once()
+        call_kwargs = mock_get_daily.call_args
+        assert call_kwargs.kwargs["entity_id"] == "regular-user-123"
 
 
 @pytest.mark.asyncio

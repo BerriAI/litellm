@@ -165,6 +165,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     getAllTags();
   }, [accessToken]);
 
+  // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
+  useEffect(() => {
+    if (!isAdmin && userID) {
+      setSelectedUserId(userID);
+    }
+  }, [isAdmin, userID]);
+
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
 

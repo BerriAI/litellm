@@ -1965,12 +1965,7 @@ async def get_user_daily_activity(
             entity_id = user_id  # None means global view, otherwise filter by user
         else:
             if user_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": "Non-admin users must provide a user_id. Global spend view is restricted to admins."
-                    },
-                )
+                user_id = user_api_key_dict.user_id
             if user_id != user_api_key_dict.user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -2067,12 +2062,7 @@ async def get_user_daily_activity_aggregated(
             entity_id = user_id  # None means global view, otherwise filter by user
         else:
             if user_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": "Non-admin users must provide a user_id. Global spend view is restricted to admins."
-                    },
-                )
+                user_id = user_api_key_dict.user_id
             if user_id != user_api_key_dict.user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
