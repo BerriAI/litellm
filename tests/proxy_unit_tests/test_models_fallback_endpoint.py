@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import Mock, patch
-import time
 
 
 def create_mock_user_api_key_auth():
