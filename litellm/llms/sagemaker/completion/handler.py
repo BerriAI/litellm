@@ -330,13 +330,14 @@ class SagemakerLLM(BaseAWSLLM):
                 raise e
         except Exception as e:
             verbose_logger.error("Sagemaker error %s", str(e))
+            _response = getattr(e, "response", None) or {}
             status_code = (
-                getattr(e, "response", {})
+                _response
                 .get("ResponseMetadata", {})
                 .get("HTTPStatusCode", 500)
             )
             error_message = (
-                getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
+                _response.get("Error", {}).get("Message", str(e))
             )
             if "Inference Component Name header is required" in error_message:
                 error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
@@ -385,14 +386,6 @@ class SagemakerLLM(BaseAWSLLM):
             )
 
             return completion_stream
-
-            # LOGGING
-            logging_obj.post_call(
-                input=[],
-                api_key="",
-                original_response="first stream response received",
-                additional_args={"complete_input_dict": data},
-            )
 
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -653,13 +646,14 @@ class SagemakerLLM(BaseAWSLLM):
                 CustomAttributes="accept_eula=true",
             )
         except Exception as e:
+            _response = getattr(e, "response", None) or {}
             status_code = (
-                getattr(e, "response", {})
+                _response
                 .get("ResponseMetadata", {})
                 .get("HTTPStatusCode", 500)
             )
             error_message = (
-                getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
+                _response.get("Error", {}).get("Message", str(e))
             )
             raise SagemakerError(status_code=status_code, message=error_message)
 

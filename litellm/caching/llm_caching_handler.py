@@ -4,10 +4,42 @@ Add the event loop to the cache key, to prevent event loop closed errors.
 
 import asyncio
 
+from litellm._logging import verbose_logger
+
 from .in_memory_cache import InMemoryCache
 
 
+def _close_http_client_on_evict(client) -> None:
+    """
+    Callback invoked when an HTTP client is evicted from the LLMClientCache.
+
+    Ensures the underlying connection pool is closed deterministically instead
+    of relying on __del__ / garbage collection, which is unreliable for async
+    resources and can cause connection pool leaks under high load.
+    """
+    close_fn = getattr(client, "close", None)
+    if close_fn is None:
+        return
+
+    if asyncio.iscoroutinefunction(close_fn):
+        # Schedule async close on the running event loop if available
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(close_fn())
+        except RuntimeError:
+            # No running loop – best-effort sync fallback
+            pass
+    else:
+        try:
+            close_fn()
+        except Exception:
+            pass
+
+
 class LLMClientCache(InMemoryCache):
+    def __init__(self, **kwargs):
+        super().__init__(on_evict=_close_http_client_on_evict, **kwargs)
+
     def update_cache_key_with_event_loop(self, key):
         """
         Add the event loop to the cache key, to prevent event loop closed errors.

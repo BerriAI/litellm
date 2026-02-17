@@ -12,7 +12,7 @@ import json
 import sys
 import time
 import heapq
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -32,9 +32,12 @@ class InMemoryCache(BaseCache):
             int
         ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
         max_size_per_item: Optional[int] = 1024,  # 1MB = 1024KB
+        on_evict: Optional[Callable[[Any], None]] = None,
     ):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
+        on_evict [Callable]: Optional callback called with evicted value when an item is removed from cache.
+                             Used by LLMClientCache to close HTTP clients when they expire.
         """
         self.max_size_in_memory = (
             max_size_in_memory if max_size_in_memory is not None else 200
@@ -43,6 +46,7 @@ class InMemoryCache(BaseCache):
         self.max_size_per_item = (
             max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
         )  # 1MB = 1024KB
+        self.on_evict = on_evict
 
         # in-memory cache
         self.cache_dict: dict = {}
@@ -97,10 +101,16 @@ class InMemoryCache(BaseCache):
 
     def _remove_key(self, key: str) -> None:
         """
-        Remove a key from both cache_dict and ttl_dict
+        Remove a key from both cache_dict and ttl_dict.
+        Calls on_evict callback if set, to allow resource cleanup (e.g. closing HTTP clients).
         """
-        self.cache_dict.pop(key, None)
+        evicted_value = self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
+        if evicted_value is not None and self.on_evict is not None:
+            try:
+                self.on_evict(evicted_value)
+            except Exception:
+                pass
 
     def evict_cache(self):
         """
