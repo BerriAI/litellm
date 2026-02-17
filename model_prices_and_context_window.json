@@ -26015,6 +26015,19 @@
         "output_cost_per_token": 3e-07,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
+    "sambanova/MiniMax-M2.5": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "sambanova",
+        "max_input_tokens": 160000,
+        "max_output_tokens": 160000,
+        "max_tokens": 160000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.sambanova.ai/plans/pricing",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "sambanova/QwQ-32B": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "sambanova",
