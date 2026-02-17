@@ -3,7 +3,7 @@ Helper util for handling bedrock-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 
@@ -11,12 +11,17 @@ if TYPE_CHECKING:
     from litellm.types.utils import Usage
 
 
-def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
+def cost_per_token(
+    model: str, usage: "Usage", service_tier: Optional[str] = None
+) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
     Follows the same logic as Anthropic's cost per token calculation.
     """
     return generic_cost_per_token(
-        model=model, usage=usage, custom_llm_provider="bedrock"
+        model=model,
+        usage=usage,
+        custom_llm_provider="bedrock",
+        service_tier=service_tier,
     )

@@ -1333,6 +1333,7 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as VertexAIRerankConfig
     from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig as FireworksAIRerankConfig
     from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
+    from .llms.watsonx.rerank.transformation import IBMWatsonXRerankConfig as IBMWatsonXRerankConfig
     from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
     from .llms.ai21.chat.transformation import AI21ChatConfig as AI21ChatConfig
     from .llms.meta_llama.chat.transformation import LlamaAPIConfig as LlamaAPIConfig

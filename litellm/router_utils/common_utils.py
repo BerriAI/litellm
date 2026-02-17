@@ -58,7 +58,7 @@ def filter_team_based_models(
     request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get(
         "user_api_key_team_id"
     )
-    ids_to_remove = []
+    ids_to_remove = set()
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
     for deployment in healthy_deployments:
@@ -67,7 +67,7 @@ def filter_team_based_models(
         if model_team_id is None:
             continue
         if model_team_id != request_team_id:
-            ids_to_remove.append(deployment.get("model_info", {}).get("id"))
+            ids_to_remove.add(_model_info.get("id"))
 
     return [
         deployment
@@ -125,4 +125,3 @@ def filter_web_search_deployments(
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
-
