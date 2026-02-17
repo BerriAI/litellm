@@ -1600,6 +1600,56 @@ def test_completion_cost_service_tier_priority():
     ), "Costs from params and usage should be similar (both flex)"
 
 
+def test_completion_cost_service_tier_for_bedrock():
+    """Test that Bedrock cost calculation applies service_tier-specific pricing."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "bedrock/us-east-1/test-bedrock-service-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "input_cost_per_token_priority": 0.01,
+                "output_cost_per_token_priority": 0.02,
+                "input_cost_per_token_flex": 0.0005,
+                "output_cost_per_token_flex": 0.001,
+                "litellm_provider": "bedrock",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    response = ModelResponse(usage=usage, model=model)
+
+    default_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+
+    priority_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+        optional_params={"service_tier": "priority"},
+    )
+
+    response_with_flex_tier = ModelResponse(usage=usage, model=model)
+    setattr(response_with_flex_tier, "service_tier", "flex")
+    flex_cost = completion_cost(
+        completion_response=response_with_flex_tier,
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+
+    assert priority_cost > default_cost > flex_cost > 0
+
+
 def test_gemini_cache_tokens_details_no_negative_values():
     """
     Test for Issue #18750: Negative text_tokens with Gemini caching
