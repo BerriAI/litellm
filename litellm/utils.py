@@ -380,6 +380,7 @@ if TYPE_CHECKING:
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
@@ -8280,6 +8281,25 @@ class ProviderConfigManager:
         """
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicSkillsConfig()
+        return None
+
+    @staticmethod
+    def get_provider_evals_api_config(
+        provider: LlmProviders,
+    ) -> Optional["BaseEvalsAPIConfig"]:
+        """
+        Get provider-specific Evals API configuration
+
+        Args:
+            provider: The LLM provider
+
+        Returns:
+            Provider-specific Evals API config or None
+        """
+        if litellm.LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+
+            return OpenAIEvalsConfig()
         return None
 
     @staticmethod
