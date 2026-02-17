@@ -1732,6 +1732,25 @@ def __getattr__(name: str) -> Any:
             _globals["_service_logger"] = litellm._service_logger
         return _globals["_service_logger"]
 
+    # Lazy load evals module functions
+    if name in ["acreate_eval", "alist_evals", "aget_eval", "aupdate_eval", "adelete_eval", "acancel_eval",
+                "create_eval", "list_evals", "get_eval", "update_eval", "delete_eval", "cancel_eval"]:
+        from litellm.evals.main import (
+            acreate_eval,
+            alist_evals,
+            aget_eval,
+            aupdate_eval,
+            adelete_eval,
+            acancel_eval,
+            create_eval,
+            list_evals,
+            get_eval,
+            update_eval,
+            delete_eval,
+            cancel_eval,
+        )
+        return locals()[name]
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
