@@ -11,6 +11,7 @@ Has all /sso/* routes
 import asyncio
 import base64
 import hashlib
+import inspect
 import os
 import secrets
 from copy import deepcopy
@@ -2258,7 +2259,7 @@ class SSOAuthenticationHandler:
         user_defined_values: Optional[SSOUserDefinedValues] = None
 
         if user_custom_sso is not None:
-            if asyncio.iscoroutinefunction(user_custom_sso):
+            if inspect.iscoroutinefunction(user_custom_sso):
                 user_defined_values = await user_custom_sso(result)  # type: ignore
             else:
                 raise ValueError("user_custom_sso must be a coroutine function")
