@@ -101,12 +101,23 @@ class VertexAITextEmbeddingConfig(BaseModel):
 
     def transform_openai_request_to_vertex_embedding_request(
         self, input: Union[list, str], optional_params: dict, model: str
-    ) -> VertexEmbeddingRequest:
+    ) -> Union[VertexEmbeddingRequest, dict]:
         """
         Transforms an openai request to a vertex embedding request.
         """
         # Import here to avoid circular import issues with litellm.__init__
         from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
+        from litellm.llms.vertex_ai.vertex_embeddings.embed_transformation import (
+            VertexGeminiEmbeddingConfig,
+        )
+
+        # Check if it's a Gemini embedding model that requires :embedContent format
+        # This includes models with "embed/" prefix
+        if model.startswith("embed/") or VertexGeminiEmbeddingConfig.is_gemini_embedding_model(model):
+            return VertexGeminiEmbeddingConfig.transform_request(
+                input=input, optional_params=optional_params, model=model
+            )
+
         if model.isdigit():
             return self._transform_openai_request_to_fine_tuned_embedding_request(
                 input, optional_params, model
@@ -211,14 +222,24 @@ class VertexAITextEmbeddingConfig(BaseModel):
         """
         Transforms a vertex embedding response to an openai response.
         """
+        # Import here to avoid circular import issues with litellm.__init__
+        from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
+        from litellm.llms.vertex_ai.vertex_embeddings.embed_transformation import (
+            VertexGeminiEmbeddingConfig,
+        )
+
+        # Check if it's a Gemini embedContent response
+        # This includes models with "embed/" prefix
+        if model.startswith("embed/") or VertexGeminiEmbeddingConfig.is_gemini_embedding_model(model):
+            return VertexGeminiEmbeddingConfig.transform_response(
+                response=response, model=model, model_response=model_response
+            )
+
         if model.isdigit():
             return self._transform_vertex_response_to_openai_for_fine_tuned_models(
                 response, model, model_response
             )
-        
-        # Import here to avoid circular import issues with litellm.__init__
-        from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
-        
+
         if VertexBGEConfig.is_bge_model(model):
             return VertexBGEConfig.transform_response(
                 response=response, model=model, model_response=model_response

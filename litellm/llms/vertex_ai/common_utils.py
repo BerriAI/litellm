@@ -242,30 +242,41 @@ def _get_embedding_url(
 ) -> Tuple[str, str]:
     """
     Get URL for embedding models.
-    
+
     Handles special patterns:
     - bge/endpoint_id -> strips to endpoint_id for endpoints/ routing
     - numeric model -> routes to endpoints/
-    - regular model -> routes to publishers/google/models/
+    - Gemini embedding models -> routes to :embedContent endpoint
+    - regular model -> routes to publishers/google/models/:predict
     """
-    endpoint = "predict"
-    
+    # Import here to avoid circular import
+    from litellm.llms.vertex_ai.vertex_embeddings.embed_transformation import (
+        VertexGeminiEmbeddingConfig,
+    )
+
     # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
-    model = get_vertex_base_model_name(model=model)
-    
+    base_model = get_vertex_base_model_name(model=model)
+
+    # Check if it's a Gemini embedding model that requires :embedContent
+    # This includes models with "embed/" prefix
+    if model.startswith("embed/") or VertexGeminiEmbeddingConfig.is_gemini_embedding_model(model):
+        endpoint = "embedContent"
+    else:
+        endpoint = "predict"
+
     # Get base URL (handles global vs regional)
     base_url = get_vertex_base_url(vertex_location)
-    
-    if model.isdigit():
+
+    if base_model.isdigit():
         # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
         # https://aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/global/endpoints/$ENDPOINT_ID:predict
-        url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{base_model}:{endpoint}"
     else:
         # Regular model -> publisher model
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/publishers/google/models/{model}:predict
-        # https://aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/global/publishers/google/models/{model}:predict
-        url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
-    
+        # For Gemini embeddings: https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/publishers/google/models/{model}:embedContent
+        # For other embeddings: https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/publishers/google/models/{model}:predict
+        url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{base_model}:{endpoint}"
+
     return url, endpoint
 
 
