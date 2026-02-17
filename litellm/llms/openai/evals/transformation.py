@@ -13,11 +13,17 @@ from litellm.llms.base_llm.evals.transformation import (
 )
 from litellm.types.llms.openai_evals import (
     CancelEvalResponse,
+    CancelRunResponse,
     CreateEvalRequest,
+    CreateRunRequest,
     DeleteEvalResponse,
     Eval,
     ListEvalsParams,
     ListEvalsResponse,
+    ListRunsParams,
+    ListRunsResponse,
+    Run,
+    RunDeleteResponse,
     UpdateEvalRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -256,3 +262,165 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         verbose_logger.debug("Transforming cancel eval response: %s", response_json)
 
         return CancelEvalResponse(**response_json)
+
+    # Run API Transformations
+    def transform_create_run_request(
+        self,
+        eval_id: str,
+        create_request: CreateRunRequest,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform create run request for OpenAI"""
+        api_base = "https://api.openai.com"
+        if litellm_params and litellm_params.api_base:
+            api_base = litellm_params.api_base
+
+        url = f"{api_base}/v1/evals/{eval_id}/runs"
+
+        # Build request body
+        request_body = {k: v for k, v in create_request.items() if v is not None}
+
+        verbose_logger.debug(
+            "Create run request - URL: %s, body: %s", url, request_body
+        )
+
+        return url, request_body
+
+    def transform_create_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Run:
+        """Transform OpenAI response to Run object"""
+        response_json = raw_response.json()
+        verbose_logger.debug("Transforming create run response: %s", response_json)
+
+        return Run(**response_json)
+
+    def transform_list_runs_request(
+        self,
+        eval_id: str,
+        list_params: ListRunsParams,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform list runs request for OpenAI"""
+        api_base = "https://api.openai.com"
+        if litellm_params and litellm_params.api_base:
+            api_base = litellm_params.api_base
+
+        url = f"{api_base}/v1/evals/{eval_id}/runs"
+
+        # Build query parameters
+        query_params: Dict[str, Any] = {}
+        if "limit" in list_params and list_params["limit"]:
+            query_params["limit"] = list_params["limit"]
+        if "after" in list_params and list_params["after"]:
+            query_params["after"] = list_params["after"]
+        if "before" in list_params and list_params["before"]:
+            query_params["before"] = list_params["before"]
+        if "order" in list_params and list_params["order"]:
+            query_params["order"] = list_params["order"]
+
+        verbose_logger.debug(
+            "List runs request made to OpenAI Evals endpoint with params: %s",
+            query_params,
+        )
+
+        return url, query_params
+
+    def transform_list_runs_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ListRunsResponse:
+        """Transform OpenAI response to ListRunsResponse"""
+        response_json = raw_response.json()
+        verbose_logger.debug("Transforming list runs response: %s", response_json)
+
+        return ListRunsResponse(**response_json)
+
+    def transform_get_run_request(
+        self,
+        eval_id: str,
+        run_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform get run request for OpenAI"""
+        url = f"{api_base}/v1/evals/{eval_id}/runs/{run_id}"
+
+        verbose_logger.debug("Get run request - URL: %s", url)
+
+        return url, headers
+
+    def transform_get_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Run:
+        """Transform OpenAI response to Run object"""
+        response_json = raw_response.json()
+        verbose_logger.debug("Transforming get run response: %s", response_json)
+
+        return Run(**response_json)
+
+    def transform_cancel_run_request(
+        self,
+        eval_id: str,
+        run_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """Transform cancel run request for OpenAI"""
+        url = f"{api_base}/v1/evals/{eval_id}/runs/{run_id}/cancel"
+
+        # Empty body for cancel request
+        request_body: Dict[str, Any] = {}
+
+        verbose_logger.debug("Cancel run request - URL: %s", url)
+
+        return url, headers, request_body
+
+    def transform_cancel_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CancelRunResponse:
+        """Transform OpenAI response to CancelRunResponse"""
+        response_json = raw_response.json()
+        verbose_logger.debug("Transforming cancel run response: %s", response_json)
+
+        return CancelRunResponse(**response_json)
+
+    def transform_delete_run_request(
+        self,
+        eval_id: str,
+        run_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """Transform delete run request for OpenAI"""
+        url = f"{api_base}/v1/evals/{eval_id}/runs/{run_id}"
+
+        # Empty body for delete request
+        request_body: Dict[str, Any] = {}
+
+        verbose_logger.debug("Delete run request - URL: %s", url)
+
+        return url, headers, request_body
+
+    def transform_delete_run_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> RunDeleteResponse:
+        """Transform OpenAI response to RunDeleteResponse"""
+        response_json = raw_response.json()
+        verbose_logger.debug("Transforming delete run response: %s", response_json)
+
+        return RunDeleteResponse(**response_json)
