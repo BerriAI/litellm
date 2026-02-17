@@ -576,6 +576,11 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
     "service_tier",
+    "store",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "verbosity",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
