@@ -3957,8 +3957,8 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     file_object: Optional[OpenAIFileObject] = None
     model_mappings: Dict[str, str]
     flat_model_file_ids: List[str]
-    created_by: Optional[str]
-    updated_by: Optional[str]
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
 
@@ -3976,8 +3976,8 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     resource_object: Optional[Any] = None  # VectorStoreCreateResponse
     model_mappings: Dict[str, str]
     flat_model_resource_ids: List[str]
-    created_by: Optional[str]
-    updated_by: Optional[str]
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
 
