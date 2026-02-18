@@ -1155,43 +1155,48 @@ export default function ComplianceUI({
                 ) : (
                   <div className="p-4 space-y-1.5">
                     {completedResults.length > 0 && (
-                      <div className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-lg mb-2 text-[11px]">
-                        <span>
-                          <span className="font-semibold text-gray-700">
-                            {testResults.length}
-                          </span>{" "}
-                          <span className="text-gray-400">total</span>
-                        </span>
-                        <div className="w-px h-3 bg-gray-200" />
-                        <span>
-                          <span className="font-semibold text-green-700">
-                            {matchCount}
-                          </span>{" "}
-                          <span className="text-gray-400">correct</span>
-                        </span>
-                        <div className="w-px h-3 bg-gray-200" />
-                        <span>
-                          <span className="font-semibold text-red-700">
-                            {mismatchCount}
-                          </span>{" "}
-                          <span className="text-gray-400">gaps</span>
-                        </span>
-                        <span className="ml-auto font-semibold">
-                          <span
-                            className={
-                              matchCount / completedResults.length >= 0.8
-                                ? "text-green-600"
-                                : matchCount / completedResults.length >= 0.5
-                                  ? "text-yellow-600"
-                                  : "text-red-600"
-                            }
-                          >
+                      <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl mb-4 border border-gray-100">
+                        <div className="flex items-center gap-3 text-sm flex-1">
+                          <span>
+                            <span className="font-semibold text-gray-700">
+                              {testResults.length}
+                            </span>{" "}
+                            <span className="text-gray-500">total</span>
+                          </span>
+                          <div className="w-px h-4 bg-gray-200" />
+                          <span>
+                            <span className="font-semibold text-green-700">
+                              {matchCount}
+                            </span>{" "}
+                            <span className="text-gray-500">correct</span>
+                          </span>
+                          <div className="w-px h-4 bg-gray-200" />
+                          <span>
+                            <span className="font-semibold text-red-700">
+                              {mismatchCount}
+                            </span>{" "}
+                            <span className="text-gray-500">gaps</span>
+                          </span>
+                        </div>
+                        <div
+                          className={`flex flex-col items-center justify-center min-w-[88px] py-2.5 px-4 rounded-xl border-2 font-bold text-2xl tabular-nums ${
+                            matchCount / completedResults.length >= 0.8
+                              ? "bg-green-50 border-green-200 text-green-700"
+                              : matchCount / completedResults.length >= 0.5
+                                ? "bg-amber-50 border-amber-200 text-amber-700"
+                                : "bg-red-50 border-red-200 text-red-700"
+                          }`}
+                        >
+                          <span className="text-[10px] font-semibold uppercase tracking-wider opacity-90">
+                            Score
+                          </span>
+                          <span>
                             {Math.round(
                               (matchCount / completedResults.length) * 100
                             )}
                             %
                           </span>
-                        </span>
+                        </div>
                       </div>
                     )}
 
