@@ -793,6 +793,7 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
+        
 
         return allowed_mcp_servers
 

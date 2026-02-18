@@ -118,6 +118,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                data["tools"] = guardrailed_tools
             verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
             return data
 
@@ -166,6 +169,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                data["tools"] = guardrailed_tools
 
             # Step 3: Map guardrail responses back to original input structure
             await self._apply_guardrail_responses_to_input(
@@ -591,8 +597,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                     content = generic_response_output_item.content
             except Exception:
                 # Try to extract content directly from output_item if validation fails
-                if hasattr(output_item, "content") and output_item.content:
-                    content = output_item.content
+                if hasattr(output_item, "content") and output_item.content: # type: ignore
+                    content = output_item.content # type: ignore
                 else:
                     return
         elif isinstance(output_item, dict):
@@ -669,10 +675,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                         if isinstance(content_item, OutputText):
                             content_item.text = guardrail_response
                             # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
+                            if hasattr(output_item, "content") and output_item.content: # type: ignore
+                                original_content = output_item.content[content_idx] # type: ignore
                                 if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
+                                    original_content.text = guardrail_response # type: ignore
                 except Exception:
                     pass
             elif isinstance(output_item, dict):
