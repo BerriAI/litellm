@@ -161,7 +161,7 @@ class TestLangfuseOtelIntegration:
         # Use monkeypatch so the real module is restored after the test runs,
         # preventing sys.modules corruption that would break patch() targets in
         # later tests (the patch would hit the stub while the real module's
-        # globals remain unpatch-ed).
+        # globals remain unpatched).
         monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse", stub_module)  # type: ignore
 
         kwargs = {"litellm_params": {"metadata": {"foo": "bar"}}}
