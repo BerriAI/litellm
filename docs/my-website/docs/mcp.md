@@ -810,14 +810,14 @@ In this example, when a client makes a request with the `X-GITHUB_PERSONAL_ACCES
 
 ## Control MCP Access for End Users
 
-Control which MCP servers end users of your AI application can access (e.g. users of an internal chat UI). Pass the customer ID in the `x-litellm-end-user` header to:
+Control which MCP servers end users of your AI application can access (e.g. users of an internal chat UI). Pass the customer ID in the `x-litellm-end-user-id` header to:
 - Enforce object permissions (limit which MCP servers they can access)
 - Apply customer-specific budgets
 - Track spend per customer
 
 **FastMCP Client Example:**
 
-```python title="Track customer spend with x-litellm-end-user" showLineNumbers
+```python title="Track customer spend with x-litellm-end-user-id" showLineNumbers
 from fastmcp import Client
 import asyncio
 
@@ -828,7 +828,7 @@ config = {
             "url": "http://localhost:4000/github_mcp/mcp",
             "headers": {
                 "x-litellm-api-key": "Bearer sk-1234",
-                "x-litellm-end-user": "customer_123",  # 👈 CUSTOMER ID
+                "x-litellm-end-user-id": "customer_123",  # 👈 CUSTOMER ID
                 "Authorization": "Bearer gho_token"
             }
         }
@@ -856,7 +856,7 @@ asyncio.run(main())
       "url": "http://localhost:4000/github_mcp/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
-        "x-litellm-end-user": "customer_123"
+        "x-litellm-end-user-id": "customer_123"
       }
     }
   }

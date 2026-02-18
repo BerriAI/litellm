@@ -1312,6 +1312,7 @@ class ProxyLogging:
             metadata = data.get("metadata", data.get("litellm_metadata", {})) or {}
             pipeline_managed: set = metadata.get("_pipeline_managed_guardrails", set())
 
+
             for callback in litellm.callbacks:
                 start_time = time.time()
                 _callback = None

@@ -4,55 +4,98 @@ import TabItem from '@theme/TabItem';
 
 # Customers / End-Users
 
-Track spend, set budgets for your customers.
+Track spend, set budgets and permissions for your customers.
 
-## Tracking Customer Spend
+## Tracking Customer Spend + Permissions
 
 ### 1. Make LLM API call w/ Customer ID
 
-You can pass the customer ID in two ways:
+LiteLLM checks for a customer/end-user ID in the following order (first match wins):
 
-**Option 1: In the request body** (using the `user` field)
+| Priority | Method | Where | Notes |
+|----------|--------|-------|-------|
+| 1 | `x-litellm-customer-id` header | Request headers | Standard header, always checked |
+| 2 | `x-litellm-end-user-id` header | Request headers | Standard header, always checked |
+| 3 | Custom header via `user_header_mappings` | Request headers | Configured in `general_settings` |
+| 4 | Custom header via `user_header_name` | Request headers | Deprecated — use `user_header_mappings` |
+| 5 | `user` field | Request body | Standard OpenAI field |
+| 6 | `litellm_metadata.user` field | Request body | Anthropic-style metadata |
+| 7 | `metadata.user_id` field | Request body | Generic metadata pattern |
+| 8 | `safety_identifier` field | Request body | Responses API |
 
-```bash showLineNumbers title="Make request with customer ID in body"
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
-        --header 'Content-Type: application/json' \
-        --header 'Authorization: Bearer sk-1234' \ # 👈 YOUR PROXY KEY
-        --data ' {
-        "model": "azure-gpt-3.5",
-        "user": "ishaan3", # 👈 CUSTOMER ID
-        "messages": [
-            {
-            "role": "user",
-            "content": "what time is it"
-            }
-        ]
-        }'
-```
-
-**Option 2: In the request headers** (using `x-litellm-end-user`)
+**Option 1: Standard headers** (recommended — no request body modification needed)
 
 ```bash showLineNumbers title="Make request with customer ID in header"
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
         --header 'Content-Type: application/json' \
         --header 'Authorization: Bearer sk-1234' \
-        --header 'x-litellm-end-user: ishaan3' \ # 👈 CUSTOMER ID IN HEADER
-        --data ' {
+        --header 'x-litellm-end-user-id: ishaan3' \
+        --data '{
         "model": "azure-gpt-3.5",
-        "messages": [
-            {
-            "role": "user",
-            "content": "what time is it"
-            }
-        ]
+        "messages": [{"role": "user", "content": "what time is it"}]
         }'
 ```
 
-**Use `x-litellm-end-user` to control permissions for end users of your AI application** (e.g. users of an internal chat UI):
-- Apply customer-specific object permissions (limit which MCP servers they can access)
-- Enforce customer budgets
-- Works with all endpoints (chat/completions, embeddings, MCP, etc.)
-- No need to modify request body
+Both `x-litellm-customer-id` and `x-litellm-end-user-id` are supported and always checked without any configuration.
+
+**Option 2: `user` field in request body** (OpenAI-compatible)
+
+```bash showLineNumbers title="Make request with customer ID in body"
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-1234' \
+        --data '{
+        "model": "azure-gpt-3.5",
+        "user": "ishaan3",
+        "messages": [{"role": "user", "content": "what time is it"}]
+        }'
+```
+
+**Option 3: Custom header via `user_header_mappings`** (configurable)
+
+```yaml showLineNumbers title="config.yaml"
+general_settings:
+  user_header_mappings:
+    - header_name: "x-my-app-user-id"
+      litellm_user_role: "customer"
+```
+
+```bash showLineNumbers title="Make request with custom header"
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'x-my-app-user-id: ishaan3' \
+        --data '{
+        "model": "azure-gpt-3.5",
+        "messages": [{"role": "user", "content": "what time is it"}]
+        }'
+```
+
+**Option 4: `litellm_metadata.user`** (Anthropic-style)
+
+```bash showLineNumbers title="Make request with litellm_metadata.user"
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-1234' \
+        --data '{
+        "model": "claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "what time is it"}],
+        "litellm_metadata": {"user": "ishaan3"}
+        }'
+```
+
+**Option 5: `metadata.user_id`**
+
+```bash showLineNumbers title="Make request with metadata.user_id"
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-1234' \
+        --data '{
+        "model": "azure-gpt-3.5",
+        "messages": [{"role": "user", "content": "what time is it"}],
+        "metadata": {"user_id": "ishaan3"}
+        }'
+```
 
 The customer_id will be upserted into the DB with the new spend.
 

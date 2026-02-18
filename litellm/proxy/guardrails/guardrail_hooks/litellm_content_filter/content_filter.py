@@ -10,8 +10,19 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
-                    Optional, Pattern, Tuple, Union, cast)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Pattern,
+    Tuple,
+    Union,
+    cast,
+)
 
 import yaml
 from fastapi import HTTPException
@@ -26,12 +37,20 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
-from litellm.types.guardrails import (BlockedWord, ContentFilterAction,
-                                      ContentFilterPattern,
-                                      GuardrailEventHooks, Mode)
+from litellm.types.guardrails import (
+    BlockedWord,
+    ContentFilterAction,
+    ContentFilterPattern,
+    GuardrailEventHooks,
+    Mode,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    BlockedWordDetection, CategoryKeywordDetection,
-    ContentFilterCategoryConfig, ContentFilterDetection, PatternDetection)
+    BlockedWordDetection,
+    CategoryKeywordDetection,
+    ContentFilterCategoryConfig,
+    ContentFilterDetection,
+    PatternDetection,
+)
 
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
@@ -178,12 +197,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Load categories if provided
         if categories:
             self._load_categories(categories)
-        else:
-            verbose_proxy_logger.warning(
-                "ContentFilterGuardrail has no content categories configured. "
-                "Toxic/abuse and other category-based keyword filtering will not run. "
-                "Add categories (e.g. harm_toxic_abuse) in the guardrail config to enable them."
-            )
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
         normalized_patterns: List[ContentFilterPattern] = []
@@ -1518,7 +1531,8 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     @staticmethod
     def get_config_model():
-        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
-            LitellmContentFilterGuardrailConfigModel
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+            LitellmContentFilterGuardrailConfigModel,
+        )
 
         return LitellmContentFilterGuardrailConfigModel
