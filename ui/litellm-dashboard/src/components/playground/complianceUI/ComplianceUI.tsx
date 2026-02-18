@@ -74,6 +74,8 @@ interface TestResult {
   actualResult: "blocked" | "allowed";
   isMatch: boolean;
   triggeredBy?: string;
+  /** Processed text returned by the API (after guardrails). */
+  returnedText?: string;
   status: "pending" | "running" | "complete";
 }
 
@@ -83,6 +85,8 @@ interface QuickTestMessage {
   text: string;
   result?: "blocked" | "allowed";
   triggeredBy?: string;
+  /** Processed text returned by the API (after guardrails). */
+  returnedText?: string;
   timestamp: Date;
 }
 
@@ -329,6 +333,10 @@ export default function ComplianceUI({
               .map((e) => `${e.guardrail_name}: ${e.message}`)
               .join("; ")
           : undefined;
+      const returnedText =
+        Array.isArray(inputs?.texts) && inputs.texts.length > 0
+          ? inputs.texts[0]
+          : undefined;
       const displayText =
         result === "blocked"
           ? `Blocked — ${triggeredBy ?? "content filter"}`
@@ -339,6 +347,7 @@ export default function ComplianceUI({
         text: displayText,
         result,
         triggeredBy,
+        returnedText,
         timestamp: new Date(),
       };
       setQuickTestMessages((prev) => [...prev, sysMsg]);
@@ -379,6 +388,7 @@ export default function ComplianceUI({
       fw.categories.flatMap((c) => c.prompts)
     );
     const selected = allPrompts.filter((p) => selectedPromptIds.has(p.id));
+    const allTexts = selected.map((p) => p.prompt);
     const pendingResults: TestResult[] = selected.map((p) => ({
       promptId: p.id,
       prompt: p.prompt,
@@ -390,61 +400,55 @@ export default function ComplianceUI({
       status: "pending",
     }));
     setTestResults(pendingResults);
-    for (let index = 0; index < selected.length; index++) {
-      const promptResult = selected[index];
-      try {
-        const { guardrail_errors } = await testPoliciesAndGuardrails(
-          accessToken,
-          {
-            policy_names:
-              selectedPolicies.length > 0 ? selectedPolicies : undefined,
-            guardrail_names:
-              selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            inputs: { texts: [promptResult.prompt] },
-            request_data: {},
-            input_type: "request",
-          }
-        );
-        const actualResult: "blocked" | "allowed" =
-          guardrail_errors.length > 0 ? "blocked" : "allowed";
-        const triggeredBy =
-          guardrail_errors.length > 0
-            ? guardrail_errors
-                .map((e) => `${e.guardrail_name}: ${e.message}`)
-                .join("; ")
-            : undefined;
-        const isMatch =
-          (promptResult.expectedResult === "fail" &&
-            actualResult === "blocked") ||
-          (promptResult.expectedResult === "pass" &&
-            actualResult === "allowed");
-        setTestResults((prev) => {
-          const updated = [...prev];
-          updated[index] = {
-            ...pendingResults[index],
-            actualResult,
-            isMatch,
-            triggeredBy,
-            status: "complete",
-          };
-          return updated;
-        });
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        setTestResults((prev) => {
-          const updated = [...prev];
-          updated[index] = {
-            ...pendingResults[index],
-            actualResult: "blocked",
-            isMatch: false,
-            triggeredBy: `Error: ${errorMessage}`,
-            status: "complete",
-          };
-          return updated;
-        });
-      }
+    try {
+      const { inputs, guardrail_errors } = await testPoliciesAndGuardrails(
+        accessToken,
+        {
+          policy_names:
+            selectedPolicies.length > 0 ? selectedPolicies : undefined,
+          guardrail_names:
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          inputs: { texts: allTexts },
+          request_data: {},
+          input_type: "request",
+        }
+      );
+      const actualResult: "blocked" | "allowed" =
+        guardrail_errors.length > 0 ? "blocked" : "allowed";
+      const triggeredBy =
+        guardrail_errors.length > 0
+          ? guardrail_errors
+              .map((e) => `${e.guardrail_name}: ${e.message}`)
+              .join("; ")
+          : undefined;
+      const returnedTexts: (string | undefined)[] =
+        Array.isArray(inputs?.texts) ? inputs.texts : [];
+      setTestResults(
+        pendingResults.map((row, index) => ({
+          ...row,
+          actualResult,
+          isMatch:
+            (row.expectedResult === "fail" && actualResult === "blocked") ||
+            (row.expectedResult === "pass" && actualResult === "allowed"),
+          triggeredBy,
+          returnedText: returnedTexts[index],
+          status: "complete" as const,
+        }))
+      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setTestResults(
+        pendingResults.map((row) => ({
+          ...row,
+          actualResult: "blocked" as const,
+          isMatch: false,
+          triggeredBy: `Error: ${errorMessage}`,
+          status: "complete" as const,
+        }))
+      );
+    } finally {
+      setIsRunning(false);
     }
-    setIsRunning(false);
   }, [
     accessToken,
     selectedPromptIds,
@@ -1075,6 +1079,14 @@ export default function ComplianceUI({
                           </span>
                         )}
                         {msg.text}
+                        {msg.type === "system" && msg.returnedText != null && (
+                          <span className="block mt-1.5 pt-1.5 border-t border-gray-200/60">
+                            <span className="text-gray-500">Returned: </span>
+                            <span className="font-medium text-gray-700 break-all">
+                              {msg.returnedText}
+                            </span>
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
