@@ -478,19 +478,20 @@ async def test_anthropic_endpoint_error_handling():
 @pytest.mark.asyncio
 async def test_factory_anthropic_endpoint_calls_anthropic_counter():
     """Test that /v1/messages/count_tokens with Anthropic model uses Anthropic counter."""
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import patch, AsyncMock, MagicMock
     from fastapi.testclient import TestClient
     from litellm.proxy.proxy_server import app
 
-    # Mock the anthropic token counting function
-    with patch(
-        "litellm.proxy.utils.count_tokens_with_anthropic_api"
-    ) as mock_anthropic_count:
-        mock_anthropic_count.return_value = {
-            "total_tokens": 42,
-            "tokenizer_used": "anthropic",
-        }
+    # Mock the global handler instance in token_counter module
+    mock_handler = MagicMock()
+    mock_handler.handle_count_tokens_request = AsyncMock(
+        return_value={"input_tokens": 42}
+    )
 
+    with patch(
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
+        mock_handler
+    ):
         # Mock router to return Anthropic deployment
         with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
             mock_router.model_list = [
@@ -510,36 +511,44 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
                 }
             )
 
-            client = TestClient(app)
+            # Set ANTHROPIC_API_KEY for the test
+            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+                client = TestClient(app)
 
-            response = client.post(
-                "/v1/messages/count_tokens",
-                json={
-                    "model": "claude-3-5-sonnet",
-                    "messages": [{"role": "user", "content": "Hello"}],
-                },
-                headers={"Authorization": "Bearer test-key"},
-            )
+                response = client.post(
+                    "/v1/messages/count_tokens",
+                    json={
+                        "model": "claude-3-5-sonnet",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                    headers={"Authorization": "Bearer test-key"},
+                )
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data["input_tokens"] == 42
+                assert response.status_code == 200
+                data = response.json()
+                assert data["input_tokens"] == 42
 
-            # Verify that Anthropic API was called
-            mock_anthropic_count.assert_called_once()
+                # Verify that Anthropic handler was called
+                mock_handler.handle_count_tokens_request.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
     """Test that /v1/messages/count_tokens with GPT-4 does NOT use Anthropic counter."""
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import patch, AsyncMock, MagicMock
     from fastapi.testclient import TestClient
     from litellm.proxy.proxy_server import app
 
-    # Mock the anthropic token counting function
+    # Mock the global handler instance in token_counter module
+    mock_handler = MagicMock()
+    mock_handler.handle_count_tokens_request = AsyncMock(
+        return_value={"input_tokens": 42}
+    )
+
     with patch(
-        "litellm.proxy.utils.count_tokens_with_anthropic_api"
-    ) as mock_anthropic_count:
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
+        mock_handler
+    ):
         # Mock litellm token counter
         with patch("litellm.token_counter") as mock_litellm_counter:
             mock_litellm_counter.return_value = 50
@@ -578,21 +587,27 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                 data = response.json()
                 assert data["input_tokens"] == 50
 
-                # Verify that Anthropic API was NOT called
-                mock_anthropic_count.assert_not_called()
+                # Verify that Anthropic handler was NOT called
+                mock_handler.handle_count_tokens_request.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
     """Test that /utils/token_counter does NOT use Anthropic counter even with Anthropic model."""
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import patch, AsyncMock, MagicMock
     from fastapi.testclient import TestClient
     from litellm.proxy.proxy_server import app
 
-    # Mock the anthropic token counting function
+    # Mock the global handler instance in token_counter module
+    mock_handler = MagicMock()
+    mock_handler.handle_count_tokens_request = AsyncMock(
+        return_value={"input_tokens": 42}
+    )
+
     with patch(
-        "litellm.proxy.utils.count_tokens_with_anthropic_api"
-    ) as mock_anthropic_count:
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
+        mock_handler
+    ):
         # Mock litellm token counter
         with patch("litellm.token_counter") as mock_litellm_counter:
             mock_litellm_counter.return_value = 35
@@ -635,8 +650,8 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
                 data = response.json()
                 assert data["total_tokens"] == 35
 
-                # Verify that Anthropic API was NOT called (since call_endpoint=False)
-                mock_anthropic_count.assert_not_called()
+                # Verify that Anthropic handler was NOT called (since call_endpoint=False)
+                mock_handler.handle_count_tokens_request.assert_not_called()
 
 
 @pytest.mark.asyncio

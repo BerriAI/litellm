@@ -44,11 +44,6 @@ def get_num_retries_from_retry_policy(
         retry_policy = RetryPolicy(**retry_policy)
 
     if (
-        isinstance(exception, BadRequestError)
-        and retry_policy.BadRequestErrorRetries is not None
-    ):
-        return retry_policy.BadRequestErrorRetries
-    if (
         isinstance(exception, AuthenticationError)
         and retry_policy.AuthenticationErrorRetries is not None
     ):
@@ -65,6 +60,11 @@ def get_num_retries_from_retry_policy(
         and retry_policy.ContentPolicyViolationErrorRetries is not None
     ):
         return retry_policy.ContentPolicyViolationErrorRetries
+    if (
+        isinstance(exception, BadRequestError)
+        and retry_policy.BadRequestErrorRetries is not None
+    ):
+        return retry_policy.BadRequestErrorRetries
 
 
 def reset_retry_policy() -> RetryPolicy:

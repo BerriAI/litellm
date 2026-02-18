@@ -237,17 +237,37 @@ def batch_completion_models_all_responses(*args, **kwargs):
     if "model" in kwargs:
         kwargs.pop("model")
     if "models" in kwargs:
-        models = kwargs["models"]
-        kwargs.pop("models")
+        models = kwargs.pop("models")
     else:
         raise Exception("'models' param not in kwargs")
+
+    if isinstance(models, str):
+        models = [models]
+    elif isinstance(models, (list, tuple)):
+        models = list(models)
+    else:
+        raise TypeError("'models' must be a string or list of strings")
+
+    if len(models) == 0:
+        return []
 
     responses = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-        for idx, model in enumerate(models):
-            future = executor.submit(litellm.completion, *args, model=model, **kwargs)
-            if future.result() is not None:
-                responses.append(future.result())
+        futures = [
+            executor.submit(litellm.completion, *args, model=model, **kwargs)
+            for model in models
+        ]
+
+        for future in futures:
+            try:
+                result = future.result()
+                if result is not None:
+                    responses.append(result)
+            except Exception as e:
+                print_verbose(
+                    f"batch_completion_models_all_responses: model request failed: {str(e)}"
+                )
+                continue
 
     return responses

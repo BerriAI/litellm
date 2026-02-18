@@ -92,7 +92,12 @@ from litellm.utils import (
 )
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ..common_utils import VertexAIError, _build_vertex_schema
+from ..common_utils import (
+    VertexAIError,
+    _build_json_schema,
+    _build_vertex_schema,
+    supports_response_json_schema,
+)
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     _gemini_convert_messages_with_history,
@@ -473,6 +478,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
                 tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
+            # Handle OpenAI-style web_search and web_search_preview tools
+            # Transform them to Gemini's googleSearch tool
+            elif "type" in tool and tool["type"] in (
+                "web_search",
+                "web_search_preview",
+            ):
+                verbose_logger.info(
+                    f"Gemini: Transforming OpenAI-style '{tool['type']}' tool to googleSearch"
+                )
+                tool = {VertexToolName.GOOGLE_SEARCH.value: {}}
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             elif "type" in tool:
                 tool = {k: tool[k] for k in tool if k != "type"}
@@ -624,30 +639,55 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         return old_schema
 
-    def apply_response_schema_transformation(self, value: dict, optional_params: dict):
+    def apply_response_schema_transformation(
+        self, value: dict, optional_params: dict, model: str
+    ):
         new_value = deepcopy(value)
-        # remove 'additionalProperties' from json schema
-        new_value = _remove_additional_properties(new_value)
-        # remove 'strict' from json schema
+        # remove 'strict' from json schema (not supported by Gemini)
         new_value = _remove_strict_from_schema(new_value)
-        if new_value["type"] == "json_object":
+
+        # Automatically use responseJsonSchema for Gemini 2.0+ models
+        # responseJsonSchema uses standard JSON Schema format and supports additionalProperties
+        # For older models (Gemini 1.5), fall back to responseSchema (OpenAPI format)
+        use_json_schema = supports_response_json_schema(model)
+
+        if not use_json_schema:
+            # For responseSchema, remove 'additionalProperties' (not supported)
+            new_value = _remove_additional_properties(new_value)
+
+        # Handle response type
+        if new_value.get("type") == "json_object":
             optional_params["response_mime_type"] = "application/json"
-        elif new_value["type"] == "text":
+        elif new_value.get("type") == "text":
             optional_params["response_mime_type"] = "text/plain"
+
+        # Extract schema from response_format
+        schema = None
         if "response_schema" in new_value:
             optional_params["response_mime_type"] = "application/json"
-            optional_params["response_schema"] = new_value["response_schema"]
-        elif new_value["type"] == "json_schema":  # type: ignore
-            if "json_schema" in new_value and "schema" in new_value["json_schema"]:  # type: ignore
+            schema = new_value["response_schema"]
+        elif new_value.get("type") == "json_schema":
+            if "json_schema" in new_value and "schema" in new_value["json_schema"]:
                 optional_params["response_mime_type"] = "application/json"
-                optional_params["response_schema"] = new_value["json_schema"]["schema"]  # type: ignore
+                schema = new_value["json_schema"]["schema"]
 
-        if "response_schema" in optional_params and isinstance(
-            optional_params["response_schema"], dict
-        ):
-            optional_params["response_schema"] = self._map_response_schema(
-                value=optional_params["response_schema"]
-            )
+        if schema and isinstance(schema, dict):
+            if use_json_schema:
+                # Use responseJsonSchema (Gemini 2.0+ only, opt-in)
+                # - Standard JSON Schema format (lowercase types)
+                # - Supports additionalProperties
+                # - No propertyOrdering needed
+                optional_params["response_json_schema"] = _build_json_schema(
+                    deepcopy(schema)
+                )
+            else:
+                # Use responseSchema (default, backwards compatible)
+                # - OpenAPI-style format (uppercase types)
+                # - No additionalProperties support
+                # - Requires propertyOrdering
+                optional_params["response_schema"] = self._map_response_schema(
+                    value=schema
+                )
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
@@ -947,7 +987,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):  # type: ignore
                 self.apply_response_schema_transformation(
-                    value=value, optional_params=optional_params
+                    value=value, optional_params=optional_params, model=model
                 )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
@@ -988,25 +1028,34 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["parallel_tool_calls"] = value
             elif param == "seed":
                 optional_params["seed"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
-                # Validate no conflict with thinking_level
-                VertexGeminiConfig._validate_thinking_config_conflicts(
-                    optional_params=optional_params,
-                    param_name="reasoning_effort",
-                    param_description="thinking_budget",
-                )
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    optional_params["thinkingConfig"] = (
-                        VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            value, model
-                        )
+            elif param == "reasoning_effort":
+                # Extract effort value - handle both string and dict formats
+                # Dict format comes from OpenAI Agents SDK: {"effort": "high", "summary": "auto"}
+                effort_value: Optional[str] = None
+                if isinstance(value, str):
+                    effort_value = value
+                elif isinstance(value, dict):
+                    effort_value = value.get("effort")
+
+                if effort_value is not None:
+                    # Validate no conflict with thinking_level
+                    VertexGeminiConfig._validate_thinking_config_conflicts(
+                        optional_params=optional_params,
+                        param_name="reasoning_effort",
+                        param_description="thinking_budget",
                     )
-                else:
-                    optional_params["thinkingConfig"] = (
-                        VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            value, model
+                    if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                                effort_value, model
+                            )
                         )
-                    )
+                    else:
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                                effort_value, model
+                            )
+                        )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(
@@ -1023,7 +1072,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
-            elif param == "web_search_options" and value and isinstance(value, dict):
+            elif param == "web_search_options" and isinstance(value, dict):
                 _tools = self._map_web_search_options(value)
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
@@ -1150,6 +1199,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
             "IMAGE_SAFETY": "The token generation was stopped as the response was flagged for image safety reasons.",
+            "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
     @staticmethod
@@ -1160,7 +1210,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         and what it means
         """
         return {
-            "FINISH_REASON_UNSPECIFIED": "stop",  # openai doesn't have a way of representing this
+            "FINISH_REASON_UNSPECIFIED": "finish_reason_unspecified",
             "STOP": "stop",
             "MAX_TOKENS": "length",
             "SAFETY": "content_filter",
@@ -1170,8 +1220,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "BLOCKLIST": "content_filter",
             "PROHIBITED_CONTENT": "content_filter",
             "SPII": "content_filter",
-            "MALFORMED_FUNCTION_CALL": "stop",  # openai doesn't have a way of representing this
+            "MALFORMED_FUNCTION_CALL": "malformed_function_call",  # openai doesn't have a way of representing this
             "IMAGE_SAFETY": "content_filter",
+            "IMAGE_PROHIBITED_CONTENT": "content_filter",
         }
 
     def translate_exception_str(self, exception_string: str):
@@ -1584,7 +1635,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 completion_image_tokens = response_tokens_details.image_tokens or 0
                 completion_audio_tokens = response_tokens_details.audio_tokens or 0
                 calculated_text_tokens = (
-                    candidates_token_count - completion_image_tokens - completion_audio_tokens
+                    candidates_token_count
+                    - completion_image_tokens
+                    - completion_audio_tokens
                 )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
@@ -1618,7 +1671,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
         ## See: https://github.com/BerriAI/litellm/issues/18750
         if cached_text_tokens is not None and prompt_text_tokens is not None:
+            # Explicit caching: subtract cached tokens per modality from cacheTokensDetails
             prompt_text_tokens = prompt_text_tokens - cached_text_tokens
+        elif (
+            cached_tokens is not None
+            and prompt_text_tokens is not None
+            and cached_text_tokens is None
+        ):
+            # Implicit caching: only cachedContentTokenCount is provided (no cacheTokensDetails)
+            # Subtract from text tokens since implicit caching is primarily for text content
+            # See: https://github.com/BerriAI/litellm/issues/16341
+            prompt_text_tokens = prompt_text_tokens - cached_tokens
         if cached_audio_tokens is not None and prompt_audio_tokens is not None:
             prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
         if cached_image_tokens is not None and prompt_image_tokens is not None:
@@ -1675,6 +1738,52 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return mapped_finish_reason[finish_reason]
         else:
             return "stop"
+
+    @staticmethod
+    def _check_prompt_level_content_filter(
+        processed_chunk: GenerateContentResponseBody,
+        response_id: Optional[str],
+    ) -> Optional["ModelResponseStream"]:
+        """
+        Check if prompt is blocked due to content filtering at the prompt level.
+
+        This handles the case where Vertex AI blocks the prompt before generation begins,
+        indicated by promptFeedback.blockReason being present.
+
+        Args:
+            processed_chunk: The parsed response chunk from Vertex AI
+            response_id: The response ID from the chunk
+
+        Returns:
+            ModelResponseStream with content_filter finish_reason if blocked, None otherwise.
+
+        Note:
+            This is consistent with non-streaming _handle_blocked_response() behavior.
+            Candidate-level content filtering (SAFETY, RECITATION, etc.) is handled
+            separately via _process_candidates() → _check_finish_reason().
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        # Check if prompt is blocked due to content filtering
+        prompt_feedback = processed_chunk.get("promptFeedback")
+        if prompt_feedback and "blockReason" in prompt_feedback:
+            verbose_logger.debug(
+                f"Prompt blocked due to: {prompt_feedback.get('blockReason')} - {prompt_feedback.get('blockReasonMessage')}"
+            )
+
+            # Create a content_filter response (consistent with non-streaming _handle_blocked_response)
+            choice = StreamingChoices(
+                finish_reason="content_filter",
+                index=0,
+                delta=Delta(content=None, role="assistant"),
+                logprobs=None,
+                enhancements=None,
+            )
+
+            model_response = ModelResponseStream(choices=[choice], id=response_id)
+            return model_response
+
+        return None
 
     @staticmethod
     def _calculate_web_search_requests(grounding_metadata: List[dict]) -> Optional[int]:
@@ -2145,6 +2254,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
+
+            ## ADD TRAFFIC TYPE ##
+            traffic_type = completion_response.get("usageMetadata", {}).get(
+                "trafficType"
+            )
+            if traffic_type:
+                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
         except Exception as e:
             raise VertexAIError(
@@ -2757,6 +2873,15 @@ class ModelResponseIterator:
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
             response_id = processed_chunk.get("responseId")
             model_response = ModelResponseStream(choices=[], id=response_id)
+
+            # Check if prompt is blocked due to content filtering
+            blocked_response = VertexGeminiConfig._check_prompt_level_content_filter(
+                processed_chunk=processed_chunk,
+                response_id=response_id,
+            )
+            if blocked_response is not None:
+                model_response = blocked_response
+
             usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             grounding_metadata: List[dict] = []
@@ -2794,6 +2919,12 @@ class ModelResponseIterator:
                     cast(
                         PromptTokensDetailsWrapper, usage.prompt_tokens_details
                     ).web_search_requests = web_search_requests
+
+                traffic_type = processed_chunk.get("usageMetadata", {}).get(
+                    "trafficType"
+                )
+                if traffic_type:
+                    model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             setattr(model_response, "usage", usage)  # type: ignore
 

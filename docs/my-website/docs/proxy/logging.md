@@ -982,6 +982,8 @@ OTEL_ENDPOINT="http:/0.0.0.0:4317"
 OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
 ```
 
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+
 Add `otel` as a callback on your `litellm_config.yaml`
 
 ```shell
@@ -1336,6 +1338,7 @@ litellm_settings:
     s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
     s3_path: my-test-path # [OPTIONAL] set path in bucket you want to write logs to
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
+    s3_use_virtual_hosted_style: false # [OPTIONAL] use virtual-hosted-style URLs (bucket.endpoint/key) instead of path-style (endpoint/bucket/key). Useful for S3-compatible services like MinIO
     s3_strip_base64_files: false # [OPTIONAL] remove base64 files before storing in s3
 ```
 

@@ -51,12 +51,14 @@ LiteLLM is a unified interface for 100+ LLMs that:
 
 ### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
 
-1. **Use Common Components as much as possible**:
+1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
+   - The only exception is the Tremor Table component and its required Tremor Table sub components.
+
+2. **Use Common Components as much as possible**:
    - These are usually defined in the `common_components` directory
    - Use these components as much as possible and avoid building new components unless needed
-   - Tremor components are deprecated; prefer using Ant Design (AntD) as much as possible
 
-2. **Testing**:
+3. **Testing**:
    - The codebase uses **Vitest** and **React Testing Library**
    - **Query Priority Order**: Use query methods in this order: `getByRole`, `getByLabelText`, `getByPlaceholderText`, `getByText`, `getByTestId`
    - **Always use `screen`** instead of destructuring from `render()` (e.g., use `screen.getByText()` not `getByText`)

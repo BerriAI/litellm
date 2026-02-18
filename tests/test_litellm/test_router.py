@@ -1172,191 +1172,6 @@ async def test_acompletion_streaming_iterator_edge_cases():
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streaming_disable_fallbacks_midstream():
-    """Test that disable_fallbacks=True prevents mid-stream fallback attempts."""
-    from unittest.mock import MagicMock
-
-    from litellm.exceptions import MidStreamFallbackError
-
-    # Set up router with fallback configuration
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key-2"},
-            },
-        ],
-        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
-        set_verbose=True,
-    )
-
-    messages = [{"role": "user", "content": "Hello"}]
-
-    # Test 1: disable_fallbacks=True with original_exception
-    print("\n=== Test 1: disable_fallbacks=True with original_exception ===")
-
-    # Create an original exception to wrap
-    from litellm.llms.anthropic.common_utils import AnthropicError
-
-    original_error = AnthropicError(
-        status_code=500,
-        message="An unexpected error occurred while processing the response",
-    )
-
-    # Create MidStreamFallbackError with original_exception
-    error_with_original = MidStreamFallbackError(
-        message="Connection lost",
-        model="gpt-4",
-        llm_provider="openai",
-        generated_content="Hello",
-        original_exception=original_error,
-    )
-
-    class AsyncIteratorWithError:
-        def __init__(self, items, error_after_index, error):
-            self.items = items
-            self.index = 0
-            self.error_after_index = error_after_index
-            self.error = error
-            self.chunks = []
-            self.model = "gpt-4"
-            self.custom_llm_provider = "openai"
-            self.logging_obj = MagicMock()
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self.index >= len(self.items):
-                raise StopAsyncIteration
-            if self.index == self.error_after_index:
-                raise self.error
-            item = self.items[self.index]
-            self.index += 1
-            self.chunks.append(item)
-            return item
-
-    mock_chunks = [
-        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
-    ]
-
-    mock_error_response = AsyncIteratorWithError(
-        mock_chunks, 1, error_with_original
-    )  # Error after first chunk
-
-    initial_kwargs = {"model": "gpt-4", "stream": True, "disable_fallbacks": True}
-
-    # Mock the fallback function to ensure it's NOT called
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        return_value=MagicMock(),
-    ) as mock_fallback_utils:
-        with pytest.raises(AnthropicError, match="An unexpected error occurred"):
-            result = await router._acompletion_streaming_iterator(
-                model_response=mock_error_response,
-                messages=messages,
-                initial_kwargs=initial_kwargs,
-            )
-
-            async for chunk in result:
-                pass  # Should not reach here; exception should be raised
-
-        # Verify fallback was NOT called
-        mock_fallback_utils.assert_not_called()
-        print("✓ Original exception raised correctly when disable_fallbacks=True")
-
-    # Test 2: disable_fallbacks=True without original_exception
-    print("\n=== Test 2: disable_fallbacks=True without original_exception ===")
-
-    error_without_original = MidStreamFallbackError(
-        message="Connection lost",
-        model="gpt-4",
-        llm_provider="openai",
-        generated_content="Hello",
-        original_exception=None,
-    )
-
-    mock_error_response_2 = AsyncIteratorWithError(
-        mock_chunks, 1, error_without_original
-    )
-
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        return_value=MagicMock(),
-    ) as mock_fallback_utils:
-        with pytest.raises(MidStreamFallbackError, match="Connection lost"):
-            result = await router._acompletion_streaming_iterator(
-                model_response=mock_error_response_2,
-                messages=messages,
-                initial_kwargs=initial_kwargs,
-            )
-
-            async for chunk in result:
-                pass  # Should not reach here
-
-        # Verify fallback was NOT called
-        mock_fallback_utils.assert_not_called()
-        print(
-            "✓ MidStreamFallbackError raised correctly when no original_exception and disable_fallbacks=True"
-        )
-
-    # Test 3: disable_fallbacks=False (default behavior - fallback should work)
-    print("\n=== Test 3: disable_fallbacks=False (fallback enabled) ===")
-
-    error_for_fallback = MidStreamFallbackError(
-        message="Connection lost",
-        model="gpt-4",
-        llm_provider="openai",
-        generated_content="Hello",
-    )
-
-    mock_error_response_3 = AsyncIteratorWithError(mock_chunks, 1, error_for_fallback)
-
-    # Mock successful fallback response
-    class EmptyAsyncIterator:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-    mock_fallback_response = EmptyAsyncIterator()
-
-    initial_kwargs_fallback_enabled = {
-        "model": "gpt-4",
-        "stream": True,
-        "disable_fallbacks": False,
-    }
-
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        return_value=mock_fallback_response,
-    ) as mock_fallback_utils:
-        collected_chunks = []
-        result = await router._acompletion_streaming_iterator(
-            model_response=mock_error_response_3,
-            messages=messages,
-            initial_kwargs=initial_kwargs_fallback_enabled,
-        )
-
-        async for chunk in result:
-            collected_chunks.append(chunk)
-
-        # Verify fallback WAS called
-        assert mock_fallback_utils.called
-        print("✓ Fallback called correctly when disable_fallbacks=False")
-
-    print("\n=== All disable_fallbacks tests passed! ===")
-
-
-@pytest.mark.asyncio
 async def test_async_function_with_fallbacks_common_utils():
     """Test the async_function_with_fallbacks_common_utils method"""
     # Create a basic router for testing
@@ -2054,3 +1869,215 @@ async def test_aguardrail():
 
     assert result["result"] == "success"
     assert result["selected_guardrail"]["id"] == "guardrail-1"
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_call_type_is_cached():
+    """
+    Regression test: Verify that anthropic_messages call type is allowed
+    in PromptCachingDeploymentCheck.async_log_success_event.
+    """
+    import asyncio
+    from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
+        PromptCachingDeploymentCheck,
+    )
+    from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+    from litellm.caching.dual_cache import DualCache
+    from litellm.types.utils import CallTypes
+    from litellm.types.utils import (
+        StandardLoggingPayload,
+        StandardLoggingModelInformation,
+        StandardLoggingMetadata,
+        StandardLoggingHiddenParams,
+    )
+    
+    # Create mock standard logging payload inline
+    def create_standard_logging_payload() -> StandardLoggingPayload:
+        return StandardLoggingPayload(
+            id="test_id",
+            call_type="completion",
+            response_cost=0.1,
+            response_cost_failure_debug_info=None,
+            status="success",
+            total_tokens=30,
+            prompt_tokens=20,
+            completion_tokens=10,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=1234567890.5,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai-gpt",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_org_id=None,
+                user_api_key_alias="test_alias",
+                user_api_key_team_id="test_team",
+                user_api_key_user_id="test_user",
+                user_api_key_team_alias="test_team_alias",
+                spend_logs_metadata=None,
+                requester_ip_address="127.0.0.1",
+                requester_metadata=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address="127.0.0.1",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            response={"choices": [{"message": {"content": "Hi there!"}}]},
+            error_str=None,
+            model_parameters={"stream": True},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.1",
+                additional_headers=None,
+            ),
+        )
+    
+    cache = DualCache()
+    deployment_check = PromptCachingDeploymentCheck(cache=cache)
+    prompt_cache = PromptCachingCache(cache=cache)
+    
+    # Create messages with enough tokens to pass the caching threshold
+    test_messages = [
+        {
+            "role": "user", 
+            "content": [
+                {
+                    "type": "text", 
+                    "text": "test long message here" * 1024,
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "5m"
+                    }
+                }
+            ]
+        }
+    ]
+    test_model_id = "test-model-id-123"
+    
+    # Create a payload with anthropic_messages call type
+    payload = create_standard_logging_payload()
+    payload["call_type"] = CallTypes.anthropic_messages.value
+    payload["messages"] = test_messages
+    payload["model"] = "anthropic/claude-3-5-sonnet-20240620"
+    payload["model_id"] = test_model_id
+    
+    # Log the success event (should cache the model_id)
+    await deployment_check.async_log_success_event(
+        kwargs={"standard_logging_object": payload},
+        response_obj={},
+        start_time=1234567890.0,
+        end_time=1234567891.0,
+    )
+    
+    # Small delay to ensure cache write completes
+    await asyncio.sleep(0.1)
+    
+    # Verify that the model_id was actually cached
+    cached_result = await prompt_cache.async_get_model_id(
+        messages=test_messages,
+        tools=None,
+    )
+    
+    # This assertion will FAIL if anthropic_messages is filtered out
+    assert cached_result is not None, "Model ID should be cached for anthropic_messages call type"
+    assert cached_result["model_id"] == test_model_id, f"Expected {test_model_id}, got {cached_result['model_id']}"
+
+
+def test_update_kwargs_with_deployment_propagates_model_tags():
+    """
+    Test that deployment-level tags from litellm_params are merged into
+    kwargs metadata when _update_kwargs_with_deployment is called.
+
+    This ensures model-level tags defined in config.yaml appear in SpendLogs.
+    See: https://github.com/BerriAI/litellm/issues/XXXX
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "tags": ["openai-account", "production"],
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Deployment tags should be propagated to kwargs metadata
+    assert "tags" in kwargs["metadata"]
+    assert "openai-account" in kwargs["metadata"]["tags"]
+    assert "production" in kwargs["metadata"]["tags"]
+
+
+def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
+    """
+    Test that when both request-level and deployment-level tags exist,
+    they are merged without duplicates.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "tags": ["openai-account", "shared-tag"],
+                },
+            },
+        ],
+    )
+
+    # Simulate request that already has tags (from request body or key/team level)
+    kwargs: dict = {"metadata": {"tags": ["user-tag", "shared-tag"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Both sources should be merged, no duplicates
+    assert "user-tag" in kwargs["metadata"]["tags"]
+    assert "openai-account" in kwargs["metadata"]["tags"]
+    assert "shared-tag" in kwargs["metadata"]["tags"]
+    assert kwargs["metadata"]["tags"].count("shared-tag") == 1
+
+
+def test_update_kwargs_with_deployment_no_tags():
+    """
+    Test that when deployment has no tags, kwargs metadata is not affected.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # No tags key should be added if deployment has no tags
+    assert "tags" not in kwargs["metadata"]

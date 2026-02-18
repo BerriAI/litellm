@@ -2,7 +2,8 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj, verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -13,9 +14,14 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
-from ...common_utils import AnthropicError
+from ...common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    optionally_handle_anthropic_oauth,
+)
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -36,9 +42,49 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tool_choice",
             "thinking",
             "context_management",
+            "output_format",
+            "inference_geo",
+            "speed",
+            "output_config",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
+
+    @staticmethod
+    def _filter_billing_headers_from_system(system_param):
+        """
+        Filter out x-anthropic-billing-header metadata from system parameter.
+
+        Args:
+            system_param: Can be a string or a list of system message content blocks
+
+        Returns:
+            Filtered system parameter (string or list), or None if all content was filtered
+        """
+        if isinstance(system_param, str):
+            # If it's a string and starts with billing header, filter it out
+            if system_param.startswith("x-anthropic-billing-header:"):
+                return None
+            return system_param
+        elif isinstance(system_param, list):
+            # Filter list of system content blocks
+            filtered_list = []
+            for content_block in system_param:
+                if isinstance(content_block, dict):
+                    text = content_block.get("text", "")
+                    content_type = content_block.get("type", "")
+                    # Skip text blocks that start with billing header
+                    if content_type == "text" and text.startswith(
+                        "x-anthropic-billing-header:"
+                    ):
+                        continue
+                    filtered_list.append(content_block)
+                else:
+                    # Keep non-dict items as-is
+                    filtered_list.append(content_block)
+            return filtered_list if len(filtered_list) > 0 else None
+        else:
+            return system_param
 
     def get_complete_url(
         self,
@@ -66,18 +112,23 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     ) -> Tuple[dict, Optional[str]]:
         import os
 
+        # Check for Anthropic OAuth token in Authorization header
+        headers, api_key = optionally_handle_anthropic_oauth(
+            headers=headers, api_key=api_key
+        )
         if api_key is None:
             api_key = os.getenv("ANTHROPIC_API_KEY")
-        if "x-api-key" not in headers and api_key:
+
+        if "x-api-key" not in headers and "authorization" not in headers and api_key:
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
 
-        headers = self._update_headers_with_optional_anthropic_beta(
+        headers = self._update_headers_with_anthropic_beta(
             headers=headers,
-            context_management=optional_params.get("context_management"),
+            optional_params=optional_params,
         )
 
         return headers, api_base
@@ -102,6 +153,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message="max_tokens is required for Anthropic /v1/messages API",
                 status_code=400,
             )
+
+        # Filter out x-anthropic-billing-header from system messages
+        system_param = anthropic_messages_optional_request_params.get("system")
+        if system_param is not None:
+            filtered_system = self._filter_billing_headers_from_system(system_param)
+            if filtered_system is not None and len(filtered_system) > 0:
+                anthropic_messages_optional_request_params["system"] = filtered_system
+            else:
+                # Remove system parameter if all content was filtered out
+                anthropic_messages_optional_request_params.pop("system", None)
+
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
@@ -153,16 +215,77 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         )
 
     @staticmethod
-    def _update_headers_with_optional_anthropic_beta(
-        headers: dict, context_management: Optional[Dict]
+    def _update_headers_with_anthropic_beta(
+        headers: dict,
+        optional_params: dict,
+        custom_llm_provider: str = "anthropic",
     ) -> dict:
-        if context_management is None:
-            return headers
+        """
+        Auto-inject anthropic-beta headers based on features used.
 
+        Handles:
+        - context_management: adds 'context-management-2025-06-27'
+        - tool_search: adds provider-specific tool search header
+        - output_format: adds 'structured-outputs-2025-11-13'
+        - speed: adds 'fast-mode-2026-02-01'
+
+        Args:
+            headers: Request headers dict
+            optional_params: Optional parameters including tools, context_management, output_format, speed
+            custom_llm_provider: Provider name for looking up correct tool search header
+        """
+        beta_values: set = set()
+
+        # Get existing beta headers if any
         existing_beta = headers.get("anthropic-beta")
-        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
-        if existing_beta is None:
-            headers["anthropic-beta"] = beta_value
-        elif beta_value not in [beta.strip() for beta in existing_beta.split(",")]:
-            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+        if existing_beta:
+            beta_values.update(b.strip() for b in existing_beta.split(","))
+
+        # Check for context management
+        context_management_param = optional_params.get("context_management")
+        if context_management_param is not None:
+            # Check edits array for compact_20260112 type
+            edits = context_management_param.get("edits", [])
+            has_compact = False
+            has_other = False
+
+            for edit in edits:
+                edit_type = edit.get("type", "")
+                if edit_type == "compact_20260112":
+                    has_compact = True
+                else:
+                    has_other = True
+
+            # Add compact header if any compact edits exist
+            if has_compact:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+
+            # Add context management header if any other edits exist
+            if has_other:
+                beta_values.add(
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                )
+
+        # Check for structured outputs
+        if optional_params.get("output_format") is not None:
+            beta_values.add(
+                ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
+            )
+
+        # Check for fast mode
+        if optional_params.get("speed") == "fast":
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
+
+        # Check for tool search tools
+        tools = optional_params.get("tools")
+        if tools:
+            anthropic_model_info = AnthropicModelInfo()
+            if anthropic_model_info.is_tool_search_used(tools):
+                # Use provider-specific tool search header
+                tool_search_header = get_tool_search_beta_header(custom_llm_provider)
+                beta_values.add(tool_search_header)
+
+        if beta_values:
+            headers["anthropic-beta"] = ",".join(sorted(beta_values))
+
         return headers

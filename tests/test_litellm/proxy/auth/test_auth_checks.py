@@ -15,10 +15,10 @@ import pytest
 import litellm
 from litellm.proxy._types import (
     CallInfo,
+    Litellm_EntityType,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
-    Litellm_EntityType,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
@@ -28,7 +28,9 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_vector_stores,
+    _get_fuzzy_user_object,
     _get_team_db_check,
+    _log_budget_lookup_failure,
     _virtual_key_max_budget_alert_check,
     _virtual_key_soft_budget_check,
     get_user_object,
@@ -42,6 +44,24 @@ from litellm.utils import get_utc_datetime
 def set_salt_key(monkeypatch):
     """Automatically set LITELLM_SALT_KEY for all tests"""
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+
+
+@pytest.fixture(autouse=True)
+def reset_constants_module():
+    """Reset constants module to ensure clean state before each test"""
+    import importlib
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+    
+    # Reload modules before test
+    importlib.reload(constants)
+    importlib.reload(auth_checks)
+    
+    yield
+    
+    # Reload modules after test to clean up
+    importlib.reload(constants)
+    importlib.reload(auth_checks)
 
 
 @pytest.fixture
@@ -131,6 +151,63 @@ def test_get_key_object_from_ui_hash_key_invalid():
     assert key_object is None
 
 
+def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
+    """Test generating CLI JWT token with default 24-hour expiration"""
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    # Decrypt and verify token contents
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["user_id"] == "test_user"
+    assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+    assert token_data["models"] == ["gpt-3.5-turbo"]
+    assert token_data["max_budget"] == litellm.max_ui_session_budget
+
+    # Verify expiration time is set to 24 hours (default)
+    assert "expires" in token_data
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    assert expires > get_utc_datetime()
+    assert expires <= get_utc_datetime() + timedelta(hours=24, minutes=1)
+    assert expires >= get_utc_datetime() + timedelta(hours=23, minutes=59)
+
+
+def test_get_cli_jwt_auth_token_custom_expiration(
+    valid_sso_user_defined_values, monkeypatch
+):
+    """Test generating CLI JWT token with custom expiration via environment variable"""
+    import importlib
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+    
+    # Set custom expiration to 48 hours
+    monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
+    
+    # Reload the constants module to pick up the new env var
+    importlib.reload(constants)
+    # Also reload auth_checks to pick up the new constant value
+    importlib.reload(auth_checks)
+    
+    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    # Decrypt and verify token contents
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    # Verify expiration time is set to 48 hours
+    assert "expires" in token_data
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    assert expires > get_utc_datetime() + timedelta(hours=47, minutes=59)
+    assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
+
+
+
 @pytest.mark.asyncio
 async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     """Test that default_internal_user_params is used when creating a new user via get_user_object"""
@@ -195,6 +272,27 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+def test_log_budget_lookup_failure_dry_run():
+    """Dry run: verify _log_budget_lookup_failure logs for schema/DB errors."""
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        err = Exception("column 'policies' does not exist in prisma schema")
+        _log_budget_lookup_failure("user", err)
+        mock_logger.error.assert_called_once()
+        call_msg = mock_logger.error.call_args[0][0]
+        assert "user" in call_msg
+        assert "cache will not be populated" in call_msg
+        assert "policies" in call_msg or "prisma" in call_msg
+        assert "prisma db push" in call_msg
+
+
+def test_log_budget_lookup_failure_skips_user_not_found():
+    """Verify _log_budget_lookup_failure does NOT log for expected user-not-found."""
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        err = Exception()  # bare Exception from get_user_object when user not found
+        _log_budget_lookup_failure("user", err)
+        mock_logger.error.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1277,3 +1375,42 @@ async def test_virtual_key_max_budget_alert_check_scenarios(
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, max_budget={max_budget}"
+
+
+@pytest.mark.asyncio
+async def test_get_fuzzy_user_object_case_insensitive_email():
+    """Test that _get_fuzzy_user_object uses case-insensitive email lookup"""
+    # Setup mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+
+    # Mock user data with mixed case email
+    test_user = LiteLLM_UserTable(
+        user_id="test_123",
+        sso_user_id=None,
+        user_email="Test@Example.com",  # Mixed case in DB
+        organization_memberships=[],
+        max_budget=None,
+    )
+
+    # Test: SSO ID not found, find by email with different casing
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
+
+    # Search with lowercase email (different from DB)
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma,
+        sso_user_id=None,
+        user_email="test@example.com",  # Lowercase search
+    )
+
+    # Verify user was found despite case difference
+    assert result == test_user
+
+    # Verify the query used case-insensitive mode
+    mock_prisma.db.litellm_usertable.find_first.assert_called_once()
+    call_args = mock_prisma.db.litellm_usertable.find_first.call_args
+    assert call_args.kwargs["where"]["user_email"]["equals"] == "test@example.com"
+    assert call_args.kwargs["where"]["user_email"]["mode"] == "insensitive"
+    assert call_args.kwargs["include"] == {"organization_memberships": True}

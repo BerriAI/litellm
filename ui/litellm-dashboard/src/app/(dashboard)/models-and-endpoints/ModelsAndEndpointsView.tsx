@@ -26,7 +26,7 @@ import ModelGroupAliasSettings from "../../../components/model_group_alias_setti
 import ModelInfoView from "../../../components/model_info_view";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
 import PassThroughSettings from "../../../components/pass_through_settings";
-import TeamInfoView from "../../../components/team/team_info";
+import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
 interface ModelDashboardProps {
@@ -94,7 +94,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   }, [modelDataResponse?.data]);
 
   const allModelsOnProxy = useMemo<string[]>(() => {
-    return modelDataResponse?.data?.map((model: any) => model.model_name);
+    if (!modelDataResponse?.data) return [];
+    return modelDataResponse.data.map((model: any) => model.model_name);
   }, [modelDataResponse?.data]);
 
   const getProviderFromModel = (model: string) => {
@@ -317,7 +318,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               onClose={() => {
                 setSelectedModelId(null);
               }}
-              modelData={processedModelData.data.find((model: any) => model.model_info.id === selectedModelId)}
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
@@ -400,6 +400,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     all_models_on_proxy={allModelsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
+                    teams={teams}
                   />
                 </TabPanel>
                 <ModelRetrySettingsTab

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict
 
 from litellm.proxy._types import MCPAuthType, MCPTransportType
+from litellm.types.mcp import MCPAuth
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = Dict[str, Any]
@@ -51,5 +52,16 @@ class MCPServer(BaseModel):
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
+    available_on_public_internet: bool = False
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @property
+    def has_client_credentials(self) -> bool:
+        """True if this server has OAuth2 client_credentials config (client_id, client_secret, token_url)."""
+        return bool(self.client_id and self.client_secret and self.token_url)
+
+    @property
+    def needs_user_oauth_token(self) -> bool:
+        """True if this is an OAuth2 server that relies on per-user tokens (no client_credentials)."""
+        return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials

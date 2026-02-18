@@ -46,6 +46,7 @@ class DeploymentAffinityCheck(CustomLogger):
         enable_user_key_affinity: bool,
         enable_responses_api_affinity: bool,
     ):
+        super().__init__()
         self.cache = cache
         self.ttl_seconds = ttl_seconds
         self.enable_user_key_affinity = enable_user_key_affinity
@@ -57,7 +58,7 @@ class DeploymentAffinityCheck(CustomLogger):
             return False
         try:
             int(value, 16)
-        except Exception:
+        except ValueError:
             return False
         return True
 

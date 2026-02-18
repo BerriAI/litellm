@@ -70,6 +70,11 @@ class ExceptionCheckers:
         Check if an error string indicates a context window exceeded error.
         """
         _error_str_lowercase = error_str.lower()
+        # Exclude param validation errors (e.g. OpenAI "user" param max 64 chars)
+        if "string_above_max_length" in _error_str_lowercase:
+            return False
+        if "invalid 'user'" in _error_str_lowercase and "string too long" in _error_str_lowercase:
+            return False
         known_exception_substrings = [
             "exceed context limit",
             "this model's maximum context length is",
@@ -98,16 +103,18 @@ class ExceptionCheckers:
         """
         Check if an error string indicates a content policy violation error.
         """
+        _lower = error_str.lower()
         known_exception_substrings = [
-            "invalid_request_error",
             "content_policy_violation",
+            "responsibleaipolicyviolation",
             "the response was filtered due to the prompt triggering azure openai's content management",
             "your task failed as a result of our safety system",
             "the model produced invalid content",
             "content_filter_policy",
+            "your request was rejected as a result of our safety system",
         ]
         for substring in known_exception_substrings:
-            if substring in error_str.lower():
+            if substring in _lower:
                 return True
         return False
 
@@ -142,7 +149,14 @@ def get_error_message(error_obj) -> Optional[str]:
         if hasattr(error_obj, "body"):
             _error_obj_body = getattr(error_obj, "body")
             if isinstance(_error_obj_body, dict):
-                return _error_obj_body.get("message")
+                # OpenAI-style: {"message": "...", "type": "...", ...}
+                if _error_obj_body.get("message"):
+                    return _error_obj_body.get("message")
+
+                # Azure-style: {"error": {"message": "...", ...}}
+                nested_error = _error_obj_body.get("error")
+                if isinstance(nested_error, dict):
+                    return nested_error.get("message")
 
         # If all else fails, return None
         return None
@@ -2044,6 +2058,33 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     else:
                         message = str(original_exception)
 
+                # Azure OpenAI (especially Images) often nests error details under
+                # body["error"]. Detect content policy violations using the structured
+                # payload in addition to string matching.
+                azure_error_code: Optional[str] = None
+                try:
+                    body_dict = getattr(original_exception, "body", None) or {}
+                    if isinstance(body_dict, dict):
+                        if isinstance(body_dict.get("error"), dict):
+                            azure_error_code = body_dict["error"].get("code")  # type: ignore[index]
+                            # Also check inner_error for
+                            # ResponsibleAIPolicyViolation which indicates a
+                            # content policy violation even when the top-level
+                            # code is generic (e.g. "invalid_request_error").
+                            if azure_error_code != "content_policy_violation":
+                                _inner = (
+                                    body_dict["error"].get("inner_error")  # type: ignore[index]
+                                    or body_dict["error"].get("innererror")  # type: ignore[index]
+                                )
+                                if isinstance(_inner, dict) and _inner.get(
+                                    "code"
+                                ) == "ResponsibleAIPolicyViolation":
+                                    azure_error_code = "content_policy_violation"
+                        else:
+                            azure_error_code = body_dict.get("code")
+                except Exception:
+                    azure_error_code = None
+
                 if "Internal server error" in error_str:
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
@@ -2072,7 +2113,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                     )
                 elif (
-                    ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+                    azure_error_code == "content_policy_violation"
+                    or ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
                 ):
                     exception_mapping_worked = True
                     from litellm.llms.azure.exception_mapping import (

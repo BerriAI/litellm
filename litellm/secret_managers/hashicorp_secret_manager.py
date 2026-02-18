@@ -444,7 +444,131 @@ class HashicorpSecretManager(BaseSecretManager):
         optional_params: Dict | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> Dict:
-        raise NotImplementedError("Hashicorp does not support secret rotation")
+        """
+        Rotates a secret by creating a new one and deleting the old one.
+        Uses _build_secret_target to handle optional_params for namespace, mount, path_prefix customization.
+
+        Args:
+            current_secret_name: Current name of the secret
+            new_secret_name: New name for the secret
+            new_secret_value: New value for the secret
+            optional_params: Additional parameters (namespace, mount, path_prefix, data)
+            timeout: Request timeout
+
+        Returns:
+            dict: Response containing status and details of the operation.
+                  On success, returns the response from async_write_secret.
+                  On error, returns {"status": "error", "message": "error message"}
+        """
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            # First verify the old secret exists using _build_secret_target
+            current_target = self._build_secret_target(current_secret_name, optional_params)
+            try:
+                response = await async_client.get(
+                    url=current_target["url"],
+                    headers=self._get_request_headers(),
+                )
+                response.raise_for_status()
+                # Secret exists, we can proceed
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    verbose_logger.exception(f"Current secret {current_secret_name} not found")
+                    return {"status": "error", "message": f"Current secret {current_secret_name} not found"}
+                verbose_logger.exception(
+                    f"Error checking current secret existence: {e.response.text if hasattr(e, 'response') else str(e)}"
+                )
+                return {
+                    "status": "error",
+                    "message": f"HTTP error occurred while checking current secret: {e.response.text if hasattr(e, 'response') else str(e)}",
+                }
+            except Exception as e:
+                verbose_logger.exception(f"Error checking current secret existence: {e}")
+                return {"status": "error", "message": f"Error checking current secret: {e}"}
+
+            # Create new secret with new name and value
+            # Use _build_secret_target to handle optional_params
+            create_response = await self.async_write_secret(
+                secret_name=new_secret_name,
+                secret_value=new_secret_value,
+                description=f"Rotated from {current_secret_name}",
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+
+            # Check if async_write_secret returned an error
+            if isinstance(create_response, dict) and create_response.get("status") == "error":
+                return create_response
+
+            # Verify new secret was created successfully using _build_secret_target
+            new_target = self._build_secret_target(new_secret_name, optional_params)
+            try:
+                response = await async_client.get(
+                    url=new_target["url"],
+                    headers=self._get_request_headers(),
+                )
+                response.raise_for_status()
+                json_resp = response.json()
+                # Use data_key from target to get the correct value
+                data_key = new_target["data_key"]
+                new_secret_value_from_vault = json_resp.get("data", {}).get("data", {}).get(data_key, None)
+                if new_secret_value_from_vault != new_secret_value:
+                    verbose_logger.exception(
+                        f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}"
+                    )
+                    return {
+                        "status": "error",
+                        "message": f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}",
+                    }
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    verbose_logger.exception(f"Failed to verify new secret {new_secret_name}")
+                    return {"status": "error", "message": f"Failed to verify new secret {new_secret_name}"}
+                verbose_logger.exception(
+                    f"Error verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}"
+                )
+                return {
+                    "status": "error",
+                    "message": f"HTTP error occurred while verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}",
+                }
+            except Exception as e:
+                verbose_logger.exception(f"Error verifying new secret: {e}")
+                return {"status": "error", "message": f"Error verifying new secret: {e}"}
+
+            # If everything is successful, delete the old secret
+            # Only delete if the names are different (same name means we're just updating the value)
+            if current_secret_name != new_secret_name:
+                delete_response = await self.async_delete_secret(
+                    secret_name=current_secret_name,
+                    recovery_window_in_days=7,  # Keep for recovery if needed
+                    optional_params=optional_params,
+                    timeout=timeout,
+                )
+                # Check if async_delete_secret returned an error
+                if isinstance(delete_response, dict) and delete_response.get("status") == "error":
+                    # Log the error but don't fail the rotation since new secret was created successfully
+                    verbose_logger.warning(
+                        f"Failed to delete old secret {current_secret_name} after rotation: {delete_response.get('message')}"
+                    )
+                else:
+                    # Clear cache for the old secret only if deletion was successful
+                    self.cache.delete_cache(current_secret_name)
+
+            # Clear cache for the new secret (or updated secret if names are the same)
+            self.cache.delete_cache(new_secret_name)
+
+            return create_response
+
+        except httpx.TimeoutException:
+            verbose_logger.exception("Timeout error occurred during secret rotation")
+            return {"status": "error", "message": "Timeout error occurred"}
+        except Exception as e:
+            verbose_logger.exception(f"Error rotating secret in Hashicorp Vault: {e}")
+            return {"status": "error", "message": str(e)}
 
     async def async_delete_secret(
         self,

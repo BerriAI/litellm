@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { testMCPToolsListRequest } from "../components/networking";
-import { AUTH_TYPE } from "@/components/mcp_tools/types";
+import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
 
 interface MCPServerConfig {
   server_id?: string;
@@ -52,7 +52,9 @@ export const useTestMCPConnection = ({
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
   // Check if we have the minimum required fields to fetch tools
-  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2;
+  const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2
+    && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
+  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
   const canFetchTools = !!(
     formValues.url &&
     formValues.transport &&

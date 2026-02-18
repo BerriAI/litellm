@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EntitySpendData, ExportScope } from "./types";
 import {
   generateDailyData,
+  generateDailyWithKeysData,
   generateDailyWithModelsData,
   generateExportData,
   generateMetadata,
@@ -462,6 +463,514 @@ describe("EntityUsageExport utils", () => {
     });
   });
 
+  describe("generateDailyWithKeysData", () => {
+    const mockSpendDataWithKeys: EntitySpendData = {
+      results: [
+        {
+          date: "2025-01-01",
+          breakdown: {
+            entities: {
+              entity1: {
+                metrics: {
+                  spend: 10.5,
+                  api_requests: 100,
+                  successful_requests: 95,
+                  failed_requests: 5,
+                  total_tokens: 1000,
+                  prompt_tokens: 600,
+                  completion_tokens: 400,
+                },
+                api_key_breakdown: {
+                  key1: {
+                    metrics: {
+                      spend: 5.0,
+                      api_requests: 50,
+                      successful_requests: 48,
+                      failed_requests: 2,
+                      total_tokens: 500,
+                      prompt_tokens: 300,
+                      completion_tokens: 200,
+                    },
+                    metadata: {
+                      team_id: "team-1",
+                      key_alias: "alias-1",
+                    },
+                  },
+                  key2: {
+                    metrics: {
+                      spend: 5.5,
+                      api_requests: 50,
+                      successful_requests: 47,
+                      failed_requests: 3,
+                      total_tokens: 500,
+                      prompt_tokens: 300,
+                      completion_tokens: 200,
+                    },
+                    metadata: {
+                      team_id: "team-1",
+                      key_alias: "alias-2",
+                    },
+                  },
+                },
+              },
+              entity2: {
+                metrics: {
+                  spend: 20.3,
+                  api_requests: 200,
+                  successful_requests: 190,
+                  failed_requests: 10,
+                  total_tokens: 2000,
+                  prompt_tokens: 1200,
+                  completion_tokens: 800,
+                },
+                api_key_breakdown: {
+                  key3: {
+                    metrics: {
+                      spend: 20.3,
+                      api_requests: 200,
+                      successful_requests: 190,
+                      failed_requests: 10,
+                      total_tokens: 2000,
+                      prompt_tokens: 1200,
+                      completion_tokens: 800,
+                    },
+                    metadata: {
+                      team_id: "team-2",
+                      key_alias: "alias-3",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          date: "2025-01-02",
+          breakdown: {
+            entities: {
+              entity1: {
+                metrics: {
+                  spend: 15.2,
+                  api_requests: 150,
+                  successful_requests: 145,
+                  failed_requests: 5,
+                  total_tokens: 1500,
+                  prompt_tokens: 900,
+                  completion_tokens: 600,
+                },
+                api_key_breakdown: {
+                  key1: {
+                    metrics: {
+                      spend: 15.2,
+                      api_requests: 150,
+                      successful_requests: 145,
+                      failed_requests: 5,
+                      total_tokens: 1500,
+                      prompt_tokens: 900,
+                      completion_tokens: 600,
+                    },
+                    metadata: {
+                      team_id: "team-1",
+                      key_alias: "alias-1",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+      metadata: {
+        total_spend: 46.0,
+        total_api_requests: 450,
+        total_successful_requests: 430,
+        total_failed_requests: 20,
+        total_tokens: 4500,
+      },
+    };
+
+    it("should generate daily breakdown with key data and correct structure", () => {
+      const result = generateDailyWithKeysData(mockSpendDataWithKeys, "Team", mockTeamAliasMap);
+
+      expect(result.length).toBeGreaterThan(0);
+      expect(result[0]).toHaveProperty("Date");
+      expect(result[0]).toHaveProperty("Team");
+      expect(result[0]).toHaveProperty("Team ID");
+      expect(result[0]).toHaveProperty("Key Alias");
+      expect(result[0]).toHaveProperty("Key ID");
+      expect(result[0]).toHaveProperty("Spend ($)");
+      expect(result[0]).toHaveProperty("Requests");
+      expect(result[0]).toHaveProperty("Successful Requests");
+      expect(result[0]).toHaveProperty("Failed Requests");
+      expect(result[0]).toHaveProperty("Total Tokens");
+      expect(result[0]).toHaveProperty("Prompt Tokens");
+      expect(result[0]).toHaveProperty("Completion Tokens");
+    });
+
+    it("should sort data by date ascending", () => {
+      const result = generateDailyWithKeysData(mockSpendDataWithKeys, "Team");
+
+      const dates = result.map((r) => new Date(r.Date).getTime());
+      for (let i = 0; i < dates.length - 1; i++) {
+        expect(dates[i]).toBeLessThanOrEqual(dates[i + 1]);
+      }
+    });
+
+    it("should aggregate metrics for duplicate date-team-key combinations", () => {
+      const spendDataWithDuplicates: EntitySpendData = {
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 5.0,
+                        api_requests: 50,
+                        successful_requests: 48,
+                        failed_requests: 2,
+                        total_tokens: 500,
+                        prompt_tokens: 300,
+                        completion_tokens: 200,
+                      },
+                      metadata: {
+                        team_id: "team-1",
+                        key_alias: "alias-1",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 5.0,
+                        api_requests: 50,
+                        successful_requests: 47,
+                        failed_requests: 3,
+                        total_tokens: 500,
+                        prompt_tokens: 300,
+                        completion_tokens: 200,
+                      },
+                      metadata: {
+                        team_id: "team-1",
+                        key_alias: "alias-1",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: {
+          total_spend: 21.0,
+          total_api_requests: 200,
+          total_successful_requests: 190,
+          total_failed_requests: 10,
+          total_tokens: 2000,
+        },
+      };
+
+      const result = generateDailyWithKeysData(spendDataWithDuplicates, "Team");
+      const key1Entries = result.filter((r) => r["Key ID"] === "key1");
+
+      expect(key1Entries).toHaveLength(1);
+      expect(key1Entries[0].Requests).toBe(100);
+      expect(key1Entries[0]["Successful Requests"]).toBe(95);
+      expect(key1Entries[0]["Failed Requests"]).toBe(5);
+      expect(key1Entries[0]["Total Tokens"]).toBe(1000);
+    });
+
+    it("should use team alias when available", () => {
+      const result = generateDailyWithKeysData(mockSpendDataWithKeys, "Team", mockTeamAliasMap);
+      const team1Entry = result.find((r) => r["Team ID"] === "team-1");
+
+      expect(team1Entry?.["Team"]).toBe("Team One");
+    });
+
+    it("should use dash when team alias is not available", () => {
+      const result = generateDailyWithKeysData(mockSpendDataWithKeys, "Team");
+      const entryWithoutTeamAlias = result.find((r) => r["Team ID"] === "team-1" && !mockTeamAliasMap[r["Team ID"]]);
+
+      if (entryWithoutTeamAlias) {
+        expect(entryWithoutTeamAlias["Team"]).toBe("-");
+      }
+    });
+
+    it("should use key alias when available", () => {
+      const result = generateDailyWithKeysData(mockSpendDataWithKeys, "Team");
+      const key1Entry = result.find((r) => r["Key ID"] === "key1");
+
+      expect(key1Entry?.["Key Alias"]).toBe("alias-1");
+    });
+
+    it("should use dash when key alias is not available", () => {
+      const spendDataWithoutKeyAlias: EntitySpendData = {
+        ...mockSpendDataWithKeys,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.5,
+                        api_requests: 100,
+                        successful_requests: 95,
+                        failed_requests: 5,
+                        total_tokens: 1000,
+                        prompt_tokens: 600,
+                        completion_tokens: 400,
+                      },
+                      metadata: {
+                        team_id: "team-1",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendDataWithKeys.metadata,
+      };
+
+      const result = generateDailyWithKeysData(spendDataWithoutKeyAlias, "Team");
+      const key1Entry = result.find((r) => r["Key ID"] === "key1");
+
+      expect(key1Entry?.["Key Alias"]).toBe("-");
+    });
+
+    it("should use entity id when team id is not available in metadata", () => {
+      const spendDataWithoutTeamId: EntitySpendData = {
+        ...mockSpendDataWithKeys,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.5,
+                        api_requests: 100,
+                        successful_requests: 95,
+                        failed_requests: 5,
+                        total_tokens: 1000,
+                        prompt_tokens: 600,
+                        completion_tokens: 400,
+                      },
+                      metadata: {},
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendDataWithKeys.metadata,
+      };
+
+      const result = generateDailyWithKeysData(spendDataWithoutTeamId, "Team");
+      const entry = result.find((r) => r["Key ID"] === "key1");
+
+      expect(entry?.["Team ID"]).toBe("entity1");
+    });
+
+    it("should use dash when team id is not available", () => {
+      const spendDataWithoutTeamId: EntitySpendData = {
+        ...mockSpendDataWithKeys,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.5,
+                        api_requests: 100,
+                        successful_requests: 95,
+                        failed_requests: 5,
+                        total_tokens: 1000,
+                        prompt_tokens: 600,
+                        completion_tokens: 400,
+                      },
+                      metadata: {
+                        team_id: null,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendDataWithKeys.metadata,
+      };
+
+      const result = generateDailyWithKeysData(spendDataWithoutTeamId, "Team");
+      const entry = result.find((r) => r["Key ID"] === "key1");
+
+      expect(entry?.["Team ID"]).toBe("entity1");
+    });
+
+    it("should format spend values correctly", () => {
+      const result = generateDailyWithKeysData(mockSpendDataWithKeys, "Team");
+
+      expect(result[0]["Spend ($)"]).toBeDefined();
+    });
+
+    it("should handle missing optional token fields", () => {
+      const spendDataWithMissingTokens: EntitySpendData = {
+        ...mockSpendDataWithKeys,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.5,
+                        api_requests: 100,
+                        successful_requests: 95,
+                        failed_requests: 5,
+                        total_tokens: 1000,
+                      },
+                      metadata: {
+                        team_id: "team-1",
+                        key_alias: "alias-1",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendDataWithKeys.metadata,
+      };
+
+      const result = generateDailyWithKeysData(spendDataWithMissingTokens, "Team");
+      const key1Entry = result.find((r) => r["Key ID"] === "key1");
+
+      expect(key1Entry?.["Prompt Tokens"]).toBe(0);
+      expect(key1Entry?.["Completion Tokens"]).toBe(0);
+    });
+
+    it("should handle empty api_key_breakdown", () => {
+      const spendDataWithEmptyBreakdown: EntitySpendData = {
+        ...mockSpendDataWithKeys,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {},
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendDataWithKeys.metadata,
+      };
+
+      const result = generateDailyWithKeysData(spendDataWithEmptyBreakdown, "Team");
+
+      expect(result).toHaveLength(0);
+    });
+
+    it("should handle multiple keys for same team on same date", () => {
+      const result = generateDailyWithKeysData(mockSpendDataWithKeys, "Team");
+      const team1Entries = result.filter((r) => r["Team ID"] === "team-1" && r.Date === "2025-01-01");
+
+      expect(team1Entries.length).toBeGreaterThanOrEqual(2);
+      const keyIds = team1Entries.map((r) => r["Key ID"]);
+      expect(keyIds).toContain("key1");
+      expect(keyIds).toContain("key2");
+    });
+  });
+
   describe("generateDailyWithModelsData", () => {
     const mockSpendDataWithModels: EntitySpendData = {
       results: [
@@ -695,6 +1204,57 @@ describe("EntityUsageExport utils", () => {
 
       expect(result.length).toBeGreaterThan(0);
       expect(result[0]).toHaveProperty("Date");
+      expect(result[0]).not.toHaveProperty("Model");
+    });
+
+    it("should return daily with keys data when scope is daily_with_keys", () => {
+      const mockDataWithKeys: EntitySpendData = {
+        ...mockSpendData,
+        results: [
+          {
+            date: "2025-01-01",
+            breakdown: {
+              entities: {
+                entity1: {
+                  metrics: {
+                    spend: 10.5,
+                    api_requests: 100,
+                    successful_requests: 95,
+                    failed_requests: 5,
+                    total_tokens: 1000,
+                    prompt_tokens: 600,
+                    completion_tokens: 400,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 10.5,
+                        api_requests: 100,
+                        successful_requests: 95,
+                        failed_requests: 5,
+                        total_tokens: 1000,
+                        prompt_tokens: 600,
+                        completion_tokens: 400,
+                      },
+                      metadata: {
+                        team_id: "team-1",
+                        key_alias: "alias-1",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: mockSpendData.metadata,
+      };
+
+      const result = generateExportData(mockDataWithKeys, "daily_with_keys", "Team", mockTeamAliasMap);
+
+      expect(result.length).toBeGreaterThan(0);
+      expect(result[0]).toHaveProperty("Key Alias");
+      expect(result[0]).toHaveProperty("Key ID");
       expect(result[0]).not.toHaveProperty("Model");
     });
 

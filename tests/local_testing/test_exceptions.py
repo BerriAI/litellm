@@ -1347,6 +1347,49 @@ def test_context_window_exceeded_error_from_litellm_proxy():
         extract_and_raise_litellm_exception(**args)
 
 
+def test_bad_request_error_with_response_without_request():
+    """
+    Test that BadRequestError handles Response objects without a request attribute.
+    
+    This simulates a real scenario where a Response is created without a request
+    (e.g., in tests or when manually creating error responses), and we need to
+    ensure it doesn't raise RuntimeError when the exception is created.
+    """
+    from httpx import Response
+    from litellm.litellm_core_utils.exception_mapping_utils import (
+        extract_and_raise_litellm_exception,
+    )
+
+    # Create a Response without a request (simulates the scenario that was failing)
+    response_without_request = Response(status_code=400, text="Bad Request")
+    
+    
+    # Test that extract_and_raise_litellm_exception can handle this
+    args = {
+        "response": response_without_request,
+        "error_str": "Error code: 400 - {'error': {'message': 'litellm.BadRequestError: Invalid request parameters', 'type': None, 'param': None, 'code': '400'}}",
+        "model": "gpt-3.5-turbo",
+        "custom_llm_provider": "openai",
+    }
+    
+    # This should raise BadRequestError without RuntimeError
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        extract_and_raise_litellm_exception(**args)
+    
+    # Verify the exception was created successfully
+    error = exc_info.value
+    assert error is not None
+    assert error.model == "gpt-3.5-turbo"
+    assert error.llm_provider == "openai"
+    
+    # Verify the exception has a response (should be minimal error response)
+    assert error.response is not None
+    # The response should have a request (minimal error response has one)
+    assert getattr(error.response, "_request", None) is not None
+    # Should be able to access request property without RuntimeError
+    assert error.response.request is not None
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("stream_mode", [True, False])
 @pytest.mark.parametrize("model", ["gpt-4.1-nano"])  # "gpt-4o-mini",
