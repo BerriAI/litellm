@@ -37,9 +37,21 @@ async def check_eu_ai_act_compliance(
     Check EU AI Act compliance for a spend log entry.
 
     Checks:
-    - Art. 9: Guardrails applied (any guardrail)
     - Art. 5: Content screened before LLM (pre-call guardrails)
+    - Art. 5.1(a): Manipulation & subliminal techniques screened
+    - Art. 5.1(b): Vulnerability exploitation screened
+    - Art. 5.1(c): Social scoring systems screened
+    - Art. 5.1(d): Criminal profiling & predictive policing screened
+    - Art. 5.1(f): Emotion recognition in workplace/education screened
+    - Art. 5.1(h): Biometric categorization screened
+    - Art. 9: Guardrails applied (any guardrail)
+    - Art. 10: Input data governance validated
     - Art. 12: Audit record complete (user_id, model, timestamp, guardrail_results)
+    - Art. 13: AI system transparency
+    - Art. 14: Human oversight mechanisms active
+    - Art. 15: Accuracy & robustness safeguards
+    - Art. 26: Deployer obligations for high-risk AI
+    - Art. 50: AI-generated content transparency
     """
     checker = ComplianceChecker(data)
     checks = checker.check_eu_ai_act()
