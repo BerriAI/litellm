@@ -292,6 +292,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
+    _safe_get_request_headers,
     check_file_size_under_limit,
     get_form_data,
 )
@@ -10167,7 +10168,7 @@ async def async_queue_request(
         data["proxy_server_request"] = {
             "url": str(request.url),
             "method": request.method,
-            "headers": dict(request.headers),
+            "headers": _safe_get_request_headers(request),
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
@@ -10188,7 +10189,7 @@ async def async_queue_request(
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
+        _headers = _safe_get_request_headers(request).copy()
         _headers.pop(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
