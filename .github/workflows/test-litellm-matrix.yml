@@ -18,10 +18,15 @@ jobs:
       matrix:
         test-group:
           # tests/test_litellm split by subdirectory (~560 files total)
-          - name: "llms"
-            path: "tests/test_litellm/llms"
-            workers: 2  # Reduced from 4 to 2 to avoid race conditions
-            reruns: 2   # Retry flaky tests twice
+          # Vertex AI tests separated for better isolation (prevent auth/env pollution)
+          - name: "llms-vertex"
+            path: "tests/test_litellm/llms/vertex_ai"
+            workers: 1
+            reruns: 2
+          - name: "llms-other"
+            path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
+            workers: 2
+            reruns: 2
           # tests/test_litellm/proxy split by subdirectory (~180 files total)
           - name: "proxy-guardrails"
             path: "tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers"
@@ -97,6 +102,10 @@ jobs:
         run: |
           cd enterprise && poetry run pip install -e . && cd ..
 
+      - name: Generate Prisma client
+        run: |
+          poetry run prisma generate --schema litellm/proxy/schema.prisma
+
       - name: Run tests - ${{ matrix.test-group.name }}
         run: |
           poetry run pytest ${{ matrix.test-group.path }} \
@@ -105,4 +114,5 @@ jobs:
             -n ${{ matrix.test-group.workers }} \
             --reruns ${{ matrix.test-group.reruns }} \
             --reruns-delay 1 \
+            --dist=loadscope \
             --durations=20

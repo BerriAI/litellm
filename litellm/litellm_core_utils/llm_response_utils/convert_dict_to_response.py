@@ -546,7 +546,11 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
-                    provider_specific_fields = {}
+                    # Preserve provider_specific_fields if already present
+                    # in the response (e.g. from proxy passthrough)
+                    provider_specific_fields = dict(
+                        choice["message"].get("provider_specific_fields", None) or {}
+                    )
                     message_keys = Message.model_fields.keys()
                     for field in choice["message"].keys():
                         if field not in message_keys:
