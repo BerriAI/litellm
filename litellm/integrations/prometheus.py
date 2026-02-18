@@ -22,6 +22,10 @@ from typing import (
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.proxy._types import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_TeamTable,
@@ -1960,7 +1964,7 @@ class PrometheusLogger(CustomLogger):
 
             api_base = standard_logging_payload["api_base"]
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
-            _metadata = _litellm_params.get("metadata", {})
+            _metadata = get_litellm_metadata_from_kwargs(request_kwargs)
             litellm_model_name = request_kwargs.get("model", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
             _model_info = _metadata.get("model_info") or {}
@@ -2176,7 +2180,8 @@ class PrometheusLogger(CustomLogger):
             original_model_group,
             kwargs,
         )
-        _metadata = kwargs.get("metadata", {})
+        _metadata_key = get_metadata_variable_name_from_kwargs(kwargs)
+        _metadata = kwargs.get(_metadata_key) or {}
         standard_metadata: StandardLoggingMetadata = (
             StandardLoggingPayloadSetup.get_standard_logging_metadata(
                 metadata=_metadata
@@ -2221,7 +2226,8 @@ class PrometheusLogger(CustomLogger):
             kwargs,
         )
         _new_model = kwargs.get("model")
-        _metadata = kwargs.get("metadata", {})
+        _metadata_key = get_metadata_variable_name_from_kwargs(kwargs)
+        _metadata = kwargs.get(_metadata_key) or {}
         _tags = cast(List[str], kwargs.get("tags") or [])
         standard_metadata: StandardLoggingMetadata = (
             StandardLoggingPayloadSetup.get_standard_logging_metadata(
