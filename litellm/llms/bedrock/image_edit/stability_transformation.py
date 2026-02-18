@@ -283,17 +283,6 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         Bedrock returns: {"images": ["base64..."], "finish_reasons": [null], "seeds": [123]}
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
-        try:
-            response_data = raw_response.json()
-            with open("response_data.json", "w") as f:
-                json.dump(response_data, f)
-        except Exception as e:
-            raise self.get_error_class(
-                error_message=f"Error parsing Bedrock Stability response: {e}",
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-            )
-
         # Check for errors in response
         if "errors" in response_data:
             raise self.get_error_class(
