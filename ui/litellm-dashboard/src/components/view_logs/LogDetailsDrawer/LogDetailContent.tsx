@@ -165,6 +165,20 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         />
       )}
 
+      {/* Compliance Panel – always visible */}
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-4">
+        <CompliancePanel
+          accessToken={accessToken ?? null}
+          logEntry={{
+            request_id: logEntry.request_id,
+            user: logEntry.user,
+            model: logEntry.model,
+            startTime: logEntry.startTime,
+            metadata: logEntry.metadata,
+          }}
+        />
+      </div>
+
       {/* Guardrail Data */}
       {hasGuardrailData && (
         <div id="guardrail-section">
