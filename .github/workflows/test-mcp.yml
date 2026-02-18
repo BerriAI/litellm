@@ -41,7 +41,7 @@ jobs:
     - name: Setup litellm-enterprise as local package
       run: |
         cd enterprise
-        python -m pip install -e .
+        python -m pip install --force-reinstall --no-deps -e .
         cd ..
 
     - name: Run MCP tests

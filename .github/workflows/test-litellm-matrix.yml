@@ -100,7 +100,7 @@ jobs:
 
       - name: Setup litellm-enterprise
         run: |
-          cd enterprise && poetry run pip install -e . && cd ..
+          cd enterprise && poetry run pip install --force-reinstall --no-deps -e . && cd ..
 
       - name: Generate Prisma client
         run: |
