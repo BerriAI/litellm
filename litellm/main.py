@@ -1295,7 +1295,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
-        setattr(model_response, "usage", litellm.Usage())
         if (
             kwargs.get("azure", False) is True
         ):  # don't remove flag check, to remain backwards compatible for repos like Codium
