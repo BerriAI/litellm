@@ -82,8 +82,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         custom_llm_provider = kwargs.get("custom_llm_provider", "") or kwargs.get("litellm_params", {}).get("custom_llm_provider", "")
         if not custom_llm_provider:
             try:
-                from litellm import get_llm_provider
-                _, custom_llm_provider, _, _ = get_llm_provider(model=kwargs.get("model", ""))
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=kwargs.get("model", ""))
             except Exception:
                 custom_llm_provider = ""
         if custom_llm_provider not in self.enabled_providers:
