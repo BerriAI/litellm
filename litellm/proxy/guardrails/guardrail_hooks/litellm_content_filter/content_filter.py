@@ -264,6 +264,52 @@ class ContentFilterGuardrail(CustomGuardrail):
             f"{len(self.category_keywords)} keywords"
         )
 
+    @staticmethod
+    def _resolve_category_file_path(file_path: str) -> str:
+        """
+        Resolve a category file path that may be relative.
+
+        Paths in policy templates (e.g. category_file) are often stored as
+        relative paths like "litellm/proxy/.../policy_templates/file.yaml".
+        These only work when the CWD is the project root. In production
+        (Docker, installed packages, etc.) the CWD is different, so the
+        file isn't found.
+
+        Resolution order:
+        1. Return as-is if absolute or already exists.
+        2. Try joining the full path relative to this module's directory.
+        3. Progressively strip leading path components and try each suffix
+           relative to this module's directory (handles paths like
+           "litellm/proxy/.../policy_templates/file.yaml" by finding the
+           "policy_templates/file.yaml" suffix that exists).
+
+        Args:
+            file_path: The file path to resolve (absolute or relative).
+
+        Returns:
+            The resolved absolute-ish path, or the original path if
+            resolution fails (caller should check existence).
+        """
+        if os.path.isabs(file_path) or os.path.exists(file_path):
+            return file_path
+
+        module_dir = os.path.dirname(__file__)
+
+        # Try the full relative path joined to the module directory
+        candidate = os.path.join(module_dir, file_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # Progressively strip leading components to find a matching suffix
+        parts = file_path.split("/")
+        for i in range(1, len(parts)):
+            suffix = os.path.join(*parts[i:])
+            candidate = os.path.join(module_dir, suffix)
+            if os.path.exists(candidate):
+                return candidate
+
+        return file_path
+
     def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
         """
         Load content categories from configuration.
@@ -302,7 +348,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             # Load category file (custom or default)
             if custom_file:
-                category_file_path = custom_file
+                category_file_path = self._resolve_category_file_path(custom_file)
             else:
                 # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
                 yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
