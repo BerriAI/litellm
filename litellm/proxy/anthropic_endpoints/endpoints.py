@@ -111,7 +111,7 @@ async def anthropic_response(  # noqa: PLR0915
             return await create_response(
                 generator=selected_data_generator,
                 media_type="text/event-stream",
-                headers={},
+                headers=dict(fastapi_response.headers),
             )
 
         return _anthropic_response

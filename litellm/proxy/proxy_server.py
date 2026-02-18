@@ -6229,6 +6229,7 @@ async def chat_completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 status_code=200,  # Return 200 for passthrough mode
+                headers=dict(fastapi_response.headers),
             )
         _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         _chat_response.usage = _usage  # type: ignore
@@ -6400,6 +6401,7 @@ async def completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 status_code=200,  # Return 200 for passthrough mode
+                headers=dict(fastapi_response.headers),
             )
         else:
             _response = litellm.TextCompletionResponse()
