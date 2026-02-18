@@ -58,7 +58,8 @@ class TestApplyPoliciesEarlyReturn:
             input_type="request",
             proxy_logging_obj=proxy_logging_obj,
         )
-        assert result == sample_inputs
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == []
 
     @pytest.mark.asyncio
     async def test_returns_inputs_unchanged_when_policy_names_empty(
@@ -71,7 +72,23 @@ class TestApplyPoliciesEarlyReturn:
             input_type="request",
             proxy_logging_obj=proxy_logging_obj,
         )
-        assert result == sample_inputs
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_returns_inputs_unchanged_when_both_policy_and_guardrail_names_empty(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
+        result = await apply_policies(
+            policy_names=[],
+            inputs=sample_inputs,
+            request_data=request_data,
+            input_type="request",
+            proxy_logging_obj=proxy_logging_obj,
+            guardrail_names=[],
+        )
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == []
 
     @pytest.mark.asyncio
     async def test_returns_inputs_unchanged_when_registry_not_initialized(
@@ -92,7 +109,8 @@ class TestApplyPoliciesEarlyReturn:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        assert result == sample_inputs
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == []
         mock_registry.is_initialized.assert_called_once()
 
     @pytest.mark.asyncio
@@ -120,7 +138,8 @@ class TestApplyPoliciesEarlyReturn:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        assert result == sample_inputs
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == []
 
 
 class TestApplyPoliciesWithGuardrails:
@@ -165,7 +184,8 @@ class TestApplyPoliciesWithGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        assert result == modified_inputs
+        assert result["inputs"] == modified_inputs
+        assert result["guardrail_errors"] == []
 
     @pytest.mark.asyncio
     async def test_applies_multiple_guardrails_in_order(
@@ -217,7 +237,8 @@ class TestApplyPoliciesWithGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        assert result == second_output
+        assert result["inputs"] == second_output
+        assert result["guardrail_errors"] == []
 
     @pytest.mark.asyncio
     async def test_skips_missing_guardrail_callback(
@@ -254,7 +275,58 @@ class TestApplyPoliciesWithGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        assert result == sample_inputs
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_records_guardrail_error_on_failure(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
+        """When a guardrail's apply_guardrail raises, error is recorded and inputs still returned."""
+        from litellm.types.proxy.policy_engine import ResolvedPolicy
+
+        mock_registry = MagicMock()
+        mock_registry.is_initialized.return_value = True
+        mock_registry.get_all_policies.return_value = {}
+
+        callback = _FakeGuardrailWithApply(guardrail_name="failing_guardrail")
+
+        async def _raise(inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("Content blocked: PII detected")
+
+        callback.apply_guardrail = _raise
+
+        mock_guardrail_registry = MagicMock()
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            return_value=mock_registry,
+        ), patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            return_value=ResolvedPolicy(
+                policy_name="p",
+                guardrails=["failing_guardrail"],
+                inheritance_chain=["p"],
+            ),
+        ), patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            return_value=mock_guardrail_registry,
+        ):
+            result = await apply_policies(
+                policy_names=["my-policy"],
+                inputs=sample_inputs,
+                request_data=request_data,
+                input_type="request",
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == [
+            {"guardrail_name": "failing_guardrail", "message": "Content blocked: PII detected"}
+        ]
 
     @pytest.mark.asyncio
     async def test_skips_callback_without_apply_guardrail(
@@ -301,7 +373,73 @@ class TestApplyPoliciesWithGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        assert result == sample_inputs
+        assert result["inputs"] == sample_inputs
+        assert result["guardrail_errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_collects_all_guardrail_failures_when_multiple_fail(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
+        """When multiple guardrails raise, all failures are collected and inputs still returned."""
+        from litellm.types.proxy.policy_engine import ResolvedPolicy
+
+        mock_registry = MagicMock()
+        mock_registry.is_initialized.return_value = True
+        mock_registry.get_all_policies.return_value = {}
+
+        callback_a = _FakeGuardrailWithApply(guardrail_name="guardrail_a")
+
+        async def _raise_a(inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("PII detected")
+
+        callback_a.apply_guardrail = _raise_a
+
+        callback_b = _FakeGuardrailWithApply(guardrail_name="guardrail_b")
+
+        async def _raise_b(inputs, request_data, input_type, logging_obj=None):
+            raise RuntimeError("Toxicity detected")
+
+        callback_b.apply_guardrail = _raise_b
+
+        def get_callback(guardrail_name):
+            if guardrail_name == "guardrail_a":
+                return callback_a
+            if guardrail_name == "guardrail_b":
+                return callback_b
+            return None
+
+        mock_guardrail_registry = MagicMock()
+        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = (
+            get_callback
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            return_value=mock_registry,
+        ), patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            return_value=ResolvedPolicy(
+                policy_name="p",
+                guardrails=["guardrail_a", "guardrail_b"],
+                inheritance_chain=["p"],
+            ),
+        ), patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            return_value=mock_guardrail_registry,
+        ):
+            result = await apply_policies(
+                policy_names=["my-policy"],
+                inputs=sample_inputs,
+                request_data=request_data,
+                input_type="request",
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        assert result["inputs"] == sample_inputs
+        assert len(result["guardrail_errors"]) == 2
+        by_name = {e["guardrail_name"]: e["message"] for e in result["guardrail_errors"]}
+        assert by_name["guardrail_a"] == "PII detected"
+        assert by_name["guardrail_b"] == "Toxicity detected"
 
 
 class TestApplyPoliciesMultiplePolicies:
@@ -355,4 +493,97 @@ class TestApplyPoliciesMultiplePolicies:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        assert result == final_inputs
+        assert result["inputs"] == final_inputs
+        assert result["guardrail_errors"] == []
+
+
+class TestApplyPoliciesDirectGuardrailNames:
+    """Test apply_policies with direct guardrail_names (no policy registry)."""
+
+    @pytest.mark.asyncio
+    async def test_applies_guardrails_from_direct_guardrail_names_only(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
+        """When only guardrail_names is passed, policy registry is not used."""
+        modified_inputs: GenericGuardrailAPIInputs = {"texts": ["from direct guardrail"]}
+        callback = _FakeGuardrailWithApply(guardrail_name="my_guardrail")
+        callback.set_return(modified_inputs)
+
+        mock_guardrail_registry = MagicMock()
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+
+        with patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            return_value=mock_guardrail_registry,
+        ):
+            result = await apply_policies(
+                policy_names=None,
+                inputs=sample_inputs,
+                request_data=request_data,
+                input_type="request",
+                proxy_logging_obj=proxy_logging_obj,
+                guardrail_names=["my_guardrail"],
+            )
+
+        assert result["inputs"] == modified_inputs
+        assert result["guardrail_errors"] == []
+        mock_guardrail_registry.get_initialized_guardrail_callback.assert_called_once_with(
+            guardrail_name="my_guardrail"
+        )
+
+    @pytest.mark.asyncio
+    async def test_applies_guardrails_from_both_policy_names_and_guardrail_names(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
+        """Guardrails from policy_names and guardrail_names are merged and applied."""
+        from litellm.types.proxy.policy_engine import ResolvedPolicy
+
+        mock_registry = MagicMock()
+        mock_registry.is_initialized.return_value = True
+        mock_registry.get_all_policies.return_value = {}
+
+        first_output: GenericGuardrailAPIInputs = {"texts": ["after first"]}
+        second_output: GenericGuardrailAPIInputs = {"texts": ["after second"]}
+        callback_from_policy = _FakeGuardrailWithApply(guardrail_name="from_policy")
+        callback_from_policy.set_return(first_output)
+        callback_direct = _FakeGuardrailWithApply(guardrail_name="direct_guardrail")
+        callback_direct.set_return(second_output)
+
+        def get_callback(guardrail_name):
+            if guardrail_name == "from_policy":
+                return callback_from_policy
+            if guardrail_name == "direct_guardrail":
+                return callback_direct
+            return None
+
+        mock_guardrail_registry = MagicMock()
+        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = (
+            get_callback
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            return_value=mock_registry,
+        ), patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            return_value=ResolvedPolicy(
+                policy_name="p",
+                guardrails=["from_policy"],
+                inheritance_chain=["p"],
+            ),
+        ), patch(
+            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            return_value=mock_guardrail_registry,
+        ):
+            result = await apply_policies(
+                policy_names=["my-policy"],
+                inputs=sample_inputs,
+                request_data=request_data,
+                input_type="request",
+                proxy_logging_obj=proxy_logging_obj,
+                guardrail_names=["direct_guardrail"],
+            )
+
+        # Sorted order: direct_guardrail then from_policy; final output is from_policy
+        assert result["inputs"] == first_output
+        assert result["guardrail_errors"] == []
