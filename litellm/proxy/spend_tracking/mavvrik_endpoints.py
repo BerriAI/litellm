@@ -349,6 +349,9 @@ async def dry_run_mavvrik_export(
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
+
+
+
 # ------------------------------------------------------------------
 # POST /mavvrik/export
 # ------------------------------------------------------------------
@@ -371,6 +374,8 @@ async def export_mavvrik_data(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
+    from datetime import datetime, timedelta, timezone as _tz
+
     try:
         settings = await _get_mavvrik_settings()
         if not settings:
@@ -380,6 +385,11 @@ async def export_mavvrik_data(
                     "error": "Mavvrik not configured. Call POST /mavvrik/init first."
                 },
             )
+
+        # Default to yesterday when no date provided
+        date_str = request.date_str or (
+            datetime.now(_tz.utc).date() - timedelta(days=1)
+        ).isoformat()
 
         from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
 
@@ -391,12 +401,11 @@ async def export_mavvrik_data(
             timezone=settings.get("timezone", "UTC"),
         )
         await logger.export_usage_data(
+            date_str=date_str,
             limit=request.limit,
-            start_time_utc=request.start_time_utc,
-            end_time_utc=request.end_time_utc,
         )
         return MavvrikExportResponse(
-            message="Mavvrik export completed successfully",
+            message=f"Mavvrik export completed successfully for {date_str}",
             status="success",
         )
     except HTTPException:

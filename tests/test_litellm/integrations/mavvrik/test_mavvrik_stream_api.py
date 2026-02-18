@@ -55,7 +55,7 @@ class TestMavvrikStreamerGetSignedUrl:
 
         with patch("httpx.Client") as MockClient:
             MockClient.return_value.__enter__.return_value.get.return_value = mock_resp
-            url = streamer._get_signed_url("2025-01-15T14:00:00Z")
+            url = streamer._get_signed_url("2025-01-15")
 
         assert url == "https://storage.googleapis.com/signed?token=abc"
 
@@ -68,7 +68,7 @@ class TestMavvrikStreamerGetSignedUrl:
         with patch("httpx.Client") as MockClient:
             MockClient.return_value.__enter__.return_value.get.return_value = mock_resp
             with pytest.raises(Exception, match="missing 'url' field"):
-                streamer._get_signed_url("2025-01-15T14:00:00Z")
+                streamer._get_signed_url("2025-01-15")
 
     def test_raises_immediately_on_4xx(self):
         streamer = self._make_streamer()
@@ -79,7 +79,7 @@ class TestMavvrikStreamerGetSignedUrl:
         with patch("httpx.Client") as MockClient, patch("time.sleep") as mock_sleep:
             MockClient.return_value.__enter__.return_value.get.return_value = mock_resp
             with pytest.raises(Exception, match="401"):
-                streamer._get_signed_url("2025-01-15T14:00:00Z")
+                streamer._get_signed_url("2025-01-15")
         # No sleep on 4xx (no retries)
         mock_sleep.assert_not_called()
 
@@ -92,7 +92,7 @@ class TestMavvrikStreamerGetSignedUrl:
         with patch("httpx.Client") as MockClient, patch("time.sleep"):
             MockClient.return_value.__enter__.return_value.get.return_value = mock_resp
             with pytest.raises(Exception, match="503|failed after"):
-                streamer._get_signed_url("2025-01-15T14:00:00Z")
+                streamer._get_signed_url("2025-01-15")
 
     def test_builds_correct_url_with_tenant_and_instance(self):
         streamer = MavvrikStreamer(
@@ -113,7 +113,7 @@ class TestMavvrikStreamerGetSignedUrl:
 
         with patch("httpx.Client") as MockClient:
             MockClient.return_value.__enter__.return_value.get.side_effect = fake_get
-            streamer._get_signed_url("2025-01-15T14:00:00Z")
+            streamer._get_signed_url("2025-01-15")
 
         assert "my-org" in captured_url[0]
         assert "prod-001" in captured_url[0]
@@ -132,7 +132,7 @@ class TestMavvrikStreamerGetSignedUrl:
 
         with patch("httpx.Client") as MockClient:
             MockClient.return_value.__enter__.return_value.get.side_effect = fake_get
-            streamer._get_signed_url("2025-01-15T14:00:00Z")
+            streamer._get_signed_url("2025-01-15")
 
         assert captured_headers[0].get("x-api-key") == "test-key"
 
@@ -235,7 +235,7 @@ class TestMavvrikStreamerUpload:
         with patch.object(streamer, "_get_signed_url") as mock_url, patch.object(
             streamer, "_initiate_resumable_upload"
         ) as mock_init, patch.object(streamer, "_finalize_upload") as mock_fin:
-            streamer.upload("   ", "2025-01-15T14:00:00Z")
+            streamer.upload("   ", date_str="2025-01-15")
         mock_url.assert_not_called()
         mock_init.assert_not_called()
         mock_fin.assert_not_called()
@@ -250,9 +250,9 @@ class TestMavvrikStreamerUpload:
         ) as mock_init, patch.object(
             streamer, "_finalize_upload"
         ) as mock_fin:
-            streamer.upload(csv_payload, "2025-01-15T14:00:00Z")
+            streamer.upload(csv_payload, date_str="2025-01-15")
 
-        mock_url.assert_called_once_with("2025-01-15T14:00:00Z")
+        mock_url.assert_called_once_with("2025-01-15")
         mock_init.assert_called_once_with("https://signed")
         mock_fin.assert_called_once()
         # Second arg to _finalize_upload is gzip-compressed CSV bytes

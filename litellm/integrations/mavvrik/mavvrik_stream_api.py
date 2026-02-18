@@ -72,13 +72,14 @@ class MavvrikStreamer:
     # Public interface
     # ------------------------------------------------------------------
 
-    def upload(self, csv_payload: str, interval: str) -> None:
-        """Upload a CSV string to GCS for the given interval.
+    def upload(self, csv_payload: str, date_str: str) -> None:
+        """Upload a CSV string to GCS for the given date.
 
         Args:
             csv_payload: CSV string (header + rows) from MavvrikTransformer.to_csv().
-            interval:    ISO-8601 UTC string used as the GCS object name
-                         (e.g. "2025-01-15T14:00:00Z").
+            date_str:    Date string "YYYY-MM-DD" used as the GCS object name.
+                         Uploading the same date again overwrites the previous file,
+                         making exports idempotent.
 
         Raises:
             Exception: if any upload step fails after retries.
@@ -91,14 +92,14 @@ class MavvrikStreamer:
 
         upload_data = self._compress(csv_payload)
 
-        signed_url = self._get_signed_url(interval)
+        signed_url = self._get_signed_url(date_str)
         session_uri = self._initiate_resumable_upload(signed_url)
         self._finalize_upload(session_uri, upload_data)
 
         verbose_proxy_logger.info(
-            "Mavvrik streamer: successfully uploaded %d bytes for interval %s",
+            "Mavvrik streamer: successfully uploaded %d bytes for date %s",
             len(upload_data),
-            interval,
+            date_str,
         )
 
     # ------------------------------------------------------------------
@@ -214,10 +215,10 @@ class MavvrikStreamer:
     # Step 1: Get signed URL from Mavvrik API
     # ------------------------------------------------------------------
 
-    def _get_signed_url(self, interval: str) -> str:
+    def _get_signed_url(self, date_str: str) -> str:
         path = UPLOAD_URL_PATH.format(tenant=self.tenant, instance_id=self.instance_id)
         url = f"{self.api_endpoint}{path}"
-        params = {"name": interval, "provider": "k8s", "type": "metrics"}
+        params = {"name": date_str, "provider": "k8s", "type": "metrics"}
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
 
         last_exc: Exception = Exception("unknown error")
@@ -233,7 +234,7 @@ class MavvrikStreamer:
                     signed_url = body.get("url")
                     if signed_url:
                         verbose_proxy_logger.debug(
-                            "Mavvrik streamer: got signed URL for interval %s", interval
+                            "Mavvrik streamer: got signed URL for date %s", date_str
                         )
                         return signed_url
                     raise Exception(f"Mavvrik API response missing 'url' field: {body}")
@@ -250,9 +251,10 @@ class MavvrikStreamer:
 
             wait = _RETRY_BACKOFF_BASE * (2**attempt)
             verbose_proxy_logger.warning(
-                "Mavvrik streamer: signed URL attempt %d/%d failed, retrying in %.1fs: %s",
+                "Mavvrik streamer: signed URL attempt %d/%d failed for date %s, retrying in %.1fs: %s",
                 attempt + 1,
                 _MAX_RETRIES,
+                date_str,
                 wait,
                 last_exc,
             )

@@ -4,11 +4,10 @@ Queries LiteLLM_DailyUserSpend joined with VerificationToken, TeamTable,
 and UserTable — identical to the CloudZero approach, returning a Polars DataFrame.
 
 Additionally provides get/set helpers for Mavvrik settings (including the
-marker that tracks the last successfully uploaded interval) stored in LiteLLM_Config.
+marker that tracks the last successfully uploaded date) stored in LiteLLM_Config.
 """
 
 import json
-from datetime import datetime
 from typing import Any, List, Optional
 
 import polars as pl
@@ -29,14 +28,12 @@ class LiteLLMDatabase:
 
     async def get_usage_data(
         self,
+        date_str: str,
         limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
     ) -> pl.DataFrame:
-        """Retrieve spend rows from LiteLLM_DailyUserSpend with team/key metadata.
+        """Retrieve spend rows for a single calendar date (YYYY-MM-DD).
 
-        Filters by updated_at to support the time-windowed export pattern.
-        When start_time_utc is None, no lower bound is applied (backfill mode).
+        Filters by dus.date so each export covers exactly one complete day.
         """
         client = self._ensure_prisma_client()
 
@@ -67,19 +64,18 @@ class LiteLLMDatabase:
         LEFT JOIN "LiteLLM_VerificationToken" vt  ON dus.api_key   = vt.token
         LEFT JOIN "LiteLLM_TeamTable"         tt  ON vt.team_id    = tt.team_id
         LEFT JOIN "LiteLLM_UserTable"         ut  ON dus.user_id   = ut.user_id
-        WHERE ($1::timestamptz IS NULL OR dus.updated_at >= $1::timestamptz)
-          AND ($2::timestamptz IS NULL OR dus.updated_at <= $2::timestamptz)
-        ORDER BY dus.date ASC, dus.created_at ASC
+        WHERE dus.date = $1::date
+        ORDER BY dus.created_at ASC
         """
 
-        params: List[Any] = [start_time_utc, end_time_utc]
+        params: List[Any] = [date_str]
 
         if limit is not None:
             try:
                 params.append(int(limit))
             except (TypeError, ValueError):
                 raise ValueError("limit must be an integer")
-            query += " LIMIT $3"
+            query += " LIMIT $2"
 
         try:
             db_response = await client.db.query_raw(query, *params)

@@ -2,15 +2,18 @@
 
 Export flow (runs every MAVVRIK_EXPORT_INTERVAL_MINUTES, default 60):
 
-  1. Read the last-uploaded marker from LiteLLM_Config.
-     - First run: start_time = now - 2× interval (backfill safety window).
-     - Subsequent runs: start_time = marker timestamp (delta / incremental).
-  2. Query LiteLLM_DailyUserSpend for rows with updated_at in [start, now].
-  3. Transform rows to NDJSON via MavvrikTransformer.
-  4. GZIP-compress the NDJSON in memory.
-  5. Obtain a GCS signed URL from the Mavvrik API (x-api-key auth).
-  6. Upload via GCS resumable upload (POST initiate → PUT payload).
-  7. Advance the marker to `now` so the next run starts from here.
+  1. Read the last-exported marker date from LiteLLM_Config (format: YYYY-MM-DD).
+     - First run: marker = yesterday (export yesterday as the first complete day).
+  2. For each date from (marker + 1 day) up to yesterday (never today):
+     a. Query LiteLLM_DailyUserSpend for rows where date = that day.
+     b. Transform rows to CSV via MavvrikTransformer.
+     c. GZIP-compress the CSV in memory.
+     d. Obtain a GCS signed URL from the Mavvrik API (x-api-key auth).
+     e. Upload via GCS resumable upload (POST initiate → PUT payload).
+        GCS object name = date string (e.g. "2026-02-18") — same name on
+        re-upload overwrites, making exports idempotent.
+     f. Advance the marker to that date in LiteLLM_Config.
+  3. Today is never exported — daily rows are still accumulating.
 
 Environment variables (fallback when DB settings are absent):
     MAVVRIK_API_KEY          x-api-key sent to Mavvrik API
@@ -21,7 +24,7 @@ Environment variables (fallback when DB settings are absent):
 """
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 import litellm
@@ -90,57 +93,79 @@ class MavvrikLogger(CustomLogger):
             await self._scheduled_export()
 
     async def _scheduled_export(self):
-        """Determine the export window from the marker, then export."""
+        """Export all complete days since the last marker, one file per day."""
         from litellm.integrations.mavvrik.database import LiteLLMDatabase
 
         db = LiteLLMDatabase()
         settings = await db.get_mavvrik_settings()
         marker_str: Optional[str] = settings.get("marker")
 
-        now_utc = datetime.now(timezone.utc)
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
 
+        # Determine start date (day after last exported date)
         if marker_str:
-            # Delta mode — start from where we last finished
             try:
-                start_utc = datetime.fromisoformat(marker_str)
-                if start_utc.tzinfo is None:
-                    start_utc = start_utc.replace(tzinfo=timezone.utc)
+                # marker is a date string "YYYY-MM-DD"
+                last_exported = date.fromisoformat(marker_str[:10])
+                start_date = last_exported + timedelta(days=1)
             except ValueError:
                 verbose_logger.warning(
-                    "MavvrikLogger: invalid marker '%s', falling back to 2× interval window",
+                    "MavvrikLogger: invalid marker '%s', starting from yesterday",
                     marker_str,
                 )
-                start_utc = now_utc - timedelta(
-                    minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES * 2
-                )
+                start_date = yesterday
         else:
-            # First run — use 2× interval overlap as a safety window
-            start_utc = now_utc - timedelta(minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES * 2)
+            # First run — start from yesterday
+            start_date = yesterday
 
-        await self.export_usage_data(
-            limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
-            start_time_utc=start_utc,
-            end_time_utc=now_utc,
-        )
-
-        # Advance marker to now after a successful export
-        await db.advance_marker(now_utc.isoformat())
-
-        # Also notify Mavvrik so it knows where to start the next ingestion window
-        try:
-            from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
-
-            streamer = MavvrikStreamer(
-                api_key=self.api_key or "",
-                api_endpoint=self.api_endpoint or "",
-                tenant=self.tenant or "",
-                instance_id=self.instance_id or "",
+        if start_date > yesterday:
+            verbose_logger.debug(
+                "MavvrikLogger: marker=%s is up to date, nothing to export", marker_str
             )
-            streamer.advance_marker(int(now_utc.timestamp()))
-        except Exception as exc:
-            verbose_logger.warning(
-                "MavvrikLogger: advance_marker PATCH failed (non-fatal): %s", exc
+            return
+
+        # Export each missed day individually
+        export_date = start_date
+        while export_date <= yesterday:
+            date_str = export_date.isoformat()  # "YYYY-MM-DD"
+            verbose_logger.info("MavvrikLogger: exporting date %s", date_str)
+
+            await self.export_usage_data(
+                date_str=date_str,
+                limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
             )
+
+            # Advance marker one day at a time so partial failures don't lose progress
+            await db.advance_marker(date_str)
+
+            # Notify Mavvrik of the new marker epoch (best-effort)
+            try:
+                from litellm.integrations.mavvrik.mavvrik_stream_api import (
+                    MavvrikStreamer,
+                )
+
+                export_epoch = int(
+                    datetime(
+                        export_date.year,
+                        export_date.month,
+                        export_date.day,
+                        tzinfo=timezone.utc,
+                    ).timestamp()
+                )
+                streamer = MavvrikStreamer(
+                    api_key=self.api_key or "",
+                    api_endpoint=self.api_endpoint or "",
+                    tenant=self.tenant or "",
+                    instance_id=self.instance_id or "",
+                )
+                streamer.advance_marker(export_epoch)
+            except Exception as exc:
+                verbose_logger.warning(
+                    "MavvrikLogger: advance_marker PATCH failed (non-fatal): %s", exc
+                )
+
+            export_date += timedelta(days=1)
 
     # ------------------------------------------------------------------
     # Core export
@@ -148,33 +173,29 @@ class MavvrikLogger(CustomLogger):
 
     async def export_usage_data(
         self,
+        date_str: str,
         limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
     ):
-        """Query → transform → upload. Called by scheduler and manual /mavvrik/export."""
+        """Query → transform → upload for a single calendar date (YYYY-MM-DD).
+
+        The GCS object is named by date_str so re-uploading the same day
+        overwrites the previous file — exports are idempotent.
+        Called by the scheduler and manual /mavvrik/export.
+        """
         from litellm.integrations.mavvrik.database import LiteLLMDatabase
         from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
         from litellm.integrations.mavvrik.transform import MavvrikTransformer
 
         self._validate_config()
 
-        verbose_logger.debug(
-            "MavvrikLogger: starting export window %s → %s",
-            start_time_utc,
-            end_time_utc,
-        )
+        verbose_logger.debug("MavvrikLogger: exporting date %s", date_str)
 
         db = LiteLLMDatabase()
-        df = await db.get_usage_data(
-            limit=limit,
-            start_time_utc=start_time_utc,
-            end_time_utc=end_time_utc,
-        )
+        df = await db.get_usage_data(date_str=date_str, limit=limit)
 
         if df.is_empty():
             verbose_logger.debug(
-                "MavvrikLogger: no spend data in window, nothing to upload"
+                "MavvrikLogger: no spend data for %s, nothing to upload", date_str
             )
             return
 
@@ -185,13 +206,10 @@ class MavvrikLogger(CustomLogger):
 
         if not csv_payload:
             verbose_logger.debug(
-                "MavvrikLogger: 0 rows after transform, skipping upload"
+                "MavvrikLogger: 0 rows after transform for %s, skipping upload",
+                date_str,
             )
             return
-
-        interval = (start_time_utc or datetime.now(timezone.utc)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
 
         streamer = MavvrikStreamer(
             api_key=self.api_key or "",
@@ -199,12 +217,12 @@ class MavvrikLogger(CustomLogger):
             tenant=self.tenant or "",
             instance_id=self.instance_id or "",
         )
-        streamer.upload(csv_payload, interval=interval)
+        streamer.upload(csv_payload, date_str=date_str)
 
         verbose_logger.info(
-            "MavvrikLogger: uploaded %d CSV bytes for interval %s",
+            "MavvrikLogger: uploaded %d CSV bytes for date %s",
             len(csv_payload),
-            interval,
+            date_str,
         )
 
     # ------------------------------------------------------------------
@@ -212,12 +230,21 @@ class MavvrikLogger(CustomLogger):
     # ------------------------------------------------------------------
 
     async def dry_run_export_usage_data(self, limit: Optional[int] = None):
-        """Return transformed records as dicts without uploading — for /mavvrik/dry-run."""
+        """Return transformed records as dicts without uploading — for /mavvrik/dry-run.
+
+        Queries the most recent complete day (yesterday) so the preview reflects
+        real final data rather than a partial in-progress day.
+        """
         from litellm.integrations.mavvrik.database import LiteLLMDatabase
         from litellm.integrations.mavvrik.transform import MavvrikTransformer
 
+        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+
         db = LiteLLMDatabase()
-        df = await db.get_usage_data(limit=limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS)
+        df = await db.get_usage_data(
+            date_str=yesterday,
+            limit=limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS,
+        )
 
         if df.is_empty():
             return {

@@ -2,7 +2,6 @@
 Mavvrik endpoint Pydantic models for LiteLLM Proxy admin API.
 """
 
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
@@ -33,16 +32,14 @@ class MavvrikInitResponse(BaseModel):
 class MavvrikExportRequest(BaseModel):
     """Request body for POST /mavvrik/export and POST /mavvrik/dry-run."""
 
+    date_str: Optional[str] = Field(
+        None,
+        description='Date to export in YYYY-MM-DD format (default: yesterday). '
+        'Re-uploading the same date overwrites the GCS file — idempotent.',
+    )
     limit: Optional[int] = Field(
         None,
         description="Max spend rows to fetch (default: MAVVRIK_MAX_FETCHED_DATA_RECORDS)",
-    )
-    start_time_utc: Optional[datetime] = Field(
-        None,
-        description="Override window start (default: last marker or 2× interval ago)",
-    )
-    end_time_utc: Optional[datetime] = Field(
-        None, description="Override window end (default: now)"
     )
 
 
@@ -80,7 +77,7 @@ class MavvrikSettingsView(BaseModel):
     instance_id: Optional[str] = None
     timezone: Optional[str] = None
     marker: Optional[str] = Field(
-        None, description="Last successfully uploaded interval timestamp"
+        None, description="Last successfully exported date (YYYY-MM-DD)"
     )
     status: Optional[str] = None
 
