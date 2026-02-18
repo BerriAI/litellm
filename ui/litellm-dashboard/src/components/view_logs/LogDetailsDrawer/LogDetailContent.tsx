@@ -433,25 +433,26 @@ function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
   };
 
   return (
-    <div
-      onClick={handleClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "4px 12px",
-        marginBottom: 12,
-        borderRadius: 16,
-        cursor: "pointer",
-        fontSize: 13,
-        fontWeight: 500,
-        backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
-        color: allPassed ? "#15803d" : "#b91c1c",
-        border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
-      }}
-    >
-      {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
-      <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
+    <div style={{ textAlign: "left", marginBottom: 12 }}>
+      <div
+        onClick={handleClick}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 12px",
+          borderRadius: 16,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 500,
+          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
+          color: allPassed ? "#15803d" : "#b91c1c",
+          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
+        }}
+      >
+        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+        <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
+      </div>
     </div>
   );
 }
