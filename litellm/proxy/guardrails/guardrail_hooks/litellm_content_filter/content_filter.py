@@ -51,7 +51,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterDetection,
     PatternDetection,
 )
-from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
