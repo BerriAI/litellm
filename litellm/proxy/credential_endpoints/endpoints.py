@@ -142,17 +142,47 @@ async def get_credentials(
     tags=["credential management"],
     response_model=CredentialItem,
 )
+async def get_credential_by_name(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [BETA] endpoint. This might change unexpectedly.
+    """
+    try:
+        for credential in litellm.credential_list:
+            if credential.credential_name == credential_name:
+                masked_credential = CredentialItem(
+                    credential_name=credential.credential_name,
+                    credential_values=_get_masked_values(
+                        credential.credential_values,
+                        unmasked_length=4,
+                        number_of_asterisks=4,
+                    ),
+                    credential_info=credential.credential_info,
+                )
+                return masked_credential
+        raise HTTPException(
+            status_code=404,
+            detail="Credential not found. Got credential name: " + credential_name,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
+
+
 @router.get(
     "/credentials/by_model/{model_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
     response_model=CredentialItem,
 )
-async def get_credential(
+async def get_credential_by_model(
     request: Request,
     fastapi_response: Response,
-    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
-    model_id: Optional[str] = None,
+    model_id: str = Path(..., description="The model ID to look up credentials for"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -161,48 +191,25 @@ async def get_credential(
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        if model_id:
-            if llm_router is None:
-                raise HTTPException(status_code=500, detail="LLM router not found")
-            model = llm_router.get_deployment(model_id)
-            if model is None:
-                raise HTTPException(status_code=404, detail="Model not found")
-            credential_values = llm_router.get_deployment_credentials(model_id)
-            if credential_values is None:
-                raise HTTPException(status_code=404, detail="Model not found")
-            masked_credential_values = _get_masked_values(
-                credential_values,
-                unmasked_length=4,
-                number_of_asterisks=4,
-            )
-            credential = CredentialItem(
-                credential_name="{}-credential-{}".format(model.model_name, model_id),
-                credential_values=masked_credential_values,
-                credential_info={},
-            )
-            # return credential object
-            return credential
-        elif credential_name:
-            for credential in litellm.credential_list:
-                if credential.credential_name == credential_name:
-                    masked_credential = CredentialItem(
-                        credential_name=credential.credential_name,
-                        credential_values=_get_masked_values(
-                            credential.credential_values,
-                            unmasked_length=4,
-                            number_of_asterisks=4,
-                        ),
-                        credential_info=credential.credential_info,
-                    )
-                    return masked_credential
-            raise HTTPException(
-                status_code=404,
-                detail="Credential not found. Got credential name: " + credential_name,
-            )
-        else:
-            raise HTTPException(
-                status_code=404, detail="Credential name or model ID required"
-            )
+        if llm_router is None:
+            raise HTTPException(status_code=500, detail="LLM router not found")
+        model = llm_router.get_deployment(model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Model not found")
+        credential_values = llm_router.get_deployment_credentials(model_id)
+        if credential_values is None:
+            raise HTTPException(status_code=404, detail="Model not found")
+        masked_credential_values = _get_masked_values(
+            credential_values,
+            unmasked_length=4,
+            number_of_asterisks=4,
+        )
+        credential = CredentialItem(
+            credential_name="{}-credential-{}".format(model.model_name, model_id),
+            credential_values=masked_credential_values,
+            credential_info={},
+        )
+        return credential
     except Exception as e:
         verbose_proxy_logger.exception(e)
         raise handle_exception_on_proxy(e)
