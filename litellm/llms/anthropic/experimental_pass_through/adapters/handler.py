@@ -78,9 +78,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             
         reasoning_effort = completion_kwargs.get("reasoning_effort")
         if isinstance(reasoning_effort, str) and reasoning_effort:
+            summary = thinking.get("summary", "detailed") if isinstance(thinking, dict) else "detailed"
             completion_kwargs["reasoning_effort"] = {
                 "effort": reasoning_effort,
-                "summary": "detailed",
+                "summary": summary,
             }
         elif isinstance(reasoning_effort, dict):
             if (
