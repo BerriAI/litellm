@@ -5,24 +5,18 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
-from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
-    EnkryptAIGuardrailConfigs,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
-    GraySwanGuardrailConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
-    IBMGuardrailsBaseConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    ContentFilterCategoryConfig,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
-    QualifireGuardrailConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
-    ToolPermissionGuardrailConfigModel,
-)
+from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import \
+    EnkryptAIGuardrailConfigs
+from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import \
+    GraySwanGuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.ibm import \
+    IBMGuardrailsBaseConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
+    ContentFilterCategoryConfig
+from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import \
+    QualifireGuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import \
+    ToolPermissionGuardrailConfigModel
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -40,6 +34,7 @@ guardrails:
 
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
+    AUTH_FILTER = "auth_filter"
     BEDROCK = "bedrock"
     GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
@@ -754,6 +749,7 @@ class guardrailConfig(TypedDict):
 class GuardrailEventHooks(str, Enum):
     pre_call = "pre_call"
     post_call = "post_call"
+    post_auth_check = "post_auth_check"
     during_call = "during_call"
     logging_only = "logging_only"
     pre_mcp_call = "pre_mcp_call"
