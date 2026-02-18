@@ -6,8 +6,12 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import (LiteLLM_TeamTable, ProxyException,
-                                  SpecialHeaders, UserAPIKeyAuth)
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    ProxyException,
+    SpecialHeaders,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -343,8 +347,6 @@ class MCPRequestHandler:
         Returns:
             List[str]: List of allowed MCP servers by server id
         """
-        from typing import List
-
         from litellm.proxy.proxy_server import general_settings
 
         try:
@@ -393,27 +395,16 @@ class MCPRequestHandler:
                         f"End user {user_api_key_auth.end_user_id} has explicit MCP permissions: {allowed_mcp_servers_for_end_user}"
                     )
 
-                    # Check if require_end_user_mcp_access flag is enabled
-                    require_end_user_mcp_access = general_settings.get(
-                        "require_end_user_mcp_access_defined", False
+                    # Always apply intersection: key/team AND end_user
+                    # This ensures end_user can only access servers that both they AND their key/team are authorized for
+                    filtered_servers = []
+                    for _mcp_server in allowed_mcp_servers:
+                        if _mcp_server in allowed_mcp_servers_for_end_user:
+                            filtered_servers.append(_mcp_server)
+                    allowed_mcp_servers = filtered_servers
+                    verbose_logger.debug(
+                        f"Applied end_user intersection filter. Final allowed servers: {allowed_mcp_servers}"
                     )
-
-                    # If the flag is enabled and end_user has permissions, use ONLY end_user permissions
-                    if require_end_user_mcp_access:
-                        verbose_logger.debug(
-                            "require_end_user_mcp_access_defined=True - using only end_user permissions"
-                        )
-                        allowed_mcp_servers = allowed_mcp_servers_for_end_user
-                    else:
-                        # Otherwise, apply intersection: key/team AND end_user
-                        filtered_servers = []
-                        for _mcp_server in allowed_mcp_servers:
-                            if _mcp_server in allowed_mcp_servers_for_end_user:
-                                filtered_servers.append(_mcp_server)
-                        allowed_mcp_servers = filtered_servers
-                        verbose_logger.debug(
-                            f"Applied end_user intersection filter. Final allowed servers: {allowed_mcp_servers}"
-                        )
                 # If flag is enabled but end_user has no permissions, block all access
                 elif general_settings.get("require_end_user_mcp_access_defined", False):
                     verbose_logger.debug(
@@ -452,9 +443,11 @@ class MCPRequestHandler:
         get_team_object() in litellm/proxy/auth/auth_checks.py
         """
         from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (prisma_client,
-                                                proxy_logging_obj,
-                                                user_api_key_cache)
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         verbose_logger.debug(
             f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
@@ -589,11 +582,12 @@ class MCPRequestHandler:
                 user_api_key_auth
             )
             if key_object_permission is None and user_api_key_auth and user_api_key_auth.object_permission_id:
-                from litellm.proxy.auth.auth_checks import \
-                    get_object_permission
-                from litellm.proxy.proxy_server import (prisma_client,
-                                                        proxy_logging_obj,
-                                                        user_api_key_cache)
+                from litellm.proxy.auth.auth_checks import get_object_permission
+                from litellm.proxy.proxy_server import (
+                    prisma_client,
+                    proxy_logging_obj,
+                    user_api_key_cache,
+                )
                 if prisma_client is not None:
                     key_object_permission = await get_object_permission(
                         object_permission_id=user_api_key_auth.object_permission_id,
@@ -671,9 +665,11 @@ class MCPRequestHandler:
         Returns the MCP servers from the end_user's object_permission.
         """
         from litellm.proxy.auth.auth_checks import get_end_user_object
-        from litellm.proxy.proxy_server import (prisma_client,
-                                                proxy_logging_obj,
-                                                user_api_key_cache)
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if not user_api_key_auth or not user_api_key_auth.end_user_id:
             return []
@@ -765,8 +761,9 @@ class MCPRequestHandler:
 
         try:
             # Import here to avoid circular import
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import \
-                global_mcp_server_manager
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
 
             # Use the new helper for config-loaded servers
             server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
@@ -795,8 +792,6 @@ class MCPRequestHandler:
         """
         Get list of MCP access groups for the given user/key based on permissions
         """
-        from typing import List
-
         access_groups: List[str] = []
         access_groups_for_key = await MCPRequestHandler._get_mcp_access_groups_for_key(
             user_api_key_auth
@@ -822,9 +817,11 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         from litellm.proxy.auth.auth_checks import get_object_permission
-        from litellm.proxy.proxy_server import (prisma_client,
-                                                proxy_logging_obj,
-                                                user_api_key_cache)
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if user_api_key_auth is None:
             return []
@@ -860,9 +857,11 @@ class MCPRequestHandler:
         Get MCP access groups for the team
         """
         from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (prisma_client,
-                                                proxy_logging_obj,
-                                                user_api_key_cache)
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if user_api_key_auth is None:
             return []

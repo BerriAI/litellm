@@ -25,327 +25,390 @@ from litellm.types.utils import (
 )
 
 
-@pytest.mark.asyncio
 class TestMCPEndUserPermissionGuardrail:
     """Test the MCP End User Permission Guardrail"""
 
-    def test_extract_mcp_server_name_from_tool(self):
+    def test_extract_mcp_server_name(self):
         """Test extracting MCP server name from tool name"""
         guardrail = MCPEndUserPermissionGuardrail()
 
         # Test valid MCP tool names
-        assert guardrail._extract_mcp_server_name_from_tool("github-create_issue") == "github"
-        assert guardrail._extract_mcp_server_name_from_tool("slack-send_message") == "slack"
-        assert guardrail._extract_mcp_server_name_from_tool("jira-create-ticket") == "jira"
+        assert guardrail._extract_mcp_server_name("github-create_issue") == "github"
+        assert guardrail._extract_mcp_server_name("slack-send_message") == "slack"
+        assert guardrail._extract_mcp_server_name("jira-create-ticket") == "jira"
 
         # Test invalid/non-MCP tool names
-        assert guardrail._extract_mcp_server_name_from_tool("search") is None
-        assert guardrail._extract_mcp_server_name_from_tool("") is None
-        assert guardrail._extract_mcp_server_name_from_tool(None) is None
+        assert guardrail._extract_mcp_server_name("search") is None
+        assert guardrail._extract_mcp_server_name("") is None
+        assert guardrail._extract_mcp_server_name(None) is None
 
     @pytest.mark.asyncio
-    async def test_check_end_user_has_mcp_permission_no_end_user(self):
-        """Test permission check when no end_user_id is present"""
+    async def test_apply_guardrail_no_end_user(self):
+        """Test guardrail when no end_user_id is present"""
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth without end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
+        # Create inputs with MCP tools
+        inputs = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github-create_issue",
+                        "description": "Create an issue",
+                    },
+                }
+            ]
+        }
+
+        request_data = {}
+
+        # Should pass through all tools when no end_user_id
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
         )
 
-        # Should allow access when no end_user_id
-        has_permission = await guardrail._check_end_user_has_mcp_permission(
-            server_name="github",
-            user_api_key_auth=user_auth,
-        )
-
-        assert has_permission is True
+        assert len(result.get("tools", [])) == 1
+        assert result["tools"][0]["function"]["name"] == "github-create_issue"
 
     @pytest.mark.asyncio
-    async def test_check_end_user_has_mcp_permission_with_access(self):
-        """Test permission check when end user has access"""
+    async def test_apply_guardrail_with_authorized_tools(self):
+        """Test guardrail when end user has access to MCP servers"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth with end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
-            end_user_id="end-user-123",
-        )
+        # Create inputs with multiple tools
+        inputs = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github-create_issue",
+                        "description": "Create an issue",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "slack-send_message",
+                        "description": "Send a message",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "description": "Regular search tool",
+                    },
+                },
+            ]
+        }
 
-        # Mock the _get_allowed_mcp_servers_for_end_user to return allowed servers
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission.MCPRequestHandler._get_allowed_mcp_servers_for_end_user"
-        ) as mock_get_allowed:
-            mock_get_allowed.return_value = ["github", "slack"]
+        request_data = {"user_api_key_end_user_id": "end-user-123"}
 
-            # Should allow access when server is in allowed list
-            has_permission = await guardrail._check_end_user_has_mcp_permission(
-                server_name="github",
-                user_api_key_auth=user_auth,
+        # Mock fetching end user object with permissions
+        with patch.object(
+            MCPEndUserPermissionGuardrail,
+            "_fetch_end_user_object",
+            return_value=MagicMock(
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="perm-1",
+                    mcp_servers=["github", "slack"],
+                )
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
             )
 
-            assert has_permission is True
-            mock_get_allowed.assert_called_once()
+            # Should keep all authorized MCP tools + non-MCP tools
+            assert len(result.get("tools", [])) == 3
 
     @pytest.mark.asyncio
-    async def test_check_end_user_has_mcp_permission_without_access(self):
-        """Test permission check when end user does not have access"""
+    async def test_apply_guardrail_with_unauthorized_tools(self):
+        """Test guardrail filters out unauthorized MCP tools"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth with end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
-            end_user_id="end-user-123",
-        )
+        # Create inputs with tools where end user only has access to some
+        inputs = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github-create_issue",
+                        "description": "Create an issue",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "slack-send_message",
+                        "description": "Send a message",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "jira-create_ticket",
+                        "description": "Create a ticket",
+                    },
+                },
+            ]
+        }
 
-        # Mock the _get_allowed_mcp_servers_for_end_user to return different servers
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission.MCPRequestHandler._get_allowed_mcp_servers_for_end_user"
-        ) as mock_get_allowed:
-            mock_get_allowed.return_value = ["slack", "jira"]
+        request_data = {"user_api_key_end_user_id": "end-user-123"}
 
-            # Should deny access when server is not in allowed list
-            has_permission = await guardrail._check_end_user_has_mcp_permission(
-                server_name="github",
-                user_api_key_auth=user_auth,
+        # Mock fetching end user object with limited permissions (only slack and jira)
+        with patch.object(
+            MCPEndUserPermissionGuardrail,
+            "_fetch_end_user_object",
+            return_value=MagicMock(
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="perm-1",
+                    mcp_servers=["slack", "jira"],
+                )
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
             )
 
-            assert has_permission is False
+            # Should filter out github tool
+            assert len(result.get("tools", [])) == 2
+            tool_names = [t["function"]["name"] for t in result["tools"]]
+            assert "slack-send_message" in tool_names
+            assert "jira-create_ticket" in tool_names
+            assert "github-create_issue" not in tool_names
 
     @pytest.mark.asyncio
-    async def test_check_end_user_has_mcp_permission_no_permissions(self):
-        """Test permission check when end user has no MCP permissions"""
+    async def test_apply_guardrail_no_permissions_configured(self):
+        """Test guardrail when end user has no MCP permissions configured"""
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth with end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
-            end_user_id="end-user-123",
-        )
+        # Create inputs with MCP tools
+        inputs = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github-create_issue",
+                        "description": "Create an issue",
+                    },
+                }
+            ]
+        }
 
-        # Mock the _get_allowed_mcp_servers_for_end_user to return empty list
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission.MCPRequestHandler._get_allowed_mcp_servers_for_end_user"
-        ) as mock_get_allowed:
-            mock_get_allowed.return_value = []
+        request_data = {"user_api_key_end_user_id": "end-user-123"}
 
-            # Should deny access when end user has no permissions
-            has_permission = await guardrail._check_end_user_has_mcp_permission(
-                server_name="github",
-                user_api_key_auth=user_auth,
+        # Mock fetching end user object with no object_permission
+        with patch.object(
+            MCPEndUserPermissionGuardrail,
+            "_fetch_end_user_object",
+            return_value=MagicMock(object_permission=None),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
             )
 
-            assert has_permission is False
+            # Should pass through all tools when no permissions configured
+            assert len(result.get("tools", [])) == 1
+            assert result["tools"][0]["function"]["name"] == "github-create_issue"
 
     @pytest.mark.asyncio
-    async def test_post_call_hook_with_authorized_tools(self):
-        """Test post call hook with authorized MCP tools"""
+    async def test_apply_guardrail_with_non_mcp_tools(self):
+        """Test guardrail passes through non-MCP tools"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth with end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
-            end_user_id="end-user-123",
-        )
+        # Create inputs with non-MCP tools
+        inputs = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "description": "Search tool",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "calculate",
+                        "description": "Calculate something",
+                    },
+                },
+            ]
+        }
 
-        # Create mock response with tool calls
-        response = ModelResponse(
-            id="test-response",
-            choices=[
-                Choices(
-                    finish_reason="tool_calls",
-                    index=0,
-                    message=Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[
-                            ChatCompletionMessageToolCall(
-                                id="call-1",
-                                type="function",
-                                function=Function(
-                                    name="github-create_issue",
-                                    arguments='{"title": "test"}',
-                                ),
-                            ),
-                        ],
-                    ),
+        request_data = {"user_api_key_end_user_id": "end-user-123"}
+
+        # Mock fetching end user object with MCP restrictions
+        with patch.object(
+            MCPEndUserPermissionGuardrail,
+            "_fetch_end_user_object",
+            return_value=MagicMock(
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="perm-1",
+                    mcp_servers=["github"],
                 )
-            ],
-            created=1234567890,
-            model="gpt-4",
-            object="chat.completion",
-        )
-
-        # Mock the permission check to return True
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission.MCPRequestHandler._get_allowed_mcp_servers_for_end_user"
-        ) as mock_get_allowed:
-            mock_get_allowed.return_value = ["github", "slack"]
-
-            # Should not raise an exception
-            result = await guardrail.async_post_call_success_hook(
-                data={"model": "gpt-4"},
-                user_api_key_dict=user_auth,
-                response=response,
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
             )
 
-            assert result == response
+            # Should keep all non-MCP tools even with MCP restrictions
+            assert len(result.get("tools", [])) == 2
 
     @pytest.mark.asyncio
-    async def test_post_call_hook_with_unauthorized_tools(self):
-        """Test post call hook with unauthorized MCP tools"""
+    async def test_apply_guardrail_filters_unauthorized_mcp_tools(self):
+        """Test guardrail filters out unauthorized MCP tools"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth with end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
-            end_user_id="end-user-123",
-        )
+        # Create inputs with MCP tools where user only has access to some
+        inputs = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github-create_issue",
+                        "description": "Create an issue",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "slack-send_message",
+                        "description": "Send a message",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "jira-create_ticket",
+                        "description": "Create a ticket",
+                    },
+                },
+            ]
+        }
 
-        # Create mock response with tool calls
-        response = ModelResponse(
-            id="test-response",
-            choices=[
-                Choices(
-                    finish_reason="tool_calls",
-                    index=0,
-                    message=Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[
-                            ChatCompletionMessageToolCall(
-                                id="call-1",
-                                type="function",
-                                function=Function(
-                                    name="github-create_issue",
-                                    arguments='{"title": "test"}',
-                                ),
-                            ),
-                        ],
-                    ),
+        request_data = {"user_api_key_end_user_id": "end-user-123"}
+
+        # Mock fetching end user object - only has access to slack and jira, not github
+        with patch.object(
+            MCPEndUserPermissionGuardrail,
+            "_fetch_end_user_object",
+            return_value=MagicMock(
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="perm-1",
+                    mcp_servers=["slack", "jira"],
                 )
-            ],
-            created=1234567890,
-            model="gpt-4",
-            object="chat.completion",
-        )
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
 
-        # Mock the permission check to return servers that don't include github
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission.MCPRequestHandler._get_allowed_mcp_servers_for_end_user"
-        ) as mock_get_allowed:
-            mock_get_allowed.return_value = ["slack", "jira"]
-
-            # Should raise GuardrailRaisedException
-            with pytest.raises(GuardrailRaisedException) as exc_info:
-                await guardrail.async_post_call_success_hook(
-                    data={"model": "gpt-4"},
-                    user_api_key_dict=user_auth,
-                    response=response,
-                )
-
-            assert "does not have permission" in str(exc_info.value.message)
-            assert "github" in str(exc_info.value.message)
+            # Should filter out github tool
+            assert len(result.get("tools", [])) == 2
+            tool_names = [t["function"]["name"] for t in result["tools"]]
+            assert "slack-send_message" in tool_names
+            assert "jira-create_ticket" in tool_names
+            assert "github-create_issue" not in tool_names
 
     @pytest.mark.asyncio
-    async def test_post_call_hook_with_non_mcp_tools(self):
-        """Test post call hook with non-MCP tools (no prefix)"""
+    async def test_apply_guardrail_with_mixed_tools(self):
+        """Test guardrail with both MCP and non-MCP tools"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth with end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
-            end_user_id="end-user-123",
-        )
+        # Create inputs with both MCP and non-MCP tools
+        inputs = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github-create_issue",
+                        "description": "Create an issue",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "description": "Search tool",
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "slack-send_message",
+                        "description": "Send a message",
+                    },
+                },
+            ]
+        }
 
-        # Create mock response with non-MCP tool calls
-        response = ModelResponse(
-            id="test-response",
-            choices=[
-                Choices(
-                    finish_reason="tool_calls",
-                    index=0,
-                    message=Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[
-                            ChatCompletionMessageToolCall(
-                                id="call-1",
-                                type="function",
-                                function=Function(
-                                    name="search",
-                                    arguments='{"query": "test"}',
-                                ),
-                            ),
-                        ],
-                    ),
+        request_data = {"user_api_key_end_user_id": "end-user-123"}
+
+        # Mock fetching end user object - only has access to slack
+        with patch.object(
+            MCPEndUserPermissionGuardrail,
+            "_fetch_end_user_object",
+            return_value=MagicMock(
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="perm-1",
+                    mcp_servers=["slack"],
                 )
-            ],
-            created=1234567890,
-            model="gpt-4",
-            object="chat.completion",
-        )
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
 
-        # Should not raise an exception for non-MCP tools
-        result = await guardrail.async_post_call_success_hook(
-            data={"model": "gpt-4"},
-            user_api_key_dict=user_auth,
-            response=response,
-        )
-
-        assert result == response
+            # Should keep slack MCP tool and non-MCP search tool, filter out github
+            assert len(result.get("tools", [])) == 2
+            tool_names = [t["function"]["name"] for t in result["tools"]]
+            assert "search" in tool_names
+            assert "slack-send_message" in tool_names
+            assert "github-create_issue" not in tool_names
 
     @pytest.mark.asyncio
-    async def test_post_call_hook_no_end_user(self):
-        """Test post call hook when no end_user_id is present"""
+    async def test_apply_guardrail_no_tools_in_request(self):
+        """Test guardrail when request has no tools"""
         guardrail = MCPEndUserPermissionGuardrail()
 
-        # Create user auth without end_user_id
-        user_auth = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
+        # Create inputs without tools
+        inputs = {"model": "gpt-4", "messages": [{"role": "user", "content": "test"}]}
+
+        request_data = {"user_api_key_end_user_id": "end-user-123"}
+
+        # Should pass through unchanged
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
         )
 
-        # Create mock response with MCP tool calls
-        response = ModelResponse(
-            id="test-response",
-            choices=[
-                Choices(
-                    finish_reason="tool_calls",
-                    index=0,
-                    message=Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[
-                            ChatCompletionMessageToolCall(
-                                id="call-1",
-                                type="function",
-                                function=Function(
-                                    name="github-create_issue",
-                                    arguments='{"title": "test"}',
-                                ),
-                            ),
-                        ],
-                    ),
-                )
-            ],
-            created=1234567890,
-            model="gpt-4",
-            object="chat.completion",
-        )
-
-        # Should not raise an exception when no end_user_id
-        result = await guardrail.async_post_call_success_hook(
-            data={"model": "gpt-4"},
-            user_api_key_dict=user_auth,
-            response=response,
-        )
-
-        assert result == response
+        assert result == inputs
+        assert "tools" not in result
