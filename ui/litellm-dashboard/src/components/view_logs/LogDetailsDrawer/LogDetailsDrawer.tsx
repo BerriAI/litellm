@@ -235,6 +235,20 @@ export function LogDetailsDrawer({
     } catch { /* clipboard unavailable in non-secure contexts */ }
   };
 
+  // For MCP calls, find the parent LLM call's guardrail info from the session
+  const parentLlmLog = useMemo(() => {
+    if (!currentLog) return null;
+    const isMcp = MCP_CALL_TYPES.includes(currentLog.call_type);
+    if (!isMcp) return null;
+
+    const logsToSearch = isSessionMode ? sessionLogs : allLogs;
+    return logsToSearch.find(
+      (row) =>
+        !MCP_CALL_TYPES.includes(row.call_type) &&
+        row.metadata?.guardrail_information
+    ) ?? null;
+  }, [currentLog, isSessionMode, sessionLogs, allLogs]);
+
   if (!currentLog || !enrichedLog) return null;
 
   return (
@@ -385,6 +399,8 @@ export function LogDetailsDrawer({
                 onOpenSettings={onOpenSettings}
                 isLoadingDetails={isLoadingDetails}
                 accessToken={accessToken ?? null}
+                parentGuardrailInfo={parentLlmLog?.metadata?.guardrail_information}
+                parentLogEntry={parentLlmLog}
               />
             </div>
           </div>
