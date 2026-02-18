@@ -19,7 +19,7 @@ tags: [incident-report, embeddings, vllm]
 hide_table_of_contents: false
 ---
 
-**Date:** Feb 16, 2025 - January 30, 2026
+**Date:** Feb 16, 2026
 **Duration:** ~3 hours
 **Severity:** High (for vLLM embedding users)
 **Status:** Resolved
