@@ -5609,6 +5609,122 @@ async def test_validate_key_list_check_key_hash_not_found():
 
 
 @pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
+)
+async def test_rotate_master_key_model_data_valid_for_prisma(
+    mock_rotate_mcp,
+):
+    """
+    Test that _rotate_master_key produces valid data for Prisma create_many().
+
+    Regression test for: master key rotation fails with Prisma validation error
+    because created_at/updated_at are None (non-nullable DateTime) and
+    litellm_params/model_info are JSON strings (create_many expects dicts).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    # Setup mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+
+    # Mock model table — return one model
+    mock_model = MagicMock()
+    mock_model.model_id = "model-1"
+    mock_model.model_name = "test-model"
+    mock_model.litellm_params = '{"model": "openai/gpt-4", "api_key": "sk-encrypted-old"}'
+    mock_model.model_info = '{"id": "model-1"}'
+    mock_model.created_by = "admin"
+    mock_model.updated_by = "admin"
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[mock_model]
+    )
+
+    # Mock transaction context manager
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable = MagicMock()
+    mock_tx.litellm_proxymodeltable.delete_many = AsyncMock()
+    mock_tx.litellm_proxymodeltable.create_many = AsyncMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=AsyncMock(
+        __aenter__=AsyncMock(return_value=mock_tx),
+        __aexit__=AsyncMock(return_value=False),
+    ))
+
+    # Mock config table — no env vars
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+
+    # Mock credentials table — no credentials
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[]
+    )
+
+    # Mock MCP rotation
+    mock_rotate_mcp.return_value = None
+
+    # Mock proxy_config
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.decrypt_model_list_from_db.return_value = [
+        {
+            "model_name": "test-model",
+            "litellm_params": {
+                "model": "openai/gpt-4",
+                "api_key": "sk-decrypted-key",
+            },
+            "model_info": {"id": "model-1"},
+        }
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_config",
+        mock_proxy_config,
+    ):
+        await _rotate_master_key(
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    # Verify create_many was called
+    mock_tx.litellm_proxymodeltable.create_many.assert_called_once()
+
+    # Get the data passed to create_many
+    call_args = mock_tx.litellm_proxymodeltable.create_many.call_args
+    created_models = call_args.kwargs.get("data") or call_args[1].get("data")
+
+    assert len(created_models) == 1
+    model_data = created_models[0]
+
+    # Verify timestamps are NOT present (Prisma @default(now()) should apply)
+    assert "created_at" not in model_data, (
+        "created_at should be excluded so Prisma @default(now()) applies"
+    )
+    assert "updated_at" not in model_data, (
+        "updated_at should be excluded so Prisma @default(now()) applies"
+    )
+
+    # Verify litellm_params and model_info are prisma.Json wrappers, NOT JSON strings
+    import prisma
+
+    assert isinstance(model_data["litellm_params"], prisma.Json), (
+        f"litellm_params should be prisma.Json for create_many(), got {type(model_data['litellm_params'])}"
+    )
+    assert isinstance(model_data["model_info"], prisma.Json), (
+        f"model_info should be prisma.Json for create_many(), got {type(model_data['model_info'])}"
+    )
+
+    # Verify delete_many was called inside the transaction (before create_many)
+    mock_tx.litellm_proxymodeltable.delete_many.assert_called_once()
 async def test_default_key_generate_params_duration(monkeypatch):
     """
     Test that default_key_generate_params with 'duration' is applied
