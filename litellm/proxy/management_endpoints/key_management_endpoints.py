@@ -11,6 +11,7 @@ All /key management endpoints
 
 import asyncio
 import copy
+import inspect
 import json
 import os
 import secrets
@@ -480,6 +481,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 "tpm_limit",
                 "rpm_limit",
                 "budget_duration",
+                "duration",
             ]:
                 setattr(data, key, litellm.default_key_generate_params.get(key, None))
             elif key == "models" and value == []:
@@ -1104,7 +1106,7 @@ async def generate_key_fn(
             )
 
         if user_custom_key_generate is not None:
-            if asyncio.iscoroutinefunction(user_custom_key_generate):
+            if inspect.iscoroutinefunction(user_custom_key_generate):
                 result = await user_custom_key_generate(data)  # type: ignore
             else:
                 raise ValueError("user_custom_key_generate must be a coroutine")
@@ -1256,7 +1258,7 @@ async def generate_service_account_key_fn(
     verbose_proxy_logger.debug("entered /key/generate")
 
     if user_custom_key_generate is not None:
-        if asyncio.iscoroutinefunction(user_custom_key_generate):
+        if inspect.iscoroutinefunction(user_custom_key_generate):
             result = await user_custom_key_generate(data)  # type: ignore
         else:
             raise ValueError("user_custom_key_generate must be a coroutine")

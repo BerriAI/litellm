@@ -920,7 +920,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         # Azure and other auth-required providers return 500/401.
                         file_object = None
                         try:
-                            from litellm.proxy.proxy_server import llm_router as _llm_router
+                            # Import module and use getattr for better testability with mocks
+                            import litellm.proxy.proxy_server as proxy_server_module
+                            _llm_router = getattr(proxy_server_module, 'llm_router', None)
                             if _llm_router is not None and model_id:
                                 _creds = _llm_router.get_deployment_credentials_with_provider(model_id) or {}
                                 file_object = await litellm.afile_retrieve(
@@ -1019,8 +1021,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # The stored file_object has the raw provider ID. Replace with the unified ID
         # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
         if stored_file_object and stored_file_object.file_object:
-            stored_file_object.file_object.id = file_id
-            return stored_file_object.file_object
+            # Use model_copy to ensure the ID update persists (Pydantic v2 compatibility)
+            response = stored_file_object.file_object.model_copy(update={"id": file_id})
+            return response
 
         # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
         # So we fetch the file object from the provider. We deliberately do not store the result to avoid interfering with batch cost tracking code.

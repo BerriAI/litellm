@@ -5,6 +5,7 @@ import BedrockGuardrailDetails, {
   BedrockGuardrailResponse,
 } from "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails";
 import ContentFilterDetails from "./ContentFilterDetails";
+import CompliancePanel from "./CompliancePanel";
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -58,6 +59,14 @@ interface GuardrailInformation {
 
 interface GuardrailViewerProps {
   data: GuardrailInformation | GuardrailInformation[];
+  accessToken?: string | null;
+  logEntry?: {
+    request_id: string;
+    user?: string;
+    model?: string;
+    startTime?: string;
+    metadata?: Record<string, any>;
+  };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -507,20 +516,6 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
       {/* Expanded details */}
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-3">
-          {/* View Policy Configuration link */}
-          {entry.policy_template && (
-            <div className="flex justify-end mb-3">
-              <a
-                href="/ui/policies"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-              >
-                View Policy Configuration
-                <ExternalLinkIcon />
-              </a>
-            </div>
-          )}
 
           {/* Classification details for llm-judge */}
           {entry.classification && (
@@ -599,7 +594,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
-const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
+const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) => {
   const guardrailEntries = useMemo(() => {
     return Array.isArray(data)
       ? data.filter((entry): entry is GuardrailInformation => Boolean(entry))
@@ -673,11 +668,6 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
             <div className="text-sm font-medium text-gray-900">
               Total: {totalOverheadMs}ms overhead
             </div>
-            {policyTemplates.length > 0 && (
-              <div className="text-xs text-gray-500 mt-0.5">
-                Policy: {policyTemplates.join(" / ")}
-              </div>
-            )}
           </div>
 
           <button
@@ -689,6 +679,13 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
           </button>
         </div>
       </div>
+
+      {/* ── Compliance Panel ──────────────────────────────────── */}
+      {accessToken && logEntry && (
+        <div className="px-6 py-4 border-b border-gray-100">
+          <CompliancePanel accessToken={accessToken} logEntry={logEntry} />
+        </div>
+      )}
 
       {/* ── Body: two columns ──────────────────────────────────── */}
       <div className="flex">

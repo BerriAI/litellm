@@ -1065,6 +1065,7 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         ("vertex_ai/gemini-1.5-pro", True),
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
+        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
         ("gpt-3.5-turbo", False),
         ("groq/llama-3.3-70b-versatile", False),
     ],

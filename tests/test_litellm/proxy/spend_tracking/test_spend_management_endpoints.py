@@ -15,7 +15,6 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-
 import litellm.proxy.proxy_server as ps
 
 
@@ -2150,3 +2149,58 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
         assert metadata["user_api_key_alias"] == "test-key-1"
         assert "error_information" in metadata
         assert metadata["error_information"]["error_code"] == "500"
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_dict_rows_session_counts():
+    """
+    Regression test: _build_ui_spend_logs_response must enrich session_total_count
+    even when rows are plain dicts (as returned by query_raw) rather than Prisma
+    model instances.  Previously getattr(dict, "session_id", None) silently
+    returned None, so every row got session_total_count=1 and the UI never
+    grouped session rows.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-abc-123"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion"},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "mcp_tool_call"},
+        {"request_id": "req-3", "session_id": None, "call_type": "completion"},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[
+            {"session_id": session_id, "_count": {"session_id": 2}},
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert len(rows) == 3
+
+    # Rows with the shared session_id should have session_total_count=2
+    assert rows[0]["session_total_count"] == 2
+    assert rows[1]["session_total_count"] == 2
+
+    # Row without a session_id defaults to 1
+    assert rows[2]["session_total_count"] == 1
+
+    # group_by should have been called with the session_id
+    mock_prisma.db.litellm_spendlogs.group_by.assert_called_once_with(
+        by=["session_id"],
+        where={"session_id": {"in": [session_id]}},
+        count={"session_id": True},
+    )
