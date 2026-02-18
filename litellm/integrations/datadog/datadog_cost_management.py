@@ -169,16 +169,20 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         metadata = log.get("metadata", {})
         if metadata:
             # Add user info
-            if "user_api_key_alias" in metadata:
+            # Add user info
+            if metadata.get("user_api_key_alias"):
                 tags["user"] = str(metadata["user_api_key_alias"])
-            if "user_api_key_team_alias" in metadata:
-                tags["team"] = str(metadata["user_api_key_team_alias"])
-            elif "team_alias" in metadata:
-                tags["team"] = str(metadata["team_alias"])
-            elif "user_api_key_team_id" in metadata:
-                tags["team"] = str(metadata["user_api_key_team_id"])
-            elif "team_id" in metadata:
-                tags["team"] = str(metadata["team_id"])
+
+            # Add Team Tag
+            team_tag = (
+                metadata.get("user_api_key_team_alias")
+                or metadata.get("team_alias")  # type: ignore
+                or metadata.get("user_api_key_team_id")
+                or metadata.get("team_id")  # type: ignore
+            )
+
+            if team_tag:
+                tags["team"] = str(team_tag)
             # model_group is not in StandardLoggingMetadata TypedDict, so we need to access it via dict.get()
             model_group = metadata.get("model_group")  # type: ignore[misc]
             if model_group:
