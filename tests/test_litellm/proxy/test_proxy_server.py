@@ -2149,6 +2149,71 @@ model_list:
 
 
 @pytest.mark.asyncio
+async def test_startup_writes_model_cost_map_reload_config_to_db():
+    """
+    Test that _write_model_cost_map_reload_config_to_db upserts the correct
+    config into the DB when model_cost_map_reload_interval_hours is set.
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+    settings = {"model_cost_map_reload_interval_hours": 6}
+
+    await ProxyStartupEvent._write_model_cost_map_reload_config_to_db(
+        general_settings=settings,
+        prisma_client=mock_prisma,
+    )
+
+    # Verify the upsert was called with the correct DB shape
+    mock_prisma.db.litellm_config.upsert.assert_called_once()
+    call_args = mock_prisma.db.litellm_config.upsert.call_args
+    assert call_args[1]["where"]["param_name"] == "model_cost_map_reload_config"
+
+    create_value = json.loads(call_args[1]["data"]["create"]["param_value"])
+    assert create_value["interval_hours"] == 6
+    assert create_value["force_reload"] is False
+
+    update_value = json.loads(call_args[1]["data"]["update"]["param_value"])
+    assert update_value["interval_hours"] == 6
+    assert update_value["force_reload"] is False
+
+
+@pytest.mark.asyncio
+async def test_startup_skips_model_cost_map_reload_when_not_configured():
+    """
+    Test that _write_model_cost_map_reload_config_to_db does NOT write to DB
+    when model_cost_map_reload_interval_hours is not set in general_settings.
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+    # Not set at all
+    await ProxyStartupEvent._write_model_cost_map_reload_config_to_db(
+        general_settings={},
+        prisma_client=mock_prisma,
+    )
+    mock_prisma.db.litellm_config.upsert.assert_not_called()
+
+    # Set to 0 (should also be skipped)
+    await ProxyStartupEvent._write_model_cost_map_reload_config_to_db(
+        general_settings={"model_cost_map_reload_interval_hours": 0},
+        prisma_client=mock_prisma,
+    )
+    mock_prisma.db.litellm_config.upsert.assert_not_called()
+
+    # Set to negative (should also be skipped)
+    await ProxyStartupEvent._write_model_cost_map_reload_config_to_db(
+        general_settings={"model_cost_map_reload_interval_hours": -1},
+        prisma_client=mock_prisma,
+    )
+    mock_prisma.db.litellm_config.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_merge_logic():
     """
     Test the _add_router_settings_from_db_config method's merge logic.
