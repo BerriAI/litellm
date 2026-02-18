@@ -10,8 +10,6 @@ Reference: https://docs.databricks.com/aws/en/machine-learning/foundation-model-
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
-import litellm
-from litellm._logging import verbose_logger
 from litellm.llms.databricks.common_utils import DatabricksBase
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponseInputParam
@@ -50,12 +48,15 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         api_key = litellm_params.api_key or os.getenv("DATABRICKS_API_KEY")
         api_base = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
 
-        # Reuse Databricks auth logic (OAuth M2M, PAT, SDK fallback)
-        api_base, headers = self.databricks_validate_environment(
+        # Reuse Databricks auth logic (OAuth M2M, PAT, SDK fallback).
+        # custom_endpoint=False allows SDK auth fallback; the appended
+        # /chat/completions suffix is harmless since we discard api_base
+        # here and build the URL separately in get_complete_url().
+        _, headers = self.databricks_validate_environment(
             api_key=api_key,
             api_base=api_base,
-            endpoint_type="chat_completions",  # reuse existing type, URL is built separately
-            custom_endpoint=True,  # prevent appending /chat/completions to api_base
+            endpoint_type="chat_completions",
+            custom_endpoint=False,
             headers=headers,
         )
 
