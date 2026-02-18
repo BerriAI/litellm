@@ -18,31 +18,50 @@ def test_opus_4_6_australia_region_uses_au_prefix_not_apac():
     - 'au.' for Australia (ap-southeast-2)
     - 'apac.' for Asia-Pacific (Singapore, ap-southeast-1)
 
-    This test ensures the Claude Opus 4.6 model correctly uses 'au.' for Australia,
-    and that 'apac.' is NOT incorrectly used for Australia region.
-
-    Related: The 'apac.' prefix is valid for Asia-Pacific (Singapore) region models,
-    but should not be used for Australia which has its own 'au.' prefix.
+    This test ensures the Claude Opus 4.6 model keeps 'au.' as a
+    compatibility alias and also supports canonical 'jp.' and 'apac.'
+    region IDs.
     """
     json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         model_data = json.load(f)
 
-    # Verify au.anthropic.claude-opus-4-6-v1 exists (correct)
+    # Verify au.anthropic.claude-opus-4-6-v1 exists (compatibility alias)
     assert "au.anthropic.claude-opus-4-6-v1" in model_data, \
-        "Missing Australia region model: au.anthropic.claude-opus-4-6-v1"
+        "Missing compatibility alias model: au.anthropic.claude-opus-4-6-v1"
 
-    # Verify apac.anthropic.claude-opus-4-6-v1 does NOT exist (incorrect)
-    assert "apac.anthropic.claude-opus-4-6-v1" not in model_data, \
-        "Incorrect model entry exists: apac.anthropic.claude-opus-4-6-v1 should be au.anthropic.claude-opus-4-6-v1"
+    # Verify canonical regional models exist
+    assert "jp.anthropic.claude-opus-4-6-v1" in model_data
+    assert "apac.anthropic.claude-opus-4-6-v1" in model_data
 
-    # Verify the au. model is registered in bedrock_converse_models
+    # Verify aliases are registered in bedrock_converse_models
     assert "au.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models, \
         "au.anthropic.claude-opus-4-6-v1 not registered in bedrock_converse_models"
+    assert "jp.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
+    assert "apac.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
 
-    # Verify apac. is NOT registered for this model
-    assert "apac.anthropic.claude-opus-4-6-v1" not in litellm.bedrock_converse_models, \
-        "apac.anthropic.claude-opus-4-6-v1 should not be in bedrock_converse_models"
+
+def test_sonnet_4_6_australia_region_mapping():
+    project_root = os.path.join(os.path.dirname(__file__), "../../")
+    main_map_path = os.path.join(project_root, "model_prices_and_context_window.json")
+    backup_map_path = os.path.join(
+        project_root, "litellm/model_prices_and_context_window_backup.json"
+    )
+
+    with open(main_map_path) as f:
+        main_map = json.load(f)
+    with open(backup_map_path) as f:
+        backup_map = json.load(f)
+
+    model_name = "au.anthropic.claude-sonnet-4-6"
+    apac_name = "apac.anthropic.claude-sonnet-4-6"
+
+    assert model_name in main_map
+    assert model_name in backup_map
+    assert model_name in litellm.bedrock_converse_models
+
+    assert main_map[model_name] == main_map[apac_name]
+    assert backup_map[model_name] == backup_map[apac_name]
 
 
 def test_opus_4_6_model_pricing_and_capabilities():
@@ -203,8 +222,51 @@ def test_opus_4_6_alias_and_dated_metadata_match():
 
 
 def test_opus_4_6_bedrock_converse_registration():
+    assert "anthropic.claude-opus-4-6-v1:0" in litellm.BEDROCK_CONVERSE_MODELS
     assert "anthropic.claude-opus-4-6-v1" in litellm.BEDROCK_CONVERSE_MODELS
     assert "global.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
     assert "us.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
     assert "eu.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
+    assert "jp.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
+    assert "apac.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
     assert "au.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
+    assert "anthropic.claude-sonnet-4-6-v1:0" in litellm.bedrock_converse_models
+    assert "anthropic.claude-sonnet-4-6-v1" in litellm.bedrock_converse_models
+    assert "jp.anthropic.claude-sonnet-4-6" in litellm.bedrock_converse_models
+    assert "apac.anthropic.claude-sonnet-4-6" in litellm.bedrock_converse_models
+    assert "au.anthropic.claude-sonnet-4-6" in litellm.bedrock_converse_models
+
+
+def test_bedrock_claude_4_6_aliases_have_model_cost_mappings():
+    project_root = os.path.join(os.path.dirname(__file__), "../../")
+    main_map_path = os.path.join(project_root, "model_prices_and_context_window.json")
+    backup_map_path = os.path.join(
+        project_root, "litellm/model_prices_and_context_window_backup.json"
+    )
+
+    with open(main_map_path) as f:
+        main_map = json.load(f)
+    with open(backup_map_path) as f:
+        backup_map = json.load(f)
+
+    expected_aliases = (
+        "anthropic.claude-sonnet-4-6-v1:0",
+        "anthropic.claude-sonnet-4-6-v1",
+    )
+
+    for model_name in expected_aliases:
+        assert model_name in main_map, f"Missing model entry in main map: {model_name}"
+        assert model_name in backup_map, f"Missing model entry in backup map: {model_name}"
+
+    assert main_map["anthropic.claude-sonnet-4-6-v1:0"] == main_map[
+        "anthropic.claude-sonnet-4-6"
+    ]
+    assert main_map["anthropic.claude-sonnet-4-6-v1"] == main_map[
+        "anthropic.claude-sonnet-4-6"
+    ]
+    assert backup_map["anthropic.claude-sonnet-4-6-v1:0"] == backup_map[
+        "anthropic.claude-sonnet-4-6"
+    ]
+    assert backup_map["anthropic.claude-sonnet-4-6-v1"] == backup_map[
+        "anthropic.claude-sonnet-4-6"
+    ]

@@ -35,6 +35,30 @@ class TestMapReasoningEffort:
         )
         assert result["type"] == "adaptive"
 
+    def test_opus_4_6_dotted_alias_returns_adaptive(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="medium", model="claude-opus-4.6-20260205"
+        )
+        assert result["type"] == "adaptive"
+
+    def test_opus_4_6_underscore_dotted_alias_returns_adaptive(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="medium", model="claude-opus_4.6-20260205"
+        )
+        assert result["type"] == "adaptive"
+
+    def test_sonnet_4_6_returns_adaptive_for_low(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="low", model="claude-sonnet-4-6"
+        )
+        assert result["type"] == "adaptive"
+
+    def test_sonnet_4_6_dotted_alias_returns_adaptive(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="high", model="claude-sonnet-4.6"
+        )
+        assert result["type"] == "adaptive"
+
     def test_other_model_low_returns_enabled_with_budget(self):
         result = AnthropicConfig._map_reasoning_effort(
             reasoning_effort="low", model="claude-3-7-sonnet-20250219"
