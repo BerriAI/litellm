@@ -359,7 +359,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/vector_store/list",
         "/v1/vector_store/list",
-
         # search
         "/search",
         "/v1/search",
@@ -421,6 +420,9 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools",
         "/mcp/tools/list",
         "/mcp/tools/call",
+        "/mcp-rest/tools/list",
+        "/mcp-rest/tools/call",
+        "/v1/mcp/server",
     ]
 
     agent_routes = [
@@ -512,6 +514,8 @@ class LiteLLMRoutes(enum.Enum):
         "/user/delete",
         "/user/info",
         "/user/list",
+        "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         # team
         "/team/new",
         "/team/update",
@@ -524,6 +528,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/available",
         "/team/permissions_list",
         "/team/permissions_update",
+        "/team/daily/activity",
         # model
         "/model/new",
         "/model/update",
@@ -631,6 +636,9 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
+        "/invitation/new",
+        "/invitation/delete",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -888,6 +896,7 @@ class KeyRequestBase(GenerateRequestBase):
         Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
     router_settings: Optional[UpdateRouterConfig] = None
+    access_group_ids: Optional[List[str]] = None
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -986,6 +995,9 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
+    grace_period: Optional[
+        str
+    ] = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
 
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
@@ -1497,6 +1509,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     models: list = []
     blocked: bool = False
     router_settings: Optional[dict] = None
+    access_group_ids: Optional[List[str]] = None
 
 
 class NewTeamRequest(TeamBase):
@@ -1584,6 +1597,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     router_settings: Optional[dict] = None
+    access_group_ids: Optional[List[str]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1909,6 +1923,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).",
     )
+    is_from_config: bool = Field(
+        default=False,
+        description="True if this endpoint is defined in the config file, False if from DB. Config-defined endpoints cannot be edited via the UI.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):
@@ -2168,6 +2186,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    access_group_ids: Optional[List[str]] = None
     rotation_count: Optional[int] = 0  # Number of times key has been rotated
     auto_rotate: Optional[bool] = False  # Whether this key should be auto-rotated
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
@@ -2232,13 +2251,22 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
     def __init__(self, **kwargs):
-        # Handle litellm_budget_table_* keys
+        # Handle litellm_budget_table_* keys (budget table overrides when key value is None or empty)
         for key, value in list(kwargs.items()):
             if key.startswith("litellm_budget_table_") and value is not None:
                 # Extract the corresponding attribute name
                 attr_name = key.replace("litellm_budget_table_", "")
-                # Check if the value is None and set the corresponding attribute
-                if getattr(self, attr_name, None) is None:
+                # Use key's value from kwargs (from DB view), not class default
+                current = kwargs.get(attr_name)
+                if current is None:
+                    current = getattr(self, attr_name, None)
+                # Apply budget value when key has no value, or for model_max_budget when key has empty dict
+                should_apply = current is None or (
+                    attr_name == "model_max_budget"
+                    and isinstance(current, dict)
+                    and len(current) == 0
+                )
+                if should_apply:
                     kwargs[attr_name] = value
             if key == "end_user_id" and value is not None and isinstance(value, int):
                 kwargs[key] = str(value)
@@ -2536,6 +2564,21 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
         return values
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    description: Optional[str] = None
+    access_model_names: List[str] = []
+    access_mcp_server_ids: List[str] = []
+    access_agent_ids: List[str] = []
+    assigned_team_ids: List[str] = []
+    assigned_key_ids: List[str] = []
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
 
 class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
@@ -3751,7 +3794,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
-        allowed_keys = self.__annotations__.keys()
+        allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
 
         invalid_keys = set(kwargs.keys()) - allowed_keys
         user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
@@ -3925,6 +3968,18 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune", "response"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+
+
+class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
+    """Table for managing vector stores with target_model_names support."""
+    unified_resource_id: str
+    resource_object: Optional[Any] = None  # VectorStoreCreateResponse
+    model_mappings: Dict[str, str]
+    flat_model_resource_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
+    storage_backend: Optional[str] = None
+    storage_url: Optional[str] = None
 
 
 class EnterpriseLicenseData(TypedDict, total=False):

@@ -269,26 +269,27 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video list request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos
         """
         # Use the api_base directly for video list
         url = api_base
-        
+
         # Prepare query parameters
         params = {}
         if after is not None:
-            params["after"] = after
+            # Decode the wrapped video ID back to the original provider ID
+            params["after"] = extract_original_video_id(after)
         if limit is not None:
             params["limit"] = str(limit)
         if order is not None:
             params["order"] = order
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
-        
+
         return url, params
 
     def transform_video_list_response(
@@ -296,18 +297,40 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str,str]:
+    ) -> Dict[str, str]:
         response_data = raw_response.json()
-        
+
         if custom_llm_provider and "data" in response_data:
             for video_obj in response_data.get("data", []):
                 if isinstance(video_obj, dict) and "id" in video_obj:
                     video_obj["id"] = encode_video_id_with_provider(
-                        video_obj["id"], 
-                        custom_llm_provider, 
-                        video_obj.get("model")
+                        video_obj["id"],
+                        custom_llm_provider,
+                        video_obj.get("model"),
                     )
-        
+
+            # Encode pagination cursor IDs so they remain consistent
+            # with the wrapped data[].id format
+            data_list = response_data.get("data", [])
+            if response_data.get("first_id"):
+                first_model = None
+                if data_list and isinstance(data_list[0], dict):
+                    first_model = data_list[0].get("model")
+                response_data["first_id"] = encode_video_id_with_provider(
+                    response_data["first_id"],
+                    custom_llm_provider,
+                    first_model,
+                )
+            if response_data.get("last_id"):
+                last_model = None
+                if data_list and isinstance(data_list[-1], dict):
+                    last_model = data_list[-1].get("model")
+                response_data["last_id"] = encode_video_id_with_provider(
+                    response_data["last_id"],
+                    custom_llm_provider,
+                    last_model,
+                )
+
         return response_data
 
     def transform_video_delete_request(

@@ -4,7 +4,7 @@ Types for the management endpoints
 Might include fastapi/proxy requirements.txt related imports
 """
 
-from typing import List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 from fastapi_sso.sso.base import OpenID
 
@@ -56,3 +56,4 @@ def get_litellm_user_role(role_str) -> Optional[LitellmUserRoles]:
 class CustomOpenID(OpenID):
     team_ids: List[str]
     user_role: Optional[LitellmUserRoles] = None
+    extra_fields: Optional[Dict[str, Any]] = None

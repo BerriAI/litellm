@@ -230,12 +230,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_file:
             return managed_file.created_by == user_id
-        return False
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {unified_file_id}",
+        )
 
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
-        ## check if the user has access to the unified object id
         ## check if the user has access to the unified object id
         user_id = user_api_key_dict.user_id
         managed_object = (
@@ -246,7 +248,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if managed_object:
             return managed_object.created_by == user_id
-        return True  # don't raise error if managed object is not found
+        raise HTTPException(
+            status_code=404,
+            detail=f"Object not found: {unified_object_id}",
+        )
 
     async def list_user_batches(
         self,
@@ -899,49 +904,58 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     batch_id=response.id, model_id=model_id
                 )
 
-                if (
-                    response.output_file_id and model_id
-                ):  # return a file id with the model_id and output_file_id
-                    original_output_file_id = response.output_file_id
-                    response.output_file_id = self.get_unified_output_file_id(
-                        output_file_id=response.output_file_id,
-                        model_id=model_id,
-                        model_name=model_name,
-                    )
-                    
-                    # Fetch the actual file object for the output file
-                    file_object = None
-                    try:
-                        # Use litellm to retrieve the file object from the provider
-                        from litellm import afile_retrieve
-                        file_object = await afile_retrieve(
-                            custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
-                            file_id=original_output_file_id
+                # Handle both output_file_id and error_file_id
+                for file_attr in ["output_file_id", "error_file_id"]:
+                    file_id_value = getattr(response, file_attr, None)
+                    if file_id_value and model_id:
+                        original_file_id = file_id_value
+                        unified_file_id = self.get_unified_output_file_id(
+                            output_file_id=original_file_id,
+                            model_id=model_id,
+                            model_name=model_name,
                         )
-                        verbose_logger.debug(
-                            f"Successfully retrieved file object for output_file_id={original_output_file_id}"
+                        setattr(response, file_attr, unified_file_id)
+                        
+                        # Use llm_router credentials when available. Without credentials,
+                        # Azure and other auth-required providers return 500/401.
+                        file_object = None
+                        try:
+                            # Import module and use getattr for better testability with mocks
+                            import litellm.proxy.proxy_server as proxy_server_module
+                            _llm_router = getattr(proxy_server_module, 'llm_router', None)
+                            if _llm_router is not None and model_id:
+                                _creds = _llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                                file_object = await litellm.afile_retrieve(
+                                    file_id=original_file_id,
+                                    **_creds,
+                                )
+                            else:
+                                file_object = await litellm.afile_retrieve(
+                                    custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                                    file_id=original_file_id,
+                                )
+                            verbose_logger.debug(
+                                f"Successfully retrieved file object for {file_attr}={original_file_id}"
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to retrieve file object for {file_attr}={original_file_id}: {str(e)}. Storing with None and will fetch on-demand."
+                            )
+                        
+                        await self.store_unified_file_id(
+                            file_id=unified_file_id,
+                            file_object=file_object,
+                            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                            model_mappings={model_id: original_file_id},
+                            user_api_key_dict=user_api_key_dict,
                         )
-                    except Exception as e:
-                        verbose_logger.warning(
-                            f"Failed to retrieve file object for output_file_id={original_output_file_id}: {str(e)}. Storing with None and will fetch on-demand."
-                        )
-                    
-                    await self.store_unified_file_id(
-                        file_id=response.output_file_id,
-                        file_object=file_object,
-                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                        model_mappings={model_id: original_output_file_id},
-                        user_api_key_dict=user_api_key_dict,
-                    )
-            asyncio.create_task(
-                self.store_unified_object_id(
-                    unified_object_id=response.id,
-                    file_object=response,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                    model_object_id=original_response_id,
-                    file_purpose="batch",
-                    user_api_key_dict=user_api_key_dict,
-                )
+            await self.store_unified_object_id(
+                unified_object_id=response.id,
+                file_object=response,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                model_object_id=original_response_id,
+                file_purpose="batch",
+                user_api_key_dict=user_api_key_dict,
             )
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
@@ -958,15 +972,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 response.id = self.get_unified_generic_response_id(
                     model_id=model_id, generic_response_id=response.id
                 )
-            asyncio.create_task(
-                self.store_unified_object_id(
-                    unified_object_id=response.id,
-                    file_object=response,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                    model_object_id=original_response_id,
-                    file_purpose="fine-tune",
-                    user_api_key_dict=user_api_key_dict,
-                )
+            await self.store_unified_object_id(
+                unified_object_id=response.id,
+                file_object=response,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                model_object_id=original_response_id,
+                file_purpose="fine-tune",
+                user_api_key_dict=user_api_key_dict,
             )
         elif isinstance(response, AsyncCursorPage):
             """
@@ -1006,8 +1018,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
         
         # Case 2: Managed file and the file object exists in the database
+        # The stored file_object has the raw provider ID. Replace with the unified ID
+        # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
         if stored_file_object and stored_file_object.file_object:
-            return stored_file_object.file_object
+            # Use model_copy to ensure the ID update persists (Pydantic v2 compatibility)
+            response = stored_file_object.file_object.model_copy(update={"id": file_id})
+            return response
 
         # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
         # So we fetch the file object from the provider. We deliberately do not store the result to avoid interfering with batch cost tracking code.

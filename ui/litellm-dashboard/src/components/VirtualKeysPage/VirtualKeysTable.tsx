@@ -727,7 +727,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                                 whiteSpace: "pre-wrap",
                                 overflow: "hidden",
                               }}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && Array.isArray(cell.getValue()) && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
                             >
                               {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </TableCell>

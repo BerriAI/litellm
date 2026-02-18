@@ -461,12 +461,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 data=prepared_request.body,  # type: ignore
                 headers=prepared_request.headers,  # type: ignore
             )
+        except HTTPException:
+            # Propagate HTTPException (e.g. from non-200 path) as-is
+            raise
         except Exception as e:
+            # If this is an HTTP error with a response body (e.g. httpx.HTTPStatusError),
+            # extract the AWS error message and propagate it
+            response = getattr(e, "response", None)
+            if isinstance(response, httpx.Response):
+                try:
+                    status_code, detail_message = (
+                        self._parse_bedrock_guardrail_error_response(response)
+                    )
+                    self.add_standard_logging_guardrail_information_to_request_data(
+                        guardrail_provider=self.guardrail_provider,
+                        guardrail_json_response={"error": detail_message},
+                        request_data=request_data or {},
+                        guardrail_status="guardrail_failed_to_respond",
+                        start_time=start_time.timestamp(),
+                        end_time=datetime.now().timestamp(),
+                        duration=(datetime.now() - start_time).total_seconds(),
+                        event_type=event_type,
+                    )
+                    raise HTTPException(
+                        status_code=status_code, detail=detail_message
+                    ) from e
+                except HTTPException:
+                    raise
             # Endpoint down, timeout, or other HTTP/network errors
             verbose_proxy_logger.error(
                 "Bedrock AI: failed to make guardrail request: %s", str(e)
             )
-            # Add guardrail information with failure status
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": str(e)},
@@ -477,7 +502,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
             )
-            # Re-raise the exception to maintain existing behavior
             raise
 
         #########################################################
@@ -509,11 +533,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     bedrock_guardrail_response
                 )
         else:
+            status_code, detail_message = self._parse_bedrock_guardrail_error_response(
+                httpx_response
+            )
             verbose_proxy_logger.error(
                 "Bedrock AI: error in response. Status code: %s, response: %s",
                 httpx_response.status_code,
                 httpx_response.text,
             )
+            raise HTTPException(status_code=status_code, detail=detail_message)
 
         return bedrock_guardrail_response
 
@@ -578,6 +606,34 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             return "success"
         return "guardrail_failed_to_respond"
+
+    def _parse_bedrock_guardrail_error_response(
+        self, response: httpx.Response
+    ) -> Tuple[int, str]:
+        """
+        Parse AWS Bedrock guardrail error response body to extract status code and message.
+
+        AWS may return shapes like {"message": "..."} or {"error": {"message": "..."}}.
+        Returns (status_code, message) for use in HTTPException.
+        """
+        status_code = response.status_code
+        message = "Bedrock guardrail request failed"
+        try:
+            body = response.json()
+        except Exception:
+            text = getattr(response, "text", None) or ""
+            if isinstance(text, str) and text.strip():
+                return (status_code, text.strip())
+            return (status_code, message)
+        if isinstance(body, dict):
+            if isinstance(body.get("message"), str):
+                return (status_code, body["message"])
+            err = body.get("error")
+            if isinstance(err, dict) and isinstance(err.get("message"), str):
+                return (status_code, err["message"])
+            if isinstance(err, str):
+                return (status_code, err)
+        return (status_code, message)
 
     def _get_http_exception_for_blocked_guardrail(
         self, response: BedrockGuardrailResponse
@@ -739,9 +795,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -811,9 +867,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data

@@ -6,7 +6,12 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_TeamTable, ProxyException, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    ProxyException,
+    SpecialHeaders,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -372,45 +377,31 @@ class MCPRequestHandler:
             return []
 
     @staticmethod
-    async def _get_key_object_permission(
+    def _get_key_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
-        """Helper to get key object_permission from cache or DB."""
-        from litellm.proxy.auth.auth_checks import get_object_permission
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        """
+        Get key object_permission - already loaded by get_key_object() in main auth flow.
 
+        Note: object_permission is automatically populated when the key is fetched via
+        get_key_object() in litellm/proxy/auth/auth_checks.py
+        """
         if not user_api_key_auth:
             return None
 
-        # Already loaded
-        if user_api_key_auth.object_permission:
-            return user_api_key_auth.object_permission
-
-        # Need to fetch from DB
-        if user_api_key_auth.object_permission_id and prisma_client:
-            return await get_object_permission(
-                object_permission_id=user_api_key_auth.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-        return None
+        return user_api_key_auth.object_permission
 
     @staticmethod
     async def _get_team_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
-        """Helper to get team object_permission from cache or DB."""
-        from litellm.proxy.auth.auth_checks import (
-            get_object_permission,
-            get_team_object,
-        )
+        """
+        Get team object_permission - automatically loaded by get_team_object() in main auth flow.
+
+        Note: object_permission is automatically populated when the team is fetched via
+        get_team_object() in litellm/proxy/auth/auth_checks.py
+        """
+        from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -423,7 +414,7 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
 
-        # First get the team object (which may have object_permission already loaded)
+        # Get the team object (which has object_permission already loaded)
         team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
             team_id=user_api_key_auth.team_id,
             prisma_client=prisma_client,
@@ -435,21 +426,7 @@ class MCPRequestHandler:
         if not team_obj:
             return None
 
-        # Already loaded
-        if team_obj.object_permission:
-            return team_obj.object_permission
-
-        # Need to fetch from DB using object_permission_id
-        if team_obj.object_permission_id:
-            return await get_object_permission(
-                object_permission_id=team_obj.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-        return None
+        return team_obj.object_permission
 
     @staticmethod
     async def get_allowed_tools_for_server(
@@ -471,8 +448,8 @@ class MCPRequestHandler:
             return None
 
         try:
-            # Get key and team object permissions
-            key_obj_perm = await MCPRequestHandler._get_key_object_permission(
+            # Get key and team object permissions (already loaded in main auth flow)
+            key_obj_perm = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
             team_obj_perm = await MCPRequestHandler._get_team_object_permission(
@@ -559,9 +536,25 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         try:
-            key_object_permission = await MCPRequestHandler._get_key_object_permission(
+            # Get key object permission (already loaded in main auth flow, or fetch from DB)
+            key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
+            if key_object_permission is None and user_api_key_auth and user_api_key_auth.object_permission_id:
+                from litellm.proxy.auth.auth_checks import get_object_permission
+                from litellm.proxy.proxy_server import (
+                    prisma_client,
+                    proxy_logging_obj,
+                    user_api_key_cache,
+                )
+                if prisma_client is not None:
+                    key_object_permission = await get_object_permission(
+                        object_permission_id=user_api_key_auth.object_permission_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=user_api_key_auth.parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
             if key_object_permission is None:
                 return []
 
@@ -591,12 +584,10 @@ class MCPRequestHandler:
         """
         Get allowed MCP servers for a team.
 
-        Uses the helper _get_team_object_permission which:
-        1. First checks if object_permission is already loaded on the team
-        2. If not, fetches from DB using object_permission_id if it exists
+        Note: object_permission is automatically loaded by get_team_object() in main auth flow.
         """
         try:
-            # Use the helper method that properly handles fetching from DB if needed
+            # Get team object permission (already loaded in main auth flow)
             object_permissions = await MCPRequestHandler._get_team_object_permission(
                 user_api_key_auth
             )

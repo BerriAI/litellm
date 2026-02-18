@@ -227,6 +227,84 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return input_items, instructions
 
+    def _map_optional_params_to_responses_api_request(
+        self,
+        optional_params: dict,
+        responses_api_request: "ResponsesAPIOptionalRequestParams",
+    ) -> None:
+        """Map optional_params into responses_api_request (mutates in place)."""
+        for key, value in optional_params.items():
+            if value is None:
+                continue
+            if key in ("max_tokens", "max_completion_tokens"):
+                responses_api_request["max_output_tokens"] = value
+            elif key == "tools" and value is not None:
+                responses_api_request["tools"] = (
+                    self._convert_tools_to_responses_format(
+                        cast(List[Dict[str, Any]], value)
+                    )
+                )
+            elif key == "response_format":
+                text_format = self._transform_response_format_to_text_format(value)
+                if text_format:
+                    responses_api_request["text"] = text_format  # type: ignore
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
+                responses_api_request[key] = value  # type: ignore
+            elif key == "previous_response_id":
+                responses_api_request["previous_response_id"] = value
+            elif key == "reasoning_effort":
+                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+            elif key == "web_search_options":
+                self._add_web_search_tool(responses_api_request, value)
+
+    def _build_sanitized_litellm_params(
+        self, litellm_params: dict
+    ) -> Dict[str, Any]:
+        """Build sanitized litellm_params with merged metadata."""
+        responses_optional_param_keys = set(
+            ResponsesAPIOptionalRequestParams.__annotations__.keys()
+        )
+        sanitized: Dict[str, Any] = {
+            key: value
+            for key, value in litellm_params.items()
+            if key not in responses_optional_param_keys
+        }
+        legacy_metadata = litellm_params.get("metadata")
+        existing_litellm_metadata = litellm_params.get("litellm_metadata")
+        merged_litellm_metadata: Dict[str, Any] = {}
+        if isinstance(legacy_metadata, dict):
+            merged_litellm_metadata.update(legacy_metadata)
+        if isinstance(existing_litellm_metadata, dict):
+            merged_litellm_metadata.update(existing_litellm_metadata)
+        if merged_litellm_metadata:
+            sanitized["litellm_metadata"] = merged_litellm_metadata
+        else:
+            sanitized.pop("litellm_metadata", None)
+        return sanitized
+
+    def _merge_responses_api_request_into_request_data(
+        self,
+        request_data: Dict[str, Any],
+        responses_api_request: "ResponsesAPIOptionalRequestParams",
+        instructions: Optional[str],
+    ) -> None:
+        """Add non-None values from responses_api_request into request_data."""
+        for key, value in responses_api_request.items():
+            if value is None:
+                continue
+            if key == "instructions" and instructions:
+                request_data["instructions"] = instructions
+            elif key == "stream_options" and isinstance(value, dict):
+                request_data["stream_options"] = value.get("include_obfuscation")
+            elif key == "user" and isinstance(value, str):
+                # OpenAI API requires user param to be max 64 chars - truncate if longer
+                if len(value) <= 64:
+                    request_data["user"] = value
+                else:
+                    request_data["user"] = value[:64]
+            else:
+                request_data[key] = value
+
     def transform_request(
         self,
         model: str,
@@ -251,36 +329,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if instructions:
             responses_api_request["instructions"] = instructions
 
-        # Map optional parameters
-        for key, value in optional_params.items():
-            if value is None:
-                continue
-            if key in ("max_tokens", "max_completion_tokens"):
-                responses_api_request["max_output_tokens"] = value
-            elif key == "tools" and value is not None:
-                # Convert chat completion tools to responses API tools format
-                responses_api_request["tools"] = (
-                    self._convert_tools_to_responses_format(
-                        cast(List[Dict[str, Any]], value)
-                    )
-                )
-            elif key == "response_format":
-                # Convert response_format to text.format
-                text_format = self._transform_response_format_to_text_format(value)
-                if text_format:
-                    responses_api_request["text"] = text_format  # type: ignore
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
-                responses_api_request[key] = value  # type: ignore
-            elif key == "metadata":
-                responses_api_request["metadata"] = value
-            elif key == "previous_response_id":
-                responses_api_request["previous_response_id"] = value
-            elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
-            elif key == "web_search_options":
-                self._add_web_search_tool(responses_api_request, value)
+        self._map_optional_params_to_responses_api_request(
+            optional_params, responses_api_request
+        )
 
-        # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug(f"Chat provider: Stream parameter: {stream}")
 
@@ -304,11 +356,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
 
+        sanitized_litellm_params = self._build_sanitized_litellm_params(
+            litellm_params
+        )
+
         request_data = {
             "model": api_model,
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
-            **litellm_params,
+            **sanitized_litellm_params,
             "client": client,
         }
 
@@ -316,18 +372,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             f"Chat provider: Final request model={api_model}, input_items={len(input_items)}"
         )
 
-        # Add non-None values from responses_api_request
-        for key, value in responses_api_request.items():
-            if value is not None:
-                if key == "instructions" and instructions:
-                    request_data["instructions"] = instructions
-                elif key == "stream_options" and isinstance(value, dict):
-                    request_data["stream_options"] = value.get("include_obfuscation")
-                elif key == "user":  # string can't be longer than 64 characters
-                    if isinstance(value, str) and len(value) <= 64:
-                        request_data["user"] = value
-                else:
-                    request_data[key] = value
+        self._merge_responses_api_request_into_request_data(
+            request_data, responses_api_request, instructions
+        )
 
         if headers:
             request_data["extra_headers"] = headers

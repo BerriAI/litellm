@@ -731,6 +731,7 @@ class Guardrail(TypedDict, total=False):
     guardrail_name: Required[str]
     litellm_params: Required[LitellmParams]
     guardrail_info: Optional[Dict]
+    policy_template: Optional[str]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 

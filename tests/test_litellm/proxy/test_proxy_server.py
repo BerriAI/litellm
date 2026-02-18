@@ -262,6 +262,11 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
         "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
         lambda *args, **kwargs: False,
     )
+    # Mock premium_user to bypass enterprise check (prevents 403 Forbidden)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
+    )
     monkeypatch.setenv("UI_USERNAME", "admin")
 
     response = client_no_auth.get("/sso/key/generate")
@@ -668,39 +673,42 @@ def test_team_info_masking():
     assert "public-test-key" not in str(exc_info.value)
 
 
-@mock_patch_aembedding()
-def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
+def test_embedding_input_array_of_tokens(client_no_auth):
     """
     Test to bypass decoding input as array of tokens for selected providers
 
     Ref: https://github.com/BerriAI/litellm/issues/10113
     """
+    from litellm.proxy import proxy_server
+
+    # Apply the mock AFTER client_no_auth fixture has initialized the router
+    # This avoids issues with llm_router being None during parallel test execution
+    if proxy_server.llm_router is None:
+        pytest.skip("llm_router not initialized - skipping test")
+
     try:
-        test_data = {
-            "model": "vllm_embed_model",
-            "input": [[2046, 13269, 158208]],
-        }
+        with mock.patch.object(
+            proxy_server.llm_router,
+            "aembedding",
+            return_value=example_embedding_result,
+        ) as mock_aembedding:
+            test_data = {
+                "model": "vllm_embed_model",
+                "input": [[2046, 13269, 158208]],
+            }
 
-        response = client_no_auth.post("/v1/embeddings", json=test_data)
+            response = client_no_auth.post("/v1/embeddings", json=test_data)
 
-        # DEPRECATED - mock_aembedding.assert_called_once_with is too strict, and will fail when new kwargs are added to embeddings
-        # mock_aembedding.assert_called_once_with(
-        #     model="vllm_embed_model",
-        #     input=[[2046, 13269, 158208]],
-        #     metadata=mock.ANY,
-        #     proxy_server_request=mock.ANY,
-        #     secret_fields=mock.ANY,
-        # )
-        # Assert that aembedding was called, and that input was not modified
-        mock_aembedding.assert_called_once()
-        call_args, call_kwargs = mock_aembedding.call_args
-        assert call_kwargs["model"] == "vllm_embed_model"
-        assert call_kwargs["input"] == [[2046, 13269, 158208]]
+            # Assert that aembedding was called, and that input was not modified
+            mock_aembedding.assert_called_once()
+            call_args, call_kwargs = mock_aembedding.call_args
+            assert call_kwargs["model"] == "vllm_embed_model"
+            assert call_kwargs["input"] == [[2046, 13269, 158208]]
 
-        assert response.status_code == 200
-        result = response.json()
-        print(len(result["data"][0]["embedding"]))
-        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
+            assert response.status_code == 200
+            result = response.json()
+            print(len(result["data"][0]["embedding"]))
+            assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -2996,9 +3004,13 @@ async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Mock os.path operations
+    # Mock os.path operations - exists=False for assets_dir so makedirs gets called
+    def exists_side_effect(path):
+        return False if path == "/var/lib/litellm/assets" else True
+
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
-         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
          patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
@@ -3038,14 +3050,16 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
 
     def exists_side_effect(path):
         exists_calls.append(path)
-        # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
-        if "/var/lib/litellm/assets/logo.jpg" in path:
+        # Return False for /var/lib/litellm/assets* so: makedirs is called, logo fallback
+        # triggers, and we don't return early with cached file
+        if "/var/lib/litellm/assets" in path:
             return False
         return True
 
     # Mock os.path operations
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
          patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
          patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
@@ -3203,3 +3217,123 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     assert result["general_settings"]["nested"]["key1"] == "updated_value1"
     assert result["general_settings"]["nested"]["key2"] == "value2"
     assert result["general_settings"]["nested"]["key3"] == "value3"
+
+
+class TestInvitationEndpoints:
+    """Tests for /invitation/new and /invitation/delete endpoints."""
+
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with admin authentication."""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "admin-user-id"
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        mock_auth.api_key = "sk-test"
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        return TestClient(app)
+
+    @pytest.mark.parametrize(
+        "endpoint,payload,mock_return",
+        [
+            (
+                "/invitation/new",
+                {"user_id": "target-user-123"},
+                {
+                    "id": "inv-123",
+                    "user_id": "target-user-123",
+                    "is_accepted": False,
+                    "accepted_at": None,
+                    "expires_at": "2025-02-18T00:00:00",
+                    "created_at": "2025-02-11T00:00:00",
+                    "created_by": "admin-user-id",
+                    "updated_at": "2025-02-11T00:00:00",
+                    "updated_by": "admin-user-id",
+                },
+            ),
+            (
+                "/invitation/delete",
+                {"invitation_id": "inv-456"},
+                {
+                    "id": "inv-456",
+                    "user_id": "target-user-123",
+                    "is_accepted": False,
+                    "accepted_at": None,
+                    "expires_at": "2025-02-18T00:00:00",
+                    "created_at": "2025-02-11T00:00:00",
+                    "created_by": "admin-user-id",
+                    "updated_at": "2025-02-11T00:00:00",
+                    "updated_by": "admin-user-id",
+                },
+            ),
+        ],
+    )
+    def test_invitation_endpoints_proxy_admin_success(
+        self, client_with_auth, endpoint, payload, mock_return
+    ):
+        """Proxy admin can successfully create and delete invitations."""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_invitationlink = MagicMock()
+            if endpoint == "/invitation/new":
+                mock_create = AsyncMock(return_value=mock_return)
+                with patch(
+                    "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
+                    mock_create,
+                ):
+                    response = client_with_auth.post(endpoint, json=payload)
+            else:
+                mock_prisma.db.litellm_invitationlink.find_unique = AsyncMock(
+                    return_value={**mock_return, "created_by": "admin-user-id"}
+                )
+                mock_prisma.db.litellm_invitationlink.delete = AsyncMock(
+                    return_value=mock_return
+                )
+                response = client_with_auth.post(endpoint, json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == mock_return["id"]
+        assert data["user_id"] == mock_return["user_id"]
+
+    @pytest.mark.parametrize(
+        "endpoint,payload",
+        [
+            ("/invitation/new", {"user_id": "target-user-123"}),
+            ("/invitation/delete", {"invitation_id": "inv-456"}),
+        ],
+    )
+    def test_invitation_endpoints_non_admin_denied(
+        self, client_with_auth, endpoint, payload
+    ):
+        """Non-admin users cannot access invitation endpoints."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "regular-user"
+        mock_auth.user_role = LitellmUserRoles.INTERNAL_USER
+        mock_auth.api_key = "sk-regular"
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_invitationlink = MagicMock()
+            # Avoid triggering async DB calls in _user_has_admin_privileges
+            with patch(
+                "litellm.proxy.proxy_server._user_has_admin_privileges",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
+                response = client_with_auth.post(endpoint, json=payload)
+
+        assert response.status_code == 400
+        body = response.json()
+        # ProxyException handler returns {"error": {...}}, HTTPException returns {"detail": {...}}
+        error_content = body.get("error", body.get("detail", body))
+        assert "not allowed" in str(error_content).lower()

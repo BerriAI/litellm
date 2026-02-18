@@ -38,6 +38,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _transform_teams_to_deleted_records,
     _validate_and_populate_member_user_info,
     delete_team,
+    list_available_teams,
     router,
     team_member_add_duplication_check,
     team_member_delete,
@@ -5871,3 +5872,37 @@ async def test_validate_and_populate_member_user_info_only_user_id_not_found():
     mock_prisma_client.db.litellm_usertable.find_unique.assert_called_once_with(
         where={"user_id": "nonexistent-user"}
     )
+
+
+@pytest.mark.asyncio
+async def test_list_available_teams_returns_empty_list_when_none_configured():
+    """
+    Test that /team/available returns an empty list when no available teams
+    are configured, instead of raising an exception.
+    """
+    import litellm
+
+    mock_request = MagicMock()
+    mock_user_key = UserAPIKeyAuth(user_id="test-user", token="fake-token")
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    ):
+        # Case 1: default_internal_user_params is None
+        original = litellm.default_internal_user_params
+        litellm.default_internal_user_params = None
+        result = await list_available_teams(
+            http_request=mock_request,
+            user_api_key_dict=mock_user_key,
+        )
+        assert result == []
+
+        # Case 2: default_internal_user_params exists but has no "available_teams" key
+        litellm.default_internal_user_params = {"some_other_param": "value"}
+        result = await list_available_teams(
+            http_request=mock_request,
+            user_api_key_dict=mock_user_key,
+        )
+        assert result == []
+
+        litellm.default_internal_user_params = original

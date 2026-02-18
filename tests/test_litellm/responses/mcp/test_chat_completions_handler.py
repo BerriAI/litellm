@@ -760,46 +760,46 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             stream=True,
         )
 
-    # Verify result is CustomStreamWrapper
-    assert isinstance(result, CustomStreamWrapper)
+        # Verify result is CustomStreamWrapper
+        assert isinstance(result, CustomStreamWrapper)
 
-    # Consume the stream and verify metadata placement
-    all_chunks = []
-    async for chunk in result:
-        all_chunks.append(chunk)
-    assert len(all_chunks) > 0
+        # Consume the stream and verify metadata placement
+        # NOTE: Stream consumption must be inside the patch context to avoid real API calls
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+        assert len(all_chunks) > 0
 
-    # Find first chunk and final chunk from initial response
-    # mcp_list_tools is added to the first chunk (all_chunks[0])
-    first_chunk = all_chunks[0] if all_chunks else None
-    initial_final_chunk = None
-    
-    for chunk in all_chunks:
-        if hasattr(chunk, "choices") and chunk.choices:
-            choice = chunk.choices[0]
-            if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
-                initial_final_chunk = chunk
+        # Find first chunk and final chunk from initial response
+        # mcp_list_tools is added to the first chunk (all_chunks[0])
+        first_chunk = all_chunks[0] if all_chunks else None
+        initial_final_chunk = None
 
-    assert first_chunk is not None, "Should have a first chunk"
-    assert initial_final_chunk is not None, "Should have a final chunk from initial response"
+        for chunk in all_chunks:
+            if hasattr(chunk, "choices") and chunk.choices:
+                choice = chunk.choices[0]
+                if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
+                    initial_final_chunk = chunk
 
-    # print(first_chunk)
-    # Verify mcp_list_tools is in the first chunk
-    if hasattr(first_chunk, "choices") and first_chunk.choices:
-        choice = first_chunk.choices[0]
-        if hasattr(choice, "delta") and choice.delta:
-            provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-            assert provider_fields is not None, "First chunk should have provider_specific_fields"
-            assert "mcp_list_tools" in provider_fields, "First chunk should have mcp_list_tools"
+        assert first_chunk is not None, "Should have a first chunk"
+        assert initial_final_chunk is not None, "Should have a final chunk from initial response"
 
-    # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
-    if hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices:
-        choice = initial_final_chunk.choices[0]
-        if hasattr(choice, "delta") and choice.delta:
-            provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-            assert provider_fields is not None, "Final chunk should have provider_specific_fields"
-            assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
-            assert "mcp_call_results" in provider_fields, "Should have mcp_call_results"
+        # Verify mcp_list_tools is in the first chunk
+        if hasattr(first_chunk, "choices") and first_chunk.choices:
+            choice = first_chunk.choices[0]
+            if hasattr(choice, "delta") and choice.delta:
+                provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+                assert provider_fields is not None, "First chunk should have provider_specific_fields"
+                assert "mcp_list_tools" in provider_fields, "First chunk should have mcp_list_tools"
+
+        # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
+        if hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices:
+            choice = initial_final_chunk.choices[0]
+            if hasattr(choice, "delta") and choice.delta:
+                provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+                assert provider_fields is not None, "Final chunk should have provider_specific_fields"
+                assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
+                assert "mcp_call_results" in provider_fields, "Should have mcp_call_results"
 
 
 @pytest.mark.asyncio
