@@ -5094,14 +5094,7 @@ async def async_data_generator(
             )
 
             if isinstance(chunk, BaseModel):
-                if getattr(chunk, "_usage_stripped", False):
-                    chunk = chunk.model_dump_json(
-                        exclude_none=True, exclude_unset=True, exclude={"usage"}  # type: ignore
-                    )
-                else:
-                    chunk = chunk.model_dump_json(
-                        exclude_none=True, exclude_unset=True
-                    )
+                chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break

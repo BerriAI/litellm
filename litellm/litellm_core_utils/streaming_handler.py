@@ -1929,9 +1929,10 @@ class CustomStreamWrapper:
                         hasattr(processed_chunk, "usage")
                         and getattr(processed_chunk, "usage", None) is not None
                     ):
-                        # Flag for proxy to exclude usage during serialization
-                        # instead of expensive model_dump() + reconstruct round-trip
-                        processed_chunk._usage_stripped = True  # type: ignore
+                        # Set usage to None so model_dump_json(exclude_none=True)
+                        # drops it. The original usage is already preserved in
+                        # self.chunks (appended above) for calculate_total_usage().
+                        processed_chunk.usage = None  # type: ignore
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
                         )
