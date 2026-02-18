@@ -189,9 +189,10 @@ class TestEUAIActFrench3Scenarios:
             )
 
         # Verify it's a conditional match, not an always_block match
-        error_msg = str(exc_info.value)
+        error_detail = getattr(exc_info.value, 'detail', {})
+        error_msg = error_detail.get("error", str(exc_info.value)) if isinstance(error_detail, dict) else str(exc_info.value)
         assert "conditional match" in error_msg.lower(), \
-            f"Expected conditional match but got: {error_msg}"
+            f"Expected conditional match but got: {error_detail}"
 
         print(f"✓ PURE CONDITIONAL MATCHING PASSED")
         print(f"  Reason: {exc_info.value}\n")
