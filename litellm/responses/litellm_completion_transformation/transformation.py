@@ -31,7 +31,6 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
     OutputTokensDetails,
-    Reasoning,
     ResponseAPIUsage,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -1500,7 +1499,7 @@ class LiteLLMCompletionResponsesConfig:
             previous_response_id=getattr(
                 chat_completion_response, "previous_response_id", None
             ),
-            reasoning=dict(Reasoning()),
+            reasoning=None,
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),

@@ -33,6 +33,8 @@ def initialize_guardrail(
 
     content_filter_guardrail = ContentFilterGuardrail(
         guardrail_name=guardrail_name,
+        guardrail_id=guardrail.get("guardrail_id"),
+        policy_template=guardrail.get("policy_template"),
         patterns=litellm_params.patterns,
         blocked_words=litellm_params.blocked_words,
         blocked_words_file=litellm_params.blocked_words_file,

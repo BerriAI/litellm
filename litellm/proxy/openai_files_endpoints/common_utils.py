@@ -644,6 +644,28 @@ def _extract_model_param(request: "Request", request_body: dict) -> Optional[str
 # ============================================================================
 
 
+async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
+    """
+    If the batch response contains a raw provider input_file_id (not already a
+    unified ID), look up the corresponding unified file ID from the managed file
+    table and replace it in-place.
+    """
+    if (
+        hasattr(response, "input_file_id")
+        and response.input_file_id
+        and not _is_base64_encoded_unified_file_id(response.input_file_id)
+        and prisma_client
+    ):
+        try:
+            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                where={"flat_model_file_ids": {"has": response.input_file_id}}
+            )
+            if managed_file:
+                response.input_file_id = managed_file.unified_file_id
+        except Exception:
+            pass
+
+
 async def get_batch_from_database(
     batch_id: str,
     unified_batch_id: Union[str, Literal[False]],
@@ -687,6 +709,9 @@ async def get_batch_from_database(
         batch_data = json.loads(db_batch_object.file_object) if isinstance(db_batch_object.file_object, str) else db_batch_object.file_object
         response = LiteLLMBatch(**batch_data)
         response.id = batch_id
+
+        # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
+        await resolve_input_file_id_to_unified(response, prisma_client)
         
         verbose_proxy_logger.debug(
             f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"

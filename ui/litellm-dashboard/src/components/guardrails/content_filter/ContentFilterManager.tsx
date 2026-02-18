@@ -158,7 +158,14 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
 
   // Read-only display mode
   if (!isEditing) {
-    return <ContentFilterDisplay patterns={selectedPatterns} blockedWords={blockedWords} readOnly={true} />;
+    return (
+      <ContentFilterDisplay
+        patterns={selectedPatterns}
+        blockedWords={blockedWords}
+        categories={selectedContentCategories}
+        readOnly={true}
+      />
+    );
   }
 
   // Edit mode

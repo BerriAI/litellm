@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -76,6 +76,7 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -2154,6 +2155,58 @@ def jsonify_object(data: dict) -> dict:
     return db_data
 
 
+# In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
+# Avoids a DB query on every auth request for non-deprecated keys.
+# Bounded to prevent memory leaks from accumulated rotations.
+_deprecated_key_cache: LimitedSizeOrderedDict = LimitedSizeOrderedDict(max_size=1000)
+_DEPRECATED_KEY_CACHE_TTL_SECONDS = 60
+
+
+async def _lookup_deprecated_key(
+    db: Any,
+    hashed_token: str,
+) -> Optional[str]:
+    """
+    Check if a token exists in the deprecated keys table and is still within its grace period.
+
+    Returns the active_token_id if found and valid, otherwise None.
+    Uses an in-memory cache to avoid DB queries on every auth request.
+    """
+    now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
+
+    # Check cache first
+    cached = _deprecated_key_cache.get(hashed_token)
+    cached = _deprecated_key_cache.get(hashed_token)
+    if cached is not None:
+        active_token_id, cache_expires_at_ts, revoke_at_ts = cached
+        if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
+            return active_token_id
+        else:
+            _deprecated_key_cache.pop(hashed_token, None)
+
+    try:
+        deprecated_row = await db.litellm_deprecatedverificationtoken.find_first(
+            where={
+                "token": hashed_token,
+                "revoke_at": {"gt": now},
+            },
+            select={"active_token_id": True},
+        )
+        if deprecated_row and deprecated_row.active_token_id:
+            _deprecated_key_cache[hashed_token] = (
+                deprecated_row.active_token_id,
+                now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+            )
+            return deprecated_row.active_token_id
+        # Only cache positive results; negative lookups are fast on indexed columns
+        # and caching them risks evicting real deprecated key entries.
+    except Exception as e:
+        verbose_proxy_logger.debug("Deprecated key lookup skipped: %s", e)
+
+    return None
+
+
 class PrismaClient:
     spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -2489,6 +2542,7 @@ class PrismaClient:
         parent_otel_span: Optional[Span] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
         budget_id_list: Optional[List[str]] = None,
+        check_deprecated: bool = True,
     ):
         args_passed_in = locals()
         start_time = time.time()
@@ -2785,6 +2839,30 @@ class PrismaClient:
                     response = await self._query_first_with_cached_plan_fallback(
                         sql_query
                     )
+
+                    # If not found in main table, check deprecated keys (grace period)
+                    # check_deprecated=False on the recursive call prevents unbounded chaining
+                    if (
+                        response is None
+                        and hashed_token is not None
+                        and check_deprecated
+                    ):
+                        active_token_id = await _lookup_deprecated_key(
+                            db=self.db, hashed_token=hashed_token
+                        )
+                        if active_token_id:
+                            response = await self.get_data(
+                                token=active_token_id,
+                                table_name="combined_view",
+                                query_type="find_unique",
+                                parent_otel_span=parent_otel_span,
+                                proxy_logging_obj=proxy_logging_obj,
+                                check_deprecated=False,
+                            )
+                            if response is not None:
+                                verbose_proxy_logger.debug(
+                                    "Deprecated key used during grace period"
+                                )
 
                     if response is not None:
                         if response["team_models"] is None:
