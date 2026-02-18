@@ -101,9 +101,6 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         />
       )}
 
-      {/* Quick-jump to Guardrails */}
-      {hasGuardrailData && <GuardrailJumpLink guardrailEntries={guardrailEntries} />}
-
       {/* Tags */}
       {logEntry.request_tags && Object.keys(logEntry.request_tags).length > 0 && (
         <TagsSection tags={logEntry.request_tags} />
@@ -421,7 +418,7 @@ function RequestResponseSection({
   );
 }
 
-function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
+export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
   const allPassed = guardrailEntries.every((e) => {
     const status = e?.guardrail_status || e?.status;
     return status === "pass" || status === "passed" || status === "success";

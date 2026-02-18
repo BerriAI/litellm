@@ -12,10 +12,11 @@ import { MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
-import { LogDetailContent } from "./LogDetailContent";
+import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
+import { normalizeGuardrailEntries } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 
@@ -320,6 +321,11 @@ export function LogDetailsDrawer({
                   </>
                 )}
               </div>
+              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                <div className="mt-2">
+                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
+                </div>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto">
