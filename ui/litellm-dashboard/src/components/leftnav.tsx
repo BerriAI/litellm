@@ -154,6 +154,13 @@ const menuGroups: MenuGroup[] = [
         label: "Logs",
         icon: <LineChartOutlined />,
       },
+      {
+        key: "compliance",
+        page: "compliance",
+        label: "Compliance",
+        icon: <AuditOutlined />,
+        roles: all_admin_roles,
+      },
     ],
   },
   {

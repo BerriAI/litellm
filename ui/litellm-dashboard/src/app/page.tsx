@@ -21,6 +21,7 @@ import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import Navbar from "@/components/navbar";
 import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName, getInProductNudgesCall } from "@/components/networking";
 import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
+import PolicyComplianceTab from "@/components/UsagePage/components/PolicyComplianceTab";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";
@@ -552,6 +553,12 @@ function CreateKeyPageContent() {
                       teams={(teams as Team[]) ?? []}
                       organizations={(organizations as Organization[]) ?? []}
                     />
+                  ) : page == "compliance" ? (
+                    <div style={{ width: "100%" }} className="p-8">
+                      <div className="text-tremor-title font-semibold text-tremor-content-strong">Policy & Compliance View</div>
+                      <div className="text-tremor-default text-tremor-content mb-6">Monitor regulatory compliance across all AI requests</div>
+                      <PolicyComplianceTab />
+                    </div>
                   ) : (
                     <Usage
                       userID={userID}
