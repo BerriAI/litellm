@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.litellm_pre_call_utils import sanitize_metadata_for_logging
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -63,7 +64,9 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
-                user_api_key_auth_metadata=user_api_key_dict.metadata,
+                user_api_key_auth_metadata=sanitize_metadata_for_logging(
+                    user_api_key_dict.metadata
+                ),
             )
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key

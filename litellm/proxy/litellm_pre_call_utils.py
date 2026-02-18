@@ -38,6 +38,45 @@ from litellm.types.utils import (
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
 
+def sanitize_metadata_for_logging(
+    metadata: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Remove sensitive fields from metadata before logging.
+
+    Sensitive fields include API keys and secrets from callback configurations.
+    This function should be used whenever user_api_key_dict.metadata is passed
+    to logging systems to prevent secret leakage.
+    """
+    if metadata is None:
+        return None
+
+    # Keys that should be masked in logging output
+    sensitive_keys = {
+        "langfuse_secret_key",
+        "langfuse_secret",
+        "api_key",
+        "secret_key",
+        "secret",
+    }
+
+    def _redact_dict(d: Any) -> Any:
+        if isinstance(d, dict):
+            result = {}
+            for k, v in d.items():
+                if k.lower() in sensitive_keys or "secret" in k.lower():
+                    result[k] = "redacted"
+                else:
+                    result[k] = _redact_dict(v)
+            return result
+        elif isinstance(d, list):
+            return [_redact_dict(item) for item in d]
+        else:
+            return d
+
+    return _redact_dict(copy.deepcopy(metadata))
+
+
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import PolicyMatchContext
@@ -582,6 +621,17 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
+    def _sanitize_metadata_for_logging(
+        metadata: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Remove sensitive fields from metadata before logging.
+
+        Wrapper around module-level sanitize_metadata_for_logging function.
+        """
+        return sanitize_metadata_for_logging(metadata)
+
+    @staticmethod
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> StandardLoggingUserAPIKeyMetadata:
@@ -602,7 +652,9 @@ class LiteLLMProxyRequestSetup:
                 if user_api_key_dict.budget_reset_at
                 else None
             ),
-            user_api_key_auth_metadata=user_api_key_dict.metadata,
+            user_api_key_auth_metadata=LiteLLMProxyRequestSetup._sanitize_metadata_for_logging(
+                user_api_key_dict.metadata
+            ),
         )
         return user_api_key_logged_metadata
 
