@@ -401,6 +401,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
+        from openai.types.responses.response_output_item import ResponseApplyPatchToolCall
 
         from litellm.types.utils import Choices, Message
 
@@ -451,6 +452,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
 
                 tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=item,
+                    index=tool_call_index,
+                )
+                accumulated_tool_calls.append(tool_call_dict)
+                tool_call_index += 1
+
+            elif isinstance(item, ResponseApplyPatchToolCall):
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
+                )
+
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_apply_patch_tool_call_to_chat_completion_tool_call(
                     tool_call_item=item,
                     index=tool_call_index,
                 )
@@ -533,7 +546,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raw_response.usage
             ),
         )
-        
+
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
         raw_response_hidden_params = getattr(raw_response, "_hidden_params", {})
@@ -550,7 +563,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     model_response._hidden_params[key] = merged_headers
                 else:
                     model_response._hidden_params[key] = value
-        
+
         return model_response
 
     def get_model_response_iterator(
@@ -855,7 +868,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return {"format": {"type": "text"}}
 
         return None
-    
+
     @staticmethod
     def _convert_annotations_to_chat_format(
         annotations: Optional[List[Any]],
