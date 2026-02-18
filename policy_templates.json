@@ -812,6 +812,48 @@
     }
   },
   {
+    "id": "eu-ai-act-article5-fr",
+    "title": "EU AI Act Article 5 — Pratiques Interdites (Français)",
+    "description": "Conformité Article 5 de la loi européenne sur l'IA pour les pratiques interdites en français. Bloque les demandes liées à la notation sociale, reconnaissance d'émotions au travail/éducation, catégorisation biométrique, profilage prédictif, manipulation, et exploitation de vulnérabilités. Utilise la correspondance conditionnelle (mot identificateur + mot contextuel).",
+    "region": "EU",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "eu-ai-act-prohibited-practices-fr"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "eu-ai-act-prohibited-practices-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_article5_prohibited_practices_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_article5_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Bloque les pratiques interdites par l'Article 5 de la loi sur l'IA (UE): systèmes de notation sociale, reconnaissance d'émotions au travail/éducation, catégorisation biométrique pour attributs sensibles, profilage prédictif, manipulation, et exploitation de vulnérabilités"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "eu-ai-act-article5-fr",
+      "description": "Politique de conformité Article 5 de la loi sur l'IA (UE) pour les pratiques interdites en français. Bloque notation sociale, reconnaissance d'émotions au travail/éducation, catégorisation biométrique, profilage prédictif, manipulation, et exploitation de vulnérabilités.",
+      "guardrails_add": [
+        "eu-ai-act-prohibited-practices-fr"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
     "id": "mcp-security-unregistered-server-block",
     "title": "MCP Security: Block Unregistered Servers",
     "description": "Blocks requests that reference MCP servers not registered on this LiteLLM gateway. Prevents unauthorized tool access via unregistered MCP endpoints.",
